@@ -225,12 +225,75 @@ pub fn build_component_state_with_ctx(
     crate::manager::runtime::WasmPluginState::new(
         plugin_id.to_string(),
         ctx,
+        // 移动测试夹具不 import WASI（wasm32-unknown-unknown）⇒ 空上下文即可
+        crate::manager::runtime::wasi::empty_ctx(),
         crate::manager::runtime::StoreSpec {
             limits: bedcode_host_kit::limits::StoreLimits::default(),
             fuel_enabled: false,
             metrics: std::sync::Arc::new(bedcode_host_kit::metrics::PluginMetrics::default()),
         },
     )
+}
+
+// ==================== 组件实例观测面（宿主集成测试转发，票 05） ====================
+//
+// 宿主集成测试链的是**不带 cfg(test)** 的 lib（`#[cfg(test)]` 项等价于不可达），
+// 而 fixture e2e 随绑定归位迁到移动宿主 `src-tauri/tests/`——它们需要的壳内私有面
+// 经这两个转发函数消费（生产跨 crate 仍不可达：`raw_store` 是 `pub(crate)`、
+// `core_binding` 是 `pub(crate) mod`）。
+
+/// 系统存储空间属主 ID（`__system__`）
+///
+/// 内核 `storage::SYSTEM_PLUGIN_ID` 是 `pub(crate)`（属主分区细节不对外）；
+/// 宿主域测试断言「系统空间纵深守卫对移动端同样生效」需要这个常量，经本转发面给出。
+pub const SYSTEM_PLUGIN_ID: &str = crate::storage::SYSTEM_PLUGIN_ID;
+
+/// 实例 ABI 版本探测（原生 `TypedFunc` 探测 + 调用，与生产协商同一实现）
+///
+/// 宿主 e2e 用它断言「产物 `abi.version()` == SDK `ABI_VERSION`」——不另拼探测逻辑，
+/// 避免测试与生产各钉一份（漂移时测试反而会掩盖问题）。
+pub fn plugin_abi_version(
+    plugin: &mut crate::manager::runtime::LoadedComponentPlugin,
+) -> crate::Result<Option<u32>> {
+    let (store, instance) = plugin.raw_store();
+    crate::manager::runtime::core_binding::abi_version(store, instance)
+}
+
+/// linker 装配面（与生产同一函数：宿主自报能力模块 + WASI 段）
+///
+/// 宿主集成测试据此断言 linker 装配契约（WASI 默认注册 / 配置关闭可重注册）——
+/// 这两条判据只有在**宿主 adapter 在链接图里**的测试二进制中才有意义（内核自己的
+/// cfg(test) 里 registry 为空；且 bare 形态的 `cargo test --lib` 目前整体不可编译，
+/// 见票 05 §7 记录）。
+pub fn build_component_linker(
+    engine: &wasmtime::Engine,
+    wasi_cfg: &crate::config::WasiConfig,
+) -> crate::Result<wasmtime::component::Linker<crate::manager::runtime::WasmPluginState>> {
+    crate::manager::runtime::bare::component::build_component_linker(engine, wasi_cfg)
+}
+
+/// 探针：对给定 linker 尝试再次注册 WASI p2
+///
+/// 返回 `Some(错误文本)` = 已注册过（重复注册被 wasmtime 以 "defined twice" 拒绝）；
+/// `None` = 本次注册成功（即此前**未**注册）。让宿主测试不引入 `wasmtime-wasi` 依赖。
+pub fn probe_wasi_p2_reregistration(
+    linker: &mut wasmtime::component::Linker<crate::manager::runtime::WasmPluginState>,
+) -> Option<String> {
+    wasmtime_wasi::p2::add_to_linker_async(linker)
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// 实例 Store / Instance 裸面（燃料、limiter、原生导出调用等机制断言用）
+///
+/// 形状与壳内 `raw_store` 逐字一致，只是把可达性从 `pub(crate)` 提到本转发面。
+pub fn plugin_raw_store(
+    plugin: &mut crate::manager::runtime::LoadedComponentPlugin,
+) -> (
+    &mut wasmtime::Store<crate::manager::runtime::WasmPluginState>,
+    &wasmtime::component::Instance,
+) {
+    plugin.raw_store()
 }
 
 // ==================== MockPorts：端口测试替身（builder 式 override） ====================

@@ -186,7 +186,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   `ws_paired` / `ws_auth_failed`）由插件经 host-events 广播，事件名与载荷与退役前逐字一致。
   回接由 `tests/retired_mobile_auth_orchestration_command_face_lock.rs` 拦截
 
-### 终端链路（协议客户端与消费 UI 皆在插件 · 窄转发在宿主，票 12 + 票 15 阶段 A）— `wasm-apps/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs`
+### 终端链路（协议客户端与消费 UI 皆在插件 · 窄转发在宿主，票 12 + 票 15 阶段 A）— `wasm-apps/terminal-session/` + `src-tauri/src/plugin/terminal_stream.rs`
 
 桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust 取代前端直连 WS；2026-09-26 票 05
 对齐桌面插件 `ws_terminal.rs` 新协议；**2026-10-08 票 12 协议客户端整体迁入 wasm app
@@ -203,12 +203,12 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   token 零过境插件；`auto-reconnect` 宿主退避重建 + `ws:open` 携带 `reconnectedFrom` 回接
   新句柄 → 插件重订阅）。状态事件 `plugin:com.bedcode.terminal-session:terminal-state` /
   `:terminal-resync`（载荷与退役前逐字段一致）
-- **宿主侧（零解析窄转发，ADR 0022 四类薄壳④）**：`terminal_stream_gateway.rs` 页面
-  Channel 表 + 转发（`terminal_page_subscribe/unsubscribe` 命令是 Tauri 传输机制登记面）；
-  WIT `host-terminal-stream.forward-output`（`host_impl/terminal_stream.rs`，权限
-  `terminal:output`）把插件交来的裸字节按 session-id 推给前端（`InvokeResponseBody::Raw`，
-  全程零 JSON——C3）；`host_impl/connection.rs` 的 `host-connection.primary-target`
-  （主连接目标事实，票 13 复用）
+- **宿主侧（零解析窄转发，ADR 0022 四类薄壳④）**：`plugin/terminal_stream.rs` 同处两段——
+  页面 Channel 表 + 转发（`terminal_page_subscribe/unsubscribe` 命令是 Tauri 传输机制登记面；
+  该表票 05 前住 wasm-core `terminal_stream_gateway.rs`，随域迁入宿主）；WIT
+  `host-terminal-stream.forward-output`（同文件，权限 `terminal:output`）把插件交来的裸字节
+  按 session-id 推给前端（`InvokeResponseBody::Raw`，全程零 JSON——C3）；
+  `plugin/connection.rs` 的 `host-connection.primary-target`（主连接目标事实，票 13 复用）
 - **协议（真源 = 桌面 `ws_terminal.rs`，wire 零变化）**：`/ws/plugin/com.bedcode.terminal-session/terminal`
   端点；握手 `auth{token}`（宿主代发）；订阅 `subscribe{sessionId,mode:live}`；输入可打印文本
   `input{data:UTF-8}`、控制字符/特殊键 binary（插件 keys 翻译）；流控 ack `ack{offset=<本地已渲染
@@ -251,7 +251,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   在通用能力 crate `packages/bedcode-ws-client-engine`**（句柄表 / reader-writer 双任务 / 心跳 /
   退避重连 / 帧信封 / 停用回收；零 WIT / 零 SDK / 零平台形态，平台差异面经端口
   `WsClientPorts` 注入）；移动端只剩薄适配器
-  `packages/bedcode-wasm-core/src/manager/runtime/host_impl/ws.rs`（5 原语转发 +
+  `bedcode-mobile/src-tauri/src/plugin/host_domains/ws.rs`（票 05 绑定归位迁入；5 原语转发 +
   `MobileWsClientPorts`：权限门读 manifest / 总线投递 / 宿主运行时任务 / jwt 代发 token /
   全局退避钳制），SDK trait 与帧信封解析在 `packages/plugin-sdk-mobile/rust/src/host/ws.rs`
 - **服务端域不跟演**：桌面 15 函数里的服务端域 9 函数与 `connection-context` 不存在于移动端
@@ -264,8 +264,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   （timeout 上限 5s）；`heartbeatSecs` / `autoReconnect` 为 config 可选面（断线按宿主退避策略
   重建 + 新句柄 `ws:open` 携带 `reconnectedFrom`，取消 = 对句柄 close 或停用回收）；
   订阅协议 / 重订阅编排归插件
-- 真实 WASM 组件全链路集成测试：`component.rs` tests 的 `ws_client_domain_full_loop_with_real_component`
-  （component-test 插件 `ws-client` feature：connect → send-text → 对端回帧 → close 事件闭环）
+- 真实 WASM 组件全链路集成测试：`src-tauri/tests/ws_client_e2e.rs` 的
+  `ws_client_domain_full_loop_with_real_component`（票 05 自内核 `component.rs` tests 迁入：
+  component-test 插件 `ws-client` feature：connect → send-text → 对端回帧 → close 事件闭环）
 
 ### 插件核心模块引导
 
@@ -273,30 +274,28 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 **插件机制整核（单一 wasm-core，仓库根 crate）— `packages/bedcode-wasm-core/`：**
 双端共用单一 crate（ADR 0045 D1；移动 fork crate 已随票 06 批次 04 退役，目录删除）。
-移动形态依赖形态（`src-tauri/Cargo.toml`）：
-`bedcode-wasm-core-mobile = { package = "bedcode-wasm-core", path = "../../packages/bedcode-wasm-core",
-default-features = false, features = ["bare-host"] }`——package rename 别名，源码
-`bedcode_wasm_core_mobile::` 导入路径零改动。`bare-host` 面（2026-10-10
-`wasm-core-mobile-purity` 票 02–05 收口后，ADR 0047）分四层：
+移动形态依赖形态（`src-tauri/Cargo.toml`）：**直连**单 crate
+`bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false,
+features = ["bare-host"] }`（票 05 收口：package rename 别名删除，源码统一 `bedcode_wasm_core::`）。
+`bare-host` 面（2026-10-11/12 `wasm-core-single-form` 票 05 绑定归位后）分三层：
 
 - **机制核**（bus / config / db / monitor / permission / security / storage /
-  `terminal_stream_gateway.rs`）：与 `common-host` 面**同一份源码**；
-- **运行时与装配**（`manager/runtime/bare/**`）：bindgen 绑移动 WIT 生成物目录 `wit/`
-  〔core.wit + cap-mobile.wit + `bedcode.wit` 分片拼装〕；`component.rs` 的 linker 装配 =
-  双端共有机制域的**本端壳** + 移动独有域的 **cfg(test) 替身**（生产装配在宿主 adapter，
-  见下节 `plugin/bindings.rs`）；
-- **共有机制域壳**（`manager/runtime/bare/host_impl/`，11 域 + `support.rs`）：**纯转发 /
-  端口接线**，域逻辑在共享 crate——peer → `bedcode-server-peer-net::plugin_binding`（票 03）、
-  http → `bedcode-server-http::plugin_binding::egress`（票 05）、fs →
-  `bedcode-host-api-core::fs`（票 05）、db·storage·bus·events·log → `bedcode-host-api-core`；
-  Android 等平台差经端口注入（`FsHostPorts::platform_delete` 一类）；壳行数由纯净性锁封顶；
-- **端口与适配**：`host_api/ports.rs`（`HostEnginePorts`，宿主引擎调用入口）+
-  `host_api/sql_guard.rs`（SQL 表名前缀护栏）+ `host_api/bare_context.rs` +
-  `test_support`（夹具构建器 + MockPorts，`any(test, feature = "test-support")` 门控）。
+  `manager::runtime::engine` 组件引擎唯一一份）：与 `common-host` 面**同一份源码**；
+- **移动壳**（`manager/runtime/bare.rs` + `bare/component.rs`，合计 ~630 行、零 WIT 绑定）：
+  Engine/Linker/Store 生命周期 + 导出调用骨架——linker = **宿主自报能力模块**
+  （`inventory`；core 12 域 + 移动独有 5 域全在宿主，见下节）+ WASI p2/p3；
+  `command` / `lifecycle` / `manifest` 走内核 core 交集绑定
+  （`manager/runtime/core_binding.rs`，绑契约真源 `wit/core.wit`）、`abi.version` 走原生探测、
+  `events.*` 走宿主注入的 `GuestEventDispatcher`。**12 个 core 域不再有内核实现**——
+  移动权限门（`granted_permissions` 词表）与插件私有库布局（`plugins/<id>.db`）都与桌面不同源；
+- **端口与测试基建**：`host_api/ports.rs`（`HostEnginePorts`，宿主引擎调用入口）+
+  `test_support`（夹具构建器 + MockPorts + 组件实例转发面，`any(test, feature = "test-support")`
+  门控）。`host_api/sql_guard.rs` 与 `terminal_stream_gateway.rs` 均已退役/迁出（票 05）。
 
-**防回接**：`src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（fork 目录 / 包名 /
-路径字形 / 别名指向四判据）+ `src-tauri/tests/mobile_wasm_core_purity_lock.rs`
-（移动独有域不回流 / 壳不含域逻辑 / 共享核在场 / 行数上限 / 退役引擎不复活；见锁索引）；
+**防回接**：`src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（直连 / 禁别名键 /
+路径字形 / 标识符 / **第二份织体目录** 五判据）+ `src-tauri/tests/mobile_wasm_core_purity_lock.rs`
+（移动独有域不回流 / core 域绑定与实现不回流 / 共享核在场 / 壳行数上限 /
+移动独有机制与退役垫片不回流 / 退役引擎不复活 / **端词汇全集** 七判据；见锁索引）；
 WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
 （CI `wit-drift-lock.yml` + husky）盯住，手改生成物即红。
 
@@ -306,19 +305,34 @@ WIT 生成物由仓库根 `node scripts/compose-wit.mjs mobile --check`
   APK assets 内置插件解压 + app_data_dir 扫描、注册表、存储
 - **bindings.rs**：宿主自带 `bindgen!`（移动 WIT）+ `expect_host_module!` 白名单双向校验
   —— 解孤儿规则 E0117、给 linker 提供宿主侧装配点（ADR 0047 D5，与桌面同形装配面）
+- **core 12 域 adapter**（票 05 绑定归位落点 `host_domains/`，14 文件 /
+  ~2.5k 行）：`mod.rs`（模块描述符 `mobile-host-core` + 12 interface 注册 + 停用回收聚合）
+  + 每域「域逻辑 + `impl Host`」同处（`log` / `storage` / `db` / `event` / `http` / `fs` /
+  `config` / `bus` / `peer` / `mdns` / `platform` / `ws` / `support`）。域逻辑是共享核的
+  薄转发（`bedcode-host-api-core` / `bedcode-server-http` / `bedcode-server-peer-net` /
+  `bedcode-ws-client-engine` / `bedcode-discovery-engine`）；**权限门读实例级
+  `granted_permissions`**（桌面 `core_binding` 的 `PermissionManager` 词表不含移动词汇，
+  不能共用那份实现）；插件私有库按移动布局 `plugins/<id 去点划>.db`（非内核
+  `plugins/<plugin_id>/plugin.db`）
+- **guest_events.rs**：移动 `events` 导出派发器（`on-bus-message` / `on-auth-success` /
+  `on-disconnect` / `on-session-*`）——内核只留事件循环机制，调哪个导出由宿主绑定实现
+  （ADR 0022「机制留内核、契约面上移」）；生产在 `PluginManager::init_wasm_runtime_with` 注入
 - **移动独有域 adapter**（票 04 落点，自带 `impl Host` + 域逻辑 + android 桥）：
   `notify.rs`（host-notify 5 原语）/ `terminal_stream.rs`（host-terminal-stream 1）/
   `fs_mobile.rs`（host-fs-mobile 2，SAF 与媒体落盘）/ `connection.rs`
   （host-connection.primary-target 1）/ `auth.rs`（host-auth 5）
 - **端口接线**：`host_ports.rs`（`HostEnginePorts` 宿主引擎端口实现，含 egress_check /
   global_token 等）/ `peer_ports.rs`（`PeerPorts`，票 03）
-- **wasm_host**：SQL 表名前缀校验与列类型转换（原宿主 `wasm_host.rs` 的 SQL 半部；
-  HTTP 执行半部已随票 05 上移能力域 crate `bedcode-server-http`）
+- **`wasm_host` 垫片已退役**（票 05）：它只 re-export 内核 `host_api::sql_guard`
+  （单条 `column_to_json`）且两侧零消费者——域实现直连共享核。HTTP 执行半部早已上移
+  能力域 crate `bedcode-server-http`
 - **downloader**：插件远程下载 + SHA256 校验 + 安装到 app_data_dir
 - **approval / validation**：权限审批与内容钉扎、插件身份校验（目录名与 manifest id 一致性，防冒名）
 - **saf_io / saf_path**：SAF 存储访问抽象（`SafIo` trait 主 seam，Kotlin `SafTransferPlugin` 实现）
   与 SAF Uri → 真实路径解析（文件传输 SAF 化改造核心接口）
-- **message_bus / fs_auth / types / commands**：插件间消息总线、文件系统校验、类型定义、Tauri 命令
+- **message_bus / types / commands**：插件间消息总线、类型定义、Tauri 命令
+  （`fs_auth` 宿主自实现已随 2026-10-11 裁决退役：fs 授权统一走内核
+  `security::fs_auth::FsAuthChecker` 判定链）
 - **android_plugins/**：Android 原生插件 Rust 注册桥（前台服务、SAF 选择/写入、生物识别、
   全部文件访问、下载目录、文件删除、组播锁、通知、设备信息、插件资产解压 → 对应 Kotlin 端 Plugin，
   Kotlin 文件位置见 Project Structure 下方的「Android 原生层」说明）。
@@ -351,23 +365,26 @@ components/screens，数据源 `adapters/devAppSource.ts` 把「内置应用 + �
 `packages/bedcode-wasm-core/wit/core.wit`）+ 同 `cap-mobile.wit`（真源 `rust/wit-src/cap-mobile.wit`）+
 `bedcode.wit`（package + `world plugin { include core; include cap-mobile; }`），由根
 `scripts/compose-wit.mjs` 按 `packages/plugin-sdk-mobile/compose.json` 拼装（`--check` 漂移锁）。
-移动 fork 的 bindgen（`packages/bedcode-wasm-core/src/manager/runtime/component.rs`）path 指
-`../plugin-sdk-mobile/rust/wit` 目录（push_dir 加载合成 package）。
+移动端 bindgen 在**宿主**：`bedcode-mobile/src-tauri/src/plugin/bindings.rs` 的 path 指
+`../packages/plugin-sdk-mobile/rust/wit` 目录（push_dir 加载合成 package）——票 05 前该 bindgen
+住内核 `manager/runtime/bare/component.rs`，随绑定归位迁出（内核零 WIT 绑定）。
 
 **票 04 交集切片收拢（ABI 19→20）：** 共享核心 core.wit 收拢 `host-websocket`（客户端 5 =
 交集完整）/ `host-http`（fetch）/ `host-fs`（交集 6）；本端独有 SAF/媒体下载目录
 `save-to-document` / `write-media-downloads` 拆入新接口 `host-fs-mobile`（fork
 `component.rs` 拆分 `impl host_fs::Host` → `impl host_fs_mobile::Host`，add_to_linker 同行）；
 旧产物（v19）import `host-fs.write-media-downloads` 等在实例化期被拒，
-`stale_artifact_rebuild_hint` 点名按 v20 SDK 重建。
+`stale_artifact_rebuild_hint` 点名按 v20 SDK 重建。票 05 起 `host-fs-mobile` 的
+`impl Host` 在 `src-tauri/src/plugin/fs_mobile.rs`（宿主自报 `mobile-fs` 模块）。
 
 **内置 wasm 应用源码 — `wasm-apps/*/`：** 每个 app 独立 package：`plugin.json` 元数据 + `rust/` WASM 后端 +
 `src/` TS 前端 + `vite.config.ts` 独立构建。改插件后需重新构建并同步产物到打包资源。
 
-**典型任务入口：** 新增宿主能力 → `wasm_runtime/host_impl/` + SDK `rust/src/host/` 对应域 trait；
+**典型任务入口：** 新增宿主能力 → `src-tauri/src/plugin/host_domains/`（core 域）或
+`src-tauri/src/plugin/<domain>.rs`（移动独有域）+ SDK `rust/src/host/` 对应域 trait；
 新增 Android 原生能力 → Kotlin Plugin（gen/android）+ `android_plugins/` 注册桥；
 插件 UI/存储问题 → 先分清前端（`src/plugin/`）还是 Rust 侧（`commands.rs` / `manager.rs`
-  对应的 host_impl 域）。
+  以及 `plugin/host_domains/` 对应域）。
 
 ### 对等网络 — 宿主适配层 `src-tauri/src/peer_*.rs` + 共享能力域 `packages/bedcode-server-peer-net`
 
@@ -390,7 +407,7 @@ components/screens，数据源 `adapters/devAppSource.ts` 把「内置应用 + �
 - **插件入口（真入口）— WIT `host-peer`**：同桌面端**逐字一致的 19 函数**（`core.wit`
   的 `host-peer` 为双端全等接口：dial-peer / close / send-files / cancel 族 / 应答族 /
   共享根 / 浏览 / 拉取 / 节点启停 / active-transfers / collect-outgoing），宿主实现在
-  wasm-core `bare-host` 面 `manager/runtime/bare/host_impl/peer.rs`（ADR 0022 v3）；
+  `src-tauri/src/plugin/host_domains/peer.rs`（票 05 归位；薄转发到能力域 crate，ADR 0022 v3）；
   插件侧经 `HostPeer` trait 调用（`wasm-apps/file-transfer/rust/src/peer.rs`）。
   **对齐方向**：能力域 crate 的 19 个 `plugin_binding::peer_*` 域函数已是 WIT-无关
   （`&Arc<dyn PeerPorts>`），移动可直接复用（补移动 `PeerPorts` + 薄转发）——见
@@ -514,7 +531,7 @@ Desktop PTY → Claude Code
 | 功能 | 目录 |
 |------|------|
 | WebSocket 客户端 / 心跳 / 重连 | `src-tauri/src/connection/` |
-| 终端链路（协议客户端在插件 `com.bedcode.terminal-session`；宿主窄转发面 `terminal_stream_gateway.rs`） | `wasm-apps/terminal-session/` + `src-tauri/src/terminal_stream_gateway.rs` |
+| 终端链路（协议客户端在插件 `com.bedcode.terminal-session`；宿主窄转发面 `plugin/terminal_stream.rs`） | `wasm-apps/terminal-session/` + `src-tauri/src/plugin/terminal_stream.rs` |
 | 消息路由 | `src-tauri/src/router/` |
 | WS 消息处理器 | `src-tauri/src/handler/` |
 | 认证 / 配对 | `src-tauri/src/auth/` |
@@ -646,7 +663,7 @@ Desktop PTY → Claude Code
   mobile ABI 16 → 17）→ `src-tauri/tests/retired_mobile_host_terminal_hooks_lock.rs`
   （WIT 缺席 / SDK+宿主 Rust 接线缺席 / 前端退役词汇缺席（排除 `__tests__`）三条 +
   `mobile_terminal_stream_retained_face_stays` 反向钉住：`host-terminal-stream.forward-output` +
-  `terminal:output` 权限位 + `terminal_stream_gateway` 窄转发 + `primary-target` 在场）
+  `terminal:output` 权限位 + `plugin/terminal_stream.rs` 窄转发 + `primary-target` 在场）
 - auto-task 独立插件整体退役（票 16：并入 `com.bedcode.terminal-session`，任务域前端在
   `wasm-apps/terminal-session/src/task/`）→ `src-tauri/tests/retired_mobile_auto_task_plugin_lock.rs`
   （旧 id / 视图 id / 命令 id 前缀扫描 + `merged_task_domain_and_plugin_retirement_stay` 反向断言：
@@ -655,7 +672,7 @@ Desktop PTY → Claude Code
 - 认证编排命令面退役（票 14 阶段 B：配对 / QR / 生物挑战编排迁 `com.bedcode.terminal-session`
   插件 auth 域，宿主只余引擎事实面）→ `src-tauri/tests/retired_mobile_auth_orchestration_command_face_lock.rs`
   （宿主零退役编排符号含 3 个流程事件 helper / `invoke_handler!` 零 5 注册项 / 前端零退役命令字面量 +
-  `auth_engine_projection_and_plugin_domain_stays` 反向钉住：引擎方法 + `host_impl/auth.rs` 投影 +
+  `auth_engine_projection_and_plugin_domain_stays` 反向钉住：引擎方法 + `plugin/auth.rs` 投影 +
   窄读命令 `ws_get_auth_credentials` + 插件编排域 + manifest `auth` 位）
 - 会话控制客户端退役（票 13：`session/http.rs` + `SessionManager` + 三命令迁插件 session 域，
   `ws_disconnect` 停活跃会话死分支同删）→ `src-tauri/tests/retired_mobile_session_control_face_lock.rs`
@@ -665,8 +682,8 @@ Desktop PTY → Claude Code
 - 插件 KV 真源 = 主库 `plugin_storage` 表（票 05b 真源搬迁）→ `src-tauri/tests/plugin_storage_db_backed_lock.rs`（`plugin_storage_is_db_backed_not_file_backed`）
 - `host-websocket` 客户端子集域边界（票 11：移动 WIT 不得长出 ws **服务端**域 / 不得定义 ws 服务端权限）→ `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs`
 - egress 三档策略架构不变量（票 20：档位→动作映射单点 `StrategyStep::of` / 写入面 `parse_wire` 单点 / 安全义务符号在场）→ `src-tauri/tests/egress_tier_mapping_single_point_lock.rs`（3 例 + 变异自检 3/3）
-- **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` 别名必须指向仓库根 crate（package rename + bare-host）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（四判据；变异自检 2/2）
-- **wasm-core 纯净性防回接**（票 2026-10-10 `wasm-core-mobile-purity` 票 06-①；ADR 0047 D4/D5）：移动独有域不得回流 wasm-core（5 个域文件不得复现 + 生产装配段不得出现其 `Host` impl）/ 形态壳不得含域逻辑（http 执行本体、fs 系统调用、peer 时代句柄表与重拨符号）/ 三条共享实现核必须在场（`server-http::plugin_binding::egress` · `host-api-core::fs` · `server-peer-net::plugin_binding`）/ 壳文件与目录行数双重上限 / 已退役的 `host_api/http_engine.rs` 不得复活 → `src-tauri/tests/mobile_wasm_core_purity_lock.rs`（6 例；变异自检 **4/4**）。**改 wasm-core `runtime/bare/host_impl/*` 或移动 `src/plugin/{notify,auth,terminal_stream,connection,fs_mobile}.rs` 前先看它**
+- **移动 fork crate 退役面**（票 06 批次 04 / 票 07 批次 02；**票 05 泛化为「禁任何第二份 wasm-core 织体」；票 06 补第 5 判据**）：fork 目录不得复活 / `bedcode-wasm-core-mobile` 只能当依赖键别名（不得作包名）/ 移动构建面不得出现 fork 形态路径（`"../packages/bedcode-wasm-core"`）/ `src-tauri` **直连**仓库根 crate（`bedcode-wasm-core` + bare-host，禁 rename 别名键）/ 移动 `src` + `tests` 源码不得出现 `bedcode_wasm_core_mobile` 标识符 / **`packages/bedcode-wasm-core` 之外不得有任何 `bedcode-wasm-core*` 目录**（第 5 判据盯「换个新名字重新长一份」——票 04/05 把双端绑定迁出内核后「复制一份内核自带绑定」是最省事也最危险的动作）→ `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs`（5 判据；变异自检：票 05 为 ⑤ 标识符注入 1/1 + 构建级即红；票 06 为第 5 判据注入 1/1）
+- **wasm-core 纯净性防回接**（票 2026-10-10 `wasm-core-mobile-purity` 票 06-①；**票 2026-10-11/12/13 `wasm-core-single-form` 票 05 按绑定归位终态重写、票 06 补判据 7**；ADR 0047 D2/D4/D5 + ADR 0049）：① 移动独有域不得回流（5 域 `Host` impl / 域文件零命中，正向钉住宿主 adapter 在场）② core 12 域的绑定与实现不得回流（内核唯一合法落点 = `manager/runtime/core_binding.rs`；移动壳禁 `bindgen!` 与 `bedcode::plugin::` 路径，正向钉住宿主 `bindings.rs` / `guest_events.rs` / `host_domains/` 在场）③ 共享实现核必须在场（`server-http::plugin_binding::egress` · `host-api-core::{fs,storage,bus}`）且宿主 adapter 真的转发到它们 ④ 移动壳行数上限（单文件 600 / 合计 800）⑤ 移动独有机制与退役垫片不回流（终端网关住宿主 `plugin/terminal_stream.rs`；零消费者 `sql_guard` 垫片退役）⑥ 已退役的 `host_api/http_engine.rs` 不得复活 ⑦ **端词汇全集**：7a 内核代码行零 cap 分片 world 名（注释放行——模块文档必须说明「cap 组合不在内核」）· 7b 声明位零端名（豁免走 `DECLARED_NAME_EXEMPTIONS` 登记表，每条须写理由）· 7c 移动端 SDK 词汇封顶在唯一已知落点 `manager/runtime/bare/component.rs`（双 SDK 收敛遗留项的看门狗，见 §遗留声明）· 7d 正向锚点（`core_binding.rs` 确含 `bindgen!` 且指向 `wit/core.wit`，防 7a–7c 空转）→ `src-tauri/tests/mobile_wasm_core_purity_lock.rs`（7 判据；变异自检：票 05 判据 1–6 **4/4**，票 06 判据 7 的 7a/7b/7c **3/3**）。**WASI 不在判据内**——用户裁决 2026-10-12 定 WASI 装配面住内核、双端默认全开（`manager/runtime/wasi.rs` + `CoreConfig::wasi`），它是共享机制不是形态差异轴。**改 wasm-core `runtime/{common,bare}*` 或移动 `src/plugin/{host_domains/**,bindings,guest_events}.rs` 前先看它**
 - **对等网络能力域集中化**（2026-10-10，ADR 0048）：移动宿主不得重新持有引擎控制面（节点装配 / 生命周期闸门 / 会话句柄表 / 载荷构造 / 接收设置落盘）→ `src-tauri/tests/peer_engine_consolidation_lock.rs`（三面判据：退役面缺席 / 适配面在场 / 共享依赖在场；变异自检 1/1）
 - **mDNS 广播死面退役**（2026-10-10，ADR 0048）：`MdnsAdvertiser` / 广播命令 / 前端死 composable / 自建 `ServiceDaemon::new` 不得回到移动宿主与前端 → `src-tauri/tests/retired_mobile_mdns_advertise_lock.rs`（退役面缺席 / browse 薄壳在场 / 共享守护复用锚点；变异自检 1/1）
 - **移动 WIT 分片拼装组合**（票 03/07）：`compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION` / 生成物 `bedcode.wit` include 集 == `core` + 各 caps 键 / `worlds` 列表在生成物目录有声明 → `src-tauri/tests/mobile_wit_composition_lock.rs`（变异自检 1/1）。生成物逐字漂移面另有仓库根 `node scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit）

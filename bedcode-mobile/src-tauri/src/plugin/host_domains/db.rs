@@ -7,10 +7,36 @@
 //! 在共享核 `bedcode-host-api-core::database`（双端单点，票 18 批次 3 + 主库收归）。
 //! 属主分区（独立 SQLite 库，惰性打开 + 停用回收）与移动 state 形状留在本端。
 
-use super::super::{WasmPluginState, current_handle, host_ctx};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use bedcode_host_api_core::database as core_db;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
+    fn execute(&mut self, sql: String) -> Result<u32, String> {
+        plugin_db_execute(self, &sql)
+    }
+
+    fn query(&mut self, sql: String) -> Result<Option<String>, String> {
+        plugin_db_query(self, &sql)
+    }
+
+    fn execute_params(&mut self, sql: String, params_json: String) -> Result<u32, String> {
+        plugin_db_execute_params(self, &sql, &params_json)
+    }
+
+    fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
+        plugin_db_query_params(self, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        plugin_db_execute_batch(self, &sqls_json)
+    }
+}
+
 
 /// 统一权限门：storage（host-plugin-database 私有库同 host-storage）
 fn require_storage_permission(state: &WasmPluginState) -> Result<(), String> {
@@ -29,7 +55,7 @@ fn require_storage_permission(state: &WasmPluginState) -> Result<(), String> {
 /// **生命周期**：连接表在 WasmHostContext.plugin_dbs（每次激活新建 host_ctx），
 /// 插件停用时 state drop → host_ctx Arc 计数归零 → 连接 Drop 关闭——无需显式
 /// purge，停用回收由生命周期自动完成
-fn plugin_db_conn(state: &WasmPluginState) -> Result<Arc<Mutex<crate::db::Database>>, String> {
+fn plugin_db_conn(state: &WasmPluginState) -> Result<Arc<Mutex<bedcode_wasm_core::db::Database>>, String> {
     let table = host_ctx(state).plugin_dbs.clone();
     {
         let guard = table.lock().expect("plugin dbs table lock poisoned");
@@ -44,14 +70,14 @@ fn plugin_db_conn(state: &WasmPluginState) -> Result<Arc<Mutex<crate::db::Databa
             let dir = current_handle()
                 .block_on(ports.app_data_dir(&app))
                 .map_err(|e| format!("plugin db: resolve app data dir failed: {e}"))?;
-            let dir = dir.join(crate::system::constants::PLUGIN_DATA_DIR);
+            let dir = dir.join(crate::system::constants::plugin::PLUGIN_DATA_DIR);
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("plugin db: create plugin data dir failed: {e}"))?;
             let path = dir.join(format!("{}.db", state.plugin_id.replace(['.', '-'], "_")));
-            crate::db::Database::new(&path)
+            bedcode_wasm_core::db::Database::new(&path)
                 .map_err(|e| format!("plugin db: open {} failed: {e}", state.plugin_id))?
         }
-        None => crate::db::Database::new(std::path::Path::new(":memory:"))
+        None => bedcode_wasm_core::db::Database::new(std::path::Path::new(":memory:"))
             .map_err(|e| format!("plugin db: open in-memory failed: {e}"))?,
     };
     let arc = Arc::new(Mutex::new(db));
@@ -168,27 +194,10 @@ pub(crate) fn plugin_db_execute_batch(state: &WasmPluginState, sqls_json: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::MessageBus;
-    use crate::manager::runtime::WasmHostContext;
-    use crate::security::fs_auth::FsAuthChecker;
-    use crate::storage::PluginStorage;
-    use std::collections::HashSet;
 
-    /// 测试保活的 tokio runtime（WasmPluginState.runtime_handle 字段要求）
-    fn test_runtime() -> tokio::runtime::Handle {
-        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RT.get_or_init(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build test runtime")
-        })
-        .handle()
-        .clone()
-    }
 
     fn storage_state(plugin_id: &str) -> WasmPluginState {
-        crate::test_support::build_component_state(
+        bedcode_wasm_core::test_support::build_component_state(
             plugin_id,
             &[bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE],
         )
@@ -201,7 +210,7 @@ mod tests {
     /// 权限门 fail-closed：未声明 storage 即拒（插件私有库）
     #[test]
     fn plugin_db_requires_storage_permission() {
-        let state = crate::test_support::build_component_state("com.bedcode.db-test", &[]);
+        let state = bedcode_wasm_core::test_support::build_component_state("com.bedcode.db-test", &[]);
         assert!(plugin_db_execute(&state, "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)").is_err());
         assert!(plugin_db_query(&state, "SELECT * FROM kv").is_err());
     }

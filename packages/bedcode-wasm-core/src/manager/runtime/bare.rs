@@ -1,10 +1,12 @@
-//! WASM 插件运行时（移动端）
+//! WASM 插件运行时（形态薄壳，票 05 起 · ADR 0049）
 //!
 //! 基于 wasmtime 组件模型（Component Model）的 WASM 插件加载、实例化、调用：
-//! - 契约单一事实来源：SDK `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`
-//!   （移动端独立 WIT，11 import / 8 export，wasmtime 48 自带 bindgen! 宏）
-//! - 加载/实例化/调用实现在子模块 component（wasm_runtime/component.rs）：
-//!   Host trait 接线（11 组）、LoadedComponentPlugin 业务方法
+//! - 契约绑定：内核**只持 core 交集**（[`super::core_binding`]，绑
+//!   `crate::wit/core.wit` 的 `world core`——双端全等的 17 个 interface）；
+//!   移动端差异由移动宿主 `cap-mobile` 分片 + 宿主自报能力模块承载，**内核不
+//!   直接绑定移动 world**（票 05 绑定归位，见 `component.rs` 模块头）
+//! - 加载/实例化/调用实现在子模块 component（`bare/component.rs`）：
+//!   linker 装配（宿主自报模块）+ `LoadedComponentPlugin` 导出调用面
 //! - 本文件管理 Engine/Linker/Store 生命周期、资源限制与 AOT 缓存
 //!
 //! 安全机制（09 清理后原样保留）：
@@ -19,22 +21,32 @@
 //! - AOT `.cwasm` 缓存：宿主 cache 目录（非插件目录，防产物投毒），
 //!   组件产物统一 `c` 前缀命名（与桌面端一致）
 //!
-//! 与桌面端差异：
-//! - WasmHostContext 无 session_manager 和 permission
-//! - host-notify 域（移动特有，ABI v18：通知/震动/声音——收编原 host-events.notify）
-//! - host-terminal（send）已随票 15 阶段 B 退役（ABI v17，终端 UI 域迁插件）
-//! - 无 session/plugin-database/params/api-call/timer/process 接口
-//! - 新增 host_mark_plugin_error（插件生命周期失败上报，置 Error + 持久化未启用）
+//! 与桌面端差异（移动契约独立演进，ADR 0018）：
+//! - 移动独有域（host-notify / host-fs-mobile / host-terminal-stream /
+//!   host-connection-target / host-auth-client / 移动 events）连同 12 个 core 域
+//!   的域逻辑与 `Host` impl 一并住宿主
+//!   `bedcode-mobile/src-tauri/src/plugin/host_domains/`，内核只留
+//!   core 交集绑定（`core_binding`）与本壳
+//! - 无 session / plugin-database / api-call / timer / process / app 等桌面域
+//!   （`host-database` 主库面已随双端退役）
+//! - 宿主上下文统一为 `crate::host_api::context::WasmHostContext`（票 02 B5
+//!   上下文合一），无旧形态的 session_manager 字段；host-task/host-terminal-
+//!   stream 等视形态归位
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
 // ==================== Component Model 路径 ====================
 //
-// 组件形态加载/校验/调用全部在子模块 component（wasm_runtime/component.rs）：
-// - bindgen! 绑定（wasmtime 48 自带宏）、17 组 Host trait 接线（v18）
-// - LoadedComponentPlugin 业务方法（ticket 03）
+// 组件形态加载/校验/调用全部在子模块 component（bare/component.rs）：
+// - linker 装配（宿主自报能力模块经 `ModuleRegistry` 收集 → 白名单双向校验
+//   → `install_all`）+ WASI（[`super::wasi`]）
+// - 导出调用面：core 交集导出走 `core_binding` + 原生探测 + 宿主注入的
+//   `GuestEventDispatcher`（移动 events 导出带 `result`，无法原生探测）
+// - **无 `bindgen!`、无 `impl … Host`**：票 05 已把移动端那份绑定与 12 域实现
+//   全部迁到移动宿主（`src-tauri/src/plugin/bindings.rs` + `host_domains/`）
 // - 自研 ABI core 路径（`__bedcode_*` 导出、(ptr,len) 内存搬运、签名表校验）
 //   已在 ticket 09 删除，本文件为组件单路径
 pub(crate) mod component;
@@ -75,6 +87,21 @@ pub struct WasmRuntime {
     /// 能写插件目录的攻击者可投放伪造产物触发宿主进程 UB
     /// （`Component::deserialize_file` 是 unsafe，假定数据可信）。
     aot_cache_dir: Option<PathBuf>,
+    /// 内核配置快照（Engine 参数在构建期固化、WASI 注册面同；预打开装配每次实例化读）
+    ///
+    /// 移动形态此前只用 `CoreConfig::default()`（无外部配置面）；用户裁决
+    /// 2026-10-12 后 WASI 面也由配置定（默认全开），故壳持有配置本身——
+    /// 宿主经 [`WasmRuntime::with_config`] 注入（`new` 即默认配置，行为不变）。
+    config: crate::config::CoreConfig,
+    /// 移动 guest 事件派发器（票 05 / ADR 0022）
+    ///
+    /// 缺省 `UnwiredGuestEvents`（派发即 fail-visible）；生产由
+    /// `PluginManager::init_wasm_runtime_with` 注入移动实现
+    /// （`plugin/guest_events.rs`，与 message_bus dispatcher 同批装配）。
+    /// 已加载实例持有创建时的快照（见 `component::instantiate_component`）。
+    guest_events: std::sync::Arc<
+        std::sync::RwLock<Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>>,
+    >,
 }
 
 /// 单个 WASM 插件实例的状态（真源 = host-kit，双形态单一 state）
@@ -84,25 +111,9 @@ pub struct WasmRuntime {
 /// 可选导出探测句柄，字段面与桌面形态逐字一致（wasm-core-mobile-purity 票 04）。
 pub use bedcode_host_kit::state::{StoreSpec, WasmPluginState};
 
-/// 从统一 state 取移动宿主上下文（类型不符即 panic——装配期编程错误，fail-visible）
-///
-/// 取代旧自持 state 的 `state.host_ctx` 字段访问：state 的 `host` 槽是
-/// `Arc<dyn HostPorts>`（host-kit 只能命名 trait 对象），本访问器做一次向下转型。
-/// 域函数（`host_impl/*`）一律经此取 `WasmHostContext`（含 `granted_permissions`
-/// 权限面——由宿主在实例化时按插件注入，见 `WasmHostContext::for_plugin`）。
-pub(crate) fn host_ctx(state: &WasmPluginState) -> &WasmHostContext {
-    bedcode_host_kit::ports::downcast_host::<WasmHostContext>(state.host.as_ref())
-}
-
-/// 取当前运行时句柄（无上下文线程回落 ambient）——旧 `state.runtime_handle` 的替代
-///
-/// 统一 state（host-kit）不再携带运行时句柄：host fn 通常运行在 tokio 上下文内
-/// （`Handle::try_current` 命中）；spawn_blocking / 纯 std 线程上回落
-/// `runtime_util::ambient_handle()`（multi_thread + enable_all，任务派生照常可用）。
-pub(crate) fn current_handle() -> tokio::runtime::Handle {
-    tokio::runtime::Handle::try_current()
-        .unwrap_or_else(|_| crate::runtime_util::ambient_handle())
-}
+// 宿主上下文取用（旧 `host_ctx`）与运行时句柄（旧 `current_handle`）随域实现
+// 迁移动宿主（票 05 绑定归位）：真源 = `bedcode-mobile/src-tauri/src/plugin/
+// host_domains/mod.rs`（同一向下转型 + 同一 ambient 兜底语义）。
 
 // WasmHostContext 真源 = `crate::host_api::context`（批次 2 迁入后单一定义；
 // 本文件经 use 引用，见文件头 import）。
@@ -120,21 +131,54 @@ impl WasmRuntime {
     /// `aot_cache_dir`：AOT 编译产物缓存目录（宿主 cache 目录），
     /// None 时禁用文件级 AOT 缓存（退化为纯编译）
     pub fn new(aot_cache_dir: Option<PathBuf>) -> crate::Result<Self> {
-        // Engine 参数：桌面形态的 `CoreConfig` 是唯一真源（ADR 0045 D5——能力域 /
-        // 形态壳不得自带配置面），移动形态消费**同一份** `build_engine_config`，
-        // 取编译期默认值。移动插件同为 wasmtime 组件模型消费者，燃料看门狗 /
-        // 内存预留 / 栈深度 / 编译缓存 / backtrace 帧数与桌面逐值一致，不再各钉一份。
-        let config = engine::build_engine_config(&crate::config::CoreConfig::default(), plugin_debug_mode());
-        let engine = Engine::new(&config)
+        // 编译期默认配置：与历史行为逐值一致（WASI 面默认全开）
+        Self::with_config(aot_cache_dir, crate::config::CoreConfig::default())
+    }
+
+    /// 以指定内核配置创建运行时（外部配置面，用户裁决 2026-10-12）
+    ///
+    /// WASI 面（[`crate::config::WasiConfig`]）与 Engine 参数一样是**构建期固化**：
+    /// p2/p3 在 linker 一次注册，运行中改配置不生效（改需重建运行时）；
+    /// 「预打开目录装配」则是每次实例化读配置（见 `wasi::build_ctx`）。
+    ///
+    /// Engine 参数：桌面形态的 `CoreConfig` 是唯一真源（ADR 0045 D5——能力域 /
+    /// 形态壳不得自带配置面），移动形态消费**同一份** `build_engine_config`。
+    /// 移动插件同为 wasmtime 组件模型消费者，燃料看门狗 / 内存预留 / 栈深度 /
+    /// 编译缓存 / backtrace 帧数与桌面逐值一致，不再各钉一份。
+    pub fn with_config(
+        aot_cache_dir: Option<PathBuf>,
+        core_config: crate::config::CoreConfig,
+    ) -> crate::Result<Self> {
+        if let Err(reason) = core_config.validate() {
+            return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
+        let engine_config = engine::build_engine_config(&core_config, plugin_debug_mode());
+        let engine = Engine::new(&engine_config)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
 
-        let linker = component::build_component_linker(&engine)?;
+        let linker = component::build_component_linker(&engine, &core_config.wasi)?;
 
         Ok(Self {
             engine,
             linker,
             aot_cache_dir,
+            config: core_config,
+            guest_events: std::sync::Arc::new(std::sync::RwLock::new(Arc::new(
+                crate::manager::runtime::guest_events::UnwiredGuestEvents,
+            )
+                as Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>)),
         })
+    }
+
+    /// 注入移动 guest 事件派发器（生产在 `PluginManager::init_wasm_runtime_with`）
+    ///
+    /// **必须在首次 `instantiate_component` 之前调用**：已加载实例持有创建时的
+    /// 派发器快照。漏注入的后果是事件派发 fail-visible 报错（不是静默丢消息）。
+    pub fn set_guest_events(
+        &self,
+        dispatcher: Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>,
+    ) {
+        *self.guest_events.write().unwrap_or_else(|e| e.into_inner()) = dispatcher;
     }
 
     /// 测试访问器：Engine 引用（组件编译与实例化必须同一 Engine 实例，
@@ -145,14 +189,12 @@ impl WasmRuntime {
     }
 }
 
-// ==================== Host 能力实现层 ====================
+// ==================== Host 能力实现层（已迁移动宿主） ====================
 //
-// 业务逻辑（值传递、权限校验、block_on 执行）在 host_impl/，
-// 组件路径的 Host trait impl（runtime/component.rs）直接调用。
-// core 形态的 func_wrap 胶水（Caller + (ptr,len) 内存搬运）已在 09 清理。
-// pub（批次 2）：宿主 manager 经垫片 `crate::plugin::wasm_runtime::host_impl`
-// 调用停用回收聚合入口。
-pub mod host_impl;
+// 旧的 `bare/host_impl/`（12 个 core 域 adapter + 停用回收聚合）随票 05 绑定归位
+// 整体迁出：真源 = `bedcode-mobile/src-tauri/src/plugin/host_domains/`
+// （各域逻辑 + 对应 interface 的 `Host` impl 同处，经 `mobile-host-core` 模块自报）。
+// 内核侧只留本壳（Engine/Linker/Store 生命周期 + 导出调用骨架）。
 
 // ==================== Async Blocking Helper ====================
 

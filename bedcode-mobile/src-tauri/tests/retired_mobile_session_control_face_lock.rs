@@ -130,7 +130,9 @@ const KEEP_HOST_FACE: [(&str, &str); 3] = [
         "fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String>",
     ),
     (
-        "../../packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
+        // 票 05 绑定归位：host-http 的 WIT 实现自 wasm-core `bare/host_impl/` 迁入
+        // 移动宿主 adapter（jwtAuth 的宿主 token 投影仍在此层，凭据只记长度不落明文）
+        "src/plugin/host_domains/http.rs",
         "no global token available (not authenticated)",
     ),
 ];

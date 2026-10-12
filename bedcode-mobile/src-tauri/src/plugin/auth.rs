@@ -11,8 +11,8 @@ use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState}
 use bedcode_plugin_api_mobile::permission::PERMISSION_AUTH;
 
 use crate::plugin::bindings::{bedcode, check_permission, ctx_of};
-use bedcode_wasm_core_mobile::host_api::ports::{HostEnginePorts, PORT_NOT_WIRED};
-use bedcode_wasm_core_mobile::runtime_util::block_on_async;
+use bedcode_wasm_core::host_api::ports::{HostEnginePorts, PORT_NOT_WIRED};
+use bedcode_wasm_core::runtime_util::block_on_async;
 
 bedcode_host_kit::expect_host_module!(MODULE_NAME);
 
@@ -66,7 +66,7 @@ fn denied() -> String {
 /// 结果——凭据零过境。
 fn require_auth_engine(
     state: &WasmPluginState,
-) -> Result<std::sync::Arc<dyn bedcode_wasm_core_mobile::host_api::ports::AuthEnginePort>, String> {
+) -> Result<std::sync::Arc<dyn bedcode_wasm_core::host_api::ports::AuthEnginePort>, String> {
     ctx_of(state)
         .ports
         .auth_engine()

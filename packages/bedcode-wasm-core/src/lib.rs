@@ -23,15 +23,51 @@
 //! 模块间协作只经本 facade 再导出或 trait 注入（如 [`bus::MessageDispatcher`]），
 //! 禁止新增横向耦合；[`permission`] 为共享词汇（bedcode-plugin-api 再导出），
 //! 所有模块可用。
+//!
+//! # 形态与绑定（wasm-core-single-form 终态）
+//!
+//! 内核**只有一份机制**，双端零机制分叉；机制之外的**绑定与端事实全部在宿主**：
+//!
+//! ```text
+//! 宿主层（bedcode-{desktop,mobile}/src-tauri/src/plugin/*）
+//!   各端完整 world 的 bindgen + 各域 `Host` impl + linker 装配 + 导出调用面
+//!         ↓ 消费本 crate 的纯机制（manager / security / bus / db / storage / …）
+//! wasm-core（packages/bedcode-wasm-core）
+//!   机制核心 + core.wit 交集绑定层（manager/runtime/core_binding.rs，17 个双端全等 interface）
+//!         ↑ cap 与端差异由各端 `HostModule` 自报汇入同一个 Linker
+//! SDK 层（plugin-sdk-{desktop,mobile}）
+//!   compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（37 / 20，ADR 0018）
+//! ```
+//!
+//! 三条边界（真源见 `docs/adr/0049-wasm-core-single-form-and-binding-in-host.md`）：
+//!
+//! - **内核零 WIT 绑定，唯一例外是 core 交集**：`manager/runtime/core_binding.rs`
+//!   绑 `wit/core.wit` 的 `world core`；cap / 端扩展 interface 的 `Host` impl 一律
+//!   在各端宿主（桌面 `src-tauri/src/plugin/*.rs` 自带 bindgen；移动
+//!   `src-tauri/src/plugin/host_domains/` 域逻辑与 `Host` impl 同处）。
+//! - **WASI 面是双端共享机制**（[`manager::runtime::wasi`] + `CoreConfig::wasi`），
+//!   不是形态差异轴：默认双端全开，开 / 关走外部配置（为将来 worker 类别插件双端
+//!   都要跑 wasm 预备，ADR 0034 L3.b）。
+//! - **契约零合并**：双端 `compose.json` 保持各自 cap 分片组合，ABI 37 / 20 各自
+//!   演进（ADR 0018 维持不撤销）。
 
-// 形态互斥守卫（票 06 批次 03）：common-host 与 bare-host 各挂一套 bindgen
-// （`manager/runtime/common/component.rs` 绑桌面生成物 / `bare/component.rs`
-// 绑移动生成物），两套都开会在同 crate 生成同名 `bedcode` 模块冲突——编译期
-// 显性拒绝，禁止静默双开。
+// 形态互斥守卫（票 06 批次 03 建立；票 04 / 票 05 绑定归位后**判据已换**）
+//
+// 建立时的理由是「两形态各挂一套 bindgen（生成同名 `bedcode` 模块）」——票 04
+// （桌面全 world 绑定）与票 05（移动全 world 绑定 + 12 域）已把两个形态壳的
+// `bindgen!` 全部迁到各端宿主，该理由**不再成立**。保留本守卫的理由换成装配面
+// 本身：`common` 与 `bare` 各自定义同名运行时类型（`WasmRuntime` /
+// `WasmPluginState` / `WasmHostContext` / `StoreSpec` / `Loaded*Plugin`）并经
+// `manager::runtime` 再导出，双开即两套装配树并存、语义无意义。
+//
+// 终态是**两个形态 feature 整体退役**（单形态），届时本守卫连同 `common` /
+// `bare` 壳一并删除。当前 feature 面收敛未做，属已知遗留项（票 05 §7.10-1）；
+// 本文件所在的收口票只动契约 / 文档 / 锁，不动 feature 面。
 #[cfg(all(feature = "common-host", feature = "bare-host"))]
 compile_error!(
     "features `common-host` and `bare-host` are mutually exclusive: \
-     each mounts its own WIT bindgen (same `bedcode` module name)"
+     each mounts its own runtime assembly tree (same `WasmRuntime` / \
+     `WasmPluginState` / `WasmHostContext` / `Loaded*Plugin` surface)"
 );
 
 pub mod bus;
@@ -50,21 +86,25 @@ pub(crate) mod host_harness;
 /// （lib → crate 单向引用，票 05 收口；lib 的 `cargo check` / 全量断言都依赖它）。
 pub mod crate_boundary_lock;
 /// 宿主对外接口模块：WASM 宿主能力实现（host-* 原语，权限校验 + 宿主服务调用，
-/// 由 `manager::runtime::component` 的 Host trait 绑定逐接口调用）+ 前端 Tauri
+/// 由 `manager::runtime::core_binding` 的 core 交集绑定逐接口调用）+ 前端 Tauri
 /// 命令桥（api_bridge，权限校验后执行操作）。
-/// 子模块按形态 cfg 分叉（票 06 批次 03）：桌面 WIT impl 域随 `common-host`，
-/// 移动 adapter（ports / sql_guard / bare_context）随 `bare-host`
-/// （`http_engine` 已于票 05 上移能力域 crate，见 `host_api.rs` 分叉段落）
+/// 票 04 / 票 05 绑定归位后：cap 与端扩展 interface 的 `Host` impl 全在各自宿主，
+/// 内核只留 core 交集实现体；本目录留内核者多为「机制执行本体 + 端口词汇 + 单元
+/// 执行器」，它们的消费者一半在内核（任务引擎 / 单元）、一半在宿主 WIT impl。
+/// 端口词汇 `host_api::ports` 与统一上下文 `host_api::context` 双端常编译；
+/// `sql_guard` 垫片与 `bare_context` 均已退役（票 05）；`http_engine` 已于票 05
+/// 上移能力域 crate（见 `host_api.rs` 模块头分叉段落）。
 pub mod host_api;
 /// 宿主→插件互调客户端（中立层，ADR 0033 从 `utils/auth/auth_center.rs` 上提）：
 /// JSON-RPC 2.0 over host-bus 的通用发起端 + 请求 id 分配。
 /// 桌面装配面（互调回复道编排留内核，票 02 批次 05；移动形态的互调经
-/// `runtime::bare` 的 host_impl/conn 域——fork 无本模块）。
+/// 宿主侧 `bedcode-mobile/src-tauri/src/plugin/host_domains/` ——移动无本模块）。
 ///
-/// **票 02 B5 保持门控**：统一上下文常编译后本模块引 `crate::manager::runtime::
-/// WasmHostContext`（已常编译）不再受阻，但其还依赖 `host_api::api`（互调回复道
-/// 编排——桌面 WIT 绑定域，`common-host` 门控）；双端机制若需合一，先把
-/// `host_api/api.rs` 常编译化（随 T-03/04 绑定归位评估），否则留门控。
+/// **门控经票 04 / 05 绑定归位后复评（结论：维持门控）**：统一上下文常编译已让
+/// 本模块不再受阻，但 `host_api::api`（互调回复道编排）仍随 `common-host` 门控——
+/// 票 04 / 05 的归位只搬走了 WIT impl，编排本体（`intercall` / `auth_center` /
+/// `call_plugin_api_host` 三方消费）判定为**桌面专属机制**故留门控。移动要互调
+/// 走宿主自己的面（`plugin/host_domains/bus.rs`），不经本模块。
 #[cfg(feature = "common-host")]
 pub mod intercall;
 pub mod manager;
@@ -94,13 +134,15 @@ pub mod test_support;
 
 // ==================== 移动装配面（bare-host，fork 迁入，票 06 批次 03） ====================
 
-/// 宿主上下文注册表（fork 迁入）：移动装配面的 AppHandle / 端口注册面
-#[cfg(feature = "bare-host")]
-pub(crate) mod host_context_registry;
-/// 终端输出流网关（fork 迁入）：`host-terminal-stream` 域的流转发闸门
-/// （移动独有 interface，桌面无此域——ADR 0018）
-#[cfg(feature = "bare-host")]
-pub mod terminal_stream_gateway;
+// 宿主上下文注册表（fork 迁入的 `host_context_registry`）已随票 05（wasm-core-
+// single-form，M4）删除：它唯一的消费者是 mdns adapter 的旧零大小形态，adapter
+// 迁宿主后（票 02 批次 03）已无任何调用点——留着只会让「装配单入口」纪律显得
+// 还有第二处。域 adapter 侧取上下文一律经 `bedcode_host_kit::ports::downcast_host`
+// （宿主 adapter 自持 `Arc<dyn HostPorts>`，见 `host_api/context.rs` 说明）。
+// 终端输出流网关（fork 迁入的 `terminal_stream_gateway`）已随票 05（wasm-core-
+// single-form，M5）迁移动宿主：它是 `host-terminal-stream` 这一**移动独有 interface**
+// 的机制（移动独有域整面住宿主，ADR 0047 D5），内核不该带端词汇——
+// 真源 = `bedcode-mobile/src-tauri/src/plugin/terminal_stream.rs`（网关 + WIT layer 同处）。
 /// 错误类型垫片（票 06 批次 03）：双端 AppError 真源统一到
 /// `bedcode-server-base::error`（fork 自持 error.rs 退役）。移动装配面迁入文件
 /// 的 `crate::error::` 路径经此零改动解析；桌面侧经文件尾 `pub use` 的路径不变。
@@ -139,6 +181,20 @@ pub use bedcode_server_base::error::{AppError, Result};
 
 #[cfg(test)]
 mod tests {
+    /// 四个形态壳文件（相对 crate 根，正斜杠）——「壳内不得持 WIT 绑定」的扫描面
+    ///
+    /// 与 `manager::runtime::engine` 内的同名常量同源两份：那边供引擎锁判「形态壳
+    /// 里不许新起 bindgen / 自持 Engine 构建」，这边供本锁判「壳不得持 bindgen」。
+    /// 两处落点不同 crate 内模块，故各持一份并各自在文件头注记来源（双份而非抽取到
+    /// 别处：`engine.rs` 是常编译生产模块、此处是 `#[cfg(test)]`，抽公共会让生产面
+    /// 多一个只为测试存在的常量）。
+    const SHELL_FILES: &[&str] = &[
+        "src/manager/runtime/common.rs",
+        "src/manager/runtime/common/component.rs",
+        "src/manager/runtime/bare.rs",
+        "src/manager/runtime/bare/component.rs",
+    ];
+
     /// 本 crate 禁止出现的模块声明形态（PTY 已整面迁出）
     ///
     /// 独立成函数的原因：禁用名单若内联在断言里，它自己就是一条「含 `mod pty;`
@@ -418,10 +474,10 @@ mod tests {
     /// （`defined twice`）。判据按**代码行**比对（跳注释行）：本文件的模块文档
     /// 正当地提到迁移史，注释不该被判红。
     ///
-    /// **合法残余（不在本锁判据内）**：`manager/runtime/component.rs` 的
-    /// `#[cfg(test)]` host-api-call 替身 impl——只进内核测试二进制（SDK 夹具经
-    /// 互调 client 静态 import 该 interface，迁移后替身顶上转发内核编排），
-    /// 生产二进制的唯一注册来源仍是宿主薄转发。
+    /// **票 04 起判据全量**：原「合法残余」`manager/runtime/common/component.rs` 的
+    /// `#[cfg(test)]` host-api-call 替身 **已随全 world 绑定删除**（其消费用例迁宿主
+    /// `src-tauri/tests/`）——现在内核全域都不许再出现该 interface 的绑定词汇
+    /// （见 `binding_surface_must_not_return_to_wasm_core` 锁）。
     #[test]
     fn api_call_wit_impl_must_not_return_to_wasm_core() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -457,11 +513,11 @@ mod tests {
     /// 单元 + 宿主 WIT impl，与 `check_permission` 提 pub 同款裁决，见 `host_api.rs`
     /// 模块文档）。
     ///
-    /// 回接形态 = 域文件再现桌面扩展 interface 词汇。**合法残余（不在判据内）**：
-    /// `manager/runtime/common/component.rs` 的 `#[cfg(test)]` 三接口替身（只进内核测试
-    /// 二进制——SDK 夹具静态 import 整个 world，替身以 headless 显性拒绝顶上；
-    /// 生产二进制的唯一注册来源仍是宿主 impl）；`system/wsl.rs` 已删（发行版列举
-    /// 迁宿主 `src-tauri/src/system/wsl.rs`），`system.rs` 只留说明注释。
+    /// 回接形态 = 域文件再现桌面扩展 interface 词汇。**票 04 起判据全量**：
+    /// 原「合法残余」之一 `manager/runtime/common/component.rs` 的 `#[cfg(test)]`
+    /// 三接口替身**已随全 world 绑定一并删除**（其消费用例迁宿主，见
+    /// `binding_surface_must_not_return_to_wasm_core` 锁）；`system/wsl.rs`
+    /// 已删（发行版列举迁宿主 `src-tauri/src/system/wsl.rs`），`system.rs` 只留说明注释。
     #[test]
     fn sliced_interfaces_must_not_return_to_wasm_core() {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -520,6 +576,119 @@ mod tests {
                      host-http-endpoint，票 02 批次 06 + 票 04），不得回流内核"
                 );
             }
+        }
+    }
+
+    /// 内核**端绑定面禁回接锁**（票 04 终局形态，票 06 去端名化）
+    ///
+    /// 票 04 删除了内核最后一份桌面绑定面：`manager/runtime/common/component.rs` 的全
+    /// world `bindgen!`（world `plugin`，path 指桌面 SDK 生成物目录）+ 4 个 `#[cfg(test)]`
+    /// 替身（host-api-call / host-events-desktop / host-fs-desktop /
+    /// host-platform-desktop）+ `TestGuestEvents`。此后内核不再有第二种绑定来源：
+    /// core 交集走 [`crate::manager::runtime::core_binding`]（契约真源 `wit/core.wit`），
+    /// cap 与形态差异全由宿主自报（`HostModule` + inventory）汇入同一 linker。票 05
+    /// 把移动那份一并迁出 ⇒ 双端壳都零 `bindgen!`，本锁因此覆盖**两端**。
+    ///
+    /// 锁名去端名（ADR 0047 D2「自持标识符零端名」，票 06）：原名
+    /// `desktop_binding_surface_…` 是票 04 的遗留措辞，端名进入自持标识符。
+    ///
+    /// 判据（**代码行**比对，跳整行 `//` 注释；自排除本文件——本锁的禁用名单自身就是带
+    /// 这些词汇的字面量行，「锁自己判红 = 锁空转」）：
+    /// - crate `src/**` 不得出现 `TestGuestEvents` 与四条替身/扩展 interface 的模块路径
+    ///   （`host_api_call::` / `host_events_desktop::` / `host_fs_desktop::` /
+    ///   `host_platform_desktop::`）；
+    /// - **两个形态壳**（桌面 `common.rs` + `common/component.rs`、移动 `bare.rs` +
+    ///   `bare/component.rs`）都不得再出现 `bindgen!`——票 05 已把移动那份一并迁到
+    ///   移动宿主 `src-tauri/src/plugin/bindings.rs`，内核至此零 `bindgen!`（唯一例外
+    ///   是 `core_binding.rs` 绑 `wit/core.wit`，判据②单独查）。
+    ///
+    /// **合法残余（不在判据内）**：`common/tests/p3_async_host_import.rs` 的自持探针
+    /// world；按**路径**读桌面 SDK 源码的夹具构建 / 契约一致性探针
+    /// （`fixture_build.rs` 的构建输入、`host_api.rs` 的权限词表、p3 探针的 WIT/abi
+    /// 零变更断言）——它们按路径读文件，不产生绑定。
+    ///
+    /// 正面锚点（防空转）：`core_binding.rs` 的 `add_to_linker` 与
+    /// `common/component.rs` 的 `host_module_whitelist` 必须在场（内核唯一的 interface
+    /// 注册通路 + 宿主自报通路），否则本锁可能对着空文件恒绿。
+    #[test]
+    fn binding_surface_must_not_return_to_wasm_core() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        // 正面锚点：两条注册通路必须在场
+        let core_binding = std::fs::read_to_string(manifest_dir.join("src/manager/runtime/core_binding.rs"))
+            .expect("src/manager/runtime/core_binding.rs 必须在场（core 交集绑定）");
+        assert!(
+            core_binding.contains("add_to_linker"),
+            "core_binding.rs 必须仍含 add_to_linker（内核唯一的交集注册通路，本锁正面锚点）"
+        );
+        let component_path = manifest_dir.join("src/manager/runtime/common/component.rs");
+        let component = std::fs::read_to_string(&component_path)
+            .expect("src/manager/runtime/common/component.rs 必须在场（桌面壳）");
+        assert!(
+            component.contains("host_module_whitelist"),
+            "common/component.rs 必须仍含 host_module_whitelist（宿主自报通路，本锁正面锚点）"
+        );
+
+        // 反向①：全域代码行不得再现桌面绑定面词汇
+        let needles = [
+            "TestGuestEvents",
+            "host_api_call::",
+            "host_events_desktop::",
+            "host_fs_desktop::",
+            "host_platform_desktop::",
+        ];
+        let mut violations: Vec<String> = Vec::new();
+        let mut stack = vec![manifest_dir.join("src")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                // 自排除：本锁所在文件（禁用名单本身就是带这些词汇的字面量行）
+                if path == manifest_dir.join("src/lib.rs") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else { continue };
+                for (idx, raw_line) in content.lines().enumerate() {
+                    if raw_line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    for needle in needles {
+                        if raw_line.contains(needle) {
+                            violations.push(format!("{}:{}: {}", path.display(), idx + 1, raw_line.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "内核出现桌面绑定面回接痕迹（票 04 已删全 world bindgen + 4 个替身 + TestGuestEvents；\
+             移动那两份票 05 一并迁出）：\n{}",
+            violations.join("\n")
+        );
+
+        // 反向②：**双端壳都不得再持 bindgen**——内核唯一的绑定是 core 交集
+        // （`core_binding.rs` 绑 `wit/core.wit`，不在这四个壳里），cap 与端差异
+        // 由各端宿主自有绑定 + `HostModule` 自报注入（票 04 桌面 / 票 05 移动）。
+        for shell in SHELL_FILES {
+            let source = std::fs::read_to_string(manifest_dir.join(shell))
+                .unwrap_or_else(|e| panic!("形态壳必须在场（{shell}）：{e}"));
+            let hit = source
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .find(|line| line.contains("bindgen!"));
+            assert!(
+                hit.is_none(),
+                "{shell} 的代码行出现 `bindgen!`（行：{hit:?}）：形态壳不再持有 WIT 绑定——\
+                 core 交集走 `core_binding`（`wit/core.wit`），cap 与端差异由各端宿主自有绑定注入"
+            );
         }
     }
 }

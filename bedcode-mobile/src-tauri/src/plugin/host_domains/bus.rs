@@ -19,12 +19,40 @@
 //!
 //! 权限拒绝文案逐字保留（`permission denied: bus`）。
 
-use super::super::{WasmPluginState, current_handle, host_ctx};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use super::support::guarded_host_call;
 use bedcode_host_api_core::bus as core_bus;
 use bedcode_host_api_core::bus::BusPorts;
 use bedcode_host_api_core::gate::PermissionGate;
 use bedcode_plugin_api_mobile::permission::PERMISSION_BUS;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_bus::Host for WasmPluginState {
+    fn publish(&mut self, topic: String, payload_json: String) -> Result<(), String> {
+        bus_publish(self, &topic, &payload_json)
+    }
+
+    /// v9：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
+    fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
+        bus_publish_binary(self, &topic, payload)
+    }
+
+    fn subscribe(&mut self, topic: String) -> Result<(), String> {
+        bus_subscribe(self, &topic)
+    }
+
+    /// v9：以二进制格式偏好订阅（只接收 publish-binary 投递）
+    fn subscribe_binary(&mut self, topic: String) -> Result<(), String> {
+        bus_subscribe_binary(self, &topic)
+    }
+
+    fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
+        bus_unsubscribe(self, &topic)
+    }
+}
+
 
 /// [`WasmPluginState`] → 共享核 [`BusPorts`] 的移动 adapter
 struct StateBusPorts<'a> {
@@ -137,13 +165,13 @@ mod tests {
     /// 构造最小 `WasmPluginState`（host_impl 是 manager::runtime 的子模块，
     /// 私有字段构造合法；宿主上下文用 test_support 的无头夹具）
     fn state_with(plugin_id: &str, granted: &[&str]) -> WasmPluginState {
-        crate::test_support::build_component_state(plugin_id, granted)
+        bedcode_wasm_core::test_support::build_component_state(plugin_id, granted)
     }
 
     /// 无操作 dispatcher：publish 要求 dispatcher 已注入，静态订阅不实际使用它
     struct NoopDispatcher;
 
-    impl crate::bus::MessageDispatcher for NoopDispatcher {
+    impl bedcode_wasm_core::bus::MessageDispatcher for NoopDispatcher {
         fn dispatch_to_wasm(
             &self,
             _plugin_id: &str,
@@ -160,7 +188,7 @@ mod tests {
     /// 静态订阅者：把收到的消息转发到 mpsc 通道供断言
     struct ChannelHandler(tokio::sync::mpsc::UnboundedSender<bedcode_server_base::wire::BusMessage>);
 
-    impl crate::bus::BusMessageHandler for ChannelHandler {
+    impl bedcode_wasm_core::bus::BusMessageHandler for ChannelHandler {
         fn on_message(&self, msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
             let _ = self.0.send(msg.clone());
             Ok(())

@@ -8,21 +8,20 @@
 //! 宿主类型（DialEndpoint / RemotePullFileDto / ConsentRequest…）不出宿主。
 //!
 //! 装配点：`PluginManager::init_wasm_runtime_with` 构造 `WasmHostContext` 时
-//! 注入 `Arc<HostPorts>`；fs_auth 闸门经 `FsAuthGate` 注入（真源 = 宿主
-//! `plugin/fs_auth.rs`，白名单 / 弹窗 / 持久授权不迁移）。
+//! 注入 `Arc<HostPorts>`；fs_auth 闸门不再经端口投影——判定链已收敛到 wasm-core
+//! `security::fs_auth::FsAuthChecker`（用户裁决 2026-10-11「机制以桌面端为准
+//! 收敛一套」，宿主自实现退役），宿主只需构造它并交给上下文。
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bedcode_wasm_core_mobile::host_api::ports::{
-    AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, PrimaryTarget,
-    SafIoPort, WsReconnectPolicyPort,
+use bedcode_wasm_core::host_api::ports::{
+    AuthEnginePort, ConnectionEnginePort, HostEnginePorts, PrimaryTarget, SafIoPort,
+    WsReconnectPolicyPort,
 };
 use tauri::Manager;
-
-use crate::plugin::fs_auth::FsOp;
 
 // ==================== 子 trait 实现（宿主引擎类型直接 impl 外部端口 trait） ====================
 
@@ -30,25 +29,25 @@ use crate::plugin::fs_auth::FsOp;
 /// 端口只透传调用结果；`get_credentials` 只投影存在性）
 #[async_trait]
 impl AuthEnginePort for crate::auth::manager::AuthManager {
-    async fn request_pairing(&self) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn request_pairing(&self) -> bedcode_wasm_core::Result<()> {
         crate::auth::manager::AuthManager::request_pairing(self)
             .await
             .map_err(Into::into)
     }
 
-    async fn verify_pairing_code(&self, code: &str) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn verify_pairing_code(&self, code: &str) -> bedcode_wasm_core::Result<bool> {
         crate::auth::manager::AuthManager::verify_pairing_code(self, code)
             .await
             .map_err(Into::into)
     }
 
-    async fn authenticate_with_qr(&self, token: &str) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn authenticate_with_qr(&self, token: &str) -> bedcode_wasm_core::Result<bool> {
         crate::auth::manager::AuthManager::authenticate_with_qr(self, token)
             .await
             .map_err(Into::into)
     }
 
-    async fn authenticate_with_biometric(&self) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn authenticate_with_biometric(&self) -> bedcode_wasm_core::Result<bool> {
         crate::auth::manager::AuthManager::authenticate_with_biometric(self)
             .await
             .map_err(Into::into)
@@ -62,31 +61,10 @@ impl AuthEnginePort for crate::auth::manager::AuthManager {
 /// 主连接事实端口投影（票 12 `host-connection.primary-target` 引擎读数）
 #[async_trait]
 impl ConnectionEnginePort for crate::connection::manager::ConnectionManager {
-    async fn primary_target(&self) -> bedcode_wasm_core_mobile::Result<Option<(PrimaryTarget, bool)>> {
+    async fn primary_target(&self) -> bedcode_wasm_core::Result<Option<(PrimaryTarget, bool)>> {
         let target = crate::connection::manager::ConnectionManager::get_target(self).await;
         let connected = crate::connection::manager::ConnectionManager::is_connected(self).await;
         Ok(target.map(|t| (PrimaryTarget { address: t.address, port: t.port }, connected)))
-    }
-}
-
-/// 文件授权闸门端口投影（宿主 FsAuthChecker 的窄面：白名单 / 弹窗 /
-/// 持久授权真源全部在宿主，crate 侧只问「能不能读/写」）
-#[async_trait]
-impl FsAuthGate for crate::plugin::fs_auth::FsAuthChecker {
-    async fn check(&self, plugin_id: &str, path: &str, op: FsAuthOp) -> bool {
-        let mapped = match op {
-            FsAuthOp::Read => FsOp::Read,
-            FsAuthOp::Write => FsOp::Write,
-        };
-        crate::plugin::fs_auth::FsAuthChecker::check(self, plugin_id, path, mapped).await
-    }
-
-    async fn check_batch(&self, plugin_id: &str, paths: &[String], op: FsAuthOp) -> bool {
-        let mapped = match op {
-            FsAuthOp::Read => FsOp::Read,
-            FsAuthOp::Write => FsOp::Write,
-        };
-        crate::plugin::fs_auth::FsAuthChecker::check_batch(self, plugin_id, paths, mapped).await
     }
 }
 
@@ -211,7 +189,7 @@ impl HostEnginePorts for HostPorts {
         node_id: String,
         addr: String,
         port: u16,
-    ) -> bedcode_wasm_core_mobile::Result<String> {
+    ) -> bedcode_wasm_core::Result<String> {
         let dto = crate::peer_net::dial_peer_endpoint(
             app.clone(),
             crate::peer_net::DialEndpoint { node_id, addr, port },
@@ -220,7 +198,7 @@ impl HostEnginePorts for HostPorts {
         Ok(dto.status)
     }
 
-    async fn peer_disconnect(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_disconnect(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_net::disconnect_peer(app.clone(), node_id).await
     }
 
@@ -229,20 +207,20 @@ impl HostEnginePorts for HostPorts {
         app: &tauri::AppHandle,
         request_id: String,
         accepted: bool,
-    ) -> bedcode_wasm_core_mobile::Result<bool> {
+    ) -> bedcode_wasm_core::Result<bool> {
         crate::peer_net::respond_peer_consent(app.clone(), request_id, accepted).await
     }
 
-    async fn peer_list_trusted(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<String> {
+    async fn peer_list_trusted(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
         let dtos = crate::peer_net::list_trusted_peers(app.clone()).await?;
         serde_json::to_string(&dtos).map_err(|e| crate::AppError::Serialization(e))
     }
 
-    async fn peer_revoke_trusted(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_revoke_trusted(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_net::revoke_trusted_peer(app.clone(), node_id).await
     }
 
-    async fn peer_set_shared_roots(&self, app: &tauri::AppHandle, entries_json: String) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn peer_set_shared_roots(&self, app: &tauri::AppHandle, entries_json: String) -> bedcode_wasm_core::Result<()> {
         let seeds: Vec<SharedRootSeed> = serde_json::from_str(&entries_json)
             .map_err(|e| crate::AppError::Serialization(e))?;
         let entries = seeds
@@ -256,21 +234,21 @@ impl HostEnginePorts for HostPorts {
         crate::peer_net::set_shared_roots(app.clone(), entries).await
     }
 
-    async fn peer_start_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_start_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core::Result<bool> {
         crate::peer_net::start_node_owned(app, caller).await
     }
 
-    async fn peer_stop_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_stop_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core::Result<bool> {
         crate::peer_net::stop_node_owned(app, caller).await
     }
 
     // ==================== peer：transfer / receive / remote ====================
 
-    async fn peer_cancel_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_cancel_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_transfer::cancel_peer_transfer(app.clone(), batch_id).await
     }
 
-    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_receive::cancel_peer_receiving(app.clone(), batch_id).await
     }
 
@@ -280,32 +258,32 @@ impl HostEnginePorts for HostPorts {
         node_id: String,
         paths: Vec<String>,
         force_encrypt: Option<bool>,
-    ) -> bedcode_wasm_core_mobile::Result<String> {
+    ) -> bedcode_wasm_core::Result<String> {
         crate::peer_transfer::send_files_to_peer_with_policy(app.clone(), node_id, paths, force_encrypt).await
     }
 
-    async fn peer_respond_transfer(&self, app: &tauri::AppHandle, batch_id: String, accept: bool) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn peer_respond_transfer(&self, app: &tauri::AppHandle, batch_id: String, accept: bool) -> bedcode_wasm_core::Result<()> {
         crate::peer_receive::respond_peer_transfer(app.clone(), batch_id, accept).await?;
         Ok(())
     }
 
-    async fn peer_set_receive_policy(&self, app: &tauri::AppHandle, mode: String, timeout_secs: u64) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn peer_set_receive_policy(&self, app: &tauri::AppHandle, mode: String, timeout_secs: u64) -> bedcode_wasm_core::Result<()> {
         crate::peer_receive::set_peer_receive_policy(app.clone(), mode, timeout_secs).await
     }
 
-    async fn peer_pause_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_pause_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_transfer::pause_peer_transfer(app.clone(), batch_id).await
     }
 
-    async fn peer_resume_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn peer_resume_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
         crate::peer_transfer::resume_peer_transfer(app.clone(), batch_id).await
     }
 
-    async fn peer_set_download_dir(&self, app: &tauri::AppHandle, path: Option<String>) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn peer_set_download_dir(&self, app: &tauri::AppHandle, path: Option<String>) -> bedcode_wasm_core::Result<()> {
         crate::peer_receive::set_peer_download_dir(app, path).await
     }
 
-    async fn peer_list_shared_roots(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core_mobile::Result<String> {
+    async fn peer_list_shared_roots(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<String> {
         let roots = crate::peer_remote::list_peer_shared_roots(app.clone(), node_id).await?;
         serde_json::to_string(&roots).map_err(|e| crate::AppError::Serialization(e))
     }
@@ -316,7 +294,7 @@ impl HostEnginePorts for HostPorts {
         node_id: String,
         dir_id: String,
         rel_path: String,
-    ) -> bedcode_wasm_core_mobile::Result<String> {
+    ) -> bedcode_wasm_core::Result<String> {
         let dto = crate::peer_remote::browse_peer_directory(app.clone(), node_id, dir_id, rel_path).await?;
         serde_json::to_string(&dto).map_err(|e| crate::AppError::Serialization(e))
     }
@@ -327,7 +305,7 @@ impl HostEnginePorts for HostPorts {
         node_id: String,
         dir_id: String,
         files_json: String,
-    ) -> bedcode_wasm_core_mobile::Result<u32> {
+    ) -> bedcode_wasm_core::Result<u32> {
         let files: Vec<crate::peer_remote::RemotePullFileDto> =
             serde_json::from_str(&files_json).map_err(|e| crate::AppError::Serialization(e))?;
         crate::peer_remote::pull_peer_files(app.clone(), node_id, dir_id, files)
@@ -335,37 +313,37 @@ impl HostEnginePorts for HostPorts {
             .map(|n| n as u32)
     }
 
-    async fn peer_active_transfers(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<String> {
+    async fn peer_active_transfers(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
         // 三表聚合投影（send 句柄表 + receive pending 询问表 + pull 会话表）——
         // 真源在共享能力域 crate（Engine 集中化 2026-10-10）
         crate::peer_transfer::active_transfers_json(app).await
     }
 
-    async fn peer_collect_outgoing(&self, paths: Vec<String>) -> bedcode_wasm_core_mobile::Result<String> {
+    async fn peer_collect_outgoing(&self, paths: Vec<String>) -> bedcode_wasm_core::Result<String> {
         crate::peer_transfer::collect_outgoing_for_plugin(paths).await
     }
 
     // ==================== platform / fs / config / db / notify ====================
 
-    async fn platform_pick_files(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<Vec<String>> {
+    async fn platform_pick_files(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<Vec<String>> {
         crate::peer_transfer::peer_pick_files(app.clone()).await
     }
 
-    async fn platform_pick_shared_directory(&self) -> bedcode_wasm_core_mobile::Result<Option<(String, String, String)>> {
+    async fn platform_pick_shared_directory(&self) -> bedcode_wasm_core::Result<Option<(String, String, String)>> {
         crate::plugin::android_plugins::pick_shared_directory_android().await
     }
 
-    async fn resolve_downloads_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<String> {
+    async fn resolve_downloads_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
         crate::plugin::android_plugins::resolve_app_downloads_dir(app)
             .await
             .ok_or_else(|| crate::AppError::Internal("downloads dir not available".to_string()))
     }
 
-    async fn delete_file_android(&self, path: String) -> bedcode_wasm_core_mobile::Result<()> {
+    async fn delete_file_android(&self, path: String) -> bedcode_wasm_core::Result<()> {
         crate::plugin::android_plugins::delete_file(&path).await
     }
 
-    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str) -> bedcode_wasm_core_mobile::Result<bool> {
+    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str) -> bedcode_wasm_core::Result<bool> {
         Ok(crate::plugin::android_plugins::is_within_app_downloads_dir(app, path).await)
     }
 
@@ -374,7 +352,7 @@ impl HostEnginePorts for HostPorts {
         Some(Arc::new(SafIoBridge(state.inner().0.clone())))
     }
 
-    async fn app_data_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core_mobile::Result<PathBuf> {
+    async fn app_data_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<PathBuf> {
         crate::peer_net::app_data_dir(app)
     }
 

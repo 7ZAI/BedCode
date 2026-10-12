@@ -12,12 +12,42 @@
 //! 这里**不**顺手把 panic 改成「显式报错」——那是另一件事（该改的话走独立票，
 //! 带能红的用例），本次迁移只承诺行为零变化。
 
-use super::super::{current_handle, host_ctx, WasmPluginState};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use super::support::guarded_host_call;
 use bedcode_host_api_core::fs as core_fs;
 use bedcode_host_api_core::fs::FsHostPorts;
 use bedcode_host_api_core::fs::{FsOp, PermissionGate};
 use bedcode_plugin_api_mobile::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_fs::Host for WasmPluginState {
+    fn read(&mut self, path: String) -> Result<Option<String>, String> {
+        fs_read(self, &path)
+    }
+
+    fn write(&mut self, path: String, data: String) -> Result<(), String> {
+        fs_write(self, &path, &data)
+    }
+
+    fn copy(&mut self, src: String, dst: String) -> Result<(), String> {
+        fs_copy(self, &src, &dst)
+    }
+
+    fn delete(&mut self, path: String) -> Result<(), String> {
+        fs_delete(self, &path)
+    }
+
+    fn exists(&mut self, path: String) -> Result<bool, String> {
+        fs_exists(self, &path)
+    }
+
+    fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
+        fs_request_auth(self, &paths_json)
+    }
+}
+
 
 // ==================== 共享核端口 adapter ====================
 
@@ -86,18 +116,18 @@ impl FsHostPorts for StateFsPorts<'_> {
 ///
 /// 两个 `FsOp` 是**不同 crate 的不同类型**（共享核的域端口词汇 / 安全域的判定链
 /// 参数），同名会诱发误传；映射在此单点收口，避免每个调用点各写一次 match。
-fn auth_op(op: FsOp) -> crate::security::fs_auth::FsOp {
+fn auth_op(op: FsOp) -> bedcode_wasm_core::security::fs_auth::FsOp {
     match op {
-        FsOp::Read => crate::security::fs_auth::FsOp::Read,
-        FsOp::Write => crate::security::fs_auth::FsOp::Write,
+        FsOp::Read => bedcode_wasm_core::security::fs_auth::FsOp::Read,
+        FsOp::Write => bedcode_wasm_core::security::fs_auth::FsOp::Write,
     }
 }
 
 /// 批量判定用操作集合（`check_batch` 收 `FsOps` 位掩码，非单值 `FsOp`）
-fn auth_ops(op: FsOp) -> crate::security::fs_auth::FsOps {
+fn auth_ops(op: FsOp) -> bedcode_wasm_core::security::fs_auth::FsOps {
     match op {
-        FsOp::Read => crate::security::fs_auth::FsOps::READ,
-        FsOp::Write => crate::security::fs_auth::FsOps::WRITE,
+        FsOp::Read => bedcode_wasm_core::security::fs_auth::FsOps::READ,
+        FsOp::Write => bedcode_wasm_core::security::fs_auth::FsOps::WRITE,
     }
 }
 

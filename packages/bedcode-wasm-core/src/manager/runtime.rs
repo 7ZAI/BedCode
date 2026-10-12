@@ -85,11 +85,8 @@ pub use common::*;
 pub mod bare;
 
 // glob 对齐 common 分支口径：bare 分支全部 pub 符号过壳（WasmPluginState /
-// WasmRuntime / LoadedComponentPlugin / WasmHostContext…），且 `host_impl` 模块
-// 别名到壳顶层——移动 src-tauri 的 `plugin::wasm_runtime` 整模块垫片（pub use
-// manager::runtime）经此解析 `wasm_runtime::host_impl::register_host_service` 等
-// 宿主消费路径（fork 原状零改动）
+// WasmRuntime / LoadedComponentPlugin / WasmHostContext…）。
+// 票 05 绑定归位：`bare::host_impl` 的转出（`wasm_runtime::host_impl::*` 路径）
+// 已随 12 域实现迁移动宿主——宿主消费点改 `crate::plugin::host_domains`。
 #[cfg(feature = "bare-host")]
 pub use bare::{LoadedComponentPlugin, StoreSpec, WasmHostContext, WasmPluginState, WasmRuntime};
-#[cfg(feature = "bare-host")]
-pub use bare::host_impl;

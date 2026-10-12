@@ -36,7 +36,7 @@ pub struct LoadedPlugin {
 /// 插件生命周期事件（真源 = fork crate `manager::types`，批次 2b 迁入；
 /// 此处 re-export 保 `crate::plugin::types::PluginLifecycleEvent` 路径——
 /// handler/auth.rs 与 connection/manager.rs 的分发面零改动）
-pub use bedcode_wasm_core_mobile::manager::types::PluginLifecycleEvent;
+pub use bedcode_wasm_core::manager::types::PluginLifecycleEvent;
 
 /// 返回给前端的插件信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

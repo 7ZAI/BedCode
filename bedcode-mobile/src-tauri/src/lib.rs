@@ -131,7 +131,7 @@ pub fn run() {
             // 批次 2b：连接所有权移交 fork crate Database wrapper（schema 真源
             // 仍在宿主 db_schema.rs；crate Database 只持连接）
             let plugin_db = Arc::new(std::sync::Mutex::new(
-                bedcode_wasm_core_mobile::db::Database::from_connection(
+                bedcode_wasm_core::db::Database::from_connection(
                     rusqlite::Connection::open(&db_path)
                         .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
                 ),
@@ -201,16 +201,10 @@ pub fn run() {
                         return;
                     }
 
-                    // 种子内置受信任插件白名单（幂等：已存在则跳过）
-                    // - terminal-session: 远程终端控制端（终端订阅 + 任务域面板，
-                    //   票 16 由 com.bedcode.auto-task 合并且换 id）
-                    // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页
-                    //   显式配置，信任模型 = 配对 + 用户显式目录白名单
-                    for trusted_plugin in &["com.bedcode.terminal-session", "com.bedcode.file-transfer"] {
-                        if let Err(e) = pm.fs_auth().add_plugin_whitelist(trusted_plugin).await {
-                            tracing::warn!(plugin_id = %trusted_plugin, error = %e, "Failed to seed plugin whitelist");
-                        }
-                    }
+                    // 内置插件 fs 授权：统一判定链下没有「插件白名单」层（用户裁决
+                    // 2026-10-11「fs 授权统一到桌面判定链，移动自实现已退役」）——
+                    // 免弹窗走授权记录 / 弹窗记忆（首次访问弹一次，用户可记住），
+                    // 启动不再需要种子步骤。
 
                     pm.scan_and_load().await;
                     pm.load_all(&ah).await;
@@ -319,14 +313,8 @@ pub fn run() {
             crate::plugin::commands::plugin_install_from_file,
             crate::plugin::commands::plugin_uninstall,
             crate::plugin::commands::reload_wasm_plugin,
-            // File System Auth Commands
+            // File System Auth Commands（白名单管理命令随移动自实现退役，只剩弹窗回执）
             crate::plugin::commands::plugin_fs_auth_respond,
-            crate::plugin::commands::plugin_fs_add_path_whitelist,
-            crate::plugin::commands::plugin_fs_remove_path_whitelist,
-            crate::plugin::commands::plugin_fs_get_path_whitelist,
-            crate::plugin::commands::plugin_fs_add_plugin_whitelist,
-            crate::plugin::commands::plugin_fs_remove_plugin_whitelist,
-            crate::plugin::commands::plugin_fs_get_plugin_whitelist,
             crate::plugin::commands::plugin_log,
             crate::plugin::commands::plugin_invoke,
             // Dev Console Relay（仅 debug 构建：前端 console 日志转发 → logcat → dev:log 电脑端落盘，见 commands::dev_logs）

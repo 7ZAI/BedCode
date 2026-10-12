@@ -177,6 +177,11 @@ pub async fn reload_wasm_plugin(app_handle: tauri::AppHandle, plugin_id: String)
 // ==================== File System Auth Commands ====================
 
 /// 回复文件访问授权请求
+///
+/// 前端契约（`FsAuthDialog.vue`）保持 `(requestId, allowed, remember)` 三参不变——
+/// 判定链收敛到 wasm-core `security::fs_auth` 后，宿主在此把「允许 + 是否记住」
+/// 映射成该实现的四种决策（`allow_once` / `allow_remember` / `deny`）。「拒绝并
+/// 永久记住」（`deny_always`）无前端入口，不在此伪造。
 #[tauri::command]
 pub async fn plugin_fs_auth_respond(
     app_handle: tauri::AppHandle,
@@ -184,76 +189,23 @@ pub async fn plugin_fs_auth_respond(
     allowed: bool,
     remember: bool,
 ) -> Result<()> {
+    use bedcode_wasm_core::security::fs_auth::FsDecision;
+
+    let decision = match (allowed, remember) {
+        (true, true) => FsDecision::AllowRemember,
+        (true, false) => FsDecision::AllowOnce,
+        // allowed=false 时 remember 无意义（前端恒传 false）——一律按一次拒绝
+        (false, _) => FsDecision::Deny,
+    };
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().respond(&request_id, allowed, remember).await;
+    manager.fs_auth().respond(&request_id, decision).await;
     Ok(())
 }
 
-/// 添加路径白名单
-#[tauri::command]
-pub async fn plugin_fs_add_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .add_path_whitelist(&path)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 移除路径白名单
-#[tauri::command]
-pub async fn plugin_fs_remove_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .remove_path_whitelist(&path)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 获取路径白名单
-#[tauri::command]
-pub async fn plugin_fs_get_path_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .get_path_whitelist()
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 添加插件白名单
-#[tauri::command]
-pub async fn plugin_fs_add_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .add_plugin_whitelist(&plugin_id)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 移除插件白名单
-#[tauri::command]
-pub async fn plugin_fs_remove_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .remove_plugin_whitelist(&plugin_id)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 获取插件白名单
-#[tauri::command]
-pub async fn plugin_fs_get_plugin_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .get_plugin_whitelist()
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
+// 路径 / 插件白名单管理命令（`plugin_fs_{add,remove,get}_{path,plugin}_whitelist`）
+// 随移动自实现退役（用户裁决 2026-10-11「fs 授权统一到桌面判定链，移动自实现
+// 已退役」）：统一判定链的授权真源 = 授权记录表 + 弹窗记忆，没有「全局路径 /
+// 插件白名单」这一层；前端无调用点（grep 实证），删除即零回归。
 
 // ==================== Plugin Logging Commands ====================
 
@@ -359,7 +311,7 @@ pub async fn terminal_page_subscribe(
     if session_id.is_empty() {
         return Err("session_id is empty".to_string());
     }
-    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway().page_subscribe(&session_id, channel);
+    crate::plugin::terminal_stream::terminal_stream_gateway().page_subscribe(&session_id, channel);
     Ok(())
 }
 
@@ -369,6 +321,6 @@ pub async fn terminal_page_unsubscribe(session_id: String) -> std::result::Resul
     if session_id.is_empty() {
         return Err("session_id is empty".to_string());
     }
-    bedcode_wasm_core_mobile::terminal_stream_gateway::terminal_stream_gateway().page_unsubscribe(&session_id);
+    crate::plugin::terminal_stream::terminal_stream_gateway().page_unsubscribe(&session_id);
     Ok(())
 }

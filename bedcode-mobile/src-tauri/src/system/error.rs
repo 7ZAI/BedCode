@@ -5,4 +5,4 @@
 //! `crate::AppError` 历史路径零改动。移动 `AppError` 形状与批次 1 fork 对齐；
 //! 原 `Pty` 变体随迁移退役（全仓零构造点，死变体清理）。
 
-pub use bedcode_wasm_core_mobile::error::{AppError, Result};
+pub use bedcode_wasm_core::error::{AppError, Result};

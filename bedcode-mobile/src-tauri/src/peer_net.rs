@@ -31,7 +31,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use async_trait::async_trait;
 use bedcode_peer_net::SharedDirEntry;
-use bedcode_server_base::ports::{BusPort, BusMessageHandler, EventSink, MdnsPort, PathsPort, SystemInfoPort};
+use bedcode_server_base::ports::{BusMessageHandler, BusPort, EventSink, MdnsPort, PathsPort, SystemInfoPort};
 use bedcode_server_peer_net::engine_ports::{PeerEnginePorts, PeerPlatformSeam};
 
 // ==================== 能力域再导出（宿主其余模块路径零改动） ====================
@@ -126,7 +126,11 @@ impl BusPort for MobileBusPort {
         let pm = match crate::state::try_get_plugin_manager() {
             Some(pm) => pm,
             None => {
-                tracing::warn!(subscriber, topic, "peer static subscribe skipped: plugin manager not ready");
+                tracing::warn!(
+                    subscriber,
+                    topic,
+                    "peer static subscribe skipped: plugin manager not ready"
+                );
                 return;
             }
         };
@@ -152,14 +156,10 @@ impl BusPort for MobileBusPort {
 struct BaseBusHandlerAdapter(Box<dyn BusMessageHandler>);
 
 impl crate::plugin::message_bus::BusMessageHandler for BaseBusHandlerAdapter {
-    fn on_message(&self, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
-        self.0.on_message(&bedcode_server_base::wire::BusMessage {
-            topic: msg.topic.clone(),
-            sender: msg.sender.clone(),
-            payload: msg.payload.clone(),
-            payload_binary: msg.payload_binary.clone(),
-            timestamp: msg.timestamp,
-        })
+    fn on_message(&self, msg: &bedcode_server_base::wire::BusMessage) -> anyhow::Result<()> {
+        // 签名与内层端口 trait 同型（票 02 M3 单形态收敛后双 trait 共用同一
+        // `bedcode_server_base::wire::BusMessage`），不再需要逐字段值转换
+        self.0.on_message(msg)
     }
 }
 
@@ -412,158 +412,149 @@ pub(crate) fn app_data_dir(app: &AppHandle) -> crate::Result<PathBuf> {
 // ==================== 平台缝：SAF 桥（Android） ====================
 #[cfg(target_os = "android")]
 mod android_saf_bridge {
-use super::*;
-use crate::file_service::saf_tree;
-use crate::plugin::saf_io::SafEntry;
-use bedcode_peer_net::SeqReader;
+    use super::*;
+    use crate::file_service::saf_tree;
+    use crate::plugin::saf_io::SafEntry;
+    use bedcode_peer_net::SeqReader;
 
-/// SAF 共享目录访问适配器：把既有 SafIo（Kotlin 桥）映射到 crate 的
-/// `SharedSafAccess` 缝。相对路径解析用 list_tree 逐层下降（与
-/// file_service/saf_tree 的 walk 同构，此处同步化以匹配 trait 签名）。
-pub(crate) struct SafSharedAccess {
-    io: Arc<dyn crate::plugin::saf_io::SafIo>,
-}
-
-impl SafSharedAccess {
-    pub(crate) fn new(io: Arc<dyn crate::plugin::saf_io::SafIo>) -> Self {
-        Self { io }
+    /// SAF 共享目录访问适配器：把既有 SafIo（Kotlin 桥）映射到 crate 的
+    /// `SharedSafAccess` 缝。相对路径解析用 list_tree 逐层下降（与
+    /// file_service/saf_tree 的 walk 同构，此处同步化以匹配 trait 签名）。
+    pub(crate) struct SafSharedAccess {
+        io: Arc<dyn crate::plugin::saf_io::SafIo>,
     }
 
-    /// 同步逐层下降到 rel 指向的条目（parts 已过 crate 路径清洗）
-    fn walk(
-        &self,
-        tree_uri: &str,
-        root_doc_id: &str,
-        parts: &[String],
-    ) -> bedcode_peer_net::Result<SafEntry> {
-        use bedcode_peer_net::{saf_not_found, PeerNetError};
-
-        if parts.is_empty() {
-            return Ok(self.root_entry(tree_uri, root_doc_id));
+    impl SafSharedAccess {
+        pub(crate) fn new(io: Arc<dyn crate::plugin::saf_io::SafIo>) -> Self {
+            Self { io }
         }
-        let mut doc_id = root_doc_id.to_string();
-        let mut current = self.root_entry(tree_uri, root_doc_id);
-        for part in parts {
-            let children = self.io.list_tree(tree_uri, &doc_id).map_err(|e| {
-                tracing::warn!(tree_uri, doc_id = %doc_id, error = %e, "saf walk list_tree failed");
-                PeerNetError::TransferSession {
-                    role: "saf",
-                    detail: format!("list_tree failed (permission may be revoked): {e}"),
-                }
-            })?;
-            let child = children
-                .into_iter()
-                .find(|c| &c.name == part)
-                .ok_or_else(|| saf_not_found(format!("'{part}' in tree {tree_uri}")))?;
-            doc_id = child.document_id.clone();
-            current = child;
-        }
-        Ok(current)
-    }
 
-    fn root_entry(&self, tree_uri: &str, root_doc_id: &str) -> SafEntry {
-        SafEntry {
-            name: saf_tree::tree_alias(tree_uri).unwrap_or_else(|| tree_uri.to_string()),
-            is_dir: true,
-            size: 0,
-            mime: String::new(),
-            uri: tree_uri.to_string(),
-            document_id: root_doc_id.to_string(),
-        }
-    }
-}
+        /// 同步逐层下降到 rel 指向的条目（parts 已过 crate 路径清洗）
+        fn walk(&self, tree_uri: &str, root_doc_id: &str, parts: &[String]) -> bedcode_peer_net::Result<SafEntry> {
+            use bedcode_peer_net::{saf_not_found, PeerNetError};
 
-impl bedcode_peer_net::SharedSafAccess for SafSharedAccess {
-    fn list_dir(
-        &self,
-        tree_uri: &str,
-        rel: &str,
-    ) -> bedcode_peer_net::Result<Vec<bedcode_peer_net::DirEntry>> {
-        use bedcode_peer_net::{resolve_rel_path, saf_not_found, PeerNetError};
-
-        let root_doc_id = saf_tree::tree_document_id(tree_uri).ok_or_else(|| PeerNetError::TransferSession {
-            role: "saf",
-            detail: format!("invalid saf tree uri: {tree_uri}"),
-        })?;
-        let parts = resolve_rel_path(rel).ok_or_else(|| saf_not_found(rel))?;
-        let target = self.walk(tree_uri, &root_doc_id, &parts)?;
-        if !target.is_dir {
-            return Err(saf_not_found(format!("'{rel}' is not a directory")));
-        }
-        let children = self.io.list_tree(tree_uri, &target.document_id).map_err(|e| {
-            PeerNetError::TransferSession {
-                role: "saf",
-                detail: format!("list_tree failed (permission may be revoked): {e}"),
+            if parts.is_empty() {
+                return Ok(self.root_entry(tree_uri, root_doc_id));
             }
-        })?;
-        Ok(children
-            .into_iter()
-            .map(|c| bedcode_peer_net::DirEntry::new(c.name, c.is_dir, c.size.max(0) as u64))
-            .collect())
-    }
-
-    fn open_read(&self, tree_uri: &str, rel: &str) -> bedcode_peer_net::Result<Arc<dyn SeqReader>> {
-        use bedcode_peer_net::{resolve_rel_path, saf_not_found, PeerNetError};
-
-        let root_doc_id = saf_tree::tree_document_id(tree_uri).ok_or_else(|| PeerNetError::TransferSession {
-            role: "saf",
-            detail: format!("invalid saf tree uri: {tree_uri}"),
-        })?;
-        let parts = resolve_rel_path(rel).ok_or_else(|| saf_not_found(rel))?;
-        let entry = self.walk(tree_uri, &root_doc_id, &parts)?;
-        if entry.is_dir {
-            return Err(saf_not_found(format!("'{rel}' is a directory")));
+            let mut doc_id = root_doc_id.to_string();
+            let mut current = self.root_entry(tree_uri, root_doc_id);
+            for part in parts {
+                let children = self.io.list_tree(tree_uri, &doc_id).map_err(|e| {
+                    tracing::warn!(tree_uri, doc_id = %doc_id, error = %e, "saf walk list_tree failed");
+                    PeerNetError::TransferSession {
+                        role: "saf",
+                        detail: format!("list_tree failed (permission may be revoked): {e}"),
+                    }
+                })?;
+                let child = children
+                    .into_iter()
+                    .find(|c| &c.name == part)
+                    .ok_or_else(|| saf_not_found(format!("'{part}' in tree {tree_uri}")))?;
+                doc_id = child.document_id.clone();
+                current = child;
+            }
+            Ok(current)
         }
-        let handle = self.io.open_stream(&entry.uri, 0).map_err(|e| PeerNetError::TransferSession {
-            role: "saf",
-            detail: format!("open stream for '{rel}' failed: {e}"),
-        })?;
-        // 大小真源：条目元数据优先（OpenableColumns.SIZE），缺失回退流探测值
-        let size = if entry.size > 0 {
-            entry.size as u64
-        } else {
-            handle.size
-        };
-        Ok(Arc::new(SafSeqReader {
-            io: Arc::clone(&self.io),
-            uri: entry.uri,
-            handle_id: handle.handle_id,
-            size,
-        }))
-    }
-}
 
-/// SAF 流顺序读取器：定位读 = seek_stream + read_stream（Kotlin 句柄复用），
-/// Drop 时尽力关闭底层 fd
-struct SafSeqReader {
-    io: Arc<dyn crate::plugin::saf_io::SafIo>,
-    uri: String,
-    handle_id: String,
-    size: u64,
-}
-
-impl SeqReader for SafSeqReader {
-    fn size(&self) -> u64 {
-        self.size
-    }
-
-    fn read_at(&self, offset: u64, cap: usize) -> std::io::Result<Vec<u8>> {
-        self.io.seek_stream(&self.handle_id, offset).map_err(io_err)?;
-        self.io.read_stream(&self.handle_id, cap).map_err(io_err)
-    }
-}
-
-impl Drop for SafSeqReader {
-    fn drop(&mut self) {
-        if let Err(e) = self.io.close_stream(&self.handle_id) {
-            tracing::debug!(handle_id = %self.handle_id, uri = %self.uri, "close saf stream failed: {e}");
+        fn root_entry(&self, tree_uri: &str, root_doc_id: &str) -> SafEntry {
+            SafEntry {
+                name: saf_tree::tree_alias(tree_uri).unwrap_or_else(|| tree_uri.to_string()),
+                is_dir: true,
+                size: 0,
+                mime: String::new(),
+                uri: tree_uri.to_string(),
+                document_id: root_doc_id.to_string(),
+            }
         }
     }
-}
 
-fn io_err(e: crate::AppError) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-}
+    impl bedcode_peer_net::SharedSafAccess for SafSharedAccess {
+        fn list_dir(&self, tree_uri: &str, rel: &str) -> bedcode_peer_net::Result<Vec<bedcode_peer_net::DirEntry>> {
+            use bedcode_peer_net::{resolve_rel_path, saf_not_found, PeerNetError};
+
+            let root_doc_id = saf_tree::tree_document_id(tree_uri).ok_or_else(|| PeerNetError::TransferSession {
+                role: "saf",
+                detail: format!("invalid saf tree uri: {tree_uri}"),
+            })?;
+            let parts = resolve_rel_path(rel).ok_or_else(|| saf_not_found(rel))?;
+            let target = self.walk(tree_uri, &root_doc_id, &parts)?;
+            if !target.is_dir {
+                return Err(saf_not_found(format!("'{rel}' is not a directory")));
+            }
+            let children =
+                self.io
+                    .list_tree(tree_uri, &target.document_id)
+                    .map_err(|e| PeerNetError::TransferSession {
+                        role: "saf",
+                        detail: format!("list_tree failed (permission may be revoked): {e}"),
+                    })?;
+            Ok(children
+                .into_iter()
+                .map(|c| bedcode_peer_net::DirEntry::new(c.name, c.is_dir, c.size.max(0) as u64))
+                .collect())
+        }
+
+        fn open_read(&self, tree_uri: &str, rel: &str) -> bedcode_peer_net::Result<Arc<dyn SeqReader>> {
+            use bedcode_peer_net::{resolve_rel_path, saf_not_found, PeerNetError};
+
+            let root_doc_id = saf_tree::tree_document_id(tree_uri).ok_or_else(|| PeerNetError::TransferSession {
+                role: "saf",
+                detail: format!("invalid saf tree uri: {tree_uri}"),
+            })?;
+            let parts = resolve_rel_path(rel).ok_or_else(|| saf_not_found(rel))?;
+            let entry = self.walk(tree_uri, &root_doc_id, &parts)?;
+            if entry.is_dir {
+                return Err(saf_not_found(format!("'{rel}' is a directory")));
+            }
+            let handle = self
+                .io
+                .open_stream(&entry.uri, 0)
+                .map_err(|e| PeerNetError::TransferSession {
+                    role: "saf",
+                    detail: format!("open stream for '{rel}' failed: {e}"),
+                })?;
+            // 大小真源：条目元数据优先（OpenableColumns.SIZE），缺失回退流探测值
+            let size = if entry.size > 0 { entry.size as u64 } else { handle.size };
+            Ok(Arc::new(SafSeqReader {
+                io: Arc::clone(&self.io),
+                uri: entry.uri,
+                handle_id: handle.handle_id,
+                size,
+            }))
+        }
+    }
+
+    /// SAF 流顺序读取器：定位读 = seek_stream + read_stream（Kotlin 句柄复用），
+    /// Drop 时尽力关闭底层 fd
+    struct SafSeqReader {
+        io: Arc<dyn crate::plugin::saf_io::SafIo>,
+        uri: String,
+        handle_id: String,
+        size: u64,
+    }
+
+    impl SeqReader for SafSeqReader {
+        fn size(&self) -> u64 {
+            self.size
+        }
+
+        fn read_at(&self, offset: u64, cap: usize) -> std::io::Result<Vec<u8>> {
+            self.io.seek_stream(&self.handle_id, offset).map_err(io_err)?;
+            self.io.read_stream(&self.handle_id, cap).map_err(io_err)
+        }
+    }
+
+    impl Drop for SafSeqReader {
+        fn drop(&mut self) {
+            if let Err(e) = self.io.close_stream(&self.handle_id) {
+                tracing::debug!(handle_id = %self.handle_id, uri = %self.uri, "close saf stream failed: {e}");
+            }
+        }
+    }
+
+    fn io_err(e: crate::AppError) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+    }
 } // mod android_saf_bridge
 
 // ==================== 平台缝：落点提升（MediaStore 回退语义） ====================
@@ -584,19 +575,17 @@ impl bedcode_peer_net::FileLanding for MediaLanding {
             .saf
             .write_media_downloads(&src, display_name, mime_type_for(display_name))
         {
-            Ok(()) => {
-                match std::fs::remove_file(final_path) {
-                    Ok(()) => tracing::info!(
-                        display_name = %display_name,
-                        "pulled file promoted to MediaStore.Downloads (private copy removed)"
-                    ),
-                    Err(e) => tracing::warn!(
-                        path = %final_path.display(),
-                        error = %e,
-                        "media promote ok but private copy cleanup failed"
-                    ),
-                }
-            }
+            Ok(()) => match std::fs::remove_file(final_path) {
+                Ok(()) => tracing::info!(
+                    display_name = %display_name,
+                    "pulled file promoted to MediaStore.Downloads (private copy removed)"
+                ),
+                Err(e) => tracing::warn!(
+                    path = %final_path.display(),
+                    error = %e,
+                    "media promote ok but private copy cleanup failed"
+                ),
+            },
             Err(e) => {
                 tracing::info!(
                     path = %final_path.display(),

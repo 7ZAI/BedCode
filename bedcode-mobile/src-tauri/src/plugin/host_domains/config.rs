@@ -1,7 +1,17 @@
 //! host_config_get — 配置读取（逻辑层）
 
-use super::super::{WasmPluginState, current_handle, host_ctx};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use super::support::guarded_host_call;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_config::Host for WasmPluginState {
+    fn get(&mut self, key: String) -> Result<Option<String>, String> {
+        config_get(self, &key)
+    }
+}
+
 
 /// 逻辑层：读取宿主配置项
 ///

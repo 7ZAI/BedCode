@@ -55,7 +55,7 @@ impl PeerPorts for HostPeerPorts {
         // 那份同步桥驱动；host fn 线程可能是 worker / 已让出 / 纯 std 线程，
         // 桥内已按 runtime flavor 分流（见 runtime_util 模块文档）
         let allowed =
-            bedcode_wasm_core_mobile::runtime_util::block_on_async(pm.has_permission(plugin_id, permission));
+            bedcode_wasm_core::runtime_util::block_on_async(pm.has_permission(plugin_id, permission));
         if !allowed {
             tracing::warn!(
                 plugin_id = %plugin_id,
@@ -79,7 +79,7 @@ impl PeerPorts for HostPeerPorts {
 
     fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn Any + Send> {
         // 复用 wasm-core 唯一那份同步桥（见模块头注第 3 条）
-        bedcode_wasm_core_mobile::runtime_util::block_on_async(fut)
+        bedcode_wasm_core::runtime_util::block_on_async(fut)
     }
 }
 

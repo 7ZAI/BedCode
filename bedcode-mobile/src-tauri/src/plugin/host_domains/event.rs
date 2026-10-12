@@ -6,8 +6,19 @@
 //! 失败且无信号（静默降级的断链形态）。WIT `host-events.emit` 无错误返回，
 //! 拒绝以 warn 落日志（与既有 emit 失败仅日志同语义）。
 
-use super::super::{WasmPluginState, host_ctx};
+use bedcode_host_kit::WasmPluginState;
+use super::host_ctx;
 use tauri::Emitter;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_events::Host for WasmPluginState {
+    // WIT 中 emit 无错误返回，宿主侧记录日志（失败在 emit_event 内记录）
+    fn emit(&mut self, event_name: String, payload_json: String) {
+        emit_event(self, &event_name, &payload_json);
+    }
+}
+
 
 /// 逻辑层：向前端发送事件（WIT host-events.emit，无错误返回；
 /// 失败仅记录日志——与旧 func_wrap 同语义）

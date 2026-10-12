@@ -22,9 +22,35 @@
 use bedcode_discovery_engine::ports::{BoxedTask, DiscoveryPorts, DiscoveryTask};
 use std::sync::Arc;
 
-use super::super::{WasmPluginState, host_ctx};
-use crate::bus::MessageBus;
-use crate::host_api::ports::HostEnginePorts;
+use bedcode_host_kit::WasmPluginState;
+use super::host_ctx;
+use bedcode_wasm_core::bus::MessageBus;
+use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_mdns::Host for WasmPluginState {
+    fn browse(&mut self, service_type: String) -> Result<String, String> {
+        mdns_browse(self, &service_type)
+    }
+
+    fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
+        mdns_stop_browse(self, &browser_id)
+    }
+
+    fn advertise(&mut self, config_json: String) -> Result<String, String> {
+        mdns_advertise(self, &config_json)
+    }
+
+    fn stop_advertise(&mut self, advertise_id: String) -> Result<bool, String> {
+        mdns_stop_advertise(self, &advertise_id)
+    }
+
+    fn is_advertising(&mut self, advertise_id: String) -> Result<bool, String> {
+        mdns_is_advertising(self, &advertise_id)
+    }
+}
+
 
 // ==================== 移动端 DiscoveryPorts 适配器 ====================
 
@@ -190,20 +216,10 @@ pub(crate) fn mdns_is_advertising(
     bedcode_discovery_engine::engine::is_advertising(&ports, &state.plugin_id, advertise_id)
 }
 
-// ==================== 宿主身份广播登记（owner=host） ====================
-
-/// 登记宿主（peer-net 引擎）节点身份广播：注册动作由引擎经共享守护完成
-/// （TXT/ServiceInfo 由引擎构造，本模块零业务拼装）；本函数只做 ADVERTISERS
-/// 句柄登记（owner=host）。续期归引擎 re-announce 循环，登记行不挂续期任务
-pub fn register_host_service(service_type: &str, fullname: &str) -> Result<String, String> {
-    bedcode_discovery_engine::engine::register_host_service(service_type, fullname)
-}
-
-/// 注销宿主身份广播登记（节点停机时调用）：只移除 owner=host 的登记行，
-/// 实际 unregister 由引擎 DiscoveryDaemon.stop() 按全名完成。幂等
-pub fn stop_host_service(advertise_id: &str) -> Result<bool, String> {
-    bedcode_discovery_engine::engine::stop_host_service(advertise_id)
-}
+// 宿主身份广播登记转发（原 `register_host_service` / `stop_host_service` 两条
+// 薄包装）已随票 05 删除：它们的唯一消费者（peer-net 引擎经 `host_impl` 垫片反向
+// 消费）早已改为直连 `bedcode_discovery_engine::engine`（移动 `src/peer_net.rs`
+// 适配层），宿主侧零调用点——留薄包装只会让「能力面在场」被误读。
 
 // ==================== 双表回收 ====================
 
@@ -219,11 +235,6 @@ pub(crate) fn purge_for_plugin(ports: &Arc<dyn HostEnginePorts>, plugin_id: &str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::MessageBus;
-    use crate::manager::runtime::WasmHostContext;
-    use crate::security::fs_auth::FsAuthChecker;
-    use crate::storage::PluginStorage;
-    use std::collections::HashSet;
 
     /// 无头插件状态：权限集按 mdns 授权开关构建。deny 路径在引擎权限门处
     /// 短路（零守护 / 零 spawn），其余行为契约由引擎 crate 单测覆盖
@@ -233,7 +244,7 @@ mod tests {
         } else {
             Vec::new()
         };
-        crate::test_support::build_component_state(plugin_id, &granted)
+        bedcode_wasm_core::test_support::build_component_state(plugin_id, &granted)
     }
 
     /// 权限门 fail-closed：未授权（granted_permissions 缺 network:mdns）时
@@ -255,27 +266,16 @@ mod tests {
         }
     }
 
-    /// 宿主身份登记纯表操作（引擎 NullTask 占位，不 spawn）：登记 → 跨 owner
-    /// 拒绝 → 注销幂等
-    #[tokio::test]
-    async fn host_service_registration_owner_arbitration() {
-        let host_reg = super::register_host_service("_co._cp.local.", "h._co._cp.local.")
-            .expect("host registration books handle");
-        // 非 owner（插件）注销 host 登记 → 拒绝（属主仲裁，引擎表内判定）
-        let s = state("intruder-plugin", true);
-        assert_eq!(
-            super::mdns_stop_advertise(&s, &host_reg),
-            Err("not owner of mdns handle".to_string())
-        );
-        // host 注销幂等移除
-        assert!(super::stop_host_service(&host_reg).expect("host registration removable"));
-        assert!(!super::stop_host_service(&host_reg).expect("idempotent false"));
-    }
+    /// 宿主身份登记的属主仲裁与幂等注销（原 wasm-core 同形用例）：`register_host_service`
+    /// / `stop_host_service` 两条薄包装随票 05 删除（唯一消费者已直连 discovery-engine），
+    /// 契约覆盖下沉引擎 crate——`cross_plugin_stop_and_query_rejected`（跨 owner 拒绝）
+    /// 与 `host_and_plugin_advertise_coexist_on_shared_daemon`（host 登记共存 + purge
+    /// 隔离 + 幂等注销）逐条等价。此处不重复持有，防「引用已删函数」的编译死链。
 
     /// purge 空表零副作用（minimal 端口，不发布 / 不拦回显 / 不触守护）
     #[tokio::test]
     async fn purge_empty_table_is_noop() {
-        let ports: Arc<dyn HostEnginePorts> = Arc::new(crate::test_support::MockPorts::new());
+        let ports: Arc<dyn HostEnginePorts> = Arc::new(bedcode_wasm_core::test_support::MockPorts::new());
         assert_eq!(super::purge_for_plugin(&ports, "ghost-plugin"), 0);
     }
 }

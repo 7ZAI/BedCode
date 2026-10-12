@@ -3,13 +3,16 @@
 //! **为什么宿主要自带一份绑定**（孤儿规则）：`impl Host for WasmPluginState`
 //! 要求 trait 或类型之一本地——`WasmPluginState` 属 host-kit（对任何消费方都是
 //! 外部类型），故**装配方必须自己生成 trait**（桌面先例
-//! `bedcode-desktop/src-tauri/src/plugin/bindings.rs`）。本绑定服务移动独有域
-//! adapter（notify / fs_mobile / terminal_stream / connection / auth）——
-//! 5 域的自定义自报装配在 `build_component_linker` 的注册面（② 段）被收集。
+//! `bedcode-desktop/src-tauri/src/plugin/bindings.rs`）。**票 05 起本文件是移动
+//! WIT 绑定的唯一落点**：服务移动独有域 adapter（notify / fs_mobile /
+//! terminal_stream / connection / auth / 移动 events）与随域迁入的 12 个 core 域
+//! （`plugin/host_domains/`）——各自的 `Host` impl 经 `mobile-host-core` 模块
+//! 自报，装配期由内核 `ModuleRegistry` 收集（核心里已零 WIT 绑定，见
+//! `packages/bedcode-wasm-core/src/manager/runtime/core_binding.rs` 只绑 core 交集）。
 //!
 //! **纪律**：宿主 adapter 的 `Host` impl 一律引用**本文件**的绑定；不得再实现
-//! wasm-core bare 面的同名 trait——同一 interface 被两份 `add_to_linker` 注册
-//! ⇒ 装配期 `defined twice`。绑定配置与 wasm-core bare 面逐字一致
+//! wasm-core 内核的同名 trait——同一 interface 被两份 `add_to_linker` 注册
+//! ⇒ 装配期 `defined twice`。绑定配置与内核 core 交集侧逐字一致
 //! （`exports: { default: async }`——测试组件与真实插件的调用路径同形）。
 
 use wasmtime::component::bindgen;

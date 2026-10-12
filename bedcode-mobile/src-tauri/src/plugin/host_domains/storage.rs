@@ -13,10 +13,28 @@
 //! serde_json 规范形，与桌面 component.rs 既有形态一致）——未授权 + 非法 JSON 的
 //! 边缘入参错误文本由权限文案变为解析文案；授权路径行为零变化。
 
-use super::super::{WasmPluginState, current_handle, host_ctx};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use super::support::guarded_host_call;
 use bedcode_host_api_core::storage::{PermissionGate, StoragePorts};
 use bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_storage::Host for WasmPluginState {
+    fn get(&mut self, key: String) -> Result<Option<String>, String> {
+        storage_get(self, &key)
+    }
+
+    fn set(&mut self, key: String, value: String) -> Result<(), String> {
+        storage_set(self, &key, &value)
+    }
+
+    fn delete(&mut self, key: String) -> Result<(), String> {
+        storage_delete(self, &key)
+    }
+}
+
 
 /// [`WasmPluginState`] → 共享核 [`StoragePorts`] 的移动 adapter
 ///
@@ -40,7 +58,7 @@ impl StoragePorts for StateStoragePorts<'_> {
         guarded_host_call(
             &self.state.plugin_id,
             "host_storage_get",
-            Err(crate::AppError::Internal("host_storage_get panicked".to_string())),
+            Err(bedcode_wasm_core::AppError::Internal("host_storage_get panicked".to_string())),
             || tokio::task::block_in_place(|| current_handle().block_on(storage.get(&pid, &key))),
         )
         .map_err(|e| e.to_string())
@@ -53,7 +71,7 @@ impl StoragePorts for StateStoragePorts<'_> {
         guarded_host_call(
             &self.state.plugin_id,
             "host_storage_set",
-            Err(crate::AppError::Internal("host_storage_set panicked".to_string())),
+            Err(bedcode_wasm_core::AppError::Internal("host_storage_set panicked".to_string())),
             || {
                 tokio::task::block_in_place(|| {
                     current_handle().block_on(storage.set(&pid, &key, value))
@@ -70,7 +88,7 @@ impl StoragePorts for StateStoragePorts<'_> {
         guarded_host_call(
             &self.state.plugin_id,
             "host_storage_delete",
-            Err(crate::AppError::Internal("host_storage_delete panicked".to_string())),
+            Err(bedcode_wasm_core::AppError::Internal("host_storage_delete panicked".to_string())),
             || tokio::task::block_in_place(|| current_handle().block_on(storage.delete(&pid, &key))),
         )
         .map_err(|e| e.to_string())
@@ -136,7 +154,7 @@ mod tests {
     /// 构造最小 `WasmPluginState`（host_impl 是 manager::runtime 的子模块，
     /// 私有字段构造合法；宿主上下文用 test_support 的无头夹具）
     fn state_with(plugin_id: &str, granted: &[&str]) -> WasmPluginState {
-        crate::test_support::build_component_state(plugin_id, granted)
+        bedcode_wasm_core::test_support::build_component_state(plugin_id, granted)
     }
 
     /// 授权插件经共享核 adapter 的 set/get/delete 往返（JSON 串 wire 形）
@@ -166,7 +184,7 @@ mod tests {
     /// 也不可达——迁移前移动缺该守卫，票 18 起与桌面同文同语义）
     #[tokio::test(flavor = "multi_thread")]
     async fn system_space_guard_now_enforced() {
-        let state = state_with(crate::storage::SYSTEM_PLUGIN_ID, &[PERMISSION_STORAGE]);
+        let state = state_with(bedcode_wasm_core::test_support::SYSTEM_PLUGIN_ID, &[PERMISSION_STORAGE]);
         let err = storage_get(&state, "activation_state").unwrap_err();
         assert!(err.contains("system storage space"), "实际: {err}");
         assert!(storage_set(&state, "k", "1").is_err(), "系统空间写入必须被拒");

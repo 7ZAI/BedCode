@@ -3,9 +3,23 @@
 //! 系统对话框等与领域无关的平台交互；选源对话框本身即用户授权动作，不叠加
 //! 权限门。底层复用既有 peer_transfer 的 SAF/系统选择器实现。
 
-use super::super::{WasmPluginState, host_ctx};
-use crate::runtime_util::block_on_async;
+use bedcode_host_kit::WasmPluginState;
+use super::host_ctx;
+use bedcode_wasm_core::runtime_util::block_on_async;
 use super::support::guarded_host_call;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_platform::Host for WasmPluginState {
+    fn pick_files(&mut self) -> Result<String, String> {
+        platform_pick_files(self)
+    }
+
+    fn pick_folder(&mut self) -> Result<String, String> {
+        platform_pick_folder(self)
+    }
+}
+
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
 pub(crate) fn platform_pick_files(state: &WasmPluginState) -> Result<String, String> {
@@ -41,7 +55,7 @@ where
     // `'static`：桥的重入避让可能把 future 搬到新线程驱动（`fresh thread` 路径
     // 要求 `Send + 'static`），借用型返回值不得经此桥搬运
     T: Send + 'static,
-    F: std::future::Future<Output = crate::Result<T>> + Send,
+    F: std::future::Future<Output = bedcode_wasm_core::Result<T>> + Send,
 {
     // 桥内部的运行时句柄获取与重入避让在 `block_on_async` 单点（旧自持 state 的
     // `runtime_handle` 不再由调用方携带，票 04 state 换型）

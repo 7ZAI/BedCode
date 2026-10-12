@@ -32,12 +32,38 @@ use std::sync::Arc;
 
 use bedcode_ws_client_engine::ports::{BoxedTask, ReconnectPolicy, WsClientPorts, WsTask};
 
-use super::super::{WasmPluginState, current_handle, host_ctx};
-use crate::runtime_util::block_on_async;
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
+use bedcode_wasm_core::runtime_util::block_on_async;
 use super::support::guarded_host_call;
 
-use crate::host_api::ports::HostEnginePorts;
-use crate::runtime_util::spawn_with_error_boundary_on;
+use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+use bedcode_wasm_core::runtime_util::spawn_with_error_boundary_on;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_websocket::Host for WasmPluginState {
+    fn connect(&mut self, config_json: String) -> Result<String, String> {
+        ws_connect(self, &config_json)
+    }
+
+    fn send_text(&mut self, handle: String, text: String) -> Result<(), String> {
+        ws_send_text(self, &handle, &text)
+    }
+
+    fn send_binary(&mut self, handle: String, payload: Vec<u8>) -> Result<(), String> {
+        ws_send_binary(self, &handle, payload)
+    }
+
+    fn close(&mut self, handle: String, close_json: String) -> Result<bool, String> {
+        ws_close(self, &handle, &close_json)
+    }
+
+    fn is_connected(&mut self, handle: String) -> Result<bool, String> {
+        ws_is_connected(self, &handle)
+    }
+}
+
 
 // ==================== 移动端 WsClientPorts 适配器 ====================
 
@@ -48,7 +74,7 @@ use crate::runtime_util::spawn_with_error_boundary_on;
 /// （`'static`），故字段只放 `Arc` / 可克隆宿主句柄。
 struct StateWsClientPorts {
     /// 插件消息总线（事件与帧的投递出口）
-    bus: Arc<crate::bus::MessageBus>,
+    bus: Arc<bedcode_wasm_core::bus::MessageBus>,
     /// 宿主引擎端口（jwt token / 全局退避边界与策略的投影）
     host_ports: Arc<dyn HostEnginePorts>,
     /// 宿主运行时句柄（后台任务派生面：host fn 可能在无 runtime 上下文的线程上执行）
@@ -86,7 +112,7 @@ impl WsTask for RuntimeTask {
 /// 两个 trait 的三方法逐字同形（ADR 0040 共享核的机制同源），本包装只做类型转换，
 /// **不复制任何退避逻辑**——指数退避 / 抖动 / 下限钳制的真源始终在宿主
 /// `connection::reconnect`。
-struct StateReconnectPolicy(Box<dyn crate::host_api::ports::WsReconnectPolicyPort>);
+struct StateReconnectPolicy(Box<dyn bedcode_wasm_core::host_api::ports::WsReconnectPolicyPort>);
 
 #[async_trait::async_trait]
 impl ReconnectPolicy for StateReconnectPolicy {
@@ -233,10 +259,7 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::MessageBus;
-    use crate::manager::runtime::WasmHostContext;
-    use crate::security::fs_auth::FsAuthChecker;
-    use crate::storage::PluginStorage;
+    use bedcode_wasm_core::bus::MessageBus;
     use std::collections::HashSet;
 
     /// 无头插件状态：权限集按 `ws:client` 授权开关构建
@@ -256,8 +279,8 @@ mod tests {
             granted_permissions
                 .insert(bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT.to_string());
         }
-        let ctx = std::sync::Arc::new(crate::test_support::build_host_ctx().for_plugin(granted_permissions));
-        crate::test_support::build_component_state_with_ctx(plugin_id, ctx)
+        let ctx = std::sync::Arc::new(bedcode_wasm_core::test_support::build_host_ctx().for_plugin(granted_permissions));
+        bedcode_wasm_core::test_support::build_component_state_with_ctx(plugin_id, ctx)
     }
 
     /// 权限门 fail-closed：未授权时全部 5 条原语在引擎权限门处直接拒绝，
@@ -287,7 +310,7 @@ mod tests {
     /// 副本——双真源漂移），且未认证时 token 为空串（引擎据此显性失败而非伪发）
     #[tokio::test]
     async fn ports_read_token_and_backoff_bounds_from_host_engine_ports() {
-        let host_ports: Arc<dyn HostEnginePorts> = Arc::new(crate::test_support::MockPorts::new());
+        let host_ports: Arc<dyn HostEnginePorts> = Arc::new(bedcode_wasm_core::test_support::MockPorts::new());
         let ports = StateWsClientPorts {
             bus: Arc::new(MessageBus::new()),
             host_ports,

@@ -15,9 +15,100 @@
 //!
 //! [`PeerPorts`]: bedcode_server_peer_net::plugin_binding::ports::PeerPorts
 
-use super::super::WasmPluginState;
+use bedcode_host_kit::WasmPluginState;
 use bedcode_server_peer_net::plugin_binding;
 use bedcode_server_peer_net::plugin_binding::ports::ports;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_peer::Host for WasmPluginState {
+    fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
+        peer_dial(self, &endpoint_json)
+    }
+
+    fn close(&mut self, handle: String) -> Result<bool, String> {
+        peer_close(self, &handle)
+    }
+
+    fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
+        peer_respond_consent(self, &request_id, accepted)
+    }
+
+    fn list_trusted(&mut self) -> Result<String, String> {
+        peer_list_trusted(self)
+    }
+
+    fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
+        peer_revoke_trusted(self, &node_id)
+    }
+
+    fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
+        peer_send_files(self, &session, &paths_json)
+    }
+
+    fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
+        peer_respond_transfer(self, &batch_id, accept)
+    }
+
+    fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
+        peer_set_receive_policy(self, &mode, timeout_secs)
+    }
+
+    fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer_pause_transfer(self, &batch_id)
+    }
+
+    fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer_resume_transfer(self, &batch_id)
+    }
+
+    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
+        peer_set_shared_roots(self, &dirs_json)
+    }
+
+    fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
+        peer_list_shared_roots(self, &session)
+    }
+
+    fn browse_directory(
+        &mut self,
+        session: String,
+        dir_id: String,
+        rel_path: String,
+    ) -> Result<String, String> {
+        peer_browse_directory(self, &session, &dir_id, &rel_path)
+    }
+
+    fn pull_files(
+        &mut self,
+        session: String,
+        dir_id: String,
+        files_json: String,
+    ) -> Result<u32, String> {
+        peer_pull_files(self, &session, &dir_id, &files_json)
+    }
+
+    fn set_download_dir(&mut self, path: String) -> Result<(), String> {
+        peer_set_download_dir(self, &path)
+    }
+
+    fn start_node(&mut self) -> Result<bool, String> {
+        peer_start_node(self)
+    }
+
+    fn stop_node(&mut self) -> Result<bool, String> {
+        peer_stop_node(self)
+    }
+
+    fn active_transfers(&mut self) -> Result<String, String> {
+        peer_active_transfers(self)
+    }
+
+    fn collect_outgoing(&mut self, paths_json: String) -> Result<String, String> {
+        peer_collect_outgoing(self, &paths_json)
+    }
+}
+
 
 pub(crate) fn peer_dial(state: &WasmPluginState, endpoint_json: &str) -> Result<String, String> {
     plugin_binding::peer_dial(&ports(), &state.plugin_id, endpoint_json)

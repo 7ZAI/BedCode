@@ -10,8 +10,8 @@ use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState}
 use bedcode_plugin_api_mobile::permission::PERMISSION_FS_WRITE;
 
 use crate::plugin::bindings::{bedcode, check_permission, ctx_of, guarded};
-use bedcode_wasm_core_mobile::host_api::ports::HostEnginePorts;
-use bedcode_wasm_core_mobile::runtime_util::block_on_async;
+use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+use bedcode_wasm_core::runtime_util::block_on_async;
 
 bedcode_host_kit::expect_host_module!(MODULE_NAME);
 
@@ -61,7 +61,7 @@ fn saf_io_checked(
     src_path: &str,
     api: &'static str,
     panic_msg: &'static str,
-) -> Result<std::sync::Arc<dyn bedcode_wasm_core_mobile::host_api::ports::SafIoPort>, String> {
+) -> Result<std::sync::Arc<dyn bedcode_wasm_core::host_api::ports::SafIoPort>, String> {
     if !check_permission(state, PERMISSION_FS_WRITE, api) {
         return Err("permission denied: fs:write".to_string());
     }

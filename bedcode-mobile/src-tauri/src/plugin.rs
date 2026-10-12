@@ -10,8 +10,10 @@
 //! ——本模块对 `crate::plugin::*` 的历史路径做
 //! 转发垫片（76+ 处宿主引用零改动）；宿主自持面（android_plugins / saf_io /
 //! saf_path / commands / db_schema / loader / manager / registry / approval /
-//! fs_auth / types / host_ports / peer_ports / bindings / 移动独有域 adapter
+//! types / host_ports / peer_ports / bindings / 移动独有域 adapter
 //! （notify / fs_mobile / terminal_stream / connection / auth））仍在宿主。
+//! `fs_auth` 宿主自实现已退役（用户裁决 2026-10-11「fs 授权统一到桌面判定链」）
+//! ——判定链与闸门类型统一取 wasm-core `security::fs_auth`。
 
 pub mod android_plugins;
 pub mod approval;
@@ -22,8 +24,12 @@ pub mod commands;
 pub mod connection;
 pub mod db_schema;
 pub mod downloader;
-pub mod fs_auth;
 pub mod fs_mobile;
+// guest 事件契约面（events 导出派发；票 05 绑定归位：内核只留机制）
+pub mod guest_events;
+// core 12 域 WIT 实现（票 05 绑定归位：自 wasm-core `bare/host_impl` 迁入，
+// 宿主自报 `mobile-host-core` 模块）
+pub mod host_domains;
 pub mod host_ports;
 pub mod loader;
 pub mod manager;
@@ -37,33 +43,28 @@ pub mod types;
 
 // ==================== 机制面垫片（真源 = bedcode-wasm-core-mobile） ====================
 
-/// 终端输出流窄转发表（纯机制；Tauri 命令薄壳在 lib.rs 注册面，经此调用）
-pub use bedcode_wasm_core_mobile::terminal_stream_gateway;
+// 终端输出流窄转发表（票 05 绑定归位）：真源随 host-terminal-stream 域迁入
+// 移动宿主 `plugin/terminal_stream.rs`（同一路径即 `crate::plugin::terminal_stream`）。
 
 /// 插件 KV 存储（主库 plugin_storage 表；crate Database wrapper 形状）
-pub use bedcode_wasm_core_mobile::storage;
+pub use bedcode_wasm_core::storage;
 
 /// 插件间消息总线（dispatcher async 形状，ADR 0029）
 pub mod message_bus {
-    pub use bedcode_wasm_core_mobile::bus::*;
+    pub use bedcode_wasm_core::bus::*;
 }
 
 /// 插件身份校验（目录名与 manifest id 一致性，防冒名）
-pub use bedcode_wasm_core_mobile::manager::validation;
+pub use bedcode_wasm_core::manager::validation;
 
 
 /// WASM 运行时与 16 域 host 原语（Engine/Store/组件绑定/host_impl；批次 1b 迁入）
-pub use bedcode_wasm_core_mobile::manager::runtime as wasm_runtime;
+pub use bedcode_wasm_core::manager::runtime as wasm_runtime;
 
-/// WASM Host Function 通用工具（SQL 表名前缀护栏；原宿主 wasm_host.rs 拆分迁入
-/// crate host_api——符号面逐字保真）
-///
-/// 出站 HTTP 执行原在本层（`http_engine`）——2026-10-10 票 05 已上移能力域
-/// crate `bedcode-server-http`（可由宿主自身 Tauri 命令面直接调用，见
-/// `commands/http_proxy` 族的早日整理契机），故此处不再 re-export。
-pub mod wasm_host {
-    pub use bedcode_wasm_core_mobile::host_api::sql_guard::*;
-}
+// `wasm_host` 垫片已随票 05（wasm-core-single-form，M6）删除：它只 re-export 内核
+// `host_api::sql_guard`（单条 `column_to_json`），而该垫片两侧均无消费者——域实现
+// 直连共享核 `bedcode-host-api-core::database`。出站 HTTP 执行原在本层，2026-10-10
+// 票 05 已上移能力域 crate `bedcode-server-http`（宿主命令面直接调用）。
 
 pub use android_plugins::{asset_extractor_plugin, foreground_service_plugin};
 pub use registry::builtin_manifests;

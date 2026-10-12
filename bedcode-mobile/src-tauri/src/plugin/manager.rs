@@ -2,7 +2,7 @@
 //!
 //! 插件生命周期管理 — WASM 动态加载、激活、停用、状态持久化
 
-use bedcode_wasm_core_mobile::db::Database;
+use bedcode_wasm_core::db::Database;
 
 use crate::plugin::approval::{
     compute_dir_hash, effective_permissions, verify_approval, ApprovalStatus, PluginApprovalStore,
@@ -111,7 +111,12 @@ pub struct PluginManager {
     /// 的 None 降级路径）
     app_handle: Option<Arc<tauri::AppHandle>>,
     /// 文件系统访问校验器
-    fs_auth: Arc<crate::plugin::fs_auth::FsAuthChecker>,
+    ///
+    /// 真源 = wasm-core `security::fs_auth::FsAuthChecker`（用户裁决 2026-10-11
+    /// 「wasm-core 机制全部以桌面端为准收敛一套：fs 授权统一到桌面判定链，移动
+    /// 自实现已退役」）——宿主不再自持闸门实现；路径 / 插件白名单管理命令随之
+    /// 退役（语义不进入统一机制），只剩弹窗回执命令 `plugin_fs_auth_respond`。
+    fs_auth: Arc<bedcode_wasm_core::security::fs_auth::FsAuthChecker>,
     /// 消息总线
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
 }
@@ -133,9 +138,13 @@ impl PluginManager {
         let approvals = Arc::new(PluginApprovalStore::new(storage.clone()));
         let plugins_dir = app_data_dir.join(PLUGIN_DATA_DIR);
 
-        let fs_auth = Arc::new(crate::plugin::fs_auth::FsAuthChecker::new(
+        // 统一判定链（wasm-core `security::fs_auth`）：移动无 first-party 免弹窗
+        // 概念 ⇒ 归属清单传空表；弹窗投递端口由 app_handle 装配（无头为 None ⇒
+        // 授权请求一律拒绝，fail-closed 与迁移前逐字一致）
+        let fs_auth = Arc::new(bedcode_wasm_core::security::fs_auth::FsAuthChecker::new(
             storage.clone(),
             app_handle.clone(),
+            Vec::new(),
         ));
         let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
 
@@ -203,6 +212,11 @@ impl PluginManager {
             }
         }
         let runtime = Arc::new(WasmRuntime::new(aot_cache_dir)?);
+        // guest 事件派发器（票 05 绑定归位）：`events` 导出是各端契约事实，内核零绑定
+        // ——注入移动实现（词汇：on-bus-message / on-auth-success / on-disconnect /
+        // on-session-*），缺省 `UnwiredGuestEvents` 派发即 fail-visible。
+        // **必须在任何 instantiate_component 之前**（实例持有创建时的派发器快照）。
+        runtime.set_guest_events(Arc::new(crate::plugin::guest_events::MobileGuestEvents));
 
         // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知
         let plugins = self.plugins.clone();
@@ -546,7 +560,11 @@ impl PluginManager {
         // 3. 合并未授权路径为单次弹窗(check_batch 内部已实现事件 emit + 30s 超时)
         let allowed = self
             .fs_auth
-            .check_batch(plugin_id, &paths, crate::plugin::fs_auth::FsOp::Read)
+            .check_batch(
+                plugin_id,
+                &paths,
+                bedcode_wasm_core::security::fs_auth::FsOps::READ,
+            )
             .await;
         if !allowed {
             return Err(crate::AppError::Plugin(
@@ -808,7 +826,7 @@ impl PluginManager {
     async fn deactivate_inner(&self, plugin_id: &str) -> Result<()> {
         // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
         // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
-        crate::plugin::wasm_runtime::host_impl::purge_for_plugin(self.wasm_host_ctx(), plugin_id);
+        crate::plugin::host_domains::purge_for_plugin(self.wasm_host_ctx(), plugin_id);
 
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
@@ -996,7 +1014,9 @@ impl PluginManager {
     }
 
     /// 获取文件系统访问校验器引用
-    pub fn fs_auth(&self) -> &Arc<crate::plugin::fs_auth::FsAuthChecker> {
+    pub fn fs_auth(
+        &self,
+    ) -> &Arc<bedcode_wasm_core::security::fs_auth::FsAuthChecker> {
         &self.fs_auth
     }
 
@@ -1143,7 +1163,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
             payload_binary: msg.payload_binary.clone(),
             timestamp: msg.timestamp,
         };
-        bedcode_wasm_core_mobile::runtime_util::block_on_async(async move {
+        bedcode_wasm_core::runtime_util::block_on_async(async move {
             let wasm_plugin = {
                 let map = wasm_plugins.read().await;
                 map.get(&pid).cloned()
@@ -1167,7 +1187,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     fn is_activated(&self, plugin_id: &str) -> bool {
         let plugins = self.plugins.clone();
         let pid = plugin_id.to_string();
-        bedcode_wasm_core_mobile::runtime_util::block_on_async(async move {
+        bedcode_wasm_core::runtime_util::block_on_async(async move {
             let plugins = plugins.read().await;
             plugins
                 .get(&pid)
@@ -1193,7 +1213,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
 mod tests {
     use super::*;
     use crate::plugin::wasm_runtime::LoadedComponentPlugin;
-    use bedcode_wasm_core_mobile::test_support::{build_host_ctx, build_test_component};
+    use bedcode_wasm_core::test_support::{build_host_ctx, build_test_component};
     use std::collections::HashSet;
     use std::sync::Arc as StdArc;
     use tempfile::TempDir;

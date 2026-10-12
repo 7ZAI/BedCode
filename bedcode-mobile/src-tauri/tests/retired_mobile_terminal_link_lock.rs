@@ -69,7 +69,7 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
 
 /// 宿主保留面（窄转发 + ABI v15 原语）必须仍在：本票只摘协议编排，不摘传输面。
 /// 票 06 批次 03/04 后真源随 fork 退役迁入**仓库根**单一 wasm-core 的 `bare-host`
-/// 面（`bedcode_wasm_core_mobile` 现为 package rename 别名），锁钉根 crate 路径。
+/// 面（`bedcode_wasm_core` 现为 package rename 别名），锁钉根 crate 路径。
 const RETAINED_FACE: [(&str, &str); 7] = [
     (
         "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
@@ -87,7 +87,8 @@ const RETAINED_FACE: [(&str, &str); 7] = [
     ),
     (
         // 薄适配器侧保留面：宿主 token 投影（C4：凭据只经端口交给引擎）
-        "../../packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/ws.rs",
+        // ——票 05 绑定归位：适配器自 wasm-core `bare/host_impl/ws.rs` 迁入移动宿主
+        "src/plugin/host_domains/ws.rs",
         "fn global_token(&self) -> String",
     ),
     (

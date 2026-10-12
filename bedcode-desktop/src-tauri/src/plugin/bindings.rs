@@ -3,8 +3,11 @@
 //! **为什么宿主要自带一份绑定**（孤儿规则，票 02 §4「宿主端组合形态」）：
 //! `impl Trait for WasmPluginState` 要求 trait 或类型之一本地——`WasmPluginState`
 //! 属 host-kit（对任何消费方都是外部类型），故**装配方必须自己生成 trait**。
-//! 内核（`manager/runtime/component.rs`）与各能力 crate（provider 侧）各自 bindgen
-//! 同一份 WIT，三处生成的 `bedcode::plugin::host_*::Host` **同名但不同类型**。
+//! **票 04 起本文件是桌面 WIT 绑定的唯一落点**：wasm-core 内核不再 bindgen 桌面
+//! world（它只绑 core 交集，见 `packages/bedcode-wasm-core/src/manager/runtime/
+//! core_binding.rs`），cap 扩展 interface 的 trait 由本文件生成，各能力 crate
+//! （provider 侧）则 bindgen 各自的 `wit/<domain>.wit` 分片。三方生成的
+//! `bedcode::plugin::host_*::Host` **同名但不同类型**。
 //!
 //! ## 纪律（批次 04/05 的路径 B 域）
 //!

@@ -1,24 +1,46 @@
-//! wasm-core 纯净性防回接锁（wasm-core-mobile-purity 票 06-①）
+//! wasm-core 纯净性防回接锁（wasm-core-mobile-purity 票 06-①；票 05 绑定归位后按新终态
+//! 重写；**票 06 收口补判据 7 = 端词汇全集**）
 //!
 //! 判据来源：spec §0 用户指令①「wasm-core 保持纯粹的 wasm-core 机制原则，不该引入额外
-//! 能力」+ 指令⑥「移动端特殊的能力留在移动端宿主侧」+ ADR 0047 D4/D5。
+//! 能力」+ 指令⑥「移动端特殊的能力留在移动端宿主侧」+ ADR 0047 D2/D4/D5 +
+//! ADR 0049（单形态 + 绑定归位）+ 票 05 的绑定归位终态。
 //!
-//! 四道判据（任一被破坏即红）：
-//! 1. **移动独有域不得回流**：`bare/host_impl/` 不得再出现 notify / fs_mobile /
-//!    terminal_stream / connection / auth 域文件；生产装配段（`#[cfg(test)]` 之前）
-//!    不得出现这些 interface 的 `Host` impl；反向钉住移动宿主 adapter 在场。
-//! 2. **形态壳不得含域逻辑**：http / fs 壳不得再出现执行本体（reqwest / fs 系统调用、
-//!    载荷构造）；peer 时代的句柄表 / 重拨符号全仓形态面零命中。
-//! 3. **共享实现核不得消失**（正向）：三条域的机制面必须在共享 crate 里可寻址——
-//!    否则「壳变薄」会退化成「能力没了」（fail-visible）。
-//! 4. **壳行数上限**：单文件与目录合计双重上限，防止有人把域逻辑改写成「壳里的
+//! 七道判据（任一被破坏即红）：
+//! 1. **移动独有域不得回流内核**：wasm-core 源码树不得出现 notify / fs_mobile /
+//!    terminal_stream / connection-target / auth-client 五域的 `Host` impl 或域实现
+//!    文件；反向钉住移动宿主 adapter 在场（能力去内核化 ≠ 能力消失）。
+//! 2. **core 12 域的绑定与实现不得回流内核**：wasm-core 不得再出现任何
+//!    `impl bedcode::plugin::host_*::Host`——**唯一合法例外**是
+//!    `manager/runtime/core_binding.rs`（桌面 core 交集 8 域，绑契约真源
+//!    `wit/core.wit`）；移动壳（`runtime/bare.rs` / `runtime/bare/component.rs`）
+//!    不得出现 `bindgen!` 与 `bedcode::plugin::` 路径。
+//! 3. **共享实现核不得消失**（正向）：搬出内核的域逻辑必须在共享 crate 里可寻址，
+//!    且宿主 adapter 真的转发到共享核（薄转发的最低证据）——否则「壳变薄」会退化
+//!    成「能力没了」（fail-visible）。
+//! 4. **移动壳行数上限**：单文件与合计双重上限，防止有人把域逻辑改写成「壳里的
 //!    实现」再慢慢长回来。
+//! 5. **移动独有机制与退役垫片不得回流**：`host-terminal-stream` 的窄转发表
+//!    （网关）随域迁移动宿主；零消费者的 `sql_guard` 垫片退役不复活。
+//! 6. **退役的 http 引擎不得回接**（保留自 purity 票 06）。
+//! 7. **端词汇全集**（票 06 补）：7a cap 分片 world 名在**代码行**零命中（注释放行，
+//!    因为模块文档必须说明「cap 组合不在内核」）/ 7b 声明位零端名（ADR 0047 D2，
+//!    豁免走登记表）/ 7c 移动端 SDK 词汇封顶在唯一已知落点 /
+//!    7d 正向锚点（core 交集绑定在场，防 7a–7c 空转）。
 //!
-//! 为什么独立成锁：票 03–05 把 3.3k 行域逻辑迁出 wasm-core，靠的是**人工对表**；
-//! 回接（把逻辑写回壳、或在壳里新起一个域实现）不会让任何既有测试转红——本锁是那条
-//! 缺口的门禁。
+//! **WASI 不在判据内**（票 06 修正票面表述）：本票 §2 初稿写的是「禁一切
+//! cap/端名/WASI/双 SDK 词汇」，其中「禁 WASI 词汇」已被 2026-10-12 用户裁决 3
+//! 作废——WASI（p2/p3）装配面住内核（`manager/runtime/wasi.rs`）且双端默认全开，
+//! 开 / 关走 `CoreConfig::wasi`。WASI 是**共享机制**不是形态差异轴，锁它等于把
+//! 裁决锁反。同理「双 SDK 词汇」在票 06 不做零命中（会立刻判红），改为封顶 +
+//! 遗留项声明。
 //!
-//! 变异自检记录见 `.scratch/2026-10-10-wasm-core-mobile-purity/ticket-06-closure.md`。
+//! 为什么独立成锁：票 03–05 把域逻辑与 WIT 绑定迁出 wasm-core，靠的是**人工对表**；
+//! 回接（把实现写回内核、在内核里新起一个域绑定）不会让任何既有测试转红——
+//! 本锁是那条缺口的门禁。
+//!
+//! 变异自检记录：票 05 落地时判据 1–6 逐锁注入违背形态 → 红 → `cp` 还原 + sha256 一致
+//! （见 `.scratch/2026-10-11-wasm-core-single-form/ticket-05-mobile-binding-host.md` §7.8）；
+//! 票 06 判据 7 按 7a / 7b / 7c 各注入一次（记录见同目录 `ticket-06` §2）。
 
 use std::path::{Path, PathBuf};
 
@@ -35,25 +57,46 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读取 {} 失败：{e}", path.display()))
 }
 
-/// 形态壳目录（bare 形态的逐域 WIT 壳）
-fn bare_shell_dir() -> PathBuf {
-    repo_root().join("packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl")
+/// wasm-core 源码根
+fn wasm_core_src() -> PathBuf {
+    repo_root().join("packages/bedcode-wasm-core/src")
 }
 
-/// 移动宿主 adapter 目录
-fn mobile_adapter_dir() -> PathBuf {
+/// 移动宿主 `plugin/` 目录
+fn mobile_plugin_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plugin")
 }
 
-// ==================== 判据 1：移动独有域不得回流 ====================
+/// 递归收集 `*.rs` 文件（跳过注释行判定由调用方负责）
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("读目录 {} 失败：{e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            out.push(path);
+        }
+    }
+}
 
-/// 移动独有域（ADR 0047 D5）：wasm-core 里不得再有这些域文件
-const MOBILE_OWNED_SHELL_FILES: [&str; 5] = [
-    "notify.rs",
-    "fs_mobile.rs",
-    "terminal_stream.rs",
-    "connection.rs",
-    "auth.rs",
+/// 源码里的非注释行（`//` 开头整行跳过——头注解释迁移史是正当的）
+fn code_lines(content: &str) -> impl Iterator<Item = (usize, &str)> {
+    content
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with("//"))
+}
+
+// ==================== 判据 1：移动独有域不得回流内核 ====================
+
+/// 移动独有域（ADR 0047 D5）：wasm-core 里不得再有这些域的 `Host` impl
+const MOBILE_ONLY_TRAITS: [&str; 5] = [
+    "bedcode::plugin::host_notify::Host for",
+    "bedcode::plugin::host_fs_mobile::Host for",
+    "bedcode::plugin::host_terminal_stream::Host for",
+    "bedcode::plugin::host_connection_target::Host for",
+    "bedcode::plugin::host_auth_client::Host for",
 ];
 
 /// 迁移后宿主 adapter 的落点（正向钉住：能力在宿主侧仍可达）
@@ -67,16 +110,38 @@ const MOBILE_ADAPTER_FILES: [&str; 5] = [
 
 #[test]
 fn mobile_owned_domains_stay_in_mobile_host() {
-    for file in MOBILE_OWNED_SHELL_FILES {
-        let in_core = bare_shell_dir().join(file);
-        assert!(
-            !in_core.exists(),
-            "移动独有域回流 wasm-core：{} 存在（应在移动宿主 src/plugin/{file}）",
-            in_core.display()
-        );
+    let mut files = Vec::new();
+    collect_rs_files(&wasm_core_src(), &mut files);
+    for path in &files {
+        let content = read(path);
+        for needle in MOBILE_ONLY_TRAITS {
+            assert!(
+                !content.contains(needle),
+                "移动独有域回流 wasm-core：{} 出现 `{needle}`（应住移动宿主 src/plugin/）",
+                path.display()
+            );
+        }
+    }
+    // 域实现文件同样不得在内核形态目录出现（旧 bare/host_impl/ 整体已迁出）
+    let runtime_dir = wasm_core_src().join("manager/runtime");
+    for name in [
+        "notify.rs",
+        "fs_mobile.rs",
+        "terminal_stream.rs",
+        "connection.rs",
+        "auth.rs",
+    ] {
+        for dir in [runtime_dir.clone(), runtime_dir.join("bare")] {
+            let p = dir.join(name);
+            assert!(
+                !p.exists(),
+                "移动独有域文件回流 wasm-core：{}（应住移动宿主 src/plugin/{name}）",
+                p.display()
+            );
+        }
     }
     for file in MOBILE_ADAPTER_FILES {
-        let in_host = mobile_adapter_dir().join(file);
+        let in_host = mobile_plugin_dir().join(file);
         assert!(
             in_host.exists(),
             "移动宿主 adapter 缺失：{}（能力去 wasm-core 化不等于能力消失）",
@@ -85,103 +150,69 @@ fn mobile_owned_domains_stay_in_mobile_host() {
     }
 }
 
-/// 生产装配段（`#[cfg(test)]` 之前）不得出现移动独有 interface 的 Host impl
-///
-/// 为什么按 cfg(test) 切段：crate 自身的单测需要一份替身实现（`standin_msg` 形态），
-/// 它**必须**留在 crate 内；要拦的是「生产路径重新长出实现」。
-#[test]
-fn production_linker_does_not_own_mobile_only_interfaces() {
-    let path = repo_root().join("packages/bedcode-wasm-core/src/manager/runtime/bare/component.rs");
-    let content = read(&path);
-    let cut = content.find("#[cfg(test)]").unwrap_or(content.len());
-    let production = &content[..cut];
+// ==================== 判据 2：core 12 域绑定/实现不得回流内核 ====================
 
-    for needle in [
-        "impl bedcode::plugin::host_notify::Host for",
-        "impl bedcode::plugin::host_fs_mobile::Host for",
-        "impl bedcode::plugin::host_terminal_stream::Host for",
-        "impl bedcode::plugin::host_connection_target::Host for",
-        "impl bedcode::plugin::host_auth_client::Host for",
-    ] {
-        assert!(
-            !production.contains(needle),
-            "移动独有域的生产 Host impl 回流 wasm-core（应住移动宿主 plugin/*.rs）：{needle}"
-        );
-    }
-}
-
-// ==================== 判据 2：形态壳不得含域逻辑 ====================
-
-/// `(相对仓库根的路径, 禁现针脚, 说明)`
-const SHELL_FORBIDDEN: [(&str, &str, &str); 6] = [
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
-        "reqwest",
-        "http 执行本体（客户端 / 请求发送）在能力域 crate，壳里不得重建",
-    ),
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
-        "execute_http_request",
-        "非流式执行属能力域（server-http::plugin_binding::egress）",
-    ),
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
-        "execute_streaming_http",
-        "SSE 流式执行属能力域",
-    ),
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/fs.rs",
-        "std::fs::",
-        "文件系统调用属共享核 bedcode-host-api-core::fs",
-    ),
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/fs.rs",
-        "create_dir_all",
-        "父目录守卫属共享核（壳只做端口接线）",
-    ),
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/fs.rs",
-        "remove_file",
-        "删除（含幂等与平台分支）属共享核",
-    ),
-];
-
-/// peer 时代的域逻辑符号（句柄表 / 自动重拨）：整个形态面零命中
-const DOMAIN_LOGIC_MARKERS: [&str; 2] = ["HandleTable", "fn redial"];
+/// 内核唯一合法的 WIT `Host` impl 落点：core 交集绑定（绑 `wit/core.wit` 真源）
+const CORE_BINDING_REL: &str = "manager/runtime/core_binding.rs";
 
 #[test]
-fn form_shells_do_not_regrow_domain_logic() {
-    let root = repo_root();
-    for (rel, needle, why) in SHELL_FORBIDDEN {
-        let content = read(&root.join(rel));
-        // 只扫非注释行：头注里说明「为什么不在这里做」属正常（本锁扫的是代码面）
-        for (idx, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            assert!(
-                !line.contains(needle),
-                "{rel}:{} 出现域逻辑针脚 `{needle}`（{why}）",
-                idx + 1
-            );
-        }
-    }
-
-    for entry in std::fs::read_dir(bare_shell_dir()).expect("bare host_impl 目录") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+fn core_domain_bindings_stay_out_of_wasm_core() {
+    let mut files = Vec::new();
+    collect_rs_files(&wasm_core_src(), &mut files);
+    for path in &files {
+        let rel = path
+            .strip_prefix(wasm_core_src())
+            .expect("path under wasm-core src")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == CORE_BINDING_REL {
             continue;
         }
-        let content = read(&path);
-        for marker in DOMAIN_LOGIC_MARKERS {
+        let content = read(path);
+        for (idx, line) in code_lines(&content) {
             assert!(
-                !content.contains(marker),
-                "{} 含域逻辑标记 `{marker}`（票 03 已把 peer 域逻辑下沉能力域 crate）",
-                path.display()
+                !line.contains("impl bedcode::plugin::host_"),
+                "core 域 `Host` impl 回流 wasm-core：{}:{}（移动住宿主 plugin/host_domains/；\
+                 桌面 core 交集只允许在 {CORE_BINDING_REL}）——行：{}",
+                rel,
+                idx + 1,
+                line.trim()
             );
         }
     }
+
+    // 移动壳不得持绑定：`bindgen!` 与绑定生成物路径一律不出现
+    for rel in ["manager/runtime/bare.rs", "manager/runtime/bare/component.rs"] {
+        let content = read(&wasm_core_src().join(rel));
+        for (idx, line) in code_lines(&content) {
+            for needle in ["bindgen!", "bedcode::plugin::"] {
+                assert!(
+                    !line.contains(needle),
+                    "{rel}:{} 出现 `{needle}`——移动壳不再持有 WIT 绑定（票 05 归位）",
+                    idx + 1
+                );
+            }
+        }
+    }
+
+    // 正向：宿主侧的绑定与域实现必须在场
+    for rel in [
+        "bindings.rs",
+        "guest_events.rs",
+        "host_domains/mod.rs",
+        "host_domains/storage.rs",
+        "host_domains/bus.rs",
+        "host_domains/ws.rs",
+        "host_domains/peer.rs",
+    ] {
+        let p = mobile_plugin_dir().join(rel);
+        assert!(p.exists(), "移动宿主绑定层缺失：{}", p.display());
+    }
+    let bindings = read(&mobile_plugin_dir().join("bindings.rs"));
+    assert!(
+        bindings.contains("bindgen!"),
+        "移动宿主 bindings.rs 必须自持 world 绑定（孤儿规则：装配方生成 trait）"
+    );
 }
 
 // ==================== 判据 3：共享实现核不得消失 ====================
@@ -193,12 +224,15 @@ const SHARED_CORES: [(&str, &str); 4] = [
         "pub fn http_fetch(",
     ),
     ("packages/bedcode-host-api-core/src/fs.rs", "pub fn fs_read("),
-    ("packages/bedcode-server-peer-net/src/plugin_binding.rs", "pub fn peer_"),
-    // 壳必须真的指向共享核（薄转发的最低证据：引用了那个 crate）
-    (
-        "packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/http.rs",
-        "bedcode_server_http",
-    ),
+    ("packages/bedcode-host-api-core/src/storage.rs", "pub fn storage_get("),
+    ("packages/bedcode-host-api-core/src/bus.rs", "pub fn bus_publish("),
+];
+
+/// `(宿主 adapter 相对 plugin/ 路径, 必须转发的共享核针脚)`
+const HOST_ADAPTER_CORE_FORWARDS: [(&str, &str); 3] = [
+    ("host_domains/http.rs", "bedcode_server_http"),
+    ("host_domains/fs.rs", "bedcode_host_api_core::fs"),
+    ("host_domains/storage.rs", "bedcode_host_api_core::storage"),
 ];
 
 #[test]
@@ -212,53 +246,93 @@ fn shared_implementation_cores_stay_addressable() {
             "{rel} 中找不到 `{needle}`（能力被搬到「壳之外」却无处可寻 = 静默失效）"
         );
     }
-    let fs_shell = read(&root.join("packages/bedcode-wasm-core/src/manager/runtime/bare/host_impl/fs.rs"));
-    assert!(
-        fs_shell.contains("bedcode_host_api_core::fs"),
-        "fs 壳必须转发到共享核 bedcode-host-api-core::fs"
-    );
+    // 宿主 adapter 必须真的转发到共享核（薄转发的最低证据：引用了那个 crate）
+    for (rel, needle) in HOST_ADAPTER_CORE_FORWARDS {
+        let path = mobile_plugin_dir().join(rel);
+        assert!(path.exists(), "宿主 adapter 缺失：{}", path.display());
+        assert!(
+            read(&path).contains(needle),
+            "{rel} 未转发到共享核 `{needle}`——域逻辑既不在内核也不在共享 crate（回流信号）"
+        );
+    }
 }
 
-// ==================== 判据 4：壳行数上限 ====================
+// ==================== 判据 4：移动壳行数上限 ====================
 
-/// 单文件上限（当前最大 = ws.rs 333 行；留 ~20% 给注释，够改够说明，不够塞逻辑）
-const SHELL_FILE_LINE_LIMIT: usize = 400;
+/// 单文件上限（当前最大 = `bare/component.rs` 437 行；留 ~35% 给注释与说明）
+const SHELL_FILE_LINE_LIMIT: usize = 600;
 
-/// 目录合计上限（当前 14 文件 / 2045 行；票 03 前约 3.3k）
-const SHELL_DIR_LINE_LIMIT: usize = 2400;
+/// 壳合计上限（`bare.rs` + `bare/component.rs`，当前 632 行）
+const SHELL_TOTAL_LINE_LIMIT: usize = 800;
 
 #[test]
-fn form_shells_stay_thin() {
-    let dir = bare_shell_dir();
+fn mobile_shell_stays_thin() {
+    let shell_files = [
+        wasm_core_src().join("manager/runtime/bare.rs"),
+        wasm_core_src().join("manager/runtime/bare/component.rs"),
+    ];
     let mut total = 0usize;
-    let mut files = 0usize;
-    let mut violations = Vec::new();
-
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .expect("bare host_impl 目录")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"))
-        .collect();
-    paths.push(dir.join("../host_impl.rs"));
-
-    for path in paths {
-        let lines = read(&path).lines().count();
+    for path in &shell_files {
+        let lines = read(path).lines().count();
         total += lines;
-        files += 1;
-        if lines > SHELL_FILE_LINE_LIMIT {
-            violations.push(format!("{}: {lines} 行 > 上限 {SHELL_FILE_LINE_LIMIT}", path.display()));
-        }
+        assert!(
+            lines <= SHELL_FILE_LINE_LIMIT,
+            "{}: {lines} 行 > 上限 {SHELL_FILE_LINE_LIMIT}（域逻辑回流的典型征兆）",
+            path.display()
+        );
     }
-
-    assert!(files >= 12, "扫描面异常：只读到 {files} 个壳文件（目录结构变了？）");
-    assert!(violations.is_empty(), "壳文件超行数上限：\n{}", violations.join("\n"));
     assert!(
-        total <= SHELL_DIR_LINE_LIMIT,
-        "壳目录合计 {total} 行 > 上限 {SHELL_DIR_LINE_LIMIT}（域逻辑回流的典型征兆）"
+        total <= SHELL_TOTAL_LINE_LIMIT,
+        "移动壳合计 {total} 行 > 上限 {SHELL_TOTAL_LINE_LIMIT}（域逻辑回流的典型征兆）"
     );
 }
 
-// ==================== 判据 5：退役的 http 引擎不得回接 ====================
+// ==================== 判据 5：移动独有机制与退役垫片不得回流 ====================
+
+/// 终端输出窄转发表（`host-terminal-stream` 的机制）与零消费者垫片都不得回流内核
+///
+/// - 网关：移动独有 interface 的机制（页面通道表 + 裸字节转发）随域迁移动宿主
+///   `plugin/terminal_stream.rs`（WIT layer 与网关同处）；
+/// - `sql_guard`：主库收归后只剩一条 `column_to_json` re-export，两侧均无消费者
+///   （域实现直连共享核）⇒ 退役而非留垫片（「符号面在场」会被误读为能力面）。
+#[test]
+fn mobile_only_mechanisms_and_retired_shims_stay_out_of_wasm_core() {
+    let gateway = wasm_core_src().join("terminal_stream_gateway.rs");
+    assert!(
+        !gateway.exists(),
+        "终端输出网关回流 wasm-core：{}（移动独有域机制住宿主 plugin/terminal_stream.rs）",
+        gateway.display()
+    );
+    let lib = read(&wasm_core_src().join("lib.rs"));
+    assert!(
+        !lib.contains("pub mod terminal_stream_gateway"),
+        "wasm-core 重新挂载了终端输出网关模块"
+    );
+    let sql_guard = wasm_core_src().join("host_api/sql_guard.rs");
+    assert!(
+        !sql_guard.exists(),
+        "零消费者的 sql_guard 垫片又出现了：{}",
+        sql_guard.display()
+    );
+    assert!(
+        !read(&wasm_core_src().join("host_api.rs")).contains("pub mod sql_guard"),
+        "wasm-core 重新挂载了 sql_guard 垫片"
+    );
+
+    // 正向：宿主侧网关在场（网关 + WIT layer 同一文件，能力去内核化 ≠ 能力消失）
+    let host = read(&mobile_plugin_dir().join("terminal_stream.rs"));
+    for needle in [
+        "pub fn terminal_stream_gateway()",
+        "impl bedcode::plugin::host_terminal_stream::Host for",
+    ] {
+        assert!(
+            host.contains(needle),
+            "移动宿主 terminal_stream.rs 缺少 `{needle}`（网关或 WIT layer 缺失 = 能力消失）"
+        );
+    }
+}
+
+// ==================== 判据 6：退役的 http 引擎不得回接 ====================
 
 #[test]
 fn retired_mobile_http_engine_stays_retired() {
@@ -273,5 +347,215 @@ fn retired_mobile_http_engine_stays_retired() {
     assert!(
         !host_api.contains("pub mod http_engine"),
         "wasm-core 重新挂载了已退役的 http 引擎模块"
+    );
+}
+
+// ==================== 判据 7：端词汇全集（票 06 补） ====================
+
+/// cap 分片 world 名——内核**代码行**零命中
+///
+/// 契约分片是**端组合面**的事实（各端 SDK `compose.json` 决定这一端组合了哪些
+/// cap），内核既不读 `compose.json` 也不该知道 cap 的存在。票 04 / 05 把端绑定
+/// 迁宿主后内核已无任何 cap 绑定逻辑 ⇒ 本判据把「代码行零命中」钉成事实，防止
+/// 有人为图省事在内核里写一句按 cap 分支的 `#[cfg]` 或路径常量。
+///
+/// **注释不在判据内**：`core_binding.rs` 的模块文档必须点名「cap 组合不在内核、
+/// 各端 compose 各自决定」——那句话正是本判据存在的理由，把文档判红等于要求内核
+/// 对自己的边界闭嘴。
+const CAP_SLICE_WORDS: [&str; 5] = ["cap-desktop", "cap-mobile", "cap-pty", "cap-http", "cap-ws"];
+
+/// 移动端 SDK crate 名（双 SDK 收敛项的「移动那半」）
+///
+/// **为什么单独钉**：内核目前消费两个端 SDK——桌面 `bedcode_plugin_api`（集中在
+/// `common-host` 门控的桌面装配树：`manager/host*` / `host_api/api.rs` /
+/// `common/component.rs`）与移动 `bedcode_plugin_api_mobile`（只在一处，见下）。
+/// 双 SDK 合一是**已声明的遗留项**（票 05 §7.10-1 ③，收口票只声明不修），
+/// 所以本判据不查「零命中」——那会立刻判红；而是**封顶**：出现处不得超过唯一
+/// 已知落点，防止收敛工作推进前先扩散。
+const MOBILE_SDK_CRATE: &str = "bedcode_plugin_api_mobile";
+
+/// 移动端 SDK 词汇在内核的唯一合法落点（相对 wasm-core src）
+const MOBILE_SDK_ALLOWED_FILE: &str = "manager/runtime/bare/component.rs";
+
+/// 允许在该落点内使用的两个具体符号（逐字形式，`::` 后段）
+///
+/// - `abi::ABI_VERSION`：移动 world 的 ABI 协商上限（移动 ABI 20 与桌面 37
+///   各自演进，ADR 0018）；桌面壳走自己的 `bedcode_plugin_api::abi`。
+/// - `BusMessage`：`on_bus_message` 的形参类型。
+///
+/// 除这两个符号外再出现 `bedcode_plugin_api_mobile::` 即判红（新增端 SDK 依赖点）。
+const MOBILE_SDK_ALLOWED_SYMBOLS: [&str; 2] = [
+    "bedcode_plugin_api_mobile::abi::ABI_VERSION",
+    "bedcode_plugin_api_mobile::BusMessage",
+];
+
+/// ADR 0047 D2「自持标识符零端名」的**声明位**豁免：`(文件, 声明名, 理由)`
+///
+/// 只豁免声明名，不豁免整个文件。收进登记表而不是静默忽略——豁免项一旦多起来，
+/// 「零端名」就退化成一句口号，读锁的人能从这张表直接看出还欠多少。理由栏与
+/// 判据分开存放，匹配只认前两项：把理由写进「声明名」会让匹配永远落空，而
+/// 一个静默失效的豁免比没有豁免更糟。
+const DECLARED_NAME_EXEMPTIONS: [(&str, &str, &str); 1] = [(
+    "manifest.rs",
+    "neutral_manifest_json_shape_matches_desktop_sdk",
+    "中性 manifest JSON 形状与**桌面 SDK** 的对照探针：该测试的对照物按定义就是桌面 SDK \
+     的类型（`bedcode_plugin_api::PluginManifest`），改中性名会把「对照哪一侧」这个测试意图 \
+     抹掉。它是契约漂移探针，不是机制面符号。",
+)];
+
+/// 源码里的声明位（`mod` / `struct` / `enum` / `trait` / `fn` / `type` / `const` /
+/// `static`，含任意可见性限定）——只取声明**名**，用于「零端名」判定
+///
+/// 为什么只查声明位：ADR 0047 D2 的「登记保留类」明确放行端事实路径
+/// （`bedcode-desktop/…`、`bedcode-mobile/…`，测试按路径读桌面 SDK 源码）与机制
+/// 描述性文案（如 `"… in mobile headless context"`）。全行子串匹配会把这两类
+/// 正当内容判红，判红即锁空转。声明位是「自持标识符」的最小无歧义口径。
+fn declared_names(content: &str) -> Vec<(usize, String)> {
+    const KEYWORDS: [&str; 8] = [
+        "mod", "struct", "enum", "trait", "fn", "type", "const", "static",
+    ];
+    let mut out = Vec::new();
+    for (idx, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        // 跳过整行注释与文档注释（迁移史说明正当地提到端名）
+        if line.starts_with("//") {
+            continue;
+        }
+        // 剥可见性限定：`pub` / `pub(crate)` / `pub(in …)` / `pub(super)`
+        let rest = match line.strip_prefix("pub") {
+            Some(r) => match r.strip_prefix('(') {
+                Some(inner) => match inner.find(')') {
+                    Some(close) => inner[close + 1..].trim_start(),
+                    // 括号不配平 = 未覆盖写法，宁可报错也不猜
+                    None => continue,
+                },
+                None => r.trim_start(),
+            },
+            None => line,
+        };
+        let Some((keyword, tail)) = KEYWORDS
+            .iter()
+            .find_map(|kw| rest.strip_prefix(kw).map(|t| (*kw, t)))
+        else {
+            continue;
+        };
+        // `mod` 后必须跟空白（挡 `module` / `model` 同前缀标识符）
+        if !tail.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let name: String = tail
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            out.push((idx + 1, format!("{keyword} {name}")));
+        }
+    }
+    out
+}
+
+#[test]
+fn wasm_core_carries_no_end_slice_or_sdk_vocabulary() {
+    let src = wasm_core_src();
+    let mut files = Vec::new();
+    collect_rs_files(&src, &mut files);
+
+    // ---- 7a · cap 分片 world 名零命中（**代码行**，跳注释）----
+    // 只查代码行，不查注释：`core_binding.rs` / `bare.rs` 的模块文档**必须**点名
+    // 「cap 组合不在内核、各端 compose 各自决定」——那是本判据存在的理由本身，
+    // 把文档判红就是要求内核闭嘴。代码行里出现 cap 名才是真泄漏：意味着存在
+    // 按 cap 分支 / 按 cap 绑定的实际逻辑。
+    let mut cap_violations: Vec<String> = Vec::new();
+    for path in &files {
+        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        for (idx, line) in code_lines(&read(path)) {
+            for needle in CAP_SLICE_WORDS {
+                if line.contains(needle) {
+                    cap_violations.push(format!("{rel}:{}: `{needle}` → {}", idx + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        cap_violations.is_empty(),
+        "wasm-core 出现 cap 分片 world 名（cap 组合是**各端 SDK `compose.json`** 的事实，\
+         内核既不读 compose 也不该知道 cap 存在）：\n{}",
+        cap_violations.join("\n")
+    );
+
+    // ---- 7b · 声明位零端名（ADR 0047 D2），豁免走登记表 ----
+    let mut name_violations: Vec<String> = Vec::new();
+    for path in &files {
+        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        for (line_no, decl) in declared_names(&read(path)) {
+            let lower = decl.to_lowercase();
+            if !lower.contains("desktop") && !lower.contains("mobile") {
+                continue;
+            }
+            if DECLARED_NAME_EXEMPTIONS
+                .iter()
+                .any(|(exempt_file, exempt_name, _)| rel == *exempt_file && decl.ends_with(exempt_name))
+            {
+                continue;
+            }
+            name_violations.push(format!("{rel}:{line_no}: `{decl}`"));
+        }
+    }
+    assert!(
+        name_violations.is_empty(),
+        "wasm-core 声明位出现端名（ADR 0047 D2「自持标识符零端名」；端事实路径与描述性文案不在\
+         判据内，已知豁免见本文件 `DECLARED_NAME_EXEMPTIONS`——豁免要写进该表，不要就地忽略）：\n{}",
+        name_violations.join("\n")
+    );
+
+    // 模块落点亦不得带端名（ADR 0047 D2：模块 / 目录名）
+    for entry in std::fs::read_dir(&src).expect("wasm-core src 可读") {
+        let path = entry.expect("dir entry").path();
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        assert!(
+            !file_name.contains("desktop") && !file_name.contains("mobile"),
+            "wasm-core 顶层出现带端名的模块落点：{}（模块 / 目录名同属 ADR 0047 D2 判据）",
+            path.display()
+        );
+    }
+
+    // ---- 7c · 移动端 SDK 词汇封顶在唯一已知落点（双 SDK 收敛遗留项的看门狗）----
+    let mut sdk_files: Vec<String> = Vec::new();
+    for path in &files {
+        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        if read(path).contains(MOBILE_SDK_CRATE) {
+            sdk_files.push(rel);
+        }
+    }
+    assert!(
+        sdk_files.len() == 1 && sdk_files[0] == MOBILE_SDK_ALLOWED_FILE,
+        "移动端 SDK `{MOBILE_SDK_CRATE}` 在 wasm-core 的落点漂移（现状应恰好一处：\
+         `{MOBILE_SDK_ALLOWED_FILE}`；实际：{sdk_files:?}）——新增落点说明双 SDK 词汇在内核\
+         扩散，要么走双 SDK 收敛（票 05 §7.10-1 遗留项），要么把该依赖上移到端宿主"
+    );
+    let mobile_sdk_file = read(&src.join(MOBILE_SDK_ALLOWED_FILE));
+    for (idx, line) in mobile_sdk_file.lines().enumerate() {
+        if !line.contains(&format!("{MOBILE_SDK_CRATE}::")) {
+            continue;
+        }
+        assert!(
+            MOBILE_SDK_ALLOWED_SYMBOLS.iter().any(|s| line.contains(s)),
+            "{MOBILE_SDK_ALLOWED_FILE}:{} 出现 `{MOBILE_SDK_CRATE}::` 的新符号（行：{}）——\
+             允许清单只有 {:?}；新增须先上移到端宿主，不要在内核扩端 SDK 依赖",
+            idx + 1,
+            line.trim(),
+            MOBILE_SDK_ALLOWED_SYMBOLS
+        );
+    }
+
+    // ---- 7d · 正向锚点（防空转）：core 交集绑定必须在场且确实在绑契约真源 ----
+    // 「端词汇零命中」最危险的失效方式是判据扫描器扫空了。正向锚点：
+    // core 交集绑定文件在盘 + 它确实含 `bindgen!` 且指向契约真源 `wit/core.wit`。
+    let core_binding = read(&src.join("manager/runtime/core_binding.rs"));
+    assert!(
+        core_binding.contains("bindgen!") && core_binding.contains("wit/core.wit"),
+        "core 交集绑定异常：`manager/runtime/core_binding.rs` 必须仍含 `bindgen!` 且指向契约真源 \
+         `wit/core.wit`——它是判据 7a/7b/7c 的正向锚点（内核唯一合法的绑定面），缺它则本锁可能空转"
     );
 }

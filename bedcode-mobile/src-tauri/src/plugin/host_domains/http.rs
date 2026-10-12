@@ -6,7 +6,7 @@
 //! 本端宿主服务接到能力域的 [`HttpPorts`]。
 //!
 //! **为什么 egress 判定（D9）不随之下沉**：三层判定（桌面端目标 / 声明 / 记忆）
-//! + NeedConsent 授权弹窗是**宿主安全闸门**的内聚实现，能力域只见「放行 / 拒绝 /
+//! 与 NeedConsent 授权弹窗是**宿主安全闸门**的内聚实现，能力域只见「放行 / 拒绝 /
 //! 判定失败」三态结论（[`OutboundAuth`]）——拆过界会让弹窗编排脱离宿主载体。
 //! 无 app_handle 的无头 / 测试上下文走 `CheckFailed`（fail-closed：弹窗事务没有
 //! 载体，收紧为「判定失败」而非「查不到就放行」）。
@@ -19,13 +19,23 @@
 
 use std::sync::Arc;
 
-use super::super::{current_handle, host_ctx, WasmPluginState};
+use bedcode_host_kit::WasmPluginState;
+use super::{current_handle, host_ctx};
 use super::support::guarded_host_call;
 use bedcode_server_http::plugin_binding::egress::http_fetch as core_http_fetch;
 use bedcode_server_http::plugin_binding::ports::{
     BoxedBlocked, HttpEventSink, HttpPorts, OutboundAuth,
 };
 use tauri::Emitter;
+
+use crate::plugin::bindings::bedcode;
+
+impl bedcode::plugin::host_http::Host for WasmPluginState {
+    fn fetch(&mut self, request_json: String) -> Result<Option<String>, String> {
+        http_fetch(self, &request_json)
+    }
+}
+
 
 // ==================== 能力域端口 adapter ====================
 
@@ -36,7 +46,7 @@ use tauri::Emitter;
 /// （权限快照 / 引擎端口 / AppHandle），不需要在此持 `&WasmPluginState`。
 struct StateHttpPorts {
     granted: std::collections::HashSet<String>,
-    ports: Arc<dyn crate::host_api::ports::HostEnginePorts>,
+    ports: Arc<dyn bedcode_wasm_core::host_api::ports::HostEnginePorts>,
     app_handle: Option<Arc<tauri::AppHandle>>,
 }
 
@@ -84,7 +94,7 @@ impl HttpPorts for StateHttpPorts {
         // fut 已是擦除后的 `Box<dyn Any + Send>`（server-http 泛型助手装箱），
         // 直接返回驱动结果，不得再套一层 Box（套层会让 downcast 落空——
         // 与桌面宿主 plugin/http.rs 同形，2026-10-11 单形态对齐）。
-        crate::runtime_util::block_on_async(fut)
+        bedcode_wasm_core::runtime_util::block_on_async(fut)
     }
 
     /// `"jwtAuth": true` 的全局 token 代注（移动侧独有能力的托管口径：token 的
@@ -162,7 +172,7 @@ mod tests {
     use super::*;
 
     fn granted_state(plugin_id: &str) -> WasmPluginState {
-        crate::test_support::build_component_state(
+        bedcode_wasm_core::test_support::build_component_state(
             plugin_id,
             &[bedcode_plugin_api_mobile::permission::PERMISSION_NETWORK_HTTP],
         )
@@ -172,7 +182,7 @@ mod tests {
     /// 权限层即拒绝（不进入 egress 判定，也不发起网络请求）
     #[tokio::test]
     async fn permission_denied_without_network_http() {
-        let st = crate::test_support::build_component_state("com.bedcode.demo", &[]);
+        let st = bedcode_wasm_core::test_support::build_component_state("com.bedcode.demo", &[]);
         let err = http_fetch(
             &st,
             &serde_json::json!({ "method": "GET", "url": "http://192.168.1.5:4455/api/health" })
