@@ -17,6 +17,8 @@
 
 ### D1 · 形态命名：`common` / `bare`（零端名、零机制名）
 
+> **⚠ 2026-10-13 修订（ADR 0049）**：D1 的**命名成果保留**（`common` / `bare` 中立词、零端名），但**「形态」的含义已变**——票 04/05 把双端 WIT 绑定与端事实全部迁出后，两个形态壳只剩机制接线，**机制零分叉**；WASI 不再是形态差（住内核 + 配置驱动，见 0049 D4）。终态目标是**形态 feature 整体退役**（单形态），届时本 ADR 的 D1 与 `lib.rs` 的 `compile_error!` 守卫一并删除——当前 feature 面收敛未做，属 ADR 0049 已声明的遗留项。
+
 | 载荷 | 新名 | 旧名 |
 | --- | --- | --- |
 | cargo feature（默认） | `common-host` | `desktop-host` |
@@ -74,7 +76,7 @@ wasm-core 内**自持标识符**零端名（desktop / mobile）、零机制名�
 4. 两端 `pnpm run test:run` + 根 `pnpm exec eslint .` 0 error；
 5. 新增 / 改动锁变异自检（注入 → 红 → 还原核 sha256）+ 双端 code-map 锁索引登记；
 6. 移动独有域真机冒烟（通知 / 终端流 / SAF 落盘 / 配对）逐项写「跑了 / 没跑 + 原因」；
-7. wasm-core 内自持标识符零端名、零 `wasi` / `wasip3` / `wasm32` 字样（注释与 D2 登记保留类除外）grep 复核。
+7. **⚠ 2026-10-13 修订（ADR 0049）**：本项原为「wasm-core 内自持标识符零端名、零 `wasi` / `wasip3` / `wasm32` 字样」的一次性 grep 复核。两处修订：① **「零 `wasi` 字样」作废**——用户裁决 2026-10-12 定 WASI 装配面**住内核**（`manager/runtime/wasi.rs`，双端同源 + `CoreConfig::wasi` 配置驱动），机制名进标识符不再误导（它不再是「某一形态才有」的东西）；② 「零端名」从一次性 grep 升级为**常驻锁**——`bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 判据 7b（声明位零端名 + `DECLARED_NAME_EXEMPTIONS` 豁免登记表，每条须写理由）+ 7a（代码行零 cap 分片 world 名）+ 7c（端 SDK 词汇封顶）。
 
 ## 实施记录
 

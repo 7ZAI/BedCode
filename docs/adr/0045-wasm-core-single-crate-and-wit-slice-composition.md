@@ -1,6 +1,6 @@
 # ADR 0045：wasm-core 单一 crate + WIT 分片组合（能力域扫描装配）
 
-- 状态：**accepted**（2026-10-10 转正：票 01–06 全落地、票 07 收口锁与文档就位——实施记录见文末「实施记录」段：POC 四命题实际结论 / D3 复评实际形态（拆分执行）/ 移动 fork 退役证据 / 与 ADR 0035·0036·0037·0040 的衔接）
+- 状态：**accepted**（2026-10-10 转正：票 01–06 全落地、票 07 收口锁与文档就位——实施记录见文末「实施记录」段：POC 四命题实际结论 / D3 复评实际形态（拆分执行）/ 移动 fork 退役证据 / 与 ADR 0035·0036·0037·0040 的衔接；**2026-10-13 部分条款被 ADR 0049 修订**：D5 的「Store 装配差异经 host-kit `wasi-store` feature 门控」作废（WASI 装配面住内核、双端同源、配置驱动，见 0049 D4），D1/D2 的「单一 crate + 分片组合」表述保留不变）
 - 日期：2026-10-09
 - spec：`.scratch/2026-10-09-wasm-core-single-crate/spec.md`（票序与门禁的真源）
 - 相关：ADR 0035（能力域 crate 化 + 自动装配）、ADR 0036（机制与真源同侧）、ADR 0037（wasm-core 整核抽出）、ADR 0039（pty 域整面迁出并承接 WIT 接线）、ADR 0040（移动 fork 两步走）、ADR 0018（移动契约独立）、ADR 0019（双端锁版）、ADR 0022（边界裁决）
@@ -45,6 +45,8 @@
 **沿用 ADR 0035 D5 硬约束**：wasm-core 与能力域各自生成的 `bedcode::plugin::host_*::Host` 是**同名但不同类型**的 trait ⇒ 宿主必须同批删除该域的 `impl Host` 与 `add_to_linker` 行，否则装配期 `defined twice`；白名单双向校验继续兜底。
 
 ### D5 · 平台形态端口化（wasm-core 双端一致的最后一块）
+
+> **⚠ 2026-10-13 修订（ADR 0049 D4）**：本条「Store 装配差异经端口 trait 注入、桌面 WASI p3 / 移动无 WASI」的表述**已作废**——WASI 装配面不再是有无差异轴，改为**双端同源住内核**（`manager/runtime/wasi.rs`）+ 运行期配置 `CoreConfig::wasi`（默认双端全开）。理由：worker 类别插件（ADR 0034 L3.b）双端都要跑 wasm，装接线必须已经同源。原表述保留于此仅作演进记录，**当前事实以 ADR 0049 为准**。
 
 Store 装配差异（桌面 WASI p3：`wasmtime_wasi::{p2,p3}` + `FsPerms` + `ResourceLimiter`；移动无 WASI）经端口 trait 注入，wasm-core 只调端口。桌面能力域依赖全部 optional + feature 门控（`desktop-host` / `mobile-host` 对称）；`cfg(target_os = "linux")` 的平台依赖（`webkit2gtk` / `dbus`，Android 同 `target_os` ⇒ 会撞）移出 wasm-core 或加 `cfg(not(target_os = "android"))`。
 
