@@ -40,7 +40,6 @@ edition = "2021"
 # cfg 互斥下只编译其一）。
 default = ["common-host"]
 common-host = [
-    "bedcode-host-kit/wasi-store",
     "dep:bedcode-plugin-api",
     "bedcode-server-http/common-host",
     "bedcode-server-websocket/common-host",
@@ -48,7 +47,6 @@ common-host = [
     "dep:bedcode-server-http",
     "dep:bedcode-server-websocket",
     "dep:bedcode-server-core",
-    "dep:wasmtime-wasi",
     "dep:aes-gcm",
     "dep:chacha20poly1305",
     "dep:x25519-dalek",
@@ -58,10 +56,24 @@ common-host = [
     "dep:jsonwebtoken",
 ]
 # 移动宿主形态（票 06 批次 03：移动 WIT 绑定 + host_impl 16 域 + 移动 ports
-# + 无头/测试夹具体系自 fork 迁入；无 WASI 装配——移动插件 wasm32-unknown-unknown）。
+# + 无头/测试夹具体系自 fork 迁入）。
+# WASI 装配面**不在形态 feature 里**（用户裁决 2026-10-12）：`wasmtime-wasi` 无条件
+# 依赖 + `manager::runtime::wasi` 常编译，双端同源、默认全开，开/关由运行期配置
+# `CoreConfig::wasi` 定。移动当前产物是 wasm32-unknown-unknown（不 import WASI）⇒
+# 注册惰性无效；将来 worker 类别产物改 wasip2/p3 即可直接用，装配代码不动。
 # 移动 SDK / discovery-engine（移动 host-mdns 域引擎）/ ws-client-engine（移动
 # host-websocket 客户端域引擎）均为跨端 path 依赖（packages/ ↔ bedcode-mobile/
 # packages/ 双向，ADR 0045 D6 单一 crate 形态的必然；桌面分支不引用）
+#
+# **票 05 收口注记（待「依赖面收敛」收）**：票 05 绑定归位后，移动 12 个 core 域
+# 实现（含 mdns / websocket）已迁移动宿主 `src-tauri/src/plugin/host_domains/`，
+# **本 crate 源码对 `bedcode-discovery-engine` / `bedcode-ws-client-engine` 零引用**
+# （`rg` 实证）；两 crate 现由移动宿主直接依赖。故本 feature 列表里的这两条
+# `dep:` 项（与下方可选项声明）已是**待摘的过渡项**——摘除属「feature / 依赖面收敛」
+#（feature 退役 + 双 SDK 依赖退出）整体动作，见
+# `.scratch/2026-10-11-wasm-core-single-form/ticket-05-mobile-binding-host.md` §7。
+# `dep:bedcode-server-http` 仍必要：桌面 `host_api/http.rs` 的 `HttpUnitExecutor`
+# （host-task 面执行器）常编译消费其引擎面。
 bare-host = [
     "dep:bedcode-plugin-api-mobile",
     "dep:bedcode-discovery-engine",
@@ -87,9 +99,10 @@ tauri-plugin-dialog = { version = "2" }
 
 # ==================== WASM 运行时（wasmtime 48，双端锁版 ADR 0019） ====================
 wasmtime = { version = "48", features = ["component-model"] }
-# 桌面 WASI p3 装配面（StorePorts 实现，批次 02 端口化）——移动无 WASI
-# （移动插件 wasm32-unknown-unknown，无 WASI import；票 17 §3.3 fork 面差异）
-wasmtime-wasi = { version = "48", features = ["p3"], optional = true }
+# WASI p2/p3 装配面（linker 注册 + 预打开上下文；真源 `manager::runtime::wasi`）。
+# **无条件依赖**（用户裁决 2026-10-12）：双端都编译、默认全开，开/关走运行期配置
+# `CoreConfig::wasi`——形态 feature 不再表达「桌面有 WASI / 移动无」。
+wasmtime-wasi = { version = "48", features = ["p3"] }
 
 # ==================== 异步 / 并发 ====================
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }

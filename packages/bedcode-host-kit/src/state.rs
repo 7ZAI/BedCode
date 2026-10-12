@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use wasmtime::component::TypedFunc;
-#[cfg(feature = "wasi-store")]
 use wasmtime::component::ResourceTable;
 
 use crate::limits::StoreLimits;
@@ -57,14 +56,13 @@ pub struct WasmPluginState {
     pub plugin_id: String,
     /// 宿主上下文（注入宿主能力；见 [`HostPorts`]）
     pub host: Arc<dyn HostPorts>,
-    /// WASI 预览 3 上下文（预打开目录由宿主装配面解析；
-    /// 未开启自身文件访问的插件为空上下文，不干扰 host 文件域路径）。
-    /// 仅 `wasi-store` 形态（桌面宿主；票 06 批次 02 Store 装配端口化）
-    #[cfg(feature = "wasi-store")]
-    pub wasi_ctx: wasmtime_wasi::WasiCtx,
-    /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）。仅 `wasi-store`
-    #[cfg(feature = "wasi-store")]
-    pub wasi_table: ResourceTable,
+    /// WASI 槽（上下文 + 资源表；预打开目录由宿主装配面解析——`manager::runtime::wasi`；
+    /// 未开启自身文件访问的插件为空上下文，不干扰 host 文件域路径）
+    ///
+    /// **常编译**（用户裁决 2026-10-12）：WASI 面双端同源、默认全开、开/关由
+    /// `CoreConfig::wasi` 定——不再有「桌面带 ctx / 移动不带」的形态 feature 分叉。
+    /// 结构见 [`WasiSlot`]（含 `Mutex` 包裹的 Sync 理由）。
+    pub wasi: std::sync::Mutex<WasiSlot>,
     /// Store 资源上限快照（实例化时自内核配置读取）
     pub limits: StoreLimits,
     /// 燃料看门狗是否开启（见 [`StoreSpec::fuel_enabled`]）
@@ -88,8 +86,8 @@ pub struct WasmPluginState {
 }
 
 impl WasmPluginState {
-    /// 构建插件状态（`wasi_ctx` 由调用方按插件配置构建；`wasi-store` 形态）
-    #[cfg(feature = "wasi-store")]
+    /// 构建插件状态（`wasi_ctx` 由调用方按插件配置构建：需要预打开目录的走
+    /// `manager::runtime::wasi::build_ctx`，无声明面走 `wasi::empty_ctx`）
     pub fn new(
         plugin_id: String,
         host: Arc<dyn HostPorts>,
@@ -99,25 +97,10 @@ impl WasmPluginState {
         Self {
             plugin_id,
             host,
-            wasi_ctx,
-            wasi_table: ResourceTable::new(),
-            limits: spec.limits,
-            fuel_enabled: spec.fuel_enabled,
-            metrics: spec.metrics,
-            // 可选导出在实例化后动态探测（verify_abi 内写入）
-            on_message_binary: None,
-            on_ws_message: None,
-            on_ws_client_message: None,
-            on_task_event: None,
-        }
-    }
-
-    /// 构建插件状态（无 WASI 形态：移动宿主 / 无头第三方宿主，票 06 批次 02）
-    #[cfg(not(feature = "wasi-store"))]
-    pub fn new(plugin_id: String, host: Arc<dyn HostPorts>, spec: StoreSpec) -> Self {
-        Self {
-            plugin_id,
-            host,
+            wasi: std::sync::Mutex::new(WasiSlot {
+                ctx: wasi_ctx,
+                table: ResourceTable::new(),
+            }),
             limits: spec.limits,
             fuel_enabled: spec.fuel_enabled,
             metrics: spec.metrics,
@@ -130,15 +113,33 @@ impl WasmPluginState {
     }
 }
 
-/// WASI 预览 3 视图：`add_to_linker_sync` / `add_to_linker` 通过此 trait 访问每个
+/// WASI 槽：`WasiCtx` + `ResourceTable`（linker 共享、槽每实例）
+///
+/// **为什么包一层 `Mutex`**：`WasiCtx` 内含 `Box<dyn StdinStream / StdoutStream /
+/// HostWallClock / Rng / Any>` 等**非 `Sync`** 字段，而移动形态的端口 adapter
+/// （`manager::runtime::bare::host_impl/*`）以 `&WasmPluginState` 实现 `Send + Sync`
+/// 的端口 trait ⇒ 状态本体必须 `Sync`。`Mutex<T: Send>` 即 `Sync`，取用走
+/// [`Mutex::get_mut`]（Store 内天然独占，不真加锁、不可能中毒），故 Sync 面由包裹
+/// 提供而运行期零成本。
+pub struct WasiSlot {
+    /// WASI 上下文
+    pub ctx: wasmtime_wasi::WasiCtx,
+    /// WASI 资源表（文件句柄 / 流等）
+    pub table: ResourceTable,
+}
+
+/// WASI 视图：`add_to_linker_async` / `add_to_linker` 通过此 trait 访问每个
 /// 插件实例的 `WasiCtx` + `ResourceTable`（linker 共享、ctx 每实例）。
-/// 仅 `wasi-store` 形态（桌面装配的 p2/p3 linker 需要；移动形态无 WASI linker）
-#[cfg(feature = "wasi-store")]
+///
+/// 常编译：p2/p3 注册是双端共享的核心装配面（`manager::runtime::wasi`），
+/// 是否注册由 `CoreConfig::wasi` 在运行时构建期决定，与形态无关。
 impl wasmtime_wasi::WasiView for WasmPluginState {
     fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        // 独占取用（不加锁；中毒不可能——无跨线程持锁路径，越界也不吞错）
+        let slot = self.wasi.get_mut().unwrap_or_else(|e| e.into_inner());
         wasmtime_wasi::WasiCtxView {
-            ctx: &mut self.wasi_ctx,
-            table: &mut self.wasi_table,
+            ctx: &mut slot.ctx,
+            table: &mut slot.table,
         }
     }
 }

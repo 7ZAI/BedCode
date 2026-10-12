@@ -72,6 +72,43 @@ pub struct CoreConfig {
     /// 插件实例调用模型（票 06 P1 灰度开关；实例级快照——实例创建/重建时读一次，
     /// 已运行实例不随开关热切，见 [`CallModel`]）
     pub call_model: CallModel,
+    /// WASI 面开关（双端共享，见 [`WasiConfig`]）
+    pub wasi: WasiConfig,
+}
+
+/// WASI（preview2 / preview3）装配开关
+///
+/// **用户裁决（2026-10-12）**：WASI 装配面住内核（`manager::runtime::wasi`）、
+/// 双端都可用且 **默认全开**；开 / 关交外部配置（宿主配置文件 / `set_config`），
+/// 不再用形态 feature 表达「桌面有、移动无」。目的：将来 worker 类别插件
+/// （ADR 0034 L3.b）双端都要跑 wasm，接线必须双端同源。
+///
+/// 语义（与 [`EngineConfig`] 同类：**运行时构建期固化**）：
+/// - 注册发生在构建 `WasmRuntime` 时（一次装进 linker），`set_config` 的运行期
+///   覆盖对已建 linker **不生效**（同 Engine 参数，见 `WasmRuntime::set_config`
+///   的 warn）；改这三项需重建运行时。
+/// - 关闭 = 不注册对应接口：import 了它们的插件在实例化阶段即失败（缺 import
+///   实现，fail-visible）；不 import 的插件不受影响（注册本惰性）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WasiConfig {
+    /// WASI 面总开关（关 = p2/p3 一律不注册）
+    pub enabled: bool,
+    /// WASI preview2（wasm32-wasip2 插件：wasi:cli@0.2 / clocks / random / filesystem …）
+    pub p2: bool,
+    /// WASI 0.3 / preview3（wasm32-wasip3 插件：wasi:cli@0.3 等）
+    pub p3: bool,
+}
+
+impl Default for WasiConfig {
+    /// 默认全开（代码即默认值真源；配置文件缺省字段回落到这里）
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            p2: true,
+            p3: true,
+        }
+    }
 }
 
 /// 插件实例调用模型（`.scratch/2026-09-26-plugin-concurrency-model/` 票 06 P1）
@@ -355,6 +392,9 @@ impl Default for CoreConfig {
             // 默认 mutex：P1（票 06）验收通过前保持现状行为（回退窗口），
             // 见 spec §6 灰度说明
             call_model: CallModel::default(),
+            // 默认全开：WASI 面是双端常态能力（用户裁决 2026-10-12），
+            // 关它是运维/宿主显式动作，不是缺省
+            wasi: WasiConfig::default(),
         }
     }
 }
@@ -456,6 +496,30 @@ mod tests {
         assert_eq!(cfg.engine.memory_reservation_bytes, 256 * 1024 * 1024);
         assert!(cfg.engine.compile_cache);
         cfg.validate().expect("默认配置必须合法");
+    }
+
+    /// WASI 面默认全开（用户裁决 2026-10-12：住核心、双端默认开启）——
+    /// 三项任何一项默认变 false 都是行为静默变更：既有 wasip2/p3 插件会在
+    /// 实例化阶段缺 import 失败，而配置文件里什么都没写
+    #[test]
+    fn wasi_defaults_are_all_open() {
+        let wasi = CoreConfig::default().wasi;
+        assert!(wasi.enabled, "WASI 面默认必须是开的");
+        assert!(wasi.p2, "preview2 注册默认必须是开的");
+        assert!(wasi.p3, "preview3 注册默认必须是开的");
+        assert_eq!(CoreConfig::default().wasi, WasiConfig::default());
+    }
+
+    /// 外部配置面：只写 `wasi.p3=false` 时其余两项仍为默认开（容器级
+    /// `serde(default)` + 字段级默认的联合语义）——「只关一项」不得顺手关掉全部
+    #[test]
+    fn wasi_config_partial_json_keeps_other_defaults() {
+        let cfg: CoreConfig =
+            serde_json::from_str(r#"{"wasi":{"p3":false}}"#).expect("partial wasi config must parse");
+        assert!(cfg.wasi.enabled, "未写 enabled：保持默认开");
+        assert!(cfg.wasi.p2, "未写 p2：保持默认开");
+        assert!(!cfg.wasi.p3, "写了的字段必须生效");
+        cfg.validate().expect("关闭 p3 是合法配置（灰度/回退用）");
     }
 
     /// A 面回归锚点：`EngineTuning` 默认值逐字等于写死前的历史行为——

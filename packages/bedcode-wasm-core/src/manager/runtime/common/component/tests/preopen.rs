@@ -1,9 +1,16 @@
-//! WASI 预打开目录解析与 build_wasi_ctx 装配（仅 worker 类别，ADR 0034）
+//! WASI 预打开目录解析与 build_ctx 装配（仅 worker 类别，ADR 0034）
 //!
 //! 自 `common/component.rs` 的 `mod tests` 拆出（共享脚手架在父 `mod tests`，
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
+//!
+//! **被测实现已迁核心模块** `manager::runtime::wasi`（用户裁决 2026-10-12：WASI
+//! 面住核心、双端同源、默认全开、开/关由 `CoreConfig::wasi` 定）——文件留在原地
+//! 只为复用父模块的测试脚手架，`use` 显式指向真源。
 
 use super::*;
+// 装配真源已迁核心模块（用户裁决 2026-10-12：WASI 面住核心、双端同源）
+use crate::config::WasiConfig;
+use crate::manager::runtime::wasi::{build_ctx, expand_preopen_declarations, resolve_preopen_dirs};
 
 // ==================== WASI 预打开目录解析 ====================
 
@@ -168,11 +175,11 @@ fn expand_preopen_declarations_keeps_read_only_tier() {
     assert!(out[0].readonly(), "只读档必须在 ${{home}} 展开后仍然生效");
 }
 
-/// 已授权但目录尚不存在（首次启用场景）：build_wasi_ctx 先幂等创建再 preopen，
+/// 已授权但目录尚不存在（首次启用场景）：build_ctx 先幂等创建再 preopen，
 /// 并把实际挂载目录计入返回值——修复「授权只落库、目录不创建」导致的
 /// WASI 预打开失败死循环（Bug B 方案 A）。
 #[tokio::test]
-async fn build_wasi_ctx_creates_missing_granted_dir_and_reports_preopened() {
+async fn build_ctx_creates_missing_granted_dir_and_reports_preopened() {
     let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
     let pid = "com.bedcode.test";
     // 授权父路径（fs_auth save_granted_path 的存储语义即父目录前缀）；
@@ -188,12 +195,13 @@ async fn build_wasi_ctx_creates_missing_granted_dir_and_reports_preopened() {
     )
     .expect("seed granted path");
 
-    let (wasi_ctx, preopened) = build_wasi_ctx(
+    let (wasi_ctx, preopened) = build_ctx(
         &ctx,
         pid,
         &[WasiPreopenDir::writable(
             missing.to_string_lossy().to_string(),
         )],
+        &WasiConfig::default(),
     );
     assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
     assert!(missing.is_dir(), "host must create the missing preopen dir");
@@ -205,7 +213,7 @@ async fn build_wasi_ctx_creates_missing_granted_dir_and_reports_preopened() {
 /// 锚点，写能力在 WASI 层由 OpenMode 拒（guest 侧的实际拒绝见 preopen_e2e 闭环）；
 /// 若把只读实现成「干脆不挂」，插件连读都读不到，是本票的反例
 #[tokio::test]
-async fn build_wasi_ctx_mounts_read_only_dir_and_reports_it() {
+async fn build_ctx_mounts_read_only_dir_and_reports_it() {
     let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
     let pid = "com.bedcode.test";
     let base = std::env::temp_dir().join(format!("bedcode-wasi-ro-{}", std::process::id()));
@@ -219,12 +227,13 @@ async fn build_wasi_ctx_mounts_read_only_dir_and_reports_it() {
     )
     .expect("seed granted path");
 
-    let (wasi_ctx, preopened) = build_wasi_ctx(
+    let (wasi_ctx, preopened) = build_ctx(
         &ctx,
         pid,
         &[WasiPreopenDir::read_only(
             missing.to_string_lossy().to_string(),
         )],
+        &WasiConfig::default(),
     );
     assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
     assert!(missing.is_dir(), "只读档也要有可挂载的锚点目录");
@@ -234,7 +243,7 @@ async fn build_wasi_ctx_mounts_read_only_dir_and_reports_it() {
 
 /// 目录创建失败（不可写路径）不 panic：跳过该声明，其余声明仍正常挂载
 #[tokio::test]
-async fn build_wasi_ctx_skips_uncreatable_dir_without_panicking() {
+async fn build_ctx_skips_uncreatable_dir_without_panicking() {
     let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
     let pid = "com.bedcode.test";
     // 已授权目录（可创建）
@@ -253,16 +262,43 @@ async fn build_wasi_ctx_skips_uncreatable_dir_without_panicking() {
     std::fs::write(&blocker, b"not a dir").unwrap();
     let bad_dir = blocker.join("child");
 
-    let (wasi_ctx, preopened) = build_wasi_ctx(
+    let (wasi_ctx, preopened) = build_ctx(
         &ctx,
         pid,
         &[
             WasiPreopenDir::writable(bad_dir.to_string_lossy().to_string()),
             WasiPreopenDir::writable(ok_dir.to_string_lossy().to_string()),
         ],
+        &WasiConfig::default(),
     );
     assert_eq!(preopened, vec![ok_dir.to_string_lossy().to_string()]);
     assert!(ok_dir.is_dir());
     drop(wasi_ctx);
     std::fs::remove_dir_all(&base).ok();
+}
+
+/// `wasi.enabled=false` ⇒ 即便声明了**已授权**目录也不预打开（空上下文）
+///
+/// 配置整体关闭 = 不给任何 WASI 能力：跳过预打开装配、`preopened` 为空。
+/// 反例锁：只在 linker 注册分支读 cfg、装配面忽略（以为「没注册就没必要防空上下文」）
+/// 会红本条——设备上真正的能力边界必须与配置一致，不能一处生效一处不生效。
+#[tokio::test]
+async fn build_ctx_yields_empty_context_when_wasi_disabled() {
+    let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+    let pid = "com.bedcode.test";
+    let (wasi_ctx, preopened) = build_ctx(
+        &ctx,
+        pid,
+        &[WasiPreopenDir::writable(dir.path().to_string_lossy().to_string())],
+        &WasiConfig {
+            enabled: false,
+            ..WasiConfig::default()
+        },
+    );
+    assert!(
+        preopened.is_empty(),
+        "关闭 WASI 面时不得预打开任何目录，实际: {:?}",
+        preopened
+    );
+    drop(wasi_ctx);
 }

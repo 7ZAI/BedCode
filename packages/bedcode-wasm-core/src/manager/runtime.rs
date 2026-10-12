@@ -34,6 +34,18 @@ pub(crate) mod engine;
 // 不进本模块。
 pub(crate) mod core_binding;
 
+// ==================== WASI 装配面（双端同源，配置驱动） ====================
+//
+// 用户裁决（2026-10-12）：WASI（p2/p3）住核心、双端默认全开、开/关由
+// `CoreConfig::wasi` 定——形态（桌面 / 移动）不再是有无 WASI 的差异轴。
+// 目的：将来 worker 类别插件双端都要跑 wasm，装配面必须已经双端同源。
+//
+// 形态门控只为「无宿主壳」的编译配置存在：本模块装配的 `WasmPluginState` 由形态壳
+// 提供，`--no-default-features`（纯引擎面复用、无宿主壳）下没有可装配对象。
+// `common-host` / `bare-host` **两者都编译本模块**（不是「桌面独有」）。
+#[cfg(any(feature = "common-host", feature = "bare-host"))]
+pub(crate) mod wasi;
+
 // ==================== Guest 事件派发契约面（票 03 / ADR 0022） ====================
 //
 // 事件循环机制留内核，`events` 导出的调用契约由各端宿主实现本 trait 并注入

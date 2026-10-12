@@ -50,7 +50,7 @@
 //! ## 不在本校验器里的事
 //!
 //! 任务单元（core-task 池线程）**不得触发弹窗**——判据由调用侧走 [`FsAuthChecker::is_granted`]，
-//! 未授权直接 fail-visible 拒绝（见 `host_impl::task`）。
+//! 未授权直接 fail-visible 拒绝（见宿主侧 task 域实现）。
 
 use crate::security::auth_policy::{
     AuthPolicyStore, AuthRecordSource, AuthResource, AuthStrategy, GrantOutcome, AUTH_EFFECT_ALLOW, AUTH_EFFECT_DENY,

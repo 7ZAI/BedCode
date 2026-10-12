@@ -13,15 +13,12 @@
 //! （方向合法）。票 06 起本模块**不再引用任何 manager 类型**（原先的
 //! `LoadedWasmPlugin` 引用随转发端口窄化消除）。
 //!
-//! **票 02 B5 上下文合一（单形态）**：本模块是双端唯一宿主上下文（原移动
-//! `bare_context::WasmHostContext` 已并入超集删除）。结构 = 桌面全字段 + 移动
-//! 独有三字段（`ports` / `granted_permissions` / `status_reporter`，桌面构造给
-//! 缺省）。`fs_auth` 槽收敛为 `Arc<dyn FsAuthGate>`（超集）：桌面注入具体
-//! `FsAuthChecker`（具体机制方法经 [`Self::fs_auth_checker`] 下转型取回同一实例），
-//! 移动注入宿主自实现（SAF URI / 白名单管理语义与桌面不同，B5 裁决不迁移，
-//! 见 `security/fs_auth.rs` 与 `bedcode-mobile/src-tauri/src/plugin/fs_auth.rs`）。
-//! 桌面侧消费点零改动：`new()` 签名保持（`fs_auth` 参数型擦除后调用点
-//! unsize-coerce 自动适配），`security` 字段改 `Arc` 后访问器返回值不变。
+//! **票 02 B5 上下文合一（单形态,已收敛）**：本模块是双端唯一宿主上下文（原移动
+//! `bare_context::WasmHostContext` 已并入超集删除）。`fs_auth` 槽为**桌面原样
+//! `Arc<FsAuthChecker>`**（用户新裁决 2026-10-11「wasm-core 机制全部以桌面端为准
+//! 收敛一套」：fs 授权统一到桌面判定链，移动自实现已退役）——判定链 / 授权记录 /
+//! 弹窗 / 策略档位单一实现在本 crate，双端共用。`first_party_dirs` 桌面由宿主
+//! 注入、移动传空表（无 first-party 概念），其余语义逐字一致。
 //!
 //! `manager/runtime.rs` 保留 `pub use` 再导出（manager→host_api 合法方向），
 //! 历史路径编译绿直至迭代清理。
@@ -42,7 +39,7 @@ use bedcode_host_kit::state::WasmPluginState;
 pub type PeerCtxProvider = dyn Fn(&tauri::AppHandle) -> Arc<bedcode_server_peer_net::PeerCtx> + Send + Sync;
 
 use crate::db::Database;
-use crate::host_api::ports::{FsAuthGate, HostEnginePorts, UnimplementedPorts};
+use crate::host_api::ports::{HostEnginePorts, UnimplementedPorts};
 use crate::permission::PermissionManager;
 use crate::security::fs_auth::FsAuthChecker;
 use crate::security::network_auth::NetworkAuthChecker;
@@ -76,7 +73,8 @@ pub trait PluginServices: Send + Sync + 'static {
 
     /// 分发进程执行完成事件到插件（host-process，v8）
     ///
-    /// 由 host_impl/process.rs 在进程结束时调用：经插件 export
+    /// 由宿主侧 process 域实现（桌面 `src-tauri/src/plugin/process.rs`，
+    /// 移动 `host_domains/` 内）在进程结束时调用：经插件 export
     /// `on_process_done` 投递 `{ run_id, exit_code, timed_out }`。
     /// 插件未激活/已卸载时调用失败，仅记日志（尽力而为）。
     fn dispatch_process_done(&self, plugin_id: String, event: serde_json::Value);
@@ -94,7 +92,8 @@ pub trait PluginServices: Send + Sync + 'static {
     ///
     /// 源 = 插件包目录 `cli/<file-name>`（Windows 自动补 .exe）；
     /// `bin_dir` 为空用平台默认。返回安装后的 bin 目录绝对路径。
-    /// 由 host_impl/app.rs 经 block_on_async 驱动（宿主侧注册表/PATH 实现）。
+    /// 由宿主侧 app 域实现（桌面 `src-tauri/src/plugin/app.rs`，移动
+    /// `host_domains/` 内）经 block_on_async 驱动（宿主侧注册表/PATH 实现）。
     /// 返回 Box<dyn Future> 保持 trait dyn 兼容（async fn 会破坏 Arc<dyn>）。
     fn install_cli(
         &self,
@@ -116,8 +115,9 @@ pub trait PluginServices: Send + Sync + 'static {
 
     /// 插件自身资源目录（host-app，v25 函数级追加，**无权限门**）：返回插件安装
     /// 目录绝对路径（`extension_path` 剥离 verbatim 前缀，与生命周期事件 payload
-    /// 的 `resource_dir` 同值）。由 host_impl/app.rs 经 block_on_async 驱动。
-    /// 插件未加载 → `Err`（不静默返回空串，调用方据此显性失败）。
+    /// 的 `resource_dir` 同值）。由宿主侧 app 域实现（桌面
+    /// `src-tauri/src/plugin/app.rs`，移动 `host_domains/` 内）经 block_on_async
+    /// 驱动。插件未加载 → `Err`（不静默返回空串，调用方据此显性失败）。
     fn plugin_resource_dir(
         &self,
         plugin_id: String,
@@ -228,16 +228,26 @@ pub trait TaskEngine: Send + Sync + 'static {
 /// 持有宿主子系统引用，Host Functions 通过此上下文访问宿主能力
 /// plugin_services 使用两阶段初始化：new() 时为 None，PluginHost 构造完成后通过 set_services() 注入
 pub struct WasmHostContext {
-    /// 主库连接（host_impl 域函数访问，host_api 迁移后 pub(crate)）
+    /// 主库连接（宿主侧域函数访问，host_api 迁移后 pub(crate)）
     pub(crate) db: Arc<Mutex<Database>>,
     /// 插件独立数据库池 — 每插件一个独立 .db 文件和连接
-    pub(crate) plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
-    pub(crate) storage: Arc<PluginStorage>,
+    ///
+    /// `pub`：移动宿主 adapter（`plugin/host_domains/db.rs`，插件私有库按移动布局
+    /// `plugins/<id 去点划>.db` 懒开 + 缓存）直读字段——票 05 绑定归位后域 adapter
+    /// 住宿主，内核侧无第二读者（内核自己的 `get_or_create_plugin_db` 走另一布局）。
+    pub plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
+    /// `pub`：移动宿主 adapter（`plugin/host_domains/storage.rs`）直读字段
+    /// （票 05 绑定归位后域逻辑住宿主，与 `ports` / `granted_permissions` 同侧先例）。
+    pub storage: Arc<PluginStorage>,
     /// 密钥托管读缓存（v15 host-auth）：read-through（get 命中直接返回，
     /// set/delete 失效对应键）；真源为主库 plugin_secrets 表（重启后一致）
     pub(crate) secrets_cache: Arc<std::sync::RwLock<std::collections::HashMap<(String, String), String>>>,
     /// Tauri AppHandle（无头/测试上下文为 None，emit/路径类宿主能力降级）
-    pub(crate) app_handle: Option<Arc<tauri::AppHandle>>,
+    ///
+    /// `pub`：移动宿主 adapter（`plugin/host_domains/{http,mdns,db,event,platform}.rs`）
+    /// 直接克隆 `Option<Arc<AppHandle>>` 交给端口/任务持有（票 05 绑定归位后域逻辑
+    /// 住宿主）；`app_handle()` 访问器只借出 `&AppHandle`，不满足「持有」场景。
+    pub app_handle: Option<Arc<tauri::AppHandle>>,
     /// 插件私有库根目录覆盖（布局 `<root>/<plugin_id>/plugin.db`）
     ///
     /// 生产为 `None`：走 `app_handle` 的 `app_data_dir()/plugins/<plugin_id>`；
@@ -246,12 +256,11 @@ pub struct WasmHostContext {
     /// 需要它）。
     plugin_db_root: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub(crate) permission: Arc<PermissionManager>,
-    /// 文件系统访问闸门（票 02 B5 收敛为 trait 对象超集）：桌面注入具体
-    /// `FsAuthChecker`（`impl FsAuthGate` 常编译），移动宿主注入自实现（SAF URI /
-    /// 白名单语义不迁移）。具体类型机制方法（`respond` / `authorize_picked` /
-    /// `is_granted` / `seed_legacy_granted_path`）经 [`Self::fs_auth_checker`]
-    /// 下转型取回——桌面侧同一实例语义不变。
-    pub(crate) fs_auth: Arc<dyn FsAuthGate>,
+    /// 文件系统访问校验器（**桌面原样 `Arc<FsAuthChecker>`**，用户新裁决
+    /// 2026-10-11「wasm-core 机制全部以桌面端为准收敛一套」）：判定链 / 授权记录 /
+    /// 弹窗 / 策略档位单一实现在本 crate，双端共用同一实例类型。
+    /// `first_party_dirs` 桌面由宿主注入、移动传空表（无 first-party 概念）。
+    pub(crate) fs_auth: Arc<FsAuthChecker>,
     /// 网络出站授权校验器（票 05：`host-http.fetch` 的出站询问与网络授权记录）
     ///
     /// 与 `fs_auth` 同一形态（持 db 句柄 + AppHandle），判定入口分别是
@@ -266,7 +275,8 @@ pub struct WasmHostContext {
     task_engine: Arc<RwLock<Option<Arc<dyn TaskEngine>>>>,
     /// 运行中进程注册表（host-process，v8）：run_id → 进程句柄
     ///
-    /// host_impl/process.rs 注册/移除；kill（超时/取消）经此查找句柄。
+    /// 宿主侧 process 域实现（桌面 `src-tauri/src/plugin/process.rs`，
+    /// 移动 `host_domains/` 内）注册/移除；kill（超时/取消）经此查找句柄。
     process_registry: Arc<ProcessRegistry>,
     /// 插件互调 api 注册表（ADR-0017）：激活登记 / 停用注销，
     /// `bus_publish` 对 `bedcode.api.*` 请求 topic 做目标校验
@@ -278,7 +288,7 @@ pub struct WasmHostContext {
     /// 访问器 [`Self::security`] 返回 `&SecurityFramework`（`Arc::as_ref`），消费点零改动。
     security: Arc<crate::security::SecurityFramework>,
     /// 能力注册表（core-plugin-manager 票据 06）：能力名 → 宿主原语/系统组件
-    /// 实例（二选一装配）；host_impl 宿主函数内经此路由
+    /// 实例（二选一装配）；宿主侧域函数内经此路由
     capabilities: Arc<dyn CapabilityProvider>,
     /// 实例级能力域端口表（域名 → 端口对象）
     ///
@@ -318,7 +328,8 @@ pub struct WasmHostContext {
 
 // ==================== 运行中的进程（记录 pid 供进程组 kill） ====================
 
-/// Child 句柄由执行任务（host_impl/process.rs）独占持有：`Child::wait`
+/// Child 句柄由执行任务（宿主侧 process 域实现，桌面 `src-tauri/src/plugin/process.rs`，
+/// 移动 `host_domains/` 内）独占持有：`Child::wait`
 /// 在整个进程生命周期内独占 `&mut self`，注册表若同时持句柄，kill 路径
 /// 将阻塞到进程自然退出（死锁）；按 pid 杀进程组则与 wait 无冲突。
 struct RunningProcess {
@@ -449,7 +460,7 @@ impl WasmHostContext {
         storage: Arc<PluginStorage>,
         app_handle: Option<Arc<tauri::AppHandle>>,
         permission: Arc<PermissionManager>,
-        fs_auth: Arc<dyn FsAuthGate>,
+        fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::bus::MessageBus>,
         capabilities: Arc<dyn CapabilityProvider>,
     ) -> Self {
@@ -459,14 +470,9 @@ impl WasmHostContext {
         let net_auth = Arc::new(NetworkAuthChecker::new(db.clone(), app_handle.clone()));
         // 统一授权框架：注册既有资源的仲裁器（fs 三层校验 / api-call 互调门）
         let security = Arc::new(crate::security::SecurityFramework::new());
-        // fs 三层校验仲裁器：桌面装配形态恒为具体 FsAuthChecker（下转型失败即
-        // 装配期编程错误，fail-visible panic——移动形态走 [`Self::new_with_ports`]，
-        // 不经本构造器）
-        let fs_checker = fs_auth_checker_of(fs_auth.clone())
-            .expect("desktop WasmHostContext::new requires FsAuthChecker gate");
         security.register(Arc::new(crate::security::framework::FsAuthorizer::new(
             permission.clone(),
-            fs_checker,
+            fs_auth.clone(),
         )));
         security.register(Arc::new(crate::security::framework::ApiCallAuthorizer::new(
             api_registry.clone(),
@@ -494,26 +500,27 @@ impl WasmHostContext {
             domain_ports: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             // 对等网络上下文装配端口：两阶段注入（PluginHost::new 写入），构造时 None
             peer_ctx_provider: Arc::new(std::sync::RwLock::new(None)),
-            // 移动装配面三字段缺省：桌面不消费（ports 命中即 fail-visible /
-            // granted 恒空 / status_reporter noop）
+            // 移动装配面三字段缺省（ports 命中即 fail-visible / granted 恒空 /
+            // status_reporter noop）
             ports: Arc::new(UnimplementedPorts),
             granted_permissions: HashSet::new(),
             status_reporter: Arc::new(|_, _| {}),
         }
     }
 
-    /// 移动装配构造器（票 02 B5）：桌面全字段给缺省 + 注入移动三件套
-    /// （`ports` / `status_reporter` / 权限经 `for_plugin` 逐插件注入）。
+    /// 移动装配构造器（票 02 B5）：桌面全字段给缺省 + 注入移动需要面。
     ///
-    /// 与桌面 `new()` 的差异：`fs_auth` 是宿主注入的 trait 对象（移动宿主自实现，
-    /// 无具体下转型需求）；`permission` / `capabilities` / `security` 给空缺省
-    /// （移动权限门走 `granted_permissions`，能力路由与安全框架无消费方）。
+    /// 用户裁决 2026-10-11「wasm-core 机制全部以桌面为准收敛一套」：`fs_auth`
+    /// 与桌面同型 `Arc<FsAuthChecker>`（移动不再自持闸门实现，白名单管理命令随
+    /// 移动实现退役——路径白名单 / 插件白名单语义不进入统一机制）；`permission` /
+    /// `capabilities` 给空缺省（移动权限门走 `granted_permissions`，能力路由无
+    /// 消费方）。
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_ports(
         db: Arc<Mutex<Database>>,
         storage: Arc<PluginStorage>,
         app_handle: Option<Arc<tauri::AppHandle>>,
-        fs_auth: Arc<dyn FsAuthGate>,
+        fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::bus::MessageBus>,
         status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
         ports: Arc<dyn HostEnginePorts>,
@@ -550,7 +557,7 @@ impl WasmHostContext {
         db: Arc<Mutex<Database>>,
         storage: Arc<PluginStorage>,
         app_handle: Option<Arc<tauri::AppHandle>>,
-        fs_auth: Arc<dyn FsAuthGate>,
+        fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::bus::MessageBus>,
         status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
     ) -> Self {
@@ -633,18 +640,18 @@ impl WasmHostContext {
             .unwrap_or_else(|e| e.into_inner().clone())
     }
 
-    /// 文件系统访问闸门（trait 对象超集，票 02 B5）——窄面消费方（`check` /
-    /// `check_batch`）直接经此取；桌面具体机制方法（`respond` / `authorize_picked` /
-    /// `is_granted` / `seed_legacy_granted_path`）走 [`Self::fs_auth_checker`]。
-    pub fn fs_auth(&self) -> &Arc<dyn FsAuthGate> {
+    /// 文件系统访问校验器（三层判定链单一实现，双端共用同一实例类型，见字段文档）
+    pub fn fs_auth(&self) -> &Arc<FsAuthChecker> {
         &self.fs_auth
     }
 
-    /// 下转型访问器：取回具体 `FsAuthChecker`（桌面装配形态恒 `Some`——注入的
-    /// 就是它；移动宿主注入自实现 → `None`，调用方按 fail-visible 处理，不得
-    /// 静默降级）。
-    pub fn fs_auth_checker(&self) -> Option<Arc<FsAuthChecker>> {
-        fs_auth_checker_of(self.fs_auth.clone())
+    /// 同 [`Self::fs_auth`]，供机制消费面（fs 单元预检 / WASI 预打开过滤 / 宿主
+    /// `plugin/{fs,platform}.rs`）按名取具体闸门
+    ///
+    /// 单一实例类型收敛后不再有「下转型可能失败」的情形，故返回具体值而非
+    /// `Option`——恒真的 `Option` 会把断链风险藏进 `.expect()` 的 panic 里。
+    pub fn fs_auth_checker(&self) -> Arc<FsAuthChecker> {
+        self.fs_auth.clone()
     }
 
     /// 网络出站授权校验器（票 05：host-http 出站面 / 应答命令的 Tauri State）
@@ -657,13 +664,23 @@ impl WasmHostContext {
         &self.permission
     }
 
+    /// 宿主引擎端口（`host-config` 端专属项的取数通道，票 03）
+    ///
+    /// 机制面常编译化后，`config_get` 这类**双端全等 interface** 的实现体不能再引
+    /// 某端 SDK 类型，只能经端口取本端事实（网络端口 / 下载目录等）；端口未注入的
+    /// 键在域内 fail-visible 报错。
+    ///
+    pub fn ports(&self) -> &Arc<dyn crate::host_api::ports::HostEnginePorts> {
+        &self.ports
+    }
+
     pub fn process_registry(&self) -> &Arc<ProcessRegistry> {
         &self.process_registry
     }
 
     /// 获取主库句柄（宿主侧读写内核表的入口）
     ///
-    /// 生产路径经各 host_impl 域函数访问（权限门 + 属主校验在域函数内）；
+    /// 生产路径经宿主侧各域函数访问（权限门 + 属主校验在域函数内）；
     /// 本访问器供宿主装配/测试直接读写内核真源（如 `pairings` 表播种与断言，
     /// 见 `host::tests::test_server_auth_policy_closed_loop`）。
     pub(crate) fn database(&self) -> &Arc<Mutex<Database>> {
@@ -734,15 +751,16 @@ impl WasmHostContext {
     /// 宿主侧互调调用（票 11 命令面桥接）：以宿主虚拟身份发布 JSON-RPC 请求到
     /// `bedcode.api.<api>` topic 并等待回复。
     ///
-    /// 与插件 mutual 调用的区别：调用方身份为 [`host_impl::api::HOST_API_CALLER_ID`]
+    /// 与插件 mutual 调用的区别：调用方身份为
+    /// [`crate::host_api::api::HOST_API_CALLER_ID`]
     /// （宿主不是插件，reply topic 路由 `bedcode.api.reply.<caller>.<id>` 用）；
     /// 互调门禁（ADR 0017 层 1）只校验目标 api 已声明、不校验调用方——未激活
     /// 插件在注册表无登记 → 门禁拒绝 → 调用方降级宿主实现。
     ///
     /// **common-host 门控（票 02 B5 保留）**：`host_api::api`（回复道编排）是
     /// 桌面 WIT 绑定域，随 T-03/04 迁宿主前保持桌面装配面门控——统一上下文
-    /// 常编译化后本方法在 bare / 无 feature 形态不编译（移动互调经
-    /// `bare/host_impl/conn` 域，不经本入口）。
+    /// 常编译化后本方法在 bare / 无 feature 形态不编译（移动互调经宿主侧
+    /// `bedcode-mobile/src-tauri/src/plugin/host_domains/` 域实现，不经本入口）。
     #[cfg(feature = "common-host")]
     pub fn call_plugin_api_host(
         &self,
@@ -787,7 +805,7 @@ impl WasmHostContext {
     ///
     /// **常编译 pub（票 02 批次 03 起）**：宿主侧 adapter（`src/plugin/mdns.rs`
     /// 的 `local_node_id`——取对等网络上下文比对自播）经本访问器读句柄；同批次
-    /// `host_context_registry` 退役后，这是 adapter 侧唯一的句柄来源。
+    /// adapter 侧唯一的上下文句柄来源（旧 `host_context_registry` 已删除，见 `lib.rs`）。
     pub fn app_handle(&self) -> Option<&tauri::AppHandle> {
         self.app_handle.as_deref()
     }
@@ -891,12 +909,15 @@ pub trait StorageScope: Send + Sync {
 /// 文件系统访问校验视图
 pub trait FsAuthScope: Send + Sync {
     /// 三层 fs 校验器（已授权路径判据，绝不从池线程触发弹窗）
-    fn fs_auth(&self) -> &Arc<dyn FsAuthGate>;
-    /// 具体 `FsAuthChecker` 下转型（桌面机制方法消费面：`respond` /
-    /// `authorize_picked` / `is_granted` / `seed_legacy_granted_path` 不在窄
-    /// trait 上）；非桌面闸门实现返回 `None`，调用方 fail-visible。
-    fn fs_auth_checker(&self) -> Option<Arc<FsAuthChecker>> {
-        None
+    fn fs_auth(&self) -> &Arc<FsAuthChecker>;
+
+    /// 取具体闸门实例（机制方法消费面用）
+    ///
+    /// 默认实现克隆 `fs_auth()`——槽已收敛为单一具体类型，无下转型可言；本方法
+    /// 让**窄接口消费方**（只拿得到 `&dyn FsAuthScope` 的域函数与宿主 adapter）
+    /// 也能触达机制方法，而不必把整个上下文类型拖进签名。
+    fn fs_auth_checker(&self) -> Arc<FsAuthChecker> {
+        self.fs_auth().clone()
     }
 }
 
@@ -1039,12 +1060,8 @@ impl StorageScope for WasmHostContext {
 }
 
 impl FsAuthScope for WasmHostContext {
-    fn fs_auth(&self) -> &Arc<dyn FsAuthGate> {
-        self.fs_auth()
-    }
-
-    fn fs_auth_checker(&self) -> Option<Arc<FsAuthChecker>> {
-        self.fs_auth_checker()
+    fn fs_auth(&self) -> &Arc<FsAuthChecker> {
+        &self.fs_auth
     }
 }
 
@@ -1108,18 +1125,6 @@ impl SecretsScope for WasmHostContext {
     fn secrets_cache(&self) -> &Arc<std::sync::RwLock<std::collections::HashMap<(String, String), String>>> {
         &self.secrets_cache
     }
-}
-
-// ==================== 辅助函数（票 02 B5 上下文合一） ====================
-
-/// [`Arc<dyn FsAuthGate>`] → [`Arc<FsAuthChecker>`] 的下转型（单点）
-///
-/// 桌面装配形态恒 `Some`；移动宿主自实现 `FsAuthGate` → `None`。返回 Option
-/// 让「非桌面闸门」成为可判定的情形而非 panic：具体机制方法消费面（`respond` /
-/// `authorize_picked` / `is_granted` / `seed_legacy_granted_path`）只属于桌面。
-fn fs_auth_checker_of(gate: Arc<dyn FsAuthGate>) -> Option<Arc<FsAuthChecker>> {
-    let any: Arc<dyn std::any::Any + Send + Sync> = gate;
-    any.downcast::<FsAuthChecker>().ok()
 }
 
 /// 能力注册表缺失占位（移动 `new_with_ports` 缺省注入）——所有路由方法
