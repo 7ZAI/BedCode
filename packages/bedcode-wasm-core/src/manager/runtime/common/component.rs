@@ -904,7 +904,7 @@ impl LoadedWasmPlugin {
     /// 双层 Result 语义：外层 = 调用本身失败（trap / 导出缺失 / 燃料耗尽），
     /// 内层 = guest 报告的启动初始化结果（v8 契约 `result<_, string>`）。
     /// 宿主据此区分「插件自报启动失败 → Degraded」与「调用故障」
-    pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
+    pub fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let _timer = self.track_call();
         let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
@@ -920,7 +920,7 @@ impl LoadedWasmPlugin {
     ///
     /// 双层 Result 语义同 [`Self::on_startup`]；停用流程对 guest 报告的
     /// 清理失败仅记录，不影响状态机
-    pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
+    pub fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let _timer = self.track_call();
         let exports = self.core_exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
@@ -936,7 +936,7 @@ impl LoadedWasmPlugin {
     ///
     /// 派发委托给宿主注入的 [`GuestEventDispatcher`]（票 03 / ADR 0022）：本壳不
     /// 持有 `events` 绑定。调用计时与燃料续费仍留机制侧。
-    pub(crate) fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
+    pub fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
         let _timer = self.track_call();
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         self.refill_call_fuel()?;
@@ -950,7 +950,7 @@ impl LoadedWasmPlugin {
     /// 仅当实例在实例化时探测到 `events-binary#on-message-binary` 导出才可调用；
     /// 总线侧已按订阅者格式偏好过滤，正常不会对无导出的实例发起本调用，
     /// 此处防御性拒绝（旧插件二进制 → 格式不匹配拒绝的语义由总线保证）
-    pub(crate) fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
+    pub fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
         let _timer = self.track_call();
         // 燃料续费：本方法不经 `exports()`（直接持探测句柄调用），必须自带
         // 续费，否则本回调的燃料跨调用累积耗尽 → trap → Store 中毒 → 自动重载
@@ -979,7 +979,7 @@ impl LoadedWasmPlugin {
     /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 该回调未导出——调用方按 spec §2.2
     /// 降级（丢弃 + 首次 warn + 计数，宿主不缓存）。无返回值（观察型回调）：
     /// guest 内部失败经 host-log 记录；此处仅 trap 上抛
-    pub(crate) fn on_ws_frame(&mut self, frame: &crate::bus::WsFrameDispatch) -> crate::Result<bool> {
+    pub fn on_ws_frame(&mut self, frame: &crate::bus::WsFrameDispatch) -> crate::Result<bool> {
         use crate::bus::WsFrameDispatch;
         let _timer = self.track_call();
         // 燃料续费：同 on_message_binary——不经 exports()，须自带续费
@@ -1054,7 +1054,7 @@ impl LoadedWasmPlugin {
     // `host-bus`。`on-message` / `on-process-done` 仍是必选导出，保留。
 
     /// 调用插件的进程执行完成事件导出（host-process，v8）
-    pub(crate) fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
+    pub fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
         let _timer = self.track_call();
         self.refill_call_fuel()?;
         let instance = self.instance;
