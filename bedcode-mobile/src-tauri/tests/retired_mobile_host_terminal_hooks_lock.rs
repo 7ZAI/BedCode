@@ -89,12 +89,16 @@ const RETAINED_FACE: [(&str, &str); 6] = [
         "pub const PERMISSION_TERMINAL_OUTPUT",
     ),
     (
-        // 票 06 批次 03：真源随 wasm-core fork 退役迁入根 crate `bare-host` 面
-        // （terminal_stream_gateway → crate 根）；2026-10-10 wasm-core-mobile-purity
-        // 票 04：该域属**移动独有** ⇒ 整面迁移动宿主 adapter（ADR 0047 D5），
-        // 锁改钉宿主 adapter（网关仍留 wasm-core，窄转发表由两端共有机制消费）
-        "../../packages/bedcode-wasm-core/src/terminal_stream_gateway.rs",
-        "pub fn forward_output(",
+        // 票 06 收口修订：真源三跳迁入后再迁移动宿主，落点已变——历史路径
+        // 迁移史：① 移动 fork crate → ② 票 06 批次 03 迁入根 crate 根
+        // `terminal_stream_gateway.rs` → ③ 2026-10-10 purity 票 04 整面迁移动宿主
+        // adapter `src/plugin/terminal_stream.rs` → ④ 2026-10-13 票 05 §7.4 网关与
+        // WIT layer **合并进同一文件**（wasm-core 侧该文件已删除）。
+        // 下面的 `src/plugin/terminal_stream.rs` 条目即本保留面的真源锚点；
+        // 「网关不得回到 wasm-core」的反向判据由
+        // `mobile_wasm_core_purity_lock.rs` 判据 5 承担，本锁不再重复钉死路径。
+        "src/plugin/terminal_stream.rs",
+        "pub fn terminal_stream_gateway()",
     ),
     (
         "src/plugin/terminal_stream.rs",
