@@ -9,6 +9,11 @@
 //! 字段只有**机制属性**：实例身份、WASI 上下文、资源上限快照、指标句柄、可选导出
 //! 探测句柄。宿主子系统引用一律经 [`HostPorts`]（[`crate::ports`]）——**本结构不
 //! 持有任何产品语义**（AGENTS §5.1 B1/B3）。
+//!
+//! 可选导出句柄是**机制层探测**（native `TypedFunc`，不经 WIT 绑定）：接口形状随端
+//! cap 演进（`events-ws` / `events-task` 目前只在桌面 cap 声明，移动侧恒探测为
+//! `None`），属共享锚点上的已知端词汇残留——新增可选导出回调需同时改本结构与
+//! wasm-core 壳的探测点（见各字段注释）。
 
 use std::sync::Arc;
 
@@ -116,9 +121,10 @@ impl WasmPluginState {
 /// WASI 槽：`WasiCtx` + `ResourceTable`（linker 共享、槽每实例）
 ///
 /// **为什么包一层 `Mutex`**：`WasiCtx` 内含 `Box<dyn StdinStream / StdoutStream /
-/// HostWallClock / Rng / Any>` 等**非 `Sync`** 字段，而移动形态的端口 adapter
-/// （`manager::runtime::bare::host_impl/*`）以 `&WasmPluginState` 实现 `Send + Sync`
-/// 的端口 trait ⇒ 状态本体必须 `Sync`。`Mutex<T: Send>` 即 `Sync`，取用走
+/// HostWallClock / Rng / Any>` 等**非 `Sync`** 字段，而 store 数据体按 `Sync` 设计
+/// （宿主与能力域的实现都以 `&WasmPluginState` 作入口共享该状态，见各端
+/// `src-tauri/src/plugin/**` 的 `Host for WasmPluginState` 与端口 adapter）。
+/// `Mutex<T: Send>` 即 `Sync`，取用走
 /// [`Mutex::get_mut`]（Store 内天然独占，不真加锁、不可能中毒），故 Sync 面由包裹
 /// 提供而运行期零成本。
 pub struct WasiSlot {

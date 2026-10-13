@@ -89,119 +89,22 @@ fn collected_module_names_are_unique() {
     );
 }
 
-/// 描述符里的词段切分与命中判定（**本锁的判据本身也是被锁对象**）
-///
-/// 按非字母数字切段，`-` / `_` 视作**段内连接符**（不切）：于是
-/// `host-session` 切成 `host` + `session`、`pty-instance` 切成 `pty` + `instance`、
-/// `ai-chatbox` 切成 `ai` + `chatbox`；而 `database:main` 切成 `database` + `main`
-/// ——`ai` 只是 `main` 内部的子串，**不算命中**。
-fn descriptor_haystack_has_noun(haystack: &str, noun: &str) -> bool {
-    // 先把 `_` 归一化成 `-`（两种连接符在本仓库都出现：接口路径用 `-`，
-    // 模块名 / 权限位用 `_`），再按非字母数字切成「词」。
-    let normalized = haystack.replace('_', "-");
-    let prefix = format!("{noun}-");
-    let suffix = format!("-{noun}");
-    let infix = format!("-{noun}-");
-    normalized
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-        .filter(|word| !word.is_empty())
-        // 禁用词必须**对齐到整段**：等于该词，或作为该词的完整前缀段 / 后缀段 /
-        // 中间段出现（`host-session` / `host-pty-instance` / `ai-chatbox`）。
-        .any(|word| {
-            word == noun
-                || word.starts_with(&prefix)
-                || word.ends_with(&suffix)
-                || word.contains(&infix)
-        })
-}
-
-/// 判据自身的契约例：复合名词命中、单词内子串不命中
-///
-/// 没有这条，匹配规则被改宽（回到子串）时**零红灯**——那时 `database:main` 会重新
-/// 把纯机制权限位判成产品名词，而修法往往是「把 sqlite 从锁里摘掉」，正是本锁要
-/// 防的那种降级。
-#[test]
-fn descriptor_noun_matcher_keeps_compounds_and_drops_substrings() {
-    // 正例：复合名词（连接符是段内的一部分）
-    assert!(descriptor_haystack_has_noun(
-        "bedcode:plugin@0.2.0/host-session",
-        "session"
-    ));
-    assert!(descriptor_haystack_has_noun("pty-instance", "pty-instance"));
-    assert!(descriptor_haystack_has_noun(
-        "host_pty_instance",
-        "pty-instance"
-    ));
-    assert!(descriptor_haystack_has_noun("ai-chatbox", "ai"));
-    assert!(descriptor_haystack_has_noun(
-        "bedcode:plugin@0.2.0/host-session",
-        "plugin"
-    ));
-    // 正例：分号 / 斜杠权限位与接口路径的词段照样命中
-    assert!(descriptor_haystack_has_noun("[\"database:main\"]", "main"));
-    assert!(descriptor_haystack_has_noun(
-        "[\"host-session\"]",
-        "session"
-    ));
-    // 反例：单词**内部**的子串不算命中（`database:main` 当年因这条误判）
-    assert!(!descriptor_haystack_has_noun(
-        "[\"database:main\", \"storage\"]",
-        "ai"
-    ));
-    assert!(!descriptor_haystack_has_noun("sqlite", "ai"));
-    assert!(!descriptor_haystack_has_noun("[\"network:mdns\"]", "file"));
-    // 正例：连字符是段边界 ⇒ `m-ai-n` 里的 `ai` 是**整段**，必须命中
-    assert!(descriptor_haystack_has_noun("m-ai-n", "ai"));
-    // 反例：名词**粘在**别的字符里（没有段边界）不算命中
-    assert!(!descriptor_haystack_has_noun("mail", "ai"));
-    assert!(!descriptor_haystack_has_noun("[\"m.ain\"]", "ai"));
-    assert!(!descriptor_haystack_has_noun(
-        "[\"ptyinstance\"]",
-        "pty-instance"
-    ));
-}
-
 /// 描述符零产品名词（AGENTS §5.1 B1/B5 红线）
 ///
 /// 模块注册表必须是「通用注册表与寻址」（§5.1.3 明列的宿主允许薄壳），一旦
-/// 描述符里出现产品名词，它就退化成业务容器。锁住当前**已迁出**的模块集合，
-/// 新模块自动纳入。
+/// 描述符里出现产品名词，它就退化成业务容器。
 ///
-/// **匹配粒度 = 词段相等，不是子串包含**（票 08 实测修正）：`sqlite` 域的权限位
-/// `database:main` 里，子串 `ai` 落在 `m-**ai**-n` 中间，把一个纯机制权限位判成
-/// 「含产品名词 ai」——子串判据对任何以该词尾的机制名词都会误伤。词段判据
-/// （按非字母数字切段，`-` / `_` 视作**段内连接符**）保住本该命中的两类：
-/// 复合名词（`host-session` / `pty-instance` / `ai-chatbox`）与分号权限位
-/// （`session:write`）。判据自身的契约例见
-/// [`descriptor_noun_matcher_keeps_compounds_and_drops_substrings`]。
+/// **判据与词表的单一真源在 host-kit**（`ModuleRegistry::product_noun_violations`）：
+/// `inventory` 收集按**测试二进制**隔离，本文件只能看到本二进制收集到的模块（经
+/// dev-deps 开 `common-host` 的三个 server 能力域）；各端宿主 adapter 自报的模块由
+/// 各端宿主自己的锁扫描（桌面 / 移动各一份）。匹配粒度 = 词段相等而非子串包含的
+/// 契约例随判据住在 `packages/bedcode-host-kit/src/registry.rs`。
 #[test]
 fn capability_module_descriptors_carry_no_product_nouns() {
-    const FORBIDDEN: &[&str] = &[
-        "session",
-        "terminal",
-        "pairing",
-        "device",
-        "transfer",
-        "file",
-        "chat",
-        "ai",
-        "agent",
-        "pty-instance",
-        "mcp",
-    ];
     let registry = bedcode_host_kit::ModuleRegistry::collected();
-    for desc in registry.descs() {
-        let haystack = format!(
-            "{} {:?} {:?} {}",
-            desc.name, desc.interfaces, desc.permissions, desc.abi_min
-        )
-        .to_lowercase();
-        for noun in FORBIDDEN {
-            assert!(
-                !descriptor_haystack_has_noun(&haystack, noun),
-                "capability module '{}' descriptor contains product noun '{noun}': {haystack}",
-                desc.name
-            );
-        }
-    }
+    let violations = registry.product_noun_violations();
+    assert!(
+        violations.is_empty(),
+        "capability module descriptors contain product nouns: {violations:?}"
+    );
 }

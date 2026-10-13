@@ -12,7 +12,7 @@
 //! - **留在宿主的能力域**（core 面）：`impl … Host for WasmPluginState` 块本身就在
 //!   宿主 crate 内，直接向下转型回 `&WasmHostContext` 继续用既有 13 个窄 scope，
 //!   零改动语义；
-//! - **迁出的能力域**（`domains/*` crate）：**不碰向下转型**，改为自声明窄端口
+//! - **迁出的能力域**（`packages/bedcode-*` crate）：**不碰向下转型**，改为自声明窄端口
 //!   trait（照 `bedcode-server-base::ports` 先例：消费方声明端口，宿主 adapter
 //!   实现），拿到的是它真正消费的那几个方法，而不是整个上帝对象。
 //!

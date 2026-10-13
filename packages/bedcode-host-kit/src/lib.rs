@@ -1,8 +1,10 @@
 //! BedCode 插件宿主**机制内核**（host kit）
 //!
-//! 本 crate 只装「机制」：把插件实例状态、能力模块契约、能力模块自动注册表这三样
-//! 与**任何产品概念无关**的东西，从各端宿主的 bin crate 里抬到可被能力 crate 依赖
-//! 的位置。它是双端将来共用的锚点（本期只接桌面端，移动端零改动，ADR 0018）。
+//! 本 crate 只装「机制」：插件实例状态、能力模块契约与自动注册表、能力域自报面
+//! （生命周期钩子 / 端口装配器 / 路由词汇）这些与**任何产品概念无关**的东西，从各端
+//! 宿主的 bin crate 里抬到可被能力 crate 依赖的位置。它是**双端共用**的锚点：桌面与
+//! 移动宿主都在直接依赖它（非「将来」），ADR 0018 的「双端契约各自演进」不因共享
+//! 机制内核而改变。
 //!
 //! ## 为什么必须独立成 crate（两条硬约束，均已实测）
 //!
@@ -33,7 +35,7 @@
 //!     └── metrics    单插件指标值对象（原子记账）
 //!            ▲                    ▲
 //!            │                    │ 依赖
-//!   能力 crate（domains/…）   宿主 bin crate（wasm_core）
+//!   能力 crate（packages/bedcode-*）   两端宿主（wasm-core / src-tauri）
 //! ```
 //!
 //! ## 边界红线（AGENTS §5.1）
@@ -65,7 +67,7 @@ pub use metrics::{
 };
 pub use module::{HostModule, HostModuleDesc, ModuleEntry};
 pub use ports::HostPorts;
-pub use registry::ModuleRegistry;
+pub use registry::{DescriptorNounViolation, ModuleRegistry, PRODUCT_NOUN_DENYLIST};
 pub use route::{collected_routable_capabilities, RoutableCapability, RoutableCapabilityEntry};
 pub use state::WasmPluginState;
 

@@ -25,6 +25,65 @@ use crate::module::HostModuleDesc;
 use crate::state::WasmPluginState;
 use crate::{HostKitError, Result};
 
+// ==================== 描述符零产品名词判据（ADR 0035 D4） ====================
+
+/// 描述符禁用词表：模块名 / 接口路径 / 权限位中不得出现的产品名词词段
+///
+/// 判据规则（词段相等，非子串包含）见 [`ModuleRegistry::product_noun_violations`]。
+/// 这些词代表产品语义（会话 / 终端 / 配对 / 设备 / 传输 / 文件 / 对话 / AI / Agent /
+/// PTY 实例 / MCP）；一旦进入描述符，注册表就从「通用注册表与寻址」退化成业务容器
+/// （AGENTS §5.1 B1/B5）。
+///
+/// **端独有扩展的例外不在这里**：豁免由各扫描点显式登记（例：移动 `mobile-terminal-stream`
+/// 是 ADR 0047 / ADR 0052 D4 保留的窄转发端扩展，命中 `terminal` 属端事实），
+/// 本表只定义「什么算命中」。
+pub const PRODUCT_NOUN_DENYLIST: &[&str] = &[
+    "session",
+    "terminal",
+    "pairing",
+    "device",
+    "transfer",
+    "file",
+    "chat",
+    "ai",
+    "agent",
+    "pty-instance",
+    "mcp",
+];
+
+/// 单条描述符命中记录（模块名 + 命中词 + 判定用的归一化文本）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorNounViolation {
+    /// 模块名（[`HostModuleDesc::name`]）
+    pub module: &'static str,
+    /// 命中的禁用词（[`PRODUCT_NOUN_DENYLIST`] 中一项）
+    pub noun: &'static str,
+    /// 判定用的归一化文本（模块名 + 接口路径 + 权限位 + ABI 下界）
+    pub haystack: String,
+}
+
+/// 词段命中判定：按非字母数字切段，`-` / `_` 视作**段内连接符**（不切）
+///
+/// 于是 `host-session` 切成 `host` + `session`（命中）、`database:main` 里的 `ai`
+/// 只是 `main` 的内部子串（不命中）。契约例见本文件 `mod tests`。
+fn descriptor_haystack_has_noun(haystack: &str, noun: &str) -> bool {
+    // 先把 `_` 归一化成 `-`（两种连接符在本仓库都出现：接口路径用 `-`，模块名 /
+    // 权限位用 `_`），再切词；`-` 保留为段内连接符。
+    let normalized = haystack.replace('_', "-");
+    let prefix = format!("{noun}-");
+    let suffix = format!("-{noun}");
+    let infix = format!("-{noun}-");
+    normalized
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            word == noun
+                || word.starts_with(&prefix)
+                || word.ends_with(&suffix)
+                || word.contains(&infix)
+        })
+}
+
 /// 宿主能力模块注册表
 /// 能力模块注册表（机制内核 crate）
 ///
@@ -97,6 +156,40 @@ impl ModuleRegistry {
         Err(HostKitError::WhitelistMismatch { unlisted, missing })
     }
 
+    /// 描述符产品名词命中（空 = 通过；AGENTS §5.1 B1/B5 红线）
+    ///
+    /// **为什么在机制侧**：描述符是 [`crate::module::HostModuleDesc`] 的自报面，而
+    /// `inventory` 收集按**测试二进制**隔离——某端宿主 adapter 自报的模块只有该端
+    /// 的测试二进制能收集到。判据与词表因此以本方法为单一真源，各扫描点
+    /// （wasm-core / 两端宿主）对自己的 `ModuleRegistry::collected()` 全量跑一次。
+    ///
+    /// **只返回原始命中、不做豁免**：端独有扩展可以合法携带端事实词汇（例：移动
+    /// `mobile-terminal-stream`，ADR 0047 / ADR 0052 D4 保留的窄转发端扩展），
+    /// 豁免由各扫描点把期望命中集显式登记后比对（防「静默放过」）。
+    ///
+    /// 匹配粒度 = **词段相等**，不是子串包含：`database:main` 里的 `ai` 是 `main`
+    /// 的内部子串，不命中（票 08 实测修正，子串判据曾把纯机制权限位判成产品名词）。
+    pub fn product_noun_violations(&self) -> Vec<DescriptorNounViolation> {
+        let mut violations = Vec::new();
+        for desc in self.descs() {
+            let haystack = format!(
+                "{} {:?} {:?} {}",
+                desc.name, desc.interfaces, desc.permissions, desc.abi_min
+            )
+            .to_lowercase();
+            for noun in PRODUCT_NOUN_DENYLIST {
+                if descriptor_haystack_has_noun(&haystack, noun) {
+                    violations.push(DescriptorNounViolation {
+                        module: desc.name,
+                        noun,
+                        haystack: haystack.clone(),
+                    });
+                }
+            }
+        }
+        violations
+    }
+
     /// 逐模块装配进插件 linker（顺序 = 字典序）
     ///
     /// 任一模块装配失败即整体失败并点名该模块（fail-visible：不允许「装了一半」的
@@ -112,5 +205,57 @@ impl ModuleRegistry {
                 })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 词段判据自身的契约例（判据本身也是被锁对象）
+    //!
+    //! 没有这组用例，匹配规则被改宽（回到子串）时**零红灯**——那时 `database:main`
+    //! 会重新把纯机制权限位判成产品名词，修法往往是「把 sqlite 从词表里摘掉」，
+    //! 正是本判据要防的那种降级。
+
+    use super::descriptor_haystack_has_noun;
+
+    /// 正例：复合名词命中（连接符是段内的一部分）
+    #[test]
+    fn descriptor_noun_matcher_keeps_compounds_and_drops_substrings() {
+        assert!(descriptor_haystack_has_noun(
+            "bedcode:plugin@0.2.0/host-session",
+            "session"
+        ));
+        assert!(descriptor_haystack_has_noun("pty-instance", "pty-instance"));
+        assert!(descriptor_haystack_has_noun(
+            "host_pty_instance",
+            "pty-instance"
+        ));
+        assert!(descriptor_haystack_has_noun("ai-chatbox", "ai"));
+        assert!(descriptor_haystack_has_noun(
+            "bedcode:plugin@0.2.0/host-session",
+            "plugin"
+        ));
+        // 正例：分号 / 斜杠权限位与接口路径的词段照样命中
+        assert!(descriptor_haystack_has_noun("[\"database:main\"]", "main"));
+        assert!(descriptor_haystack_has_noun(
+            "[\"host-session\"]",
+            "session"
+        ));
+        // 反例：单词**内部**的子串不算命中（`database:main` 当年因这条误判）
+        assert!(!descriptor_haystack_has_noun(
+            "[\"database:main\", \"storage\"]",
+            "ai"
+        ));
+        assert!(!descriptor_haystack_has_noun("sqlite", "ai"));
+        assert!(!descriptor_haystack_has_noun("[\"network:mdns\"]", "file"));
+        // 正例：连字符是段边界 ⇒ `m-ai-n` 里的 `ai` 是**整段**，必须命中
+        assert!(descriptor_haystack_has_noun("m-ai-n", "ai"));
+        // 反例：名词**粘在**别的字符里（没有段边界）不算命中
+        assert!(!descriptor_haystack_has_noun("mail", "ai"));
+        assert!(!descriptor_haystack_has_noun("[\"m.ain\"]", "ai"));
+        assert!(!descriptor_haystack_has_noun(
+            "[\"ptyinstance\"]",
+            "pty-instance"
+        ));
     }
 }
