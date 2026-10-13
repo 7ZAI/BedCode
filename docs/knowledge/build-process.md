@@ -719,7 +719,7 @@ tauri-plugin-*）——宿主侧 14G 是**活产物**（`deps/` 里几乎每个 
 | C 移动端夹具共享 target | ~0.35G → ~0.2G | **采纳**（低成本，同构） |
 | D 两端宿主共享 target | 估 2~3G | **不做**：编译期独占锁使并发构建串行化；`cargo clean` 爆炸半径覆盖全端；且去重空间有限（见上） |
 | E 单一根 workspace | 增量有限 | **不做**：单一 `Cargo.lock` 耦合 wasmtime 分叉；stable vs nightly 工具链冲突；workspace feature 统一污染 wasm 产物；`cargo build --workspace` 会按宿主三元组编译 wasm 应用 |
-| F sccache | 不省空间 | **2026-09-26 否决 → 2026-10-05 复核后引入 → 2026-10-06 部分推翻**。重新引入所依据的「现代 sccache 检测 `-Zincremental` 透传、依赖全量照常缓存」**在本机不成立**：cargo dev profile 对所有 crate 都传 `-C incremental`，sccache 0.18 对其静默跳过，实测只缓存 289 个非增量单位（proc-macro + build script）而漏掉 1049 个普通 crate（含 wasmtime / tauri / actix）。详见下节。要让收益成立需 `CARGO_INCREMENTAL=0`，代价是失去 cargo 增量编译，属未决取舍 |
+| F sccache | 不省空间 | **2026-09-26 否决 → 2026-10-05 复核后引入 → 2026-10-06「部分推翻」→ 2026-10-13 实测重定**。2026-10-06 的推翻理由（「cargo dev profile 对所有 crate 都传 `-C incremental`，sccache 静默跳过 1049 个普通 crate、覆盖率仅 21%」）**无法复现且机制不成立**：sccache 只在命令行确实带 `-C incremental` 时跳过，而 cargo 只对**工作区成员**（本地 path crate）传该参数，registry 依赖（wasmtime / tauri / actix 这些最贵的）本就全部进缓存。结论：默认配置即有效，无需 `CARGO_INCREMENTAL=0`（详见下节实测） |
 | G btrfs + compress=zstd | 14G → 5~7G | **不做**：需独立分区，loop 挂载性能损失不可接受 |
 | H 定期回收 | 立即 ~4G | **采纳**（Step 0 + 监控脚本扩展） |
 
@@ -767,28 +767,37 @@ rustc-wrapper = "sccache"   # bare 名经 PATH 解析（~/.cargo/bin 已装）
 SCCACHE_CACHE_SIZE = { value = "20GiB", force = false }  # 外部变量优先（CI 设 2GiB）
 ```
 
-**⚠ 与增量编译的关系（2026-10-06 实测修正，原结论已被推翻）**
+**⚠ 与增量编译的关系（2026-10-13 实测重定；2026-10-06 的「覆盖率 21%」结论已推翻）**
 
-原文写的是「cargo 只对本地 crate 开 incremental（`-Zincremental`），sccache 检测到该参数时
-透传不缓存；依赖 crate 的全量编译照常缓存」，并附 2026-10-05 的实测（`bedcode-host-kit`
-wasmtime 全量 3m34s → clean 后 37s，244 次编译 100% 命中）。**这个实测无法在当前环境下复现**，
-原文的机制解释也不成立：
+2026-10-05 原文写「cargo 只对本地 crate 开 incremental、依赖照常缓存」，2026-10-06 又以
+「cargo dev profile 对**所有** crate（含依赖）都传 `-C incremental`，sccache 0.18 静默跳过，
+实测 server-libs 桶 1049 个普通 crate 全跳过、仅 289 个非增量单位入缓存（覆盖率 21%）」
+把它推翻。**2026-10-13 复核：10-06 的推翻不成立。**
 
-- cargo 的 dev profile 对**所有** crate（含依赖 crate）都默认传 `-C incremental`，并非「只对本地 crate」；
-- sccache 0.18 + Rust 1.98 对带 `-C incremental` 的调用**静默跳过**，症状是统计里出现
-  「空请求」：`Compile requests` +1，而 `executed` / `hits` / `misses` 全部不动。
+- sccache 的判据只在**命令行确实带 `-C incremental`** 时才跳过该次编译（源码
+  `cannot_cache!("incremental")`，`src/compiler/rust.rs`）；cargo 只把该参数传给
+  **工作区成员**——即本地 path crate（`bedcode-*` / `link-crypto` / `peer-net` 等），
+  registry 依赖（wasmtime / tauri / actix / serde…）**不带**，因此默认配置下依赖图本来就全进缓存。
+- 实测（2026-10-13，桌面宿主 target 刚被 15G 阈值 `cargo clean` 后跑 `cargo check --lib`）：
+  `865 请求 / 760 executed / 758 hits（99.74%）/ 2 misses`，3m53s 完成；非缓存原因里
+  `incremental` 仅 15 次且全是本地 crate，`crate-type` 82（bin/test 链接产物，本就不可缓存）。
+  独立探针工程（单 crate + serde）同结论：serde 系列走缓存并命中，`debug/incremental/`
+  目录里只出现探针自身。
+- 10-06 记录的「1049 个普通 crate 全跳过」在当前 cargo 1.98.1 + sccache 0.18 下无法复现；
+  最接近该症状的是 **`CARGO_INCREMENTAL=1`**——但那时 sccache 会**直接拒绝执行**
+  （`sccache: incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue.`，
+  连 `rustc -vV` 探针都退出 1），一切 cargo 命令成批失败，而不是「静默跳过」。
+  **任何时候都不要设 `CARGO_INCREMENTAL=1`。**
 
-实测覆盖（server-libs 桶）：普通 crate 1049 个（**含 wasmtime / tauri / actix 这些最贵的**）
-全部跳过，只有非增量单位（proc-macro `.so` 111 + build script 178 = 289 个）入缓存，
-覆盖率约 **21%**，恰好漏掉最贵的部分。复现步骤：
-`sccache --zero-stats` → `touch src/lib.rs` → `cargo build` → 看统计；再以
-`CARGO_INCREMENTAL=0` 跑同一动作对比（后者 `executed` / `misses` 正常增长）。
+**因此不需要为 sccache 开启 `CARGO_INCREMENTAL = 0`**：它只会额外把本地 crate 纳入缓存，
+代价是失去 cargo 自身增量编译（改一个文件重编整个 crate），属全局取舍，2026-10-13 决定
+保持默认（本地 crate 走增量、依赖走缓存）。如确要全量缓存（例如频繁 clean 的场景），
+在根 config `[env]` 加 `CARGO_INCREMENTAL = { value = "0", force = false }` 即可。
 
-**要真正兑现「clean 后不重编」**，须在根 config 的 `[env]` 加
-`CARGO_INCREMENTAL = { value = "0", force = false }`。代价是失去 cargo 自身的增量编译
-（改一个文件重编整个 crate），属全局性能取舍，**未擅自开启**；方案 F 当初「dev 迭代更慢」
-的否决理由至今仍然成立。**排查提示**：怀疑 sccache 失效时先看 `executed` 是否为 0——
-为 0 就是全被跳过了，而不是「没命中」。
+**排查提示**：怀疑 sccache 失效时，先看 `sccache --show-stats` 的
+`Non-cacheable reasons: incremental` 计数与本地 `target/debug/incremental/` 内容——前者
+只应命中本地 crate、后者只应出现本地 crate 目录；若 registry 依赖（wasmtime 等）也出现在
+incremental 目录里，检查是否有人设了 `CARGO_INCREMENTAL=1`。
 
 **安装（显性失败设计）**：sccache 未安装时 cargo 直接报错（找不到 wrapper），不会静默
 降级——装好即用，装法与各平台差异见根 `.cargo/config.toml` 注释。
@@ -796,13 +805,15 @@ wasmtime 全量 3m34s → clean 后 37s，244 次编译 100% 命中）。**这�
 **CI 与本地差异**：CI 不启用 sccache 的 GHA cache 后端（不设 `SCCACHE_GHA_ENABLED`）——
 跨 run 缓存由 `Swatinem/rust-cache`（target）负责，sccache 只做 job 内跨 crate 命中
 （server-libs / wasm-apps 循环共享依赖）；CI job 级 `SCCACHE_CACHE_SIZE=2GiB`
-（ubuntu-latest 磁盘 ~14G）经根 config 的 `force=false` 覆盖 20GiB 默认。
+（ubuntu-latest 磁盘 ~14G）经根 config 的 `force=false` 覆盖 30GiB 默认。
 
 **缓存管理**：缓存目录 `~/.cache/sccache`（`SCCACHE_DIR` 可改），与 check-target-size.js
 **互不相关**——不在 target 内，15G 阈值 `cargo clean` 不碰它（这正是设计意图：clean 后
 由 sccache 恢复依赖）。清缓存：`sccache --stop-server && rm -rf ~/.cache/sccache`。
-磁盘占用是 target 之外的额外一份压缩产物（zstd，约 target 的 1/3），20GiB 上限封顶，
-紧张时降 8~10GiB。
+磁盘占用是 target 之外的额外一份压缩产物（zstd，约 target 的 1/3），**30GiB**
+上限封顶（2026-10-13 由 20GiB 上调：单次桌面 `cargo check` 就产生 760 个编译单元，
+缓存长期停在 16~20GiB 满位附近，LRU 淘汰会挤掉稀有的 build 产物；淘汰一次 = 下次重编，
+实测平均单次编译 17.8s），紧张时降回 8~10GiB。
 
 ---
 
