@@ -66,6 +66,10 @@ const SCANNED_CRATES: &[&str] = &[
     // 恰是本锁 C-4 反向约束：核内不得出现任何产品身份字面量（插件 id 经
     // `PluginIdentity` 运行期注入），核内就地锁 `tests/boundary_lock.rs` 同判据。
     "bedcode-file-transfer-core",
+    // 仓库级插件组件化工具（file-transfer 单产物后双端共用同一编码路径，2026-10-13
+    // 自移动 SDK rust/tools/ 提升）：core module → Component 编码（等价
+    // wasm-tools component new），零产品语义。
+    "bedcode-componentize",
 ];
 
 /// 已知的、暂未纳入扫描的 `bedcode-*` crate（各有明确在办票据）

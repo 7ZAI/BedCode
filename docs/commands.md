@@ -231,9 +231,11 @@ adb -s 192.168.1.23:5555 reverse --remove-all && adb -s 192.168.1.23:5555 revers
 
 桌面是 **`wasm-apps/<app-id>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`wasm-apps/<app-id>/`**（3 个：`ai-chatbox` / `file-transfer` / `terminal-session`）。插件 id 形如 `com.bedcode.<name>`。
 
-### 5.1 工具链（桌面 wasm32-wasip3）
+### 5.1 工具链（桌面 wasm32-wasip3；file-transfer 例外）
 
 桌面 wasm 应用统一编译到 **`wasm32-wasip3`**（由 pin 住的 nightly 提供 std），**不是 `wasm32-unknown-unknown`**。目标与 toolchain 由 `scripts/wasip3-toolchain.sh` 单一维护（含 `rustup target add wasm32-wasip3 --toolchain <pinned>`），脚本会按需补装。背景与移动端待决策项见 `docs/knowledge/wasip3-toolchain.md`。
+
+**例外 —— file-transfer（双端单产物，2026-10-13）**：file-transfer 是双端共享产物源（规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`），桌面与移动加载**同一份 crate 编出的组件**，故其构建改用 **`wasm32-unknown-unknown` + 仓库级组件化工具**（`packages/bedcode-componentize`，等价 `wasm-tools component new`）——与移动端构建同一编码路径，stable 工具链可编（无需 pinned nightly），移动宿主（wasmtime 48）加载的组件形态与其既有产物同构。移动端 `wasm-apps/file-transfer/` 已无 `rust/` 目录，`package.json` 的 `bedcode.sharedRustManifest` 声明共享产物源，`scripts/plugin-build.js` 先构建共享 rust 再走前端构建。
 
 ### 5.2 构建与测试
 

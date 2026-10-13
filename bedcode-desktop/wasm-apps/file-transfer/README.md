@@ -39,12 +39,16 @@ file-transfer/
 ├── plugin.json                # 插件清单（权限、命令、侧边栏 + 状态栏视图）
 ├── rust/
 │   └── src/
-│       ├── lib.rs             # WASM 入口 + 命令路由 + 事件派发
-│       ├── peer.rs            # 数据面命令编排与存储运行时
+│       ├── lib.rs             # WASM 入口 + 命令路由 + 事件派发（双词汇 events 并集 + activate 平台分支）
+│       ├── platform.rs        # 运行期平台探测与分支选择（host-platform.platform()，未知值 fail-visible）
+│       ├── peer.rs            # 数据面命令编排与存储运行时（持久化/挂载/设置按平台分支）
+│       ├── adapters.rs        # 桌面行为端口包（plugin-db 持久化 / path wire / 节点电源 / 认证中心）
+│       ├── adapters_mobile.rs # 移动行为端口包（storage KV / safTreeUri wire / 电源 unsupported / 原语直答）
+│       ├── auth_center.rs     # 桌面专属：consent/信任经互调会话中心（移动分支不触达）
 │       ├── device_bridge.rs   # 设备快照 / endpoint memo / session 句柄
-│       ├── transfer_store.rs  # 任务与历史自持存储（纯函数 + I/O）
-│       ├── roots_registry.rs  # 共享目录注册表真源
-│       └── settings_store.rs  # 接收策略 / 下载目录 / 加密设置
+│       ├── transfer_store.rs  # 任务与历史自持存储（纯转出至共享核）
+│       ├── roots_registry.rs  # 共享目录注册表真源（平台分支：plugin-db 表 / storage 键）
+│       └── settings_store.rs  # 接收策略 / 下载目录 / 加密设置（平台分支）
 ├── scripts/
 │   └── build.js               # 统一构建脚本（Vite + Cargo WASM + Component Model + 复制产物；支持 --watch / --frontend-only / --rust-only）
 ├── src/
@@ -58,6 +62,8 @@ file-transfer/
 └── vite.config.ts             # Vite 配置
 ```
 
+> **双端单产物**（2026-10-13，规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：本 crate 是双端**唯一**的 file-transfer wasm 产物源——桌面与移动宿主加载同一份组件（按桌面 `world plugin` 构建）。移动端 `bedcode-mobile/wasm-apps/file-transfer/` 只保留前端与 manifest（`rust/` 已退役），其构建经 `package.json` 的 `bedcode.sharedRustManifest` 指向本 crate。产品差异不消除：同一端口 trait 的桌面/移动两套实现 + 激活时 `host-platform.platform()` 探测分支。
+
 ## 构建
 
 ```bash
@@ -68,7 +74,9 @@ node scripts/build.js --frontend-only
 node scripts/build.js --rust-only
 ```
 
-构建脚本串联：`vite build` → `cargo build --target wasm32-unknown-unknown --features wasm` → Component Model 编码（`packages/plugin-sdk-desktop/rust/tools/componentize`）→ 复制 `index.js` / `plugin.json` / `icon.svg` / `*.wasm` 到 `src-tauri/resources/plugins/desktop/com.bedcode.file-transfer/`。
+构建脚本串联：`vite build` → `cargo build --target wasm32-unknown-unknown --features wasm` → Component Model 编码（仓库级工具 `packages/bedcode-componentize`）→ 复制 `index.js` / `plugin.json` / `icon.svg` / `*.wasm` 到 `src-tauri/resources/plugins/desktop/com.bedcode.file-transfer/`。
+
+> **工具链口径**：本应用是双端共享产物源，与桌面其余 wasm 应用（wasm32-wasip3 直出 Component）不同——改用 unknown-unknown + 组件化，与移动端构建同一编码路径（stable 可编、移动宿主加载形态同构）。产物自报协商 ABI 21（`SHARED_ABI_VERSION`，≤ 双端宿主 AbiPolicy 下界；桌面 38 / 移动 21 均放行）。
 
 > 产物目录（`**/src-tauri/resources/plugins/`）已加入 .gitignore，打包/运行前需先执行构建。
 

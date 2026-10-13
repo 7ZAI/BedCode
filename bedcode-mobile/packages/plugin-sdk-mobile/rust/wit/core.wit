@@ -193,7 +193,7 @@ interface host-mdns {
 /// 双端交集切片：桌面独有 `pick-folders` / `wsl-distros` /
 /// `local-ipv4-addresses` / `reveal-in-dir` 拆入
 /// [`host-platform-desktop`]（cap-desktop 分片），本接口只剩双端交集
-/// `pick-files` / `pick-folder`。
+/// `pick-files` / `pick-folder`，外加双端全等的 `platform`（宿主平台标识探测）。
 interface host-platform {
     /// 系统多文件选择器 → string[] JSON（用户取消为空数组）。
     ///
@@ -221,6 +221,14 @@ interface host-platform {
     /// 权限 `fs:pick` + 选择后授权校验（授权落账到所选目录本身），口径同
     /// `pick-files`。（移动端为 SAF 目录树选择器，返回树 URI）
     pick-folder: func() -> result<string, string>;
+    /// 宿主平台标识探测（双端全等；**无权限门**——平台事实不是能力，ADR 0022 裁剪线）。
+    ///
+    /// 取值由各端宿主定义（当前约定：桌面 `desktop` / 移动 `mobile`）；guest 用于
+    /// 运行期平台分支——双端共享 wasm 产物（如 file-transfer 单产物，规格
+    /// `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）据此在同一 trait
+    /// 的双实现间选择，无需双份产物。空/未知取值时 guest 侧按 fail-visible
+    /// 处理（显性报错，不猜默认平台——猜错会把桌面分支静默跑在移动宿主上）。
+    platform: func() -> string;
 }
 /// WebSocket 基础能力（v14 起；双端交集切片 = 客户端域 5 函数）
 ///

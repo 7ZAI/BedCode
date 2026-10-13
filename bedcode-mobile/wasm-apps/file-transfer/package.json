@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bedcode-plugin build",
-    "package": "bedcode-plugin package",
+    "build": "node ../../../scripts/plugin-build.js --plugin com.bedcode.file-transfer",
     "dev": "bedcode-plugin dev"
+  },
+  "bedcode": {
+    "sharedRustManifest": "../../../bedcode-desktop/wasm-apps/file-transfer/rust/Cargo.toml"
   },
   "dependencies": {
     "@binblink/bedcode-plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"

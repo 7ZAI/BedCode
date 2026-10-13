@@ -231,7 +231,18 @@
 //!   （v36 SDK 构建）仍 import 旧接口内的这些函数 → **实例化期**即被拒，
 //!   `stale_artifact_rebuild_hint` 点名「按 v37 SDK 重建」。WIT 绑定与插件产物
 //!   全量重建。**desktop 独有**，移动端不跟演（mobile ABI 另走 v20，见移动 SDK）。
-pub const ABI_VERSION: u32 = 37;
+//!
+//! - **v38: 双端单产物共享 wasm（2026-10-13，file-transfer 单产物，加法）**——三处契约
+//!   面变更为同一目标服务（规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：
+//!   ① 共享核心 `host-platform` 新增 `platform`（宿主平台标识探测，无权限门；**双端
+//!   同步**，移动 ABI 另走 v21）；② 桌面 `interface events` 扩为**七函数并集**（并入移动
+//!   词汇 on-bus-message / on-auth-success / on-disconnect / on-session-created /
+//!   on-session-stopped）——双端共享产物按桌面 world 构建、同时导出两端宿主要按名
+//!   调用的回调；对桌面原生插件是加法（默认空实现，旧宿主按名调用不受影响）；
+//!   ③ 新增 binding-only `world desktop-compat`（import host-api-call /
+//!   host-platform-desktop）——移动宿主 bindgen 它为共享产物提供 fail-visible 桩。
+//!   旧桌面产物（v37 SDK 构建）**不受影响**：少导出的函数不被任何调用方按名查找。
+pub const ABI_VERSION: u32 = 38;
 
 /// 组件形态标识：`abi-form.form() == FORM_COMPONENT`（WIT `abi-form` 接口的 form() 声明）
 ///
@@ -283,8 +294,11 @@ mod tests {
         // v36 条目；desktop 独有，移动端不跟演）；
         // **v37 = 交集切片收拢**（2026-10-10：host-websocket 拆出 host-websocket-server、
         // host-http 拆出 host-http-endpoint，见本文件头部 v37 条目；desktop 独有，
-        // 移动端不跟演）
-        assert_eq!(ABI_VERSION, 37);
+        // 移动端不跟演）；
+        // **v38 = 双端单产物共享 wasm**（2026-10-13：core host-platform 加 platform 探测、
+        // 桌面 events 扩为七函数并集、新增 desktop-compat binding-only world，
+        // 见本文件头部 v38 条目；platform 原语双端同步，events 并集 desktop 独有）
+        assert_eq!(ABI_VERSION, 38);
     }
 
     #[test]

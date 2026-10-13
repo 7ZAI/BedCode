@@ -843,6 +843,14 @@ impl HostCrypto for WasmHost {
 // ==================== host-platform（ADR 0022 v2）====================
 
 impl HostPlatform for WasmHost {
+    /// 宿主平台标识（v38，双端共享产物运行期分支用）
+    ///
+    /// 走 WIT import（宿主才是端值真源——未来若宿主声明新形态，guest 无需重编）；
+    /// import 无 result 包装故不可失败。
+    fn platform(&self) -> String {
+        host_platform::platform()
+    }
+
     fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_pick_files",

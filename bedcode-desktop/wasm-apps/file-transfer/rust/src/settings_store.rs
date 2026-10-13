@@ -1,10 +1,13 @@
-//! 接收策略与落点设置 —— **实现已迁双端共享核**（`bedcode-file-transfer-core::settings`，
-//! ADR 0044），本文件保留桌面端宿主 I/O 包装（薄适配，零判据）。
+//! 接收策略与落点设置 —— 实现在双端共享核（`bedcode-file-transfer-core::settings`，
+//! ADR 0044），本文件是单产物后的宿主 I/O 包装（平台分支选择桌面 / 移动端口）。
 //!
-//! 桌面形态：`downloadDir` 由 UI 选择后推送 `set-download-dir`（核内由形态位
-//! `PluginProfile::supports_custom_download_dir` 闸门放行）。
+//! 平台差异：桌面 `downloadDir` 由 UI 选择后推送 `set-download-dir`（核内由形态位
+//! `PluginProfile::supports_custom_download_dir` 闸门放行）；移动落点固定
+//! `MediaStore.Downloads`，核内同款闸门不放行 ⇒ 不推送（行为与退役前逐字一致）。
 
 use crate::adapters::DesktopPorts;
+use crate::adapters_mobile::MobilePorts;
+use crate::platform::{self, Platform};
 use bedcode_file_transfer_core::settings as core_settings;
 use bedcode_plugin_api::host::{HostPeer, HostStorage};
 
@@ -12,43 +15,63 @@ pub(crate) use bedcode_file_transfer_core::settings::*;
 
 /// 读取设置（存储空/缺失回默认；损坏值显性报错——静默重置用户设置比报错更糟）
 pub(crate) fn load<H: HostStorage + ?Sized>(h: &H) -> anyhow::Result<TransferSettings> {
-    core_settings::load(&DesktopPorts(h)).map_err(anyhow::Error::new)
+    match platform::current() {
+        Platform::Desktop => core_settings::load(&DesktopPorts(h)).map_err(anyhow::Error::new),
+        Platform::Mobile => core_settings::load(&MobilePorts(h)).map_err(anyhow::Error::new),
+    }
 }
 
 /// 读取设置（惰性迁移语义与退役前一致：引擎旧读接口已退役，空值即默认）
 pub(crate) fn load_or_migrate<H: HostStorage + ?Sized>(h: &H) -> anyhow::Result<TransferSettings> {
-    core_settings::load_or_migrate(&DesktopPorts(h)).map_err(anyhow::Error::new)
+    match platform::current() {
+        Platform::Desktop => {
+            core_settings::load_or_migrate(&DesktopPorts(h)).map_err(anyhow::Error::new)
+        }
+        Platform::Mobile => {
+            core_settings::load_or_migrate(&MobilePorts(h)).map_err(anyhow::Error::new)
+        }
+    }
 }
 
-/// 保存设置并推送宿主配置原语（接收策略闸门 + 落点）
+/// 保存设置并推送宿主配置原语（接收策略闸门 + 落点——落点推送受形态位闸门）
 pub(crate) fn save_and_push<H: HostStorage + HostPeer + ?Sized>(
     h: &H,
     s: &TransferSettings,
 ) -> anyhow::Result<()> {
-    core_settings::save_and_push(&DesktopPorts(h), s).map_err(anyhow::Error::new)
+    match platform::current() {
+        Platform::Desktop => {
+            core_settings::save_and_push(&DesktopPorts(h), s).map_err(anyhow::Error::new)
+        }
+        Platform::Mobile => {
+            core_settings::save_and_push(&MobilePorts(h), s).map_err(anyhow::Error::new)
+        }
+    }
 }
 
 // ==================== Tests ====================
 
-// 这些用例现在的身份是**适配器接线测试**：判据已被核内用例覆盖，此处验证
-// 「桌面 SDK host trait → 核端口」的委派真的把调用送到了宿主原语上。
+// 这些用例的身份是**适配器接线测试**：判据已被核内用例覆盖，此处验证
+// 「桌面 SDK host trait → 核端口」的委派真的把调用送到了宿主原语上，且双平台
+// 分支各自落在正确的持久化 / 推送面上。
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     /// 内存版 HostStorage+HostPeer mock：记录推送调用供断言
     struct MockHost {
-        kv: std::cell::RefCell<std::collections::HashMap<String, serde_json::Value>>,
-        pushed_policy: std::cell::RefCell<Vec<(String, u64)>>,
-        pushed_dirs: std::cell::RefCell<Vec<String>>,
+        kv: RefCell<HashMap<String, serde_json::Value>>,
+        pushed_policy: RefCell<Vec<(String, u64)>>,
+        pushed_dirs: RefCell<Vec<String>>,
     }
 
     impl MockHost {
         fn new() -> Self {
             MockHost {
-                kv: std::cell::RefCell::new(std::collections::HashMap::new()),
-                pushed_policy: std::cell::RefCell::new(vec![]),
-                pushed_dirs: std::cell::RefCell::new(vec![]),
+                kv: RefCell::new(HashMap::new()),
+                pushed_policy: RefCell::new(vec![]),
+                pushed_dirs: RefCell::new(vec![]),
             }
         }
     }
@@ -116,16 +139,6 @@ mod tests {
         ) -> Result<(), bedcode_plugin_api::host::HostError> {
             unimplemented!()
         }
-        fn peer_set_receive_policy(
-            &self,
-            mode: &str,
-            timeout_secs: u64,
-        ) -> Result<(), bedcode_plugin_api::host::HostError> {
-            self.pushed_policy
-                .borrow_mut()
-                .push((mode.to_string(), timeout_secs));
-            Ok(())
-        }
         fn peer_pause_transfer(
             &self,
             _batch_id: &str,
@@ -137,6 +150,16 @@ mod tests {
             _batch_id: &str,
         ) -> Result<(), bedcode_plugin_api::host::HostError> {
             unimplemented!()
+        }
+        fn peer_set_receive_policy(
+            &self,
+            mode: &str,
+            timeout_secs: u64,
+        ) -> Result<(), bedcode_plugin_api::host::HostError> {
+            self.pushed_policy
+                .borrow_mut()
+                .push((mode.to_string(), timeout_secs));
+            Ok(())
         }
         fn peer_set_shared_roots(
             &self,
@@ -192,16 +215,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn save_and_push_writes_storage_and_host_primitives() {
-        let h = MockHost::new();
-        let s = TransferSettings {
+    fn sample() -> TransferSettings {
+        TransferSettings {
             receiving_policy: "accept".into(),
             approval_timeout_sec: 999,
             download_dir: Some("D:/dl".into()),
             encryption: true,
             concurrency: 5,
-        };
+        }
+    }
+
+    #[test]
+    fn save_and_push_writes_storage_and_host_primitives_desktop() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        let s = sample();
         save_and_push(&h, &s).unwrap();
         assert_eq!(
             h.pushed_policy.borrow().as_slice(),
@@ -213,6 +242,27 @@ mod tests {
             &["D:/dl".to_string()][..]
         );
         // 回读一致
+        let loaded = load(&h).unwrap();
+        assert_eq!(loaded, s);
+    }
+
+    #[test]
+    fn save_and_push_skips_download_dir_on_mobile() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Mobile);
+        let h = MockHost::new();
+        let s = sample();
+        save_and_push(&h, &s).unwrap();
+        assert_eq!(
+            h.pushed_policy.borrow().as_slice(),
+            &[("always_accept".to_string(), 600u64)][..]
+        );
+        // 移动形态位 = 固定 MediaStore.Downloads ⇒ 不得推送落点（静默推送会让
+        // 引擎落点与 UI 声明不一致）
+        assert!(
+            h.pushed_dirs.borrow().is_empty(),
+            "移动端不得推送自定义落点"
+        );
         let loaded = load(&h).unwrap();
         assert_eq!(loaded, s);
     }

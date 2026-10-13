@@ -338,6 +338,13 @@ pub(crate) fn run_phase1(
     };
     match decision.decision {
         DecisionKind::Ask => (false, false),
+        // 应答投递失败**刻意不翻成失败**（返回的二元组答的是「决策是否已裁定」，不是
+        // 「应答是否送达」）：改判会让已裁定的 accept/deny 退回「继续询问」，等于让
+        // 投递故障改写用户已表达的意向。此处也不打日志——本函数刻意只收两个 trait
+        // 对象、不持有 WasmHost（native 单测据此注入记录式假实现），加日志得改签名
+        // 并连带改测试。迟到应答按上文「双轨兜底」落到宿主 hit:false，无害。
+        // 恢复方式：若要把投递失败显性化，令 `PeerRespondOps` 增一条 log 回调或把
+        // 返回值扩为三元组，并同步 native 单测的假实现。
         DecisionKind::Accept => {
             let _ = peer.respond_consent(&decision.request_id, true);
             (true, true)

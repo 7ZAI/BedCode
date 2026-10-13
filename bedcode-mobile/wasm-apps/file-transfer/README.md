@@ -20,7 +20,7 @@
 
 > 📊 架构图：[plugin-file-transfer-mobile.html](../../../docs/diagrams/plugin-file-transfer-mobile.html)
 
-- **Rust WASM 层**：WASM 入口与命令路由（`lib.rs`）、设备发现桥接与快照持久化（`device_bridge.rs`）、共享根注册表（`roots_registry.rs`）、任务/历史自持存储（`transfer_store.rs`）、接收策略设置（`settings_store.rs`）、数据面命令编排（`peer.rs`）
+- **Rust WASM 层**：**双端单产物**（2026-10-13，规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）——移动端不再自持 rust crate，wasm 产物源在**桌面端** `bedcode-desktop/wasm-apps/file-transfer/rust/`（WASM 入口与命令路由 `lib.rs`、平台探测与分支 `platform.rs`、桌面/移动两套端口适配 `adapters.rs` / `adapters_mobile.rs`、设备发现桥接 `device_bridge.rs`、共享根注册表 `roots_registry.rs`、任务/历史存储 `transfer_store.rs`、接收策略 `settings_store.rs`、数据面编排 `peer.rs`）。本目录的构建经 `package.json` 的 `bedcode.sharedRustManifest` 声明指向该共享 crate（`scripts/plugin-build.js` 先构建共享 rust 再走前端构建）
 - **TS 前端**：`FileTransferView`（三段式主视图：传输/浏览/设备）+ Tab 子组件（`TransfersTab` / `BrowseTab` / `DevicesTab`）、卡片与工具（`TaskCard` / `PeerHeader` / `SummaryBar` / `TabBar` / `FileTypeIcon` / `EmptyState`）、审批与信任（`BatchRequestDialog` / `TrustedPeersSection`）、设置（`SettingsPage` / `SettingsSection`）、工具箱入口（`ToolboxEntry`）
 - **设备缓存**：`deviceState.ts` 纯函数状态机（去重 / TTL / 能力位）自持于前端，Rust 侧只透传 `mdns:*` 事件与持久化快照
 - **与桌面端通信**：经宿主 `fileservice` / `transfer` / `peer` 权限访问桌面端文件服务；上传走系统 SAF 文件选择（`platform_pick_files` → `enqueue`）；`storage` 承载插件自有 KV 真源（设备快照 / 共享根 / 接收策略）
@@ -30,14 +30,6 @@
 ```
 file-transfer/
 ├── plugin.json          # 插件清单（权限、命令、toolbox 视图、设置页、路由）
-├── rust/
-│   └── src/
-│       ├── lib.rs              # WASM 入口 + 命令路由 + 总线消息分发
-│       ├── device_bridge.rs    # 设备发现桥接 + 快照持久化 + endpoint memo
-│       ├── peer.rs             # 数据面命令编排 + 存储运行时
-│       ├── roots_registry.rs   # 共享根注册表真源（storage KV + 引擎推送）
-│       ├── settings_store.rs   # 接收策略设置自持（storage KV + 闸门推送）
-│       └── transfer_store.rs   # 任务/历史自持存储（快照 merge + 归档）
 ├── src/
 │   ├── index.ts               # 插件入口：注册 i18n / 视图 / 路由 / 设置区 / 首连确认
 │   ├── types.ts               # 业务类型（camelCase 干净类型，宿主 DTO 由 Rust 翻译）
@@ -50,7 +42,7 @@ file-transfer/
 │   │                          #   useConsent / useTrustedPeers + deviceState（纯函数）
 │   ├── utils/                 # format.ts（文件大小 / 时间等格式化）
 │   └── i18n/                  # 插件翻译表（zh-CN / en + messages 类型）
-├── package.json
+├── package.json          # bedcode.sharedRustManifest 声明共享 wasm 产物源（桌面端 crate）
 ├── tsconfig.json
 └── vite.config.ts             # Vite 配置
 ```

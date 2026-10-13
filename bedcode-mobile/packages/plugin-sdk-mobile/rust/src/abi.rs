@@ -105,7 +105,14 @@
 ///   仍 import `host-fs.write-media-downloads` / `host-fs.save-to-document` →
 ///   **实例化期**即被拒，`stale_artifact_rebuild_hint` 点名「按 v20 SDK 重建」。
 ///   WIT 绑定与插件产物全量重建。
-pub const ABI_VERSION: u32 = 20;
+///
+/// - **v21: 共享核心 platform 探测原语（2026-10-13，file-transfer 单产物，加法）**——
+///   双端共享核心 `host-platform` 新增 `platform: func() -> string`（宿主平台标识探测，
+///   无权限门；双端同步，桌面 ABI 另走 v38）。移动宿主 `HostPlatform` impl 返回
+///   `mobile`；本端 WIT 其余面零变更（file-transfer 单产物的桌面词汇并集与
+///   desktop-compat 桩面住桌面 wit-src，移动 SDK 不跟演）。规格
+///   `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`。
+pub const ABI_VERSION: u32 = 21;
 
 #[cfg(test)]
 mod tests {
@@ -114,6 +121,7 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
+        // v21 = 共享核心 host-platform 新增 platform 探测原语（双端同步，加法）、
         // v20 = 交集切片收拢（host-fs 交集 6 进共享 core + host-fs-mobile 拆分）、
         // v19 = host-database（主库）整面退役（主库收归 wasm-core，双端同步）、
         // v18 = 通知/震动/声音整族封装（host-notify 域收编 host-events.notify），
@@ -121,6 +129,6 @@ mod tests {
         // v15 终端订阅协议客户端迁插件、v14 host-websocket 客户端域、
         // v13 接收编排下沉、v12 发送编排下沉、
         // v11 host-mdns v2、v10 总线二进制载荷与 v9 host-peer 传输控制二原语
-        assert_eq!(ABI_VERSION, 20);
+        assert_eq!(ABI_VERSION, 21);
     }
 }

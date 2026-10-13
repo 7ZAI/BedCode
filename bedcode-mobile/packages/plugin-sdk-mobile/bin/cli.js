@@ -591,8 +591,10 @@ function cmdBuild(flags) {
     // 编码为 Component Model 组件（等价 wasm-tools component new）。
     // 工具幂等——产物已是组件（0d 00 01 00）时直接复制，支持增量构建。
     // 迁移 spec §4 S2：产物字节形态 `00 61 73 6d 0d 00 01 00`（模块段在组件头前）
+    // 工具住仓库级 `packages/bedcode-componentize`（file-transfer 单产物后双端
+    // 共用同一编码路径，2026-10-13 自 SDK rust/tools/ 提升）
     console.log('\n[bedcode-plugin] ====== 组件化 WASM (Component Model) ======')
-    const componentizeManifest = join(SDK_ROOT, 'rust/tools/componentize/Cargo.toml')
+    const componentizeManifest = resolve(SDK_ROOT, '../../..', 'packages/bedcode-componentize/Cargo.toml')
     run(
       'cargo',
       ['run', '--release', '--manifest-path', componentizeManifest, '--', wasmPath, '-o', wasmPath],

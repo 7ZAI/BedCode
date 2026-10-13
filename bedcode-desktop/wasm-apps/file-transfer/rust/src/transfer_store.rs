@@ -1,8 +1,8 @@
 //! 传输任务台账 —— **实现已迁双端共享核**（`bedcode-file-transfer-core::transfer`，ADR 0044）。
 //!
 //! 本文件只剩转出：台账全是纯函数与领域类型（无宿主 I/O），故持久化与事件订阅不在这里，
-//! 而在端内编排层（`peer.rs` 的 `load_entries` / `persist_entries`，走 `host-plugin-database`
-//! 独立表 `transfer_entries`）。
+//! 而在编排层（`peer.rs` 的 `load_entries` / `persist_entries`——单产物后按平台分支：
+//! 桌面 `host-plugin-database` 表 `transfer_entries` / 移动 `host-storage` 键）。
 //!
 //! **本端行为随迁移发生的变化（用户裁决 T7=B，桌面统一到修正版）**：
 //! 事件归约新增 `pull-started` 建行锚点——本端拉取批次由引擎事件即建行，不再依赖旧快照

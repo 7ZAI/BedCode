@@ -143,8 +143,13 @@ const PLUGIN_WATCH_CMDS = [
     dir: 'wasm-apps/file-transfer',
     id: 'com.bedcode.file-transfer',
     args: ['scripts/build.js', '--watch'],
-    // 票 03 起桌面插件统一 wasm32-wasip3（cdylib 直出 Component，免 componentize）
-    wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_file_transfer.wasm',
+    // 单产物口径（2026-10-13）：file-transfer 与移动端共用一份 wasm，本端也走
+    // wasm32-unknown-unknown + componentize（仓库级 `packages/bedcode-componentize`），
+    // 产物落**仓库根 target**（`bedcode-desktop/target/wasm-apps/…`），不再是 wasip3 直出。
+    // 注意本字段只被 `ensurePluginWasm` 取 `basename()` 定位 resources 下的目标产物
+    // （陈旧判定比的是「resources 产物 vs Rust 源码 mtime」，不据此路径找源产物），
+    // 故这里写的是**产物文件名口径**；补建一律走 `scripts/build.js`。
+    wasmFile: '../target/wasm-apps/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
   },
   {
     // Agent Hub：与另三个同为桌面 wasm 应用。缺席本表时 `tauri dev` 不给它起

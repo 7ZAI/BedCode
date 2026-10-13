@@ -75,14 +75,15 @@ impl AbiGuest for ComponentTestPlugin {
         {
             return 999;
         }
-        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
-        // （=20，v20 = 交集切片收拢——host-fs 交集 6 进共享 core + host-fs-mobile
+        // 夹具不依赖 SDK crate（仅 wit-bindgen 生成物），版本手写——**bump ABI
+        // 需同步此处**（file-transfer C4 同步点；2026-10-13 SDK 20→21 已跟）。
+        // （历史 v20 = 交集切片收拢——host-fs 交集 6 进共享 core + host-fs-mobile
         //  拆分，2026-10-10 票 04；叠加 v19 host-database（主库）整面退役——主库由
         //  wasm-core 管理、不给插件直接调用，2026-10-09 双端机制决策；再叠加 v18
         //  host-notify 域收编、v17 host-terminal / terminal-hooks 整面退役（票 15
         //  阶段 B）、v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
         //  v14 host-websocket 客户端域 5 函数）
-        20
+        21
     }
 }
 

@@ -257,6 +257,15 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     fn pick_folder(&mut self) -> Result<String, String> {
         platform::platform_pick_folder(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
     }
+
+    /// 宿主平台标识（v38；无权限门——平台事实不是能力）
+    ///
+    /// 双端共享产物（file-transfer 单产物）经此在同一 trait 的双实现间分支；
+    /// 端值由装配 feature 编译期判定（`host_api::platform::platform_id`）。
+    /// WIT 签名无 result 包装 ⇒ 不可失败（端值是编译期常量）。
+    fn platform(&mut self) -> String {
+        platform::platform_id()
+    }
 }
 
 // v36：`host-platform.pick-folders / wsl-distros / local-ipv4-addresses /

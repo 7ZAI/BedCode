@@ -16,18 +16,22 @@
 //!
 //! 这里把「能 1:1 委派的端口」全部实现，**本身就是一道编译期校验**：端口签名与桌面 SDK
 //! 不一致会直接编不过（移动端 T4 就是靠这步查出三处签名出入）。
-//! 唯一不实现的是 `ConsentGate`——它要包住具体 `WasmHost` 并调 `auth_center` 互调，
-//! 属「编排层共享」票据的落点，不在本轮。
+//! 唯一不能泛型化的是 `ConsentGate`（差异面⑦）：它经互调认证中心裁决，而认证中心
+//! client 由宏按**具体 `WasmHost`** 生成 ⇒ 该端口落在独立窄类型
+//! [`DesktopConsentGate`]，理由见其定义处注释。
 
 use bedcode_file_transfer_core::domain::SharedRoot;
 use bedcode_file_transfer_core::ports::{
-    BusPort, EventPort, KvStore, LogPort, MdnsPort, NodePower, PeerPort, PlatformPort,
+    BusPort, ConsentGate, EventPort, KvStore, LogPort, MdnsPort, NodePower, PeerPort, PlatformPort,
     PluginProfile, PortError, PortResult, RootWireCodec, RootsStore,
 };
 use bedcode_plugin_api::host::{
     HostBus, HostError, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
     HostStorage,
 };
+use bedcode_plugin_api::wasm_host::WasmHost;
+
+use crate::auth_center;
 
 /// 桌面端端口包：`&H`（`H` = 任一满足对应 SDK trait 的宿主句柄，通常是 `WasmHost`）
 pub(crate) struct DesktopPorts<'a, H: ?Sized>(pub(crate) &'a H);
@@ -295,9 +299,37 @@ impl<H: HostMdns + ?Sized> MdnsPort for DesktopPorts<'_, H> {
 
 // ==================== 信任决策面 ====================
 
-// `ConsentGate` 桌面侧实现留到「编排层共享」票据：它需要包住具体 `WasmHost` 并调
-// `auth_center` 互调（差异面⑦），而本轮核内尚无消费方。**刻意不写**：未消费的适配器
-// 会诱使后来者以为「已经接线了」。核内 trait 保留 = 差异面登记在册。
+/// 差异面⑦的**桌面**实现：经互调认证中心裁决（ADR 0031/0033）。
+///
+/// **为什么是独立具体类型、而不是 `DesktopPorts<H>` 的一个泛型 impl**：本端口要调
+/// `auth_center`，而后者经 `wasm_entry!` 生成的 client 只对具体 `WasmHost` 存在
+/// （宏按具体句柄生成 typed call）。要塞进泛型 impl 就得给 `H` 加「能互调」的
+/// 约束，那等于把宏产物形态漏进端口面——故此处另立持有 `&WasmHost` 的窄类型。
+///
+/// 移动侧对应实现见 `adapters_mobile.rs`（`MobilePorts`，直答宿主原语）。
+pub(crate) struct DesktopConsentGate<'a>(pub(crate) &'a WasmHost);
+
+impl ConsentGate for DesktopConsentGate<'_> {
+    fn decide_consent(&self, request_id: &str, accepted: bool) -> PortResult<bool> {
+        auth_center::decide_and_respond(self.0, request_id, accepted)
+            .map_err(|e| PortError::new(e))
+    }
+
+    /// 阶段 1 信任预检：已信任则免确认自动放行并应答宿主。
+    ///
+    /// native 桩恒 `false`（单测经 `run_phase1` 注入假实现直测），与移动侧
+    /// 「恒 false = 交前端弹窗」的语义同形：返回 true 的含义严格是
+    /// 「认证中心已裁决并应答，不必弹窗」。
+    fn evaluate_consent(&self, payload: &serde_json::Value) -> PortResult<bool> {
+        Ok(auth_center::evaluate_and_maybe_respond(self.0, payload))
+    }
+
+    /// 信任设备列表：经认证中心统一视图；中心不可用时双轨降级直查宿主
+    /// （降级逻辑在 `auth_center::run_list_trusted` 内，端口层只转类型）
+    fn list_trusted(&self) -> PortResult<serde_json::Value> {
+        auth_center::list_trusted(self.0).map_err(|e| PortError::new(e))
+    }
+}
 
 // ==================== 形态能力位 ====================
 
@@ -445,5 +477,44 @@ mod tests {
         let p = DesktopPorts(&db);
         assert!(p.supports_custom_download_dir(), "桌面可自定义接收落点");
         assert!(p.uses_legacy_snapshot(), "桌面仍处旧快照双写期");
+    }
+
+    // ==================== 差异面⑦：ConsentGate ====================
+
+    /// 桌面侧的信任决策走互调认证中心，而认证中心 client 由 `wasm_entry!` 按具体
+    /// `WasmHost` 生成 ⇒ native 下没有真 client。native 桩的契约是
+    /// **显性失败、不得静默给空值**：
+    ///
+    /// - 反例（决策 / 信任列表）：返回 `Ok` 会让「native 单测跑通」掩盖「这里本来
+    ///   该走认证中心」——编排层拿到空列表就会静默弹窗，等于桌面首连确认被绕过。
+    /// - 正例（阶段 1 预检）：恒 `false` 是**正确**默认值，含义是「未预检消化 →
+    ///   交前端弹窗」，与移动侧同形。
+    #[test]
+    fn desktop_consent_gate_is_fail_visible_outside_wasm() {
+        let h = WasmHost;
+        let gate = DesktopConsentGate(&h);
+
+        let decide_err = gate.decide_consent("req-1", true).unwrap_err();
+        assert!(
+            decide_err.message().contains("outside wasm runtime"),
+            "native 决策桩必须点名「不在 wasm 运行时」，实测：{decide_err}"
+        );
+        let list_err = gate.list_trusted().unwrap_err();
+        assert!(
+            list_err.message().contains("outside wasm runtime"),
+            "native 列表桩同样必须显性失败（静默空列表 = 桌面首连确认被绕过），实测：{list_err}"
+        );
+
+        assert!(
+            !gate.evaluate_consent(&serde_json::json!({})).unwrap(),
+            "预检在无认证中心时恒 false = 交前端弹窗"
+        );
+        // **本用例的盲区（变异自检实测）**：把本方法改成「丢弃
+        // `evaluate_and_maybe_respond` 的返回值、硬编码 `Ok(false)`」——native 下
+        // **杀不掉**该变异，因为 native 桩本身就恒 false，两者不可区分。
+        // 覆盖归口：预检的**真实判据**由 `auth_center::tests::phase1_*` 经注入
+        // 假网关直测（含 trusted 自动放行 / 未知 peer 询问 / 中心不可用降级）；
+        // 本方法只是那批已测逻辑的一行委派，其接线正确性由真机互传回归兜底
+        // （首连免确认弹窗是否按预期出现）。此处不写「恒真断言」假装覆盖。
     }
 }

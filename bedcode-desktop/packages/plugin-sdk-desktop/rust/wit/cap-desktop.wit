@@ -504,13 +504,29 @@ interface host-crypto {
         peer-public: list<u8>,
     ) -> result<list<u8>, string>;
 }
-/// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）
+/// 事件回调（桌面词汇 + 移动词汇**并集**）
+///
+/// 并集理由（2026-10-13，file-transfer 单产物，规格
+/// `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：双端共享 wasm 产物按
+/// 桌面 `world plugin` 构建，必须同时导出两端宿主要按名调用的回调——桌面 dispatcher
+/// 调 `on-message` / `on-process-done`，移动 dispatcher 调 `on-bus-message` /
+/// `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped`。
+/// wit-bindgen 导出视图按名懒查找，一端不认识的函数对该端无感 ⇒ 并集对两端原生插件
+/// 均为加法（旧产物少导出函数，旧宿主按名调用不受影响）。
+/// 移动侧 5 函数签名逐字照 `cap-mobile.wit` 的 `interface events`（双端同步维护；
+/// 签名漂移有契约锁拦截）。
 interface events {
     on-message: func(topic: string, sender: string, payload-json: string) -> result<_, string>;
     /// 进程执行完成回调（v8）：host-process run 的进程结束时触发
     /// （正常退出 / 非零退出 / 超时 kill），payload-json 为
     /// `{ run_id, exit_code, timed_out }`
     on-process-done: func(payload-json: string) -> result<_, string>;
+    /// 以下 5 函数为移动词汇（并集）：桌面宿主不调用，桌面原生插件走默认空实现
+    on-bus-message: func(topic: string, payload-json: string) -> result<_, string>;
+    on-auth-success: func() -> result<_, string>;
+    on-disconnect: func(reason: string) -> result<_, string>;
+    on-session-created: func(session-id: string) -> result<_, string>;
+    on-session-stopped: func(session-id: string) -> result<_, string>;
 }
 /// 产物形态（v36 自 `abi` 拆出，桌面独有）：组件（Component Model）形态声明，
 /// 宿主按 `form()==1` 识别；`0` 是 core 形态的自研 ABI（已退役）。
@@ -601,6 +617,19 @@ world cap-desktop {
     export events;
     export abi;
     export abi-form;
+}
+
+/// 桌面兼容面 binding-only world（2026-10-13，file-transfer 单产物）
+///
+/// **宿主绑定用，插件不实例化它**（同 `plugin-binary` 先例）：移动宿主 bindgen 本
+/// world 取得 `host-api-call` / `host-platform-desktop` 的 `Host` trait，为双端共享
+/// wasm 产物（按桌面 `world plugin` 构建、import 这两个 interface）提供 **fail-visible
+/// 桩**——全部函数显性 `Err("unsupported on mobile")`。桌面分支在移动端不可达
+/// （共享产物经 `host-platform.platform()` 探测后不选桌面实现），桩的存在只为满足
+/// 组件实例化的 import 闭合，不是「移动端实现桌面能力」。
+world desktop-compat {
+    import host-api-call;
+    import host-platform-desktop;
 }
 
 /// v11：二进制消息接收专用 world（**仅 SDK 绑定用，宿主不实例化它**）

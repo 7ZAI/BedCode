@@ -1,30 +1,45 @@
-//! 双端接线防漂移锁（本 crate 的**对外契约**：核是单点，端内只有适配器）。
+//! 单产物接线防漂移锁（本 crate 的**对外契约**：核是单点，产物只有一份）。
 //!
 //! ## 为什么需要它
 //!
-//! 本重构的全部价值在「可共享面只有一份」。而它最可能的失效形态不是崩溃，而是**慢性回流**：
-//! 某天有人在移动端 `transfer_store.rs` 里「顺手补一个判据」，双份实现就此复活，且没有任何
-//! 测试会红——两份实现各自自洽时，所有单元测试都绿。
+//! 本重构的全部价值在「可共享面只有一份、产物只有一份」。而它最可能的失效形态不是崩溃，
+//! 而是**慢性回流**：某天有人在端内「顺手补一个判据」，或在移动端重建一份 rust crate，
+//! 双份实现就此复活，且没有任何测试会红——两份实现各自自洽时，所有单元测试都绿。
 //!
-//! 本锁把「端内不得再定义核内判据」变成可执行断言。四条判据：
+//! 本锁把「核内判据不得回流 / 双适配器在场 / 移动端不得重建产物源」变成可执行断言。
+//! 六条判据（单产物后从「双端各一份」改写为「一份产物 + 桌面/移动两套端口适配」）：
 //!
-//! 1. **零回流**：核内 23 个纯逻辑函数名，在双端 `rust/src/**` 里**不得有同名 `fn` 定义**；
-//! 2. **台账是纯转出**：双端 `transfer_store.rs` 必须含逐字相同的转出行；
-//! 3. **两端都在场**：双端都必须有 `adapters.rs` 且实现核的**已消费端口**（实现即接线证据）；
+//! 1. **零回流**：核内 23 个纯逻辑函数名，在共享产物 crate 的 `rust/src/**` 里
+//!    **不得有同名 `fn` 定义**；
+//! 2. **台账是纯转出**：共享 crate 的 `transfer_store.rs` 必须含逐字相同的转出行；
+//! 3. **双适配器在场**：`adapters.rs`（桌面行为）与 `adapters_mobile.rs`（移动行为）
+//!    都必须实现核的**已消费端口**（实现即接线证据；缺一侧 = 平台分支被拆）；
 //! 4. **端口面登记在册**：核 `ports.rs` 的 `pub trait` 集合与钉死清单精确相等——新增差异面
-//!    必须回到本锁改清单（一次显式决定），而不是悄悄多一个没人实现的 trait。
+//!    必须回到本锁改清单（一次显式决定），而不是悄悄多一个没人实现的 trait；
+//! 5. **移动端产物源已退役**：`bedcode-mobile/wasm-apps/file-transfer/rust/` 不得存在
+//!    （重建 = 双产物复活），且共享 crate **只链桌面 SDK**（`Cargo.toml` 不得出现
+//!    `bedcode-plugin-api-mobile`——「移动实现」是桌面 SDK 上的第二套端口行为，
+//!    不是第二套 SDK）；
+//! 6. **协商 ABI 受控**：共享 crate 必须经 `wasm_entry_with_abi!` 显式传
+//!    `SHARED_ABI_VERSION`，且其值 ≤ 双端 SDK 的 `ABI_VERSION`（桌面宿主 38 /
+//!    移动宿主 21 均放行；任一端 bump 后重估）。
+//! 7. **events 并集签名受控**：桌面 wit 的 `interface events` 必须恰好等于
+//!    「桌面词汇 2 + 移动词汇 5」，且移动 5 函数签名与移动 wit **逐字一致**
+//!    ——两端宿主都按函数名派发，缺函数或签名漂移都不会编译报错，只在该端运行时
+//!    派发那一刻才炸。
 //!
 //! 扫描纪律（与宿主侧同款锁一致）：**剥行注释**（注释里点名函数解释「为什么」是正常的）、
 //! 引号感知剥注释、needle 取不跨行的最短片段；测试子树（路径含 `tests` 段）跳过。
+//! 判据 7 扫的是 **wit 文本**（文档注释前缀是 `///` 而非 `//`，按整行跳过）。
 //!
 //! 位置说明：本文件在 `src/`（由 `#[cfg(test)] mod wiring_lock;` 引入）而非 crate 根
 //! `tests/`，理由同 [`crate::boundary_lock`]。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 核内纯逻辑函数：双端**不得**再定义同名 `fn`
+/// 核内纯逻辑函数：共享产物 crate **不得**再定义同名 `fn`
 ///
 /// 注意**不包含**端内合法的包装名（`load` / `save_and_push` / `load_all` / `ensure_table` /
 /// `load_snapshot` / `save_snapshot` / `apply_and_push`）——那些正是适配层的职责。
@@ -54,7 +69,7 @@ const CORE_ONLY_FNS: &[&str] = &[
     "entry_from_dto",
 ];
 
-/// 双端 `transfer_store.rs` 必须逐字含本行（台账 = 纯转出）
+/// 共享 crate 的 `transfer_store.rs` 必须逐字含本行（台账 = 纯转出）
 const TRANSFER_STORE_REEXPORT: &str = "pub(crate) use bedcode_file_transfer_core::transfer::*;";
 
 /// 核内端口面（`ports.rs` 的 `pub trait`）登记清单——新增差异面必须回本锁登记
@@ -73,9 +88,16 @@ const REGISTERED_PORTS: &[&str] = &[
     "RootsStore",
 ];
 
-/// 各端 `adapters.rs` 必须实现的**已消费端口**（缺一即接线不完整）
-const END_MUST_IMPLEMENT: &[&str] =
-    &["KvStore", "PeerPort", "RootWireCodec", "RootsStore", "PluginProfile"];
+/// 两个适配器文件必须实现的**已消费端口**（缺一即接线不完整）
+///
+/// `ConsentGate` 在册的依据：编排层 `lib.rs::consent_gate()` 按平台选实现，三个
+/// 消费点（respond-consent / list-trusted / peer:consent 预检）全经端口——它一度
+/// 是「有 trait、有单侧实现、零消费方」的死面，接线后才是真差异面。
+const ADAPTER_MUST_IMPLEMENT: &[&str] =
+    &["KvStore", "PeerPort", "RootWireCodec", "RootsStore", "PluginProfile", "ConsentGate"];
+
+/// 平台行为 → 适配器文件（桌面行为 / 移动行为各一份，`platform` 探测选择）
+const ADAPTER_FILES: &[(&str, &str)] = &[("desktop", "adapters.rs"), ("mobile", "adapters_mobile.rs")];
 
 // ==================== 扫描器 ====================
 
@@ -87,12 +109,9 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// 端内插件源码目录：(端名, 路径)
-fn end_src_dirs() -> Vec<(&'static str, PathBuf)> {
-    vec![
-        ("desktop", repo_root().join("bedcode-desktop/wasm-apps/file-transfer/rust/src")),
-        ("mobile", repo_root().join("bedcode-mobile/wasm-apps/file-transfer/rust/src")),
-    ]
+/// 共享产物 crate 的源码目录（单产物唯一源：桌面 wasm-apps/file-transfer/rust/src）
+fn app_src_dir() -> PathBuf {
+    repo_root().join("bedcode-desktop/wasm-apps/file-transfer/rust/src")
 }
 
 /// 剥行注释（引号感知：字符串内的 `//` 不是注释起点）
@@ -181,6 +200,15 @@ fn contains(lines: &[String], needle: &str) -> bool {
     lines.iter().any(|l| l.contains(needle))
 }
 
+/// 读文件的生产代码行（到首个 `#[cfg(test…)]` 为止，剥行注释）
+fn prod_lines(path: &Path) -> Vec<String> {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    text.lines()
+        .take_while(|l| !opens_cfg_test(l))
+        .map(|l| strip_line_comments(l.trim_end_matches('\r')))
+        .collect()
+}
+
 // ==================== 用例 ====================
 
 /// 扫描器自检：既不能假绿（漏真回流），也不能假红（把注释当代码）
@@ -200,67 +228,50 @@ fn scanner_is_not_vacuous() {
     let kept = strip_line_comments("fn a(); // fn b()");
     assert!(kept.contains("fn a()"), "注释前的真代码必须保留");
     assert!(!kept.contains("fn b()"), "注释必须被剥掉");
-    // 端内源码目录必须真实存在（判据路径漂移 = 扫描器空转）
-    for (end, dir) in end_src_dirs() {
-        assert!(dir.is_dir(), "{end} 插件源码目录不存在：{}", dir.display());
-    }
+    // 共享产物源码目录必须真实存在（判据路径漂移 = 扫描器空转）
+    assert!(app_src_dir().is_dir(), "共享产物源码目录不存在：{}", app_src_dir().display());
 }
 
-/// 判据 1：零回流——核内判据不得在任一端重新长出定义
+/// 判据 1：零回流——核内判据不得在共享产物 crate 里重新长出定义
 #[test]
-fn pure_logic_is_not_reimplemented_per_end() {
+fn pure_logic_is_not_reimplemented_in_shared_app() {
+    let dir = app_src_dir();
+    assert!(dir.is_dir(), "共享产物源码目录不存在：{}（锁的判据路径已漂移）", dir.display());
     let mut violations = Vec::new();
-    for (end, dir) in end_src_dirs() {
-        assert!(dir.is_dir(), "{end} 插件源码目录不存在：{}（锁的判据路径已漂移）", dir.display());
-        for (rel, lines) in collect_prod(&dir) {
-            for name in CORE_ONLY_FNS {
-                if defines_fn(&lines, name) {
-                    violations.push(format!("{end}/{rel}: 重新定义了核内判据 `fn {name}(`"));
-                }
+    for (rel, lines) in collect_prod(&dir) {
+        for name in CORE_ONLY_FNS {
+            if defines_fn(&lines, name) {
+                violations.push(format!("shared-app/{rel}: 重新定义了核内判据 `fn {name}(`"));
             }
         }
     }
     assert!(
         violations.is_empty(),
-        "共享核的判据在端内复活（两份实现的漂移就从这里开始，且两边的单测都会绿）：\n  - {}",
+        "共享核的判据在产物 crate 里复活（两份实现的漂移就从这里开始，且各自单测都会绿）：\n  - {}",
         violations.join("\n  - ")
     );
 }
 
-/// 判据 2：双端 `transfer_store.rs` 是纯转出
+/// 判据 2：共享 crate 的 `transfer_store.rs` 是纯转出
 #[test]
-fn transfer_store_stays_a_pure_reexport_on_both_ends() {
-    let mut missing = Vec::new();
-    for (end, dir) in end_src_dirs() {
-        let path = dir.join("transfer_store.rs");
-        let Ok(text) = fs::read_to_string(&path) else {
-            missing.push(format!("{end}: 缺 transfer_store.rs（{}）", path.display()));
-            continue;
-        };
-        let prod: Vec<String> = text
-            .lines()
-            .take_while(|l| !opens_cfg_test(l))
-            .map(|l| strip_line_comments(l.trim_end_matches('\r')))
-            .collect();
-        if !contains(&prod, TRANSFER_STORE_REEXPORT) {
-            missing.push(format!("{end}/transfer_store.rs: 缺转出行 `{TRANSFER_STORE_REEXPORT}`"));
-        }
-    }
+fn transfer_store_stays_a_pure_reexport() {
+    let path = app_src_dir().join("transfer_store.rs");
+    let prod = prod_lines(&path);
     assert!(
-        missing.is_empty(),
-        "台账不再是纯转出（端内又自带实现 ⇒ 判据有两个真源）：\n  - {}",
-        missing.join("\n  - ")
+        contains(&prod, TRANSFER_STORE_REEXPORT),
+        "台账不再是纯转出（产物 crate 又自带实现 ⇒ 判据有两个真源）：{}",
+        path.display()
     );
 }
 
-/// 判据 3：两端都在场且实现已消费端口（适配器缺席 = 接线被拆）
+/// 判据 3：桌面/移动两个适配器都在场且实现已消费端口（拆一侧 = 平台分支被拆）
 #[test]
-fn both_ends_ship_an_adapter_implementing_consumed_ports() {
+fn both_platform_adapters_ship_consumed_ports() {
     let mut problems = Vec::new();
-    for (end, dir) in end_src_dirs() {
-        let path = dir.join("adapters.rs");
+    for (platform, file) in ADAPTER_FILES {
+        let path = app_src_dir().join(file);
         let Ok(text) = fs::read_to_string(&path) else {
-            problems.push(format!("{end}: 缺 adapters.rs（{}）", path.display()));
+            problems.push(format!("{platform}: 缺 {file}（{}）", path.display()));
             continue;
         };
         let prod: Vec<String> = text
@@ -268,23 +279,24 @@ fn both_ends_ship_an_adapter_implementing_consumed_ports() {
             .take_while(|l| !opens_cfg_test(l))
             .map(|l| strip_line_comments(l.trim_end_matches('\r')))
             .collect();
-        for port in END_MUST_IMPLEMENT {
+        for port in ADAPTER_MUST_IMPLEMENT {
             // 端口是**被实现的 trait**（在 `for` 之前），不是泛型约束：`impl<H: SdkTrait> Port for X`
             let needle = format!("{port} for ");
             if !contains(&prod, &needle) {
                 problems.push(format!(
-                    "{end}/adapters.rs: 未见端口 `{port}` 的实现（找 `{needle}`）"
+                    "{platform}/{file}: 未见端口 `{port}` 的实现（找 `{needle}`）"
                 ));
             }
         }
         if !contains(&prod, "PortError") {
-            problems
-                .push(format!("{end}/adapters.rs: 未见 `PortError`（错误类型未转换 ⇒ 适配层形态不对）"));
+            problems.push(format!(
+                "{platform}/{file}: 未见 `PortError`（错误类型未转换 ⇒ 适配层形态不对）"
+            ));
         }
     }
     assert!(
         problems.is_empty(),
-        "适配器面不完整（端内接线被拆或未跟上核的端口面）：\n  - {}",
+        "适配器面不完整（平台分支被拆或未跟上核的端口面）：\n  - {}",
         problems.join("\n  - ")
     );
 }
@@ -319,4 +331,208 @@ fn core_port_surface_is_registered() {
          差异面是**显式决定**，不是随手加一个没人实现的 trait"
     );
     assert_eq!(REGISTERED_PORTS.len(), expected.len(), "登记清单自身有重复项");
+}
+
+/// 判据 5a：移动端产物源已退役——不得重建 rust crate（重建 = 双产物复活）
+#[test]
+fn mobile_artifact_source_stays_retired() {
+    let retired = repo_root().join("bedcode-mobile/wasm-apps/file-transfer/rust");
+    assert!(
+        !retired.exists(),
+        "移动端 file-transfer rust/ 重新出现（{}）：双端单产物的产物源只有桌面 \
+         wasm-apps/file-transfer/rust——移动端差异是同一 crate 内的平台分支，不是第二份产物源",
+        retired.display()
+    );
+}
+
+/// 判据 5b：共享产物 crate 只链桌面 SDK
+///
+/// 「移动实现」不是第二套 SDK，而是桌面 SDK（core interface 双端提供）上的第二套
+/// 端口行为。链移动 SDK 会让产物 import 移动 cap 界面 ⇒ 桌面宿主实例化失败。
+#[test]
+fn shared_app_depends_on_desktop_sdk_only() {
+    let manifest = repo_root().join("bedcode-desktop/wasm-apps/file-transfer/rust/Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("读共享 crate Cargo.toml");
+    let prod: Vec<String> = text
+        .lines()
+        .take_while(|l| !opens_cfg_test(l))
+        .map(|l| strip_line_comments(l.trim_end_matches('\r')))
+        .collect();
+    assert!(
+        contains(&prod, "bedcode-plugin-api"),
+        "共享 crate 必须依赖桌面 SDK（bedcode-plugin-api）"
+    );
+    assert!(
+        !contains(&prod, "bedcode-plugin-api-mobile"),
+        "共享 crate 出现了移动 SDK 依赖（bedcode-plugin-api-mobile）：产物将 import \
+         移动 cap 界面、桌面宿主无法实例化——移动行为应经桌面 SDK 的 core interface 表达"
+    );
+}
+
+/// 判据 6：协商 ABI 受控——显式传值且 ≤ 双端 SDK 的 ABI_VERSION
+#[test]
+fn shared_abi_version_is_negotiated_and_bounded() {
+    let lib_rs = app_src_dir().join("lib.rs");
+    let prod = prod_lines(&lib_rs);
+
+    // 显式传值：不得走默认 ABI 的 wasm_entry!（桌面 ABI 38 > 移动宿主 21 会被拒）
+    assert!(
+        contains(&prod, "wasm_entry_with_abi!"),
+        "共享产物必须经 wasm_entry_with_abi! 显式传协商 ABI（默认路径会自报桌面 38，\
+         移动宿主 verify_abi 拒绝）"
+    );
+    let shared = parse_u32_const(&prod, "SHARED_ABI_VERSION")
+        .expect("lib.rs 缺 SHARED_ABI_VERSION 常量");
+    let desktop = sdk_abi_version("bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs");
+    let mobile = sdk_abi_version("bedcode-mobile/packages/plugin-sdk-mobile/rust/src/abi.rs");
+    assert!(
+        shared <= desktop && shared <= mobile,
+        "SHARED_ABI_VERSION({shared}) 超出双端下界（desktop {desktop} / mobile {mobile}）——\
+         移动宿主会拒绝加载；重估协商值并同步本锁"
+    );
+}
+
+/// 从 SDK `abi.rs` 解析 `ABI_VERSION` 常量值
+fn sdk_abi_version(rel: &str) -> u32 {
+    let path = repo_root().join(rel);
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("读 {} 失败: {e}", path.display()));
+    let needle = "pub const ABI_VERSION: u32 =";
+    for line in text.lines() {
+        if let Some(rest) = line.split_once(needle) {
+            let value = rest.1.split(';').next().unwrap_or("").trim();
+            return value.parse().unwrap_or_else(|_| panic!("{} ABI_VERSION 解析失败", rel));
+        }
+    }
+    panic!("{} 缺 ABI_VERSION 常量", rel);
+}
+
+/// 从生产代码行解析 `const NAME: u32 = <value>;`
+fn parse_u32_const(lines: &[String], name: &str) -> Option<u32> {
+    let needle = format!("const {name}: u32 =");
+    for line in lines {
+        if let Some(rest) = line.split_once(&needle) {
+            let value = rest.1.split(';').next().unwrap_or("").trim();
+            return value.parse().ok();
+        }
+    }
+    None
+}
+
+// ==================== 判据 7：events 并集签名锁 ====================
+
+/// 桌面 `events` 自有词汇（桌面 dispatcher 按名调用）
+const DESKTOP_EVENT_VOCAB: &[&str] = &["on-message", "on-process-done"];
+
+/// 移动 `events` 词汇（移动 dispatcher 按名调用；共享产物按桌面 world 构建，
+/// 故这 5 个函数必须**逐字**出现在桌面 wit 里——签名漂移则移动宿主派发时才发现）
+const MOBILE_EVENT_VOCAB: &[&str] = &[
+    "on-bus-message",
+    "on-auth-success",
+    "on-disconnect",
+    "on-session-created",
+    "on-session-stopped",
+];
+
+/// 从 wit 文本抽出 `interface events` 的函数声明（`name: func(...) -> ...;`）
+///
+/// WIT 文档注释用 `///`（与 Rust 的 `//` 不同），这里按整行前缀跳过；
+/// 函数声明在本仓 wit 里一律单行，故按分号切分即可。
+fn wit_event_signatures(text: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut inside = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.starts_with("interface events") {
+            inside = true;
+            continue;
+        }
+        if inside {
+            if line.starts_with('}') {
+                break;
+            }
+            if line.starts_with("///") || line.is_empty() || line.starts_with("//") {
+                continue;
+            }
+            // `name: func(args) -> result<_, string>;`
+            let decl = line.trim_end_matches(';').trim();
+            let Some((name, sig)) = decl.split_once(':') else { continue };
+            let name = name.trim();
+            if !name.is_empty() && sig.trim_start().starts_with("func") {
+                out.insert(name.to_string(), sig.trim().to_string());
+            }
+        }
+    }
+    out
+}
+
+/// 判据 7：`events` 并集导出受控——桌面 wit 的 `events` = 桌面词汇 ∪ 移动词汇，
+/// 且移动 5 函数签名与移动 wit **逐字一致**
+///
+/// **为什么必须锁**：两端宿主都按**函数名**派发（桌面调 `on-message`，移动调
+/// `on-bus-message`），wit-bindgen 对导出做按名懒查找。少一个函数、或签名漂移，
+/// 都不会编译报错——只在该端**运行时派发那一刻**才炸，且报错形态是「导出不存在」，
+/// 极难反推到「是共享产物少导了移动词汇」。
+#[test]
+fn desktop_events_interface_is_union_of_both_vocabularies() {
+    let desktop_wit = repo_root()
+        .join("bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit");
+    let mobile_wit = repo_root()
+        .join("bedcode-mobile/packages/plugin-sdk-mobile/rust/wit-src/cap-mobile.wit");
+
+    let desktop =
+        wit_event_signatures(&fs::read_to_string(&desktop_wit).expect("读桌面 cap-desktop.wit"));
+    let mobile =
+        wit_event_signatures(&fs::read_to_string(&mobile_wit).expect("读移动 cap-mobile.wit"));
+
+    assert!(
+        !desktop.is_empty() && !mobile.is_empty(),
+        "events 扫描器空转（桌面 {} 项 / 移动 {} 项）——判据路径或解析规则已漂移",
+        desktop.len(),
+        mobile.len()
+    );
+
+    let mut problems = Vec::new();
+    // 移动词汇逐字一致（签名漂移 ⇒ 移动宿主派发面与产物导出面不匹配）
+    for name in MOBILE_EVENT_VOCAB {
+        let Some(mobile_sig) = mobile.get(*name) else {
+            problems.push(format!("移动 wit 的 events 缺 `{name}`（词汇真源被改名/删除）"));
+            continue;
+        };
+        match desktop.get(*name) {
+            None => problems.push(format!(
+                "桌面 wit 的 events 缺移动词汇 `{name}`：共享产物按桌面 world 构建，\
+                 少导该函数 ⇒ 移动宿主派发时才发现"
+            )),
+            Some(desktop_sig) if desktop_sig != mobile_sig => problems.push(format!(
+                "`{name}` 签名漂移：桌面 `{desktop_sig}` ≠ 移动 `{mobile_sig}`"
+            )),
+            Some(_) => {}
+        }
+    }
+    // 桌面自有词汇仍在（并集不是替换：桌面 dispatcher 仍按名调那 2 个）
+    for name in DESKTOP_EVENT_VOCAB {
+        if !desktop.contains_key(*name) {
+            problems.push(format!("桌面 wit 的 events 缺桌面自有词汇 `{name}`"));
+        }
+    }
+    // 并集恰好等于两侧词汇之和（多出的函数 = 未登记的第三端词汇，须显式决定）
+    let expected: BTreeSet<&str> = DESKTOP_EVENT_VOCAB
+        .iter()
+        .chain(MOBILE_EVENT_VOCAB.iter())
+        .copied()
+        .collect();
+    let observed: BTreeSet<&str> = desktop.keys().map(String::as_str).collect();
+    if observed != expected {
+        problems.push(format!(
+            "桌面 events 不是登记并集：多出 {:?} / 缺失 {:?}——新增端词汇必须回到本锁登记",
+            observed.difference(&expected).collect::<Vec<_>>(),
+            expected.difference(&observed).collect::<Vec<_>>()
+        ));
+    }
+
+    assert!(
+        problems.is_empty(),
+        "events 并集面漂移（共享产物按桌面 world 构建，vocabulary 缺失只在该端派发时才炸）：\n  - {}",
+        problems.join("\n  - ")
+    );
 }

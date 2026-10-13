@@ -2,7 +2,7 @@
 name = "bedcode-componentize"
 version = "0.1.0"
 edition = "2021"
-description = "BedCode 插件组件化工具（移动端）— 将 wit-bindgen 产出的 core module 编码为 Component Model 组件（等价 wasm-tools component new）"
+description = "BedCode 插件组件化工具（仓库级，双端共用）— 将 wit-bindgen 产出的 core module 编码为 Component Model 组件（等价 wasm-tools component new）"
 
 [[bin]]
 name = "componentize"

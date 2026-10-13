@@ -3,7 +3,8 @@
 //! 插件系统入口 — WASM 动态加载 + 前端插件管理
 //!
 //! **票 17 批次 2b（垫片形态）+ 票 06 批次 03/04（单一 crate）**：机制面真源在
-//! 仓库根单一 wasm-core `packages/bedcode-wasm-core` 的 `bare-host` 面
+//! 仓库根单一 wasm-core `packages/bedcode-wasm-core`（单形态 2026-10-13 起无
+//! common/bare 之分）的统一机制面
 //! （manager::runtime / host_api / bus / storage / security::fs_auth /
 //! manager::{types,validation,downloader} / terminal_stream_gateway；
 //! `bedcode-wasm-core-mobile` 只是 package rename 别名，fork crate 已退役）
@@ -23,6 +24,9 @@ pub mod bindings;
 pub mod commands;
 pub mod connection;
 pub mod db_schema;
+// 桌面兼容面桩（file-transfer 双端单产物：host-api-call / host-platform-desktop
+// 的 fail-visible unsupported 实现，绑桌面 wit 的 desktop-compat world）
+pub mod desktop_compat;
 pub mod downloader;
 pub mod fs_mobile;
 // guest 事件契约面（events 导出派发；票 05 绑定归位：内核只留机制）
@@ -41,7 +45,7 @@ pub mod saf_path;
 pub mod terminal_stream;
 pub mod types;
 
-// ==================== 机制面垫片（真源 = bedcode-wasm-core-mobile） ====================
+// ==================== 机制面垫片（真源 = bedcode-wasm-core，单形态） ====================
 
 // 终端输出流窄转发表（票 05 绑定归位）：真源随 host-terminal-stream 域迁入
 // 移动宿主 `plugin/terminal_stream.rs`（同一路径即 `crate::plugin::terminal_stream`）。

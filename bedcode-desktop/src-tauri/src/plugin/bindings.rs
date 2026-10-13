@@ -86,11 +86,11 @@ mod tests {
         let mut worlds: Vec<&str> = m["worlds"].as_array().unwrap()
             .iter().map(|v| v.as_str().unwrap()).collect();
         worlds.sort();
-        assert_eq!(worlds, vec!["plugin", "plugin-auth-policy", "plugin-binary",
+        assert_eq!(worlds, vec!["desktop-compat", "plugin", "plugin-auth-policy", "plugin-binary",
             "plugin-system", "plugin-task", "plugin-ws"],
-            "worlds 漂移：桌面 6 个 world 是合成 package 的完整面");
+            "worlds 漂移：桌面 7 个 world 是合成 package 的完整面（desktop-compat = file-transfer 单产物的移动宿主桩绑定面，binding-only）");
 
-        assert_eq!(m["abi"]["version"], 37, "abi.version 漂移：与 SDK abi.rs ABI_VERSION 对齐（票 04 交集切片收拢）");
+        assert_eq!(m["abi"]["version"], 38, "abi.version 漂移：与 SDK abi.rs ABI_VERSION 对齐（v38 = 双端单产物共享 wasm：platform 探测 + events 并集 + desktop-compat）");
     }
 
     #[test]

@@ -91,6 +91,41 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    // ==================== 移动词汇回调（v38 events 并集，可选，默认忽略） ====================
+    //
+    // 并集理由：双端共享 wasm 产物按桌面 world 构建，必须同时导出移动宿主要按名
+    // 调用的回调（`on-bus-message` / `on-auth-success` / `on-disconnect` /
+    // `on-session-created` / `on-session-stopped`）——规格
+    // `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`。桌面宿主的 dispatcher
+    // 只调 `on-message` / `on-process-done`，这 5 个方法对桌面原生插件是不可见的
+    // 死代码面，故给默认空实现；共享产物（file-transfer）覆写它们并把内部逻辑
+    // 与 `on-message` 汇流。
+
+    /// 移动词汇总线消息回调（无 sender 字段；共享产物覆写，与 `on-message` 汇流）
+    fn on_bus_message(_msg: &BusMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：WS 认证成功回调（共享产物按平台分支消费）
+    fn on_auth_success() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：WS 断开回调（reason 为人类可读原因）
+    fn on_disconnect(_reason: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：会话创建回调
+    fn on_session_created(_session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：会话停止回调
+    fn on_session_stopped(_session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// 接收 WS 客户端域消息帧（v14，可选，默认忽略）
     ///
     /// 由宿主 host-websocket 出站连接任务投递（`events-ws` 可选导出，宿主
@@ -216,11 +251,17 @@ mod tests {
 /// 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl 注释）。
 ///
 /// v27：`terminal-hooks` 组已随 interface 删除（票 10）。
+/// v38：`events` 组扩为**七函数并集**（桌面 on-message / on-process-done + 移动
+/// on-bus-message / on-auth-success / on-disconnect / on-session-created /
+/// on-session-stopped）——双端共享产物按桌面 world 构建、同时满足两端宿主的按名
+/// 派发；桌面宿主只调前两个，后五个对桌面原生插件是默认空实现。
 ///
 /// # 失败一律记 `warn`、不记 `error`（AGENTS §8 日志红线 ③）
 ///
-/// 宏内 10 处失败路径（`activate` / `deactivate` / `on_startup` / `on_shutdown` /
-/// `on_message` / `on_message_binary` / `on_process_done` / `on_ws_message` /
+/// 宏内 15 处失败路径（`activate` / `deactivate` / `on_startup` / `on_shutdown` /
+/// `on_message` / `on_message_binary` / `on_process_done` / `on_bus_message` /
+/// `on_auth_success` / `on_disconnect` / `on_session_created` /
+/// `on_session_stopped` / `on_ws_message` /
 /// `on_ws_client_message` / `on_task_event`）**全部**用 `log_warn` 而非 `log_error`。
 ///
 /// 依据：AGENTS.md §8「guest 自报的可处理错误不升 `error!`」。这些 `Err` 都是**插件
@@ -246,6 +287,21 @@ mod tests {
 #[macro_export]
 macro_rules! wasm_entry {
     ($plugin_type:ident) => {
+        // 默认 ABI = 本 SDK 的 ABI_VERSION（桌面原生插件路径）
+        $crate::wasm_entry_with_abi!($plugin_type, $crate::abi::ABI_VERSION as u32);
+    };
+}
+
+/// 同 `wasm_entry!`，但显式指定 `abi.version()` 导出值（双端共享产物路径）
+///
+/// 用途：file-transfer 单产物（规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）
+/// 按桌面 world 构建、双端宿主加载，其自报 ABI 必须 ≤ 双端宿主 `AbiPolicy` 的下界
+/// （当前 = 移动端 ABI）——桌面 SDK 的 `ABI_VERSION` 高于该下界，故共享产物经本宏
+/// 显式传协商值（共享 crate 常量 `SHARED_ABI_VERSION`；锁断言 ≤ 双端 `ABI_VERSION`）。
+/// 桌面原生插件一律走 `wasm_entry!`（默认值路径），不用本宏。
+#[macro_export]
+macro_rules! wasm_entry_with_abi {
+    ($plugin_type:ident, $abi_version:expr) => {
         // ==================== command（原 __bedcode_invoke_command） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::command::Guest for $plugin_type {
@@ -384,6 +440,93 @@ macro_rules! wasm_entry {
                     }
                 }
             }
+
+            // ==================== 移动词汇 5 导出（v38 events 并集） ====================
+            //
+            // 桌面宿主不调用这 5 个导出（它的 dispatcher 只按名调 on-message /
+            // on-process-done）；它们的存在是为双端共享产物（file-transfer 单产物）
+            // 同时满足移动宿主的按名派发。对桌面原生插件是默认空实现。
+
+            fn on_bus_message(topic: String, payload: String) -> Result<(), String> {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+                // 移动词汇无 sender 字段；BusMessage.sender 填空串（共享产物的
+                // on_bus_message 实现不消费 sender）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender: String::new(),
+                    payload,
+                    payload_binary: None,
+                    timestamp: 0,
+                };
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_bus_message(&msg) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_bus_message failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_auth_success() -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_auth_success() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_auth_success failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_disconnect(reason: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_disconnect(&reason) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_disconnect failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_session_created(session_id: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_created(&session_id) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_session_created failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_session_stopped(session_id: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_stopped(&session_id) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_session_stopped failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
         }
 
         // ==================== events-binary（v11，可选导出，宿主动态探测） ====================
@@ -424,9 +567,10 @@ macro_rules! wasm_entry {
         // ==================== abi（原 __bedcode_abi_version；v36 切片后只剩 version） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION` 完全一致
+            /// ABI 版本：`wasm_entry!` 路径 = `abi::ABI_VERSION`；`wasm_entry_with_abi!`
+            /// 路径 = 调用方显式传入的协商值（双端共享产物，见该宏文档）
             fn version() -> u32 {
-                $crate::abi::ABI_VERSION as u32
+                $abi_version
             }
         }
 

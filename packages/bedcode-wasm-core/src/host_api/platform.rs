@@ -39,6 +39,25 @@ fn require_pick_permission(perm: &dyn PermissionScope, plugin_id: &str, api: &st
     ))
 }
 
+/// 宿主平台标识（v38 `host-platform.platform`；无权限门——平台事实不是能力）
+///
+/// 端值按**装配 feature** 编译期判定而非运行期探测：`desktop-assembly` = 桌面宿主
+/// 装配（默认开；移动宿主 `default-features = false` 不开）。判据同 `config` 域
+/// `network.port` 的形态门控先例——「在哪端装配」是编译事实，不需要猜。
+/// 消费方是双端共享 wasm 产物（file-transfer 单产物，规格
+/// `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：它经此在同一 trait
+/// 的双实现间分支；guest 侧对空/未知取值 fail-visible（显性报错不猜默认平台）。
+pub(crate) fn platform_id() -> String {
+    #[cfg(feature = "desktop-assembly")]
+    {
+        "desktop".to_string()
+    }
+    #[cfg(not(feature = "desktop-assembly"))]
+    {
+        "mobile".to_string()
+    }
+}
+
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
 pub(crate) fn platform_pick_files(
     perm: &dyn PermissionScope,

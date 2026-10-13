@@ -2,8 +2,13 @@
 
 ## 状态
 
-**已立项，分票实施中（2026-10-09）**。规格与逐票记录：
-`.scratch/2026-10-09-file-transfer-shared-core/spec.md`。
+**共享核阶段已完成（2026-10-09，T1–T7 全落地）；「双端各自薄适配器产物」形态已由
+ADR 0050（2026-10-13，双端单产物）终结**——编排层与产物层也收敛为一份，移动端
+`wasm-apps/file-transfer/rust/` 退役。本 ADR 的核 crate（`domain` / `ports` /
+`identity` / `settings` / `roots` / `sessions` / `transfer`）是 ADR 0050 的基座，
+D1–D6 决策对核的依赖纪律与边界锁继续有效。规格与逐票记录：
+`.scratch/2026-10-09-file-transfer-shared-core/spec.md`（核阶段）、
+`.scratch/2026-10-13-file-transfer-single-wasm/spec.md`（单产物阶段）。
 
 - 票 T1（核 crate 骨架 + 边界锁）**已落地**：`domain` / `ports` / `identity` / `settings` /
   `roots` / `sessions` + 5 例边界锁。
