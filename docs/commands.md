@@ -102,6 +102,7 @@ pnpm run tauri:build  # 打包安装包；-- --bundles deb 只出 DEB
 cd src-tauri && cargo check
 ```
 
+- **`pnpm run tauri:dev` 会等宿主首次构建完成后才起插件前端 watch**（2026-10-13 加固，见 `scripts/dev-run.js` 头注）：冷构建期 watch 复制产物会触发 Tauri 重启，与在跑 rustc 竞争导致 wasmtime 归档 `failed to open object file`；`--host-cmd` 定制宿主不走此门控。
 - **`pnpm run tauri:dev -- --no-watch`**：关掉插件前端 watch。默认开着；插件 watch 会把 vite 产物复制进 `src-tauri/`，触发 Tauri 全量重启宿主并清当日日志。**必须经 pnpm 转发**（裸 `node scripts/dev-run.js` 在缺 `pnpm_execpath` 时 Linux ENOENT）。关掉后改插件前端自行 `cd wasm-apps/<app-id> && pnpm run build`。
 - **安装包输出**：`src-tauri/target/release/bundle/{nsis/*.exe,deb/*.deb}`；构建成功后 `scripts/tauri-build.js` 会重命名为 `BedCode-<版本>-release-<arch>-*`。
 - **updater 签名**：未配置 `TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env` 时自动禁用升级包，本地构建无需私钥（发布见 `docs/knowledge/release-workflow.md`）。

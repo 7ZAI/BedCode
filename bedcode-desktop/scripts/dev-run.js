@@ -4,14 +4,25 @@
  *
  * `npm run tauri:dev` 一条命令即完成：
  *   - 各插件 WASM 缺失预检 + 自动补建（watch 只建前端，WASM 需一次性全量构建产出）
+ *   - 宿主 dev 进程（tauri dev）——先启动
  *   - 各插件前端 watch：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）
- *   - 宿主 dev 进程（tauri dev）
+ *     ——等宿主首次构建完成后启动，见下方「首次构建门控」
  * 任一子进程退出（Ctrl+C / 宿主崩溃）时统一回收全部。
  *
  * 用法：
- *   node scripts/dev-run.js              # 默认：三个插件 watch + tauri dev
+ *   node scripts/dev-run.js              # 默认：四个插件 watch + tauri dev
  *   node scripts/dev-run.js --host-cmd "<命令>"   # 覆盖宿主命令（按空格拆分）
  *   node scripts/dev-run.js --no-watch   # 不起插件前端 watch（默认开启，行为不变）
+ *
+ * 首次构建门控（2026-10-13 加固）：宿主先启动，插件前端 watch 等宿主输出出现 cargo
+ * `Finished `dev` profile`（兜底 `Running `target/debug/...``）后再启动。原因：watch 首次
+ * vite 构建会把产物复制进 `src-tauri/resources/plugins/desktop/<id>/`，而 `tauri dev` 的
+ * file watch 覆盖整个 `src-tauri/`，每次复制都触发 Tauri「Rebuilding application...」重启
+ * DevCommand。宿主冷构建（首次 / 大依赖变更 / cargo clean 后，wasmtime 等分钟级）期间复制
+ * = 上一轮 rustc 与重启后的构建重叠、同写 `target/debug/deps/*.rcgu.o`：先完成者归档后清理
+ * 中间文件，另一进程归档即 `failed to build archive ... failed to open object file`（cargo
+ * 不落 fingerprint，报错会反复出现、重跑才恢复）。`--host-cmd` 定制命令不保证有 cargo 输出、
+ * 无法可靠判据，跳过门控（保持旧的立即启动）。
  *
  * `--no-watch` 的存在理由：插件 watch 会把 vite 产物复制进
  * `src-tauri/resources/plugins/desktop/<id>/`，而 `tauri dev` 的 file watch 覆盖整个
@@ -205,7 +216,7 @@ function openDevLog() {
 
 const devLog = openDevLog()
 
-function start(cmd, args, cwd) {
+function start(cmd, args, cwd, onOutput) {
   // POSIX：detached 让子进程自成进程组长（pgid = 自己的 pid），shutdown 时可用
   // 负 pgid 一次杀整棵子树（已实测：孙进程自动继承该 pgid，无需各自 detached）。
   // Windows 必须排除：detached 会传 CREATE_NEW_CONSOLE 弹出额外控制台窗口，
@@ -220,10 +231,46 @@ function start(cmd, args, cwd) {
     stream?.on('data', (chunk) => {
       target.write(chunk)
       devLog?.write(chunk)
+      // 门控按 chunk 消费宿主输出（stdout/stderr 都走这里：cargo 构建进度在 stderr）
+      onOutput?.(chunk)
     })
   }
   children.push(child)
   return child
+}
+
+// ==================== 宿主首次构建门控（2026-10-13） ====================
+
+/**
+ * 等宿主输出里出现 cargo「构建完成」标记后回调一次（仅一次）。
+ *
+ * 判据先去掉 `--color always` 的 ANSI 控制序列（颜色 CSI + cargo `Finished` 行里指向文档的
+ * OSC 8 超链接）；标记可能被 chunk 切断，保留尾部窗口拼接：
+ *   - `Finished `dev` profile`：cargo 构建完成（正常路径）
+ *   - `Running `target/debug/...``：cargo run 启动二进制（兜底，防 cargo 文案变化）
+ *
+ * 背景与必要性见文件头「首次构建门控」段。宿主命令由 `--host-cmd` 覆盖时输出不保证
+ * 含上述标记，调用方直接跳过门控；触发时若会话已在回收（shuttingDown），
+ * 由 startPluginWatches 自行短路。
+ */
+function createHostBuildGate(onReady) {
+  let ready = false
+  let tail = ''
+  return {
+    onOutput(chunk) {
+      if (ready || shuttingDown) return
+      const text = chunk
+        .toString()
+        // 去 ANSI：OSC（cargo 的 Finished 行里带指向文档的 OSC 8 超链接）+ CSI（颜色/光标）
+        .replace(/\u001b\][^\u001b\u0007]*(?:\u0007|\u001b\\)/g, '')
+        .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '')
+      tail = (tail + text).slice(-4096)
+      if (/Finished\s+`dev`\s+profile/.test(tail) || /Running\s+`target\/debug\//.test(tail)) {
+        ready = true
+        onReady()
+      }
+    },
+  }
 }
 
 /** 回收所有子进程并退出（防重入：kill 触发的 exit 不再进入 shutdown） */
@@ -401,35 +448,55 @@ await precheckHmrPort()
 // 1. 插件 WASM 缺失自动补建（串行同步，完成后才启动 watch / 宿主）
 ensurePluginWasm()
 
-// 2. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
-if (noWatch) {
-  console.warn('[dev-run] 插件前端 watch 已关闭（--no-watch）：resources 产物不会随插件源码改动刷新。')
-  console.warn('[dev-run]   改了插件前端要自己重建：cd wasm-apps/<id> && node scripts/build.js')
-} else for (const { dir, args } of PLUGIN_WATCH_CMDS) {
-  // 插件目录可能被临时移除（停用/排查）：缺失时跳过而非 fail-fast 整组回收，
-  // 否则单个插件下线会连带杀死宿主 dev 会话
-  if (!existsSync(resolve(ROOT, dir))) {
-    console.warn(`[dev-run] 插件目录不存在，跳过 watch：${dir}`)
-    continue
-  }
-  const child = start(process.execPath, args, resolve(ROOT, dir))
-  // 插件 watch 异常退出 → 整组回收（fail fast，避免宿主运行在过期产物上）
-  child.on('exit', (code) => {
-    if (!shuttingDown) {
-      console.error(`[dev-run] 插件 watch 退出（${dir}, code=${code}），回收全部进程`)
-      shutdown(code ?? 0)
+/**
+ * 启动全部插件前端 watch。
+ * 插件目录可能被临时移除（停用/排查）：缺失时跳过而非 fail-fast 整组回收，
+ * 否则单个插件下线会连带杀死宿主 dev 会话。
+ */
+function startPluginWatches() {
+  if (shuttingDown) return
+  for (const { dir, args } of PLUGIN_WATCH_CMDS) {
+    if (!existsSync(resolve(ROOT, dir))) {
+      console.warn(`[dev-run] 插件目录不存在，跳过 watch：${dir}`)
+      continue
     }
-  })
+    const child = start(process.execPath, args, resolve(ROOT, dir))
+    // 插件 watch 异常退出 → 整组回收（fail fast，避免宿主运行在过期产物上）
+    child.on('exit', (code) => {
+      if (!shuttingDown) {
+        console.error(`[dev-run] 插件 watch 退出（${dir}, code=${code}），回收全部进程`)
+        shutdown(code ?? 0)
+      }
+    })
+  }
 }
 
-// 3. 宿主 dev 进程
-const host = start(hostCmd[0], hostCmd[1], ROOT)
+// 2. 宿主 dev 进程（先启动；默认路径下由它的首次构建完成信号触发插件 watch）
+//    --no-watch：不起 watch，无需门控；--host-cmd：定制命令无 cargo 标记，跳过门控
+const watchGate = (noWatch || hostOverride)
+  ? null
+  : createHostBuildGate(() => {
+      console.log('[dev-run] 宿主首次构建完成，启动插件前端 watch')
+      startPluginWatches()
+    })
+const host = start(hostCmd[0], hostCmd[1], ROOT, watchGate?.onOutput)
 host.on('exit', (code) => {
   if (!shuttingDown) {
     console.log(`[dev-run] 宿主 dev 退出（code=${code}），回收插件 watch`)
     shutdown(code ?? 0)
   }
 })
+
+// 3. 插件前端 watch
+if (noWatch) {
+  console.warn('[dev-run] 插件前端 watch 已关闭（--no-watch）：resources 产物不会随插件源码改动刷新。')
+  console.warn('[dev-run]   改了插件前端要自己重建：cd wasm-apps/<id> && node scripts/build.js')
+} else if (hostOverride) {
+  console.warn('[dev-run] --host-cmd 定制宿主：跳过首次构建门控，插件前端 watch 立即启动')
+  startPluginWatches()
+} else {
+  console.log('[dev-run] 宿主首次构建中：插件前端 watch 延后到构建完成后启动（避免构建期重启竞争）')
+}
 
 // Ctrl+C / 终止信号：广播回收
 process.on('SIGINT', () => shutdown(0))
