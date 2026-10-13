@@ -89,7 +89,9 @@ function saveSettings() {
   syncToSettingsStore()
 
   for (const [key, value] of Object.entries(settings.value)) {
-    invoke('set_db_setting', {
+    // 后端命令面经 2026-10-10 能力域集中化改名（JSON 文件存储），
+    // 旧名 set_db_setting 已退役；签名 key/value 兼容
+    invoke('set_db_setting_mobile', {
       key: `mobile.${key}`,
       value: String(value),
     }).catch(() => {})
@@ -123,7 +125,7 @@ async function loadSettings(): Promise<void> {
 
     // 尝试从后端加载移动端设置并同步
     try {
-      const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings')
+      const dbSettings = await invoke<Array<{ key: string; value: string }>>('get_all_db_settings_mobile')
       // DB 中同时存在新旧 key 时只用新 key，避免旧行覆盖用户已修改的新值
       const hasMaxOpenTerminals = dbSettings.some(s => s.key === 'mobile.maxOpenTerminals')
       for (const s of dbSettings) {

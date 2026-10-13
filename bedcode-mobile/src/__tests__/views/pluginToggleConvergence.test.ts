@@ -105,7 +105,7 @@ describe('handlePluginToggle 失败收敛', () => {
       name: 'File Transfer',
       pluginType: 'wasm',
       permissions: ['ui:toolbox'],
-      state: { state: 'Deactivated' },
+      state: { state: 'deactivated' },
     })
     h.pluginListLoaded.mockResolvedValue([info])
     h.pluginIsEnabled.mockResolvedValue(false)
@@ -144,7 +144,7 @@ describe('handlePluginToggle 失败收敛', () => {
       name: 'File Transfer',
       pluginType: 'wasm',
       permissions: ['ui:toolbox'],
-      state: { state: 'Deactivated' },
+      state: { state: 'deactivated' },
     })
     h.pluginListLoaded.mockResolvedValue([info])
     h.pluginIsEnabled.mockResolvedValue(false)

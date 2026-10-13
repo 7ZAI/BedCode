@@ -9,6 +9,58 @@
 
 ## [未发布]
 
+#### 移动端：旧前端适配当前新后端（前端回退 92222e8b6，后端保持不变）
+
+- **背景**：移动端前端（宿主 UI + 三个 wasm-app 前端）已回退至 `92222e8b6`（旧宿主退役前最后完整态），
+  Rust 后端 / SDK rust 契约 / WIT / ABI 保持当前线。本条目 = 让回退后的旧前端在当前后端上
+  编译通过、可运行的适配层。
+- **SDK 类型面回退（仅类型）**：`packages/plugin-sdk-mobile/src/types.ts` 恢复旧 `UIRegistry`
+  （`registerToolboxPage` / `registerNavTab` / `registerTerminalToolbarItem` /
+  `registerTerminalView` / `registerSettingsSection`）与旧描述符类型；`index.ts` 重新导出。
+  `PluginState` 联合类型**有意保留 camelCase**：宿主 Rust 现仍序列化 camelCase
+  （`#[serde(rename_all = "camelCase")]`），若把类型一并回退成 PascalCase 会编译过但运行永不命中。
+- **状态比较适配 camelCase**：`src/plugin/loader.ts`、`src/shell/adapters/pluginAppSource.ts`、
+  `src/views/PluginView.vue` 的状态字面量改为 `'activated'` / `'activating'` / `'degraded'` /
+  `'needsApproval'` …，与线上 payload 对齐。
+- **命令面适配**：`useMobileSettings.ts` 改调 `set_db_setting_mobile` / `get_all_db_settings_mobile`
+  （旧名已在能力域集中化时退役）；`useMdnsAdvertiser.ts` 移除广播调用（移动端广播面已退役，
+  退役锁 `retired_mobile_mdns_advertise_lock` 钉死）。
+- **事件桥验证**：`ws_pairing_request` / `ws_pairing_verified` 由 terminal-session 插件经 host-events
+  发射并逐字转发；`ws_connecting` / `ws_disconnected` / `ws_event_channel_ready` /
+  `ws_link_crypto_pin` 仍由宿主直接发射——旧前端监听零改动。
+- **清理回退残留**：`wasm-apps/terminal-session/src/{app,host,settings}` 与仅存在于新壳时代的
+  测试文件（`pluginContextShell` / `retiredHostUIRetirementLocks` / `shellSettingsScreen` /
+  `useShellAppsSurface` / `connectionEvents` / `useClearAllData`）为非完整回退的遗留（92222e8b6 无，
+  且引用已退役的 `registerSurface` 族 API），已删除；vitest include 同步回退为旧套件形态。
+- **新增回归测试**：`useMobileSettings.test.ts` 断言改名后的持久化命令（`set_db_setting_mobile`、
+  `mobile.` key 前缀、旧名 `set_db_setting` 不得复活、失败隔离）；`useMdnsAdvertiser.test.ts`
+  断言零后端调用（广播退役）与保留的状态机形状。`useMdnsDiscovery.test.ts` mock `frontendLogger`，
+  消除异步日志攒批 flush 对 `not.toHaveBeenCalled` 断言的 flaky。
+
+#### 桌面端：插件状态按线上 camelCase 识别（修好应用中心启停开关与整条状态判定链）
+
+- **根因**：插件状态真源是共享内核 crate `packages/bedcode-wasm-core` 的 `PluginState`
+  （`#[serde(tag = "state", rename_all = "camelCase")]`，线上 `{state:'activated'}`），
+  但桌面端 TS 类型与所有状态判断都按 PascalCase（`'Activated'`）写。接口能编译、测试用
+  同款 PascalCase 夹具自洽，真机上整条链却是死代码：`isRunning` 永不命中 → 应用中心
+  启停开关恒显示未启用态（点击启用后样式不变）、已启用/未启用分区恒错位、降级/错误/
+  待授权徽标全错、贡献面（侧边栏/设置分组）永不生效、前端加载器的 activated/degraded
+  门禁也从未放行。
+- **修复**：`src/plugin/types.ts` 与 SDK 双写副本 `packages/plugin-sdk-desktop/src/types.ts`
+  改为线上 camelCase；`contributionKinds` / `loader` / `registry` / `PluginConfigView` /
+  `PluginDetailView` 的判定与内部登记值同步；测试夹具与断言改用线上值。
+- **回归锁**：新增 `src/__tests__/plugin/pluginStateVocabulary.test.ts`——解析 wasm-core
+  `manifest.rs` 真源变体并与两份 TS 副本逐字比对（L1/L2）、生产消费面禁回接 PascalCase
+  （L3）、逐态判定正反例且不兼容旧值（L4）；`plugin-flow` 集成测试直接断言开关样式变量
+  `--toggle-on`（启用 1 / 未启用 0）随状态切换，钉住用户可见症状。
+- **未在本次改动内**：桌面 SDK Rust 副本 `packages/plugin-sdk-desktop/rust/src/types.rs`
+  的 `PluginState` 仍是旧 `tag="state", content="error"` PascalCase 形状（无仓库内消费者，
+  不在宿主→前端线上路径），留作后续单独对齐。
+- **验证**：桌面 `pnpm run test:run` 1627/1628（唯一失败是 `terminalPreview.test.ts` 的
+  resize 重试用例：该目录本次零改动、隔离运行也复现，与改动面无关）；`vue-tsc --noEmit`
+  干净；根 `eslint .` 0 error（110 warning）；变异自检：`isRunning` 写回 PascalCase →
+  词汇锁 L3/L4 + plugin-flow 开关样式断言转红，TS 副本写回 PascalCase → L2 转红。
+
 #### 移动端宿主壳：修好插件状态 / i18n / 图标 / 主题链路，并做一轮壳内页面收口
 
 逐页走查 Android dev 构建（adb 截图 + 视觉审查）发现。以下每条都是真机复现的缺陷，不是风格偏好。

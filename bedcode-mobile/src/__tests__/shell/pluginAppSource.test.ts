@@ -67,38 +67,38 @@ beforeEach(() => {
 
 describe('插件状态 → 壳运行态', () => {
   it('should_beRunning_when_pluginActivated', () => {
-    expect(toShellApp(info({ state: 'Activated' })).state).toBe('running')
+    expect(toShellApp(info({ state: 'activated' })).state).toBe('running')
   })
 
   it('should_beRunning_when_pluginDegraded', () => {
     // 降级但实例存活、命令可用；显示成「已停止」会让用户误以为没起来
-    expect(toShellApp(info({ state: 'Degraded', error: 'slow' })).state).toBe('running')
+    expect(toShellApp(info({ state: 'degraded', error: 'slow' })).state).toBe('running')
   })
 
   it('should_beDisabled_when_pluginNeedsApproval', () => {
-    expect(toShellApp(info({ state: 'NeedsApproval' })).state).toBe('disabled')
+    expect(toShellApp(info({ state: 'needsApproval' })).state).toBe('disabled')
   })
 
   it('should_beErrorWithReason_when_pluginErrored', () => {
-    const app = toShellApp(info({ state: 'Error', error: 'boom' }))
+    const app = toShellApp(info({ state: 'error', error: 'boom' }))
     expect(app.state).toBe('error')
     expect(app.error).toBe('boom')
   })
 
   it('should_beStopped_when_pluginLoadedOrActivating', () => {
-    expect(toShellApp(info({ state: 'Loaded' })).state).toBe('stopped')
-    expect(toShellApp(info({ state: 'Activating' })).state).toBe('stopped')
+    expect(toShellApp(info({ state: 'loaded' })).state).toBe('stopped')
+    expect(toShellApp(info({ state: 'activating' })).state).toBe('stopped')
   })
 
   it('should_beDisabled_when_pluginDeactivated', () => {
-    expect(toShellApp(info({ state: 'Deactivated' })).state).toBe('disabled')
+    expect(toShellApp(info({ state: 'deactivated' })).state).toBe('disabled')
   })
 })
 
 describe('权限映射', () => {
   it('should_markGrantedAndLockStorage_when_approved', () => {
     const app = toShellApp(
-      info({ state: 'Activated' }, { permissions: ['storage', 'fs:write'] }),
+      info({ state: 'activated' }, { permissions: ['storage', 'fs:write'] }),
     )
 
     expect(app.permissions.map((p) => p.granted)).toEqual([true, true])
@@ -107,14 +107,14 @@ describe('权限映射', () => {
   })
 
   it('should_markNotGranted_when_pluginNeedsApproval', () => {
-    const app = toShellApp(info({ state: 'NeedsApproval' }, { permissions: ['fs:read'] }))
+    const app = toShellApp(info({ state: 'needsApproval' }, { permissions: ['fs:read'] }))
     // 未人工批准 ⇒ 一律未授予（不编造逐项授予状态：后端没有暴露它）
     expect(app.permissions[0].granted).toBe(false)
   })
 
   it('should_beOfficial_when_packagedInApkAssets', () => {
-    expect(toShellApp(info({ state: 'Loaded' })).official).toBe(true)
-    expect(toShellApp(info({ state: 'Loaded' }, { source: 'user' })).official).toBe(false)
+    expect(toShellApp(info({ state: 'loaded' })).official).toBe(true)
+    expect(toShellApp(info({ state: 'loaded' }, { source: 'user' })).official).toBe(false)
   })
 })
 
@@ -138,7 +138,7 @@ describe('运行面解析', () => {
 
 describe('启动与停止', () => {
   it('should_preauthorizeThenLoadFrontend_when_pluginHasFrontend', async () => {
-    vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(info({ state: 'Loaded' }))
+    vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(info({ state: 'loaded' }))
     const source = createPluginAppSource()
 
     await source.launch('com.test.app')
@@ -151,7 +151,7 @@ describe('启动与停止', () => {
 
   it('should_activateBackendOnly_when_pluginIsRustOnly', async () => {
     vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(
-      info({ state: 'Loaded' }, { pluginType: 'rust' }),
+      info({ state: 'loaded' }, { pluginType: 'rust' }),
     )
     const source = createPluginAppSource()
 

@@ -15,6 +15,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+// 隔离 frontendLogger 的异步攒批转发（setInterval 400ms flush → invoke
+// 'report_frontend_log'）：被测契约是 mDNS 命令调用面，日志转发是环境噪声，
+// 不 mock 会让「not.toHaveBeenCalled」断言在 flush 窗口内 flaky（既有时序问题）
+vi.mock('@/utils/frontendLogger', () => ({
+  logger: { log: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
+
 // ==================== 替身 ====================
 
 const mockInvoke = vi.fn()

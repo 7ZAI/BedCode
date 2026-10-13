@@ -42,24 +42,28 @@ function isOfficial(info: PluginInfo): boolean {
  *
  * Degraded 归为 running：后端实例仍在、命令可用，只是带降级原因——把它显示成
  * 「已停止」会让用户误以为应用没起来。降级原因经 warn 落日志，不占用 UI 主信息位。
+ *
+ * 状态值真源 = 宿主 Rust `PluginState` serde camelCase（`types.rs`，
+ * `#[serde(tag = "state", rename_all = "camelCase")]`），线上 payload 为小写；
+ * 旧前端按 PascalCase 比较命中不了，表现为「应用明明在跑，壳里显示 0 个运行中」。
  */
 function mapState(info: PluginInfo): ShellAppState {
   switch (info.state.state) {
-    case 'Activated':
+    case 'activated':
       return 'running'
-    case 'Degraded':
+    case 'degraded':
       logger.warn(`[ShellAdapter] plugin degraded but alive: id=${info.id}`)
       return 'running'
-    case 'NeedsApproval':
+    case 'needsApproval':
       return 'disabled'
-    case 'Error':
+    case 'error':
       return 'error'
-    case 'Activating':
+    case 'activating':
       // 激活中：后端尚未给出终态，按未启动呈现，刷新后自愈
       return 'stopped'
-    case 'Deactivated':
+    case 'deactivated':
       return 'disabled'
-    case 'Loaded':
+    case 'loaded':
     default:
       return 'stopped'
   }
@@ -68,11 +72,11 @@ function mapState(info: PluginInfo): ShellAppState {
 /**
  * 权限清单 → 授予项
  *
- * granted 的口径是「清单声明且已通过审批」：NeedsApproval 表示尚未人工批准，
+ * granted 的口径是「清单声明且已通过审批」：needsApproval 表示尚未人工批准，
  * 其余状态表示审批已完成。这里不编造逐项授予状态——后端没有暴露它。
  */
 function mapPermissions(info: PluginInfo): ShellPermissionGrant[] {
-  const approved = info.state.state !== 'NeedsApproval'
+  const approved = info.state.state !== 'needsApproval'
   return info.permissions.map((key) => ({
     key,
     granted: approved,
@@ -93,7 +97,7 @@ export function toShellApp(info: PluginInfo): ShellApp {
     state: mapState(info),
     permissions: mapPermissions(info),
     sizeBytes: typeof info.sizeBytes === 'number' ? info.sizeBytes : undefined,
-    error: info.state.state === 'Error' ? info.state.error : undefined,
+    error: info.state.state === 'error' ? info.state.error : undefined,
     // 运行面不从清单下发：插件的 UI 入口在激活后才注册进插件注册表，
     // 因此在 resolveSurface 里按需解析（见下）
     contributions: {},

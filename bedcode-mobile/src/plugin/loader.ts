@@ -100,14 +100,15 @@ class PluginLoaderClass {
       }
 
       // 按运行时状态补充门禁（意图优先，状态辅助）：
-      // - Activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
-      // - Degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // - activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
+      // - degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // （状态值 camelCase 与宿主 Rust serde 序列化一致，见 SDK PluginState 注释）
       const st = manifest.state
-      if (st.state === 'Activating') {
+      if (st.state === 'activating') {
         logger.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
         continue
       }
-      if (st.state === 'Degraded') {
+      if (st.state === 'degraded') {
         logger.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
       }
 

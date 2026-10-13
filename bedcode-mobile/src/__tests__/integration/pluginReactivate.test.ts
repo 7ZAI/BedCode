@@ -46,7 +46,7 @@ function makePluginInfo(overrides: Partial<PluginInfo> = {}): PluginInfo {
     pluginType: 'frontend',
     // 覆盖 context.ui.registerToolboxPage/registerRoute/registerSettingsSection 权限
     permissions: ['ui:toolbox', 'ui:route', 'ui:settings'],
-    state: 'Loaded',
+    state: 'loaded',
     contributes: {},
     source: 'builtin',
     extensionPath: '/plugins/mock-plugin',

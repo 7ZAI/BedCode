@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: legacy frontend adapted to the current backend (frontend reverted to 92222e8b6, backend unchanged)
+
+- **Context**: the mobile frontend (host UI + the three wasm-app frontends) was reverted to `92222e8b6`
+  (the last complete old-host state) while the Rust backend / SDK Rust contract / WIT / ABI stay on the
+  current line. This entry covers the adaptation that makes the reverted frontend compile and run again.
+- **SDK type surface reverted (types only)**: `packages/plugin-sdk-mobile/src/types.ts` returns the old
+  `UIRegistry` (`registerToolboxPage` / `registerNavTab` / `registerTerminalToolbarItem` /
+  `registerTerminalView` / `registerSettingsSection`) and the old contribution descriptors; `index.ts`
+  exports them again. The `PluginState` union stays camelCase on purpose: the host Rust still serializes
+  camelCase (`#[serde(rename_all = "camelCase")]`), so reverting the type to PascalCase would compile
+  but never match at runtime.
+- **State comparisons adapted to camelCase**: `src/plugin/loader.ts`,
+  `src/shell/adapters/pluginAppSource.ts` and `src/views/PluginView.vue` now compare `'activated'` /
+  `'activating'` / `'degraded'` / `'needsApproval'` … matching the wire payload.
+- **Command surface adapted**: `useMobileSettings.ts` calls `set_db_setting_mobile` /
+  `get_all_db_settings_mobile` (the old names were retired in the capability-domain consolidation);
+  `useMdnsAdvertiser.ts` drops the advertise invocations (mobile broadcasting is retired, locked by
+  `retired_mobile_mdns_advertise_lock`).
+- **Event bridge verified**: `ws_pairing_request` / `ws_pairing_verified` are emitted by the
+  terminal-session plugin through host-events and forwarded verbatim; `ws_connecting` /
+  `ws_disconnected` / `ws_event_channel_ready` / `ws_link_crypto_pin` are still emitted by the host.
+  The old frontend listeners need zero changes.
+- **Stray new-shell files removed**: `wasm-apps/terminal-session/src/{app,host,settings}` and the
+  new-shell-only test files (`pluginContextShell` / `retiredHostUIRetirementLocks` /
+  `shellSettingsScreen` / `useShellAppsSurface` / `connectionEvents` / `useClearAllData`) were leftover
+  from the incomplete revert (they do not exist at `92222e8b6` and reference the retired `registerSurface`
+  family); the vitest include was reverted to the old suite shape.
+- **New regression tests**: `useMobileSettings.test.ts` asserts the renamed persistence command
+  (`set_db_setting_mobile`, `mobile.` key prefix, no `set_db_setting` resurrection, failure isolation);
+  `useMdnsAdvertiser.test.ts` asserts zero backend invocations (advertising retired) and the kept
+  state-machine shape. `useMdnsDiscovery.test.ts` now mocks `frontendLogger` to stop the async
+  log-batch flush from making the `not.toHaveBeenCalled` assertions flaky.
+
+#### Desktop: read plugin state with the wire camelCase values (fixes the app-center enable/disable chain)
+
+- **Root cause**: the plugin-state source of truth is the shared kernel crate
+  `packages/bedcode-wasm-core` (`PluginState`, `#[serde(tag = "state", rename_all = "camelCase")]`,
+  wire `{state:'activated'}`), but the desktop TS type and every state check branched on
+  PascalCase (`'Activated'`). It compiled and the tests used the same PascalCase fixtures, yet on a
+  real build the chain was dead code: `isRunning` never matched → the app-center toggle always
+  rendered as "not enabled" (the style did not change after enabling), the enabled/disabled
+  sections were always wrong, degraded/error/needs-approval badges never showed, plugin
+  contributions (sidebar/settings sections) never became active, and the loader's
+  activated/degraded gates never admitted anything.
+- **Fix**: both TS copies (`src/plugin/types.ts` and the SDK
+  `packages/plugin-sdk-desktop/src/types.ts`) now declare the wire camelCase values;
+  `contributionKinds` / `loader` / `registry` / `PluginConfigView` / `PluginDetailView`
+  comparisons and internal state registrations were updated; fixtures and assertions use the wire values.
+- **Regression lock**: the new `src/__tests__/plugin/pluginStateVocabulary.test.ts` parses the
+  wasm-core `manifest.rs` variants and compares them against both TS copies (L1/L2), bans the
+  retired PascalCase vocabulary from production consumers (L3), and pins each state's
+  positive/negative predicate results while rejecting the old values (L4). The `plugin-flow`
+  integration test now asserts the toggle's `--toggle-on` style variable (1 on / 0 off) across
+  state changes, pinning the user-visible symptom.
+- **Not in this change**: the desktop SDK Rust copy
+  `packages/plugin-sdk-desktop/rust/src/types.rs` still carries the old PascalCase
+  `tag="state", content="error"` shape (no in-repo consumer, not on the host→frontend wire) and is
+  left for a separate alignment.
+- **Verification**: desktop `pnpm run test:run` 1627/1628 (the only failure is the
+  `terminalPreview.test.ts` resize-retry case — that tree has zero changes and the failure
+  reproduces in isolation); `vue-tsc --noEmit` clean; root `eslint .` 0 errors (110 warnings);
+  mutation checks: reverting `isRunning` to PascalCase turns vocabulary lock L3/L4 and the
+  plugin-flow toggle-style assertions red, reverting a TS copy turns L2 red.
+
 #### Mobile host shell: fix plugin state/i18n/icon/theme plumbing and polish the shell screens
 
 Found by walking every screen of the Android dev build (adb screenshots + visual review). Each item below is a defect confirmed on device, not a style preference.

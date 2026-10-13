@@ -45,7 +45,7 @@
 
           <!-- 待授权横幅：权限未经批准，启用前必须人工审批 -->
           <div
-            v-if="detailPlugin.state.state === 'NeedsApproval'"
+            v-if="detailPlugin.state.state === 'needsApproval'"
             class="mx-5 mt-3 px-4 py-3 rounded-xl border border-[color:color-mix(in_srgb,var(--mobile-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--mobile-warning)_10%,transparent)]"
           >
             <div class="text-sm font-medium text-[var(--mobile-warning)]">
@@ -228,7 +228,7 @@
                       :class="stateBadgeClass(plugin.state)"
                     >
                       <span
-                        v-if="plugin.state.state === 'Activated'"
+                        v-if="plugin.state.state === 'activated'"
                         class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
                       ></span>
                       {{ $t(getStateKey(plugin.state)) }}
@@ -280,7 +280,7 @@
                       :class="stateBadgeClass(plugin.state)"
                     >
                       <span
-                        v-if="plugin.state.state === 'Activated'"
+                        v-if="plugin.state.state === 'activated'"
                         class="w-1.5 h-1.5 rounded-full bg-[var(--mobile-success)]"
                       ></span>
                       {{ $t(getStateKey(plugin.state)) }}
@@ -526,7 +526,7 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
   // 待授权插件：先走审批流程，批准成功后继续启用
   if (enabled) {
     const plugin = plugins.value.find((p) => p.id === pluginId)
-    if (plugin && plugin.state.state === 'NeedsApproval') {
+    if (plugin && plugin.state.state === 'needsApproval') {
       approveThenEnable.value = true
       requestApprove(plugin)
       return
@@ -719,33 +719,33 @@ function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) {
     return 'bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)]'
   }
-  if (state.state === 'NeedsApproval' || state.state === 'Degraded') {
+  if (state.state === 'needsApproval' || state.state === 'degraded') {
     return 'bg-[color:color-mix(in_srgb,var(--mobile-warning)_15%,transparent)] text-[var(--mobile-warning)]'
   }
-  if (state.state === 'Activated') {
+  if (state.state === 'activated') {
     return 'bg-[var(--mobile-success-muted)] text-[var(--mobile-success)]'
   }
-  // Activating / Loaded / Deactivated 走灰（默认 muted）
+  // activating / loaded / deactivated 走灰（默认 muted）
   return 'bg-[var(--mobile-input-bg)] text-[var(--mobile-text-muted)]'
 }
 
 /** 状态文本 key */
 function getStateKey(state: PluginState): string {
-  if (state.state === 'Error') return 'mobile.plugin.stateError'
-  if (state.state === 'NeedsApproval') return 'mobile.plugin.stateNeedsApproval'
-  if (state.state === 'Degraded') return 'mobile.plugin.stateDegraded'
-  if (state.state === 'Activated') return 'mobile.plugin.stateActivated'
-  if (state.state === 'Activating') return 'mobile.plugin.stateActivating'
-  if (state.state === 'Deactivated') return 'mobile.plugin.stateDeactivated'
+  if (state.state === 'error') return 'mobile.plugin.stateError'
+  if (state.state === 'needsApproval') return 'mobile.plugin.stateNeedsApproval'
+  if (state.state === 'degraded') return 'mobile.plugin.stateDegraded'
+  if (state.state === 'activated') return 'mobile.plugin.stateActivated'
+  if (state.state === 'activating') return 'mobile.plugin.stateActivating'
+  if (state.state === 'deactivated') return 'mobile.plugin.stateDeactivated'
   return 'mobile.plugin.stateLoaded'
 }
 
 function isErrorState(state: PluginState): boolean {
-  return state.state === 'Error'
+  return state.state === 'error'
 }
 
 function getErrorMessage(state: PluginState): string {
-  return state.state === 'Error' ? state.error : ''
+  return state.state === 'error' ? state.error : ''
 }
 
 /** 来源标签 */
