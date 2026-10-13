@@ -49,7 +49,7 @@ function makePluginInfo(overrides: Partial<PluginInfo> = {}): PluginInfo {
     pluginType: 'frontend',
     // 覆盖 context.ui.registerRoute（运行面与壳设置入口免权限）
     permissions: ['ui:route'],
-    state: 'Loaded',
+    state: 'loaded',
     contributes: {},
     source: 'builtin',
     extensionPath: '/plugins/mock-plugin',

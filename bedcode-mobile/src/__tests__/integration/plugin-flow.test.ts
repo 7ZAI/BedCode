@@ -51,7 +51,7 @@ function makePluginInfo(overrides: Partial<PluginInfo> = {}): PluginInfo {
     main: 'index.js',
     pluginType: 'frontend',
     permissions: [],
-    state: 'Loaded',
+    state: 'loaded',
     contributes: {},
     source: 'builtin',
     extensionPath: '/plugins/plugin-1',

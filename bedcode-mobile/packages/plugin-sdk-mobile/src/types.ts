@@ -14,15 +14,22 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only' | 'wasm'
 
-/** 插件运行时状态 */
+/** 插件运行时状态
+ *
+ * 取值口径（2026-10-14 对齐）：真源 = 共享 crate `bedcode-wasm-core/src/manifest.rs` 的
+ * `PluginState`，其 serde 属性为 `#[serde(tag = "state", rename_all = "camelCase")]`——
+ * 线上 JSON 是 **camelCase**（`{state:'activated'}` / `{state:'needsApproval'}` …）。
+ * 旧声明写成 PascalCase（`'Activated'`），与后端序列化不一致：宿主前端按 PascalCase 分支
+ * 判断时永远命中不了，表现为「应用明明在跑，壳里显示 0 个运行中 / 未启动」。
+ * 改动词表时先改共享 crate，再同步本类型与两端消费者。 */
 export type PluginState =
-  | { state: 'Loaded' }
-  | { state: 'Activating' }
-  | { state: 'Activated' }
-  | { state: 'Degraded'; error: string }
-  | { state: 'NeedsApproval' }
-  | { state: 'Deactivated' }
-  | { state: 'Error'; error: string }
+  | { state: 'loaded' }
+  | { state: 'activating' }
+  | { state: 'activated' }
+  | { state: 'degraded'; error: string }
+  | { state: 'needsApproval' }
+  | { state: 'deactivated' }
+  | { state: 'error'; error: string }
 
 /** 插件描述文件结构 */
 export interface PluginManifest {

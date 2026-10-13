@@ -316,16 +316,38 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   }
 
   // ==================== I18nAPI ====================
+  /**
+   * 把插件的消息树展平为「完整点分 key → 叶子值」的一层表
+   *
+   * 为什么必须展平（2026-10-14 实测修正）：宿主取文案走 `t('<插件id>.<域>.<键>')`，
+   * vue-i18n 按点号逐段寻路径。插件若把消息写成嵌套对象（如 `{ app: { title: '远程终端' } }`），
+   * 前缀后得到的是**键名带点的对象**（`'com.x.app' → {title}`）——路径寻址在第二段就断了，
+   * 全部文案回退成 key 字面量（实测 terminal-session 整个运行面显示 `com.bedcode.terminal-session.app.title`）。
+   * 展平后每个键都是叶子，路径直达；数组与标量原样保留（vue-i18n 的列表/复数消息不能拆）。
+   */
+  function flattenMessages(
+    source: Record<string, unknown>,
+    prefix: string,
+    out: Record<string, unknown>,
+  ): void {
+    for (const [key, value] of Object.entries(source)) {
+      const fullKey = prefix ? `${prefix}.${key}` : key
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        flattenMessages(value as Record<string, unknown>, fullKey, out)
+      } else {
+        out[fullKey] = value
+      }
+    }
+  }
+
   const i18n: I18nAPI = {
     registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
       const prefixed: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(messages)) {
-        prefixed[`${info.id}.${key}`] = value
-      }
-      const existing = hostI18n.global.getLocaleMessage(locale)
-      hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
+      flattenMessages(messages, info.id, prefixed)
+      // 直接合并新消息，vue-i18n 会自动与现有消息深度合并
+      hostI18n.global.mergeLocaleMessage(locale, prefixed)
     },
     t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n

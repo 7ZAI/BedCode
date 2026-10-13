@@ -7,8 +7,8 @@
 
 import type { PluginInfo, PluginModule, PluginContext } from './types'
 import { logger } from '@/utils/frontendLogger'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import * as pluginCmds from './commands'
+import { toPluginAssetUrl } from './assets'
 import { createPluginContext } from './context'
 import { clearPluginEvents } from './events'
 import { getPluginRegistry } from './registry'
@@ -100,14 +100,15 @@ class PluginLoaderClass {
       }
 
       // 按运行时状态补充门禁（意图优先，状态辅助）：
-      // - Activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
-      // - Degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // - activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
+      // - degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // 状态值取线上 camelCase（真源 = 共享 crate 的 PluginState serde 属性）
       const st = manifest.state
-      if (st.state === 'Activating') {
+      if (st.state === 'activating') {
         logger.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
         continue
       }
-      if (st.state === 'Degraded') {
+      if (st.state === 'degraded') {
         logger.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
       }
 
@@ -204,7 +205,9 @@ class PluginLoaderClass {
     try {
       // 经 Tauri asset protocol 从插件目录直读前端模块
       // Android 上自动变为 http://tauri.localhost/，与桌面端 convertFileSrc 方案一致
-      const module = await this.importWithTimeout(this.convertFileUrl(manifest.extensionPath, manifest.main))
+      const module = await this.importWithTimeout(
+        toPluginAssetUrl(manifest.extensionPath, manifest.main),
+      )
 
       const context = createPluginContext(manifest)
       // 关键：先注册 context 再激活 —— activate 内 registerSurface / registerSlot 等会立即
@@ -230,12 +233,6 @@ class PluginLoaderClass {
       }
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
-  }
-
-  /** 将插件路径转换为可导入的 URL（通过 Tauri asset protocol） */
-  private convertFileUrl(extensionPath: string, main: string): string {
-    const filePath = `${extensionPath}/${main}`.replace(/\\/g, '/')
-    return convertFileSrc(filePath)
   }
 
   /** 带超时的动态导入 */

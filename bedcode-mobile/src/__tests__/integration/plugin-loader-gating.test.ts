@@ -106,7 +106,7 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
           makePluginInfo({
             id: 'com.bedcode.gate-ok',
             name: 'Gate Ok',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
           makeDegradedPluginInfo({
             id: 'com.bedcode.gate-degraded',
@@ -117,29 +117,29 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
           makePluginInfo({
             id: 'com.bedcode.gate-loaded',
             name: 'Gate Loaded',
-            state: { state: 'Loaded' },
+            state: { state: 'loaded' },
           }),
           makePluginInfo({
             id: 'com.bedcode.gate-error',
             name: 'Gate Error',
-            state: { state: 'Error', error: 'boom' },
+            state: { state: 'error', error: 'boom' },
           }),
           makePluginInfo({
             id: 'com.bedcode.gate-approval',
             name: 'Gate Approval',
-            state: { state: 'NeedsApproval' },
+            state: { state: 'needsApproval' },
           }),
           makePluginInfo({
             id: 'com.bedcode.gate-off',
             name: 'Gate Off',
-            state: { state: 'Deactivated' },
+            state: { state: 'deactivated' },
           }),
           // rust 类型：后端自管，跳过（loader.ts:82-86）
           makePluginInfo({
             id: 'com.bedcode.gate-rust',
             name: 'Gate Rust',
             pluginType: 'rust',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
         ])
       }
@@ -188,11 +188,11 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
       if (cmd === 'plugin_list_loaded') {
         return Promise.resolve([
           // 已激活且启用 → 放行
-          makePluginInfo({ id: 'com.bedcode.gate-on', name: 'Gate On', state: { state: 'Activated' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-on', name: 'Gate On', state: { state: 'activated' } }),
           // 已激活但意图关闭 → 跳过（即使运行时是 Activated）
-          makePluginInfo({ id: 'com.bedcode.gate-off', name: 'Gate Off', state: { state: 'Activated' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-off', name: 'Gate Off', state: { state: 'activated' } }),
           // Loaded 但意图关闭 → 跳过（意图优先：重启不自动挂载）
-          makePluginInfo({ id: 'com.bedcode.gate-off-loaded', name: 'Gate Off Loaded', state: { state: 'Loaded' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-off-loaded', name: 'Gate Off Loaded', state: { state: 'loaded' } }),
         ])
       }
       if (cmd === 'plugin_is_enabled') {

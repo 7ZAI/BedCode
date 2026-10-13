@@ -21,7 +21,9 @@ import {
   pluginUninstall,
 } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
+import { toPluginAssetUrl } from '@/plugin/assets'
 import { getShellRegistry } from '@/shell/registry'
+import { iconKindOf } from '../utils'
 import type { PluginInfo } from '@/plugin/types'
 import type { ShellApp, ShellAppSource, ShellAppState, ShellPermissionGrant } from '../types'
 import { isLockedPermission } from '../permissions'
@@ -42,21 +44,21 @@ function isOfficial(info: PluginInfo): boolean {
  */
 function mapState(info: PluginInfo): ShellAppState {
   switch (info.state.state) {
-    case 'Activated':
+    case 'activated':
       return 'running'
-    case 'Degraded':
+    case 'degraded':
       logger.warn(`[ShellAdapter] plugin degraded but alive: id=${info.id}`)
       return 'running'
-    case 'NeedsApproval':
+    case 'needsApproval':
       return 'disabled'
-    case 'Error':
+    case 'error':
       return 'error'
-    case 'Activating':
+    case 'activating':
       // 激活中：后端尚未给出终态，按未启动呈现，刷新后自愈
       return 'stopped'
-    case 'Deactivated':
+    case 'deactivated':
       return 'disabled'
-    case 'Loaded':
+    case 'loaded':
     default:
       return 'stopped'
   }
@@ -69,7 +71,7 @@ function mapState(info: PluginInfo): ShellAppState {
  * 其余状态表示审批已完成。这里不编造逐项授予状态——后端没有暴露它。
  */
 function mapPermissions(info: PluginInfo): ShellPermissionGrant[] {
-  const approved = info.state.state !== 'NeedsApproval'
+  const approved = info.state.state !== 'needsApproval'
   return info.permissions.map((key) => ({
     key,
     granted: approved,
@@ -86,11 +88,17 @@ export function toShellApp(info: PluginInfo): ShellApp {
     description: info.description,
     author: info.author,
     icon: info.icon,
+    // 图片图标：清单里的 icon 是相对插件目录的路径（icon.svg），壳不认识文件系统，
+    // 由本适配器（插件系统侧）解析成 asset protocol URL 后再交给壳
+    iconUrl:
+      iconKindOf(info.icon) === 'image' && info.extensionPath
+        ? toPluginAssetUrl(info.extensionPath, info.icon!.trim())
+        : undefined,
     official: isOfficial(info),
     state: mapState(info),
     permissions: mapPermissions(info),
     sizeBytes: typeof info.sizeBytes === 'number' ? info.sizeBytes : undefined,
-    error: info.state.state === 'Error' ? info.state.error : undefined,
+    error: info.state.state === 'error' ? info.state.error : undefined,
     // 运行面不从清单下发：插件的 UI 入口在激活后才注册进插件注册表，
     // 因此在 resolveSurface 里按需解析（见下）
     contributions: {},

@@ -74,7 +74,7 @@ function makeFrontendInfo(overrides: { extensionPath?: string; state?: unknown }
     main: 'index.js',
     pluginType: 'wasm',
     permissions: ['ui:route'],
-    state: { state: 'Activated' },
+    state: { state: 'activated' },
     contributes: {},
     source: 'builtin',
     extensionPath: '/plugins/mock-ok',
