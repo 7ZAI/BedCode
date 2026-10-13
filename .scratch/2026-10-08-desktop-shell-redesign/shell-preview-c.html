@@ -1,0 +1,1864 @@
+<!doctype html>
+<html lang="zh-CN" data-palette="warm" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BedCode — 方案 C：设备壳 v0.2（主屏 + 卡片切换）</title>
+<style>
+/* ============================================================================
+   设计 token：全部取自 bedcode-desktop/src/style.css（:root warm 色板 + :root.dark）
+   零新增 hex / 零新字体族 / 零 Google Fonts（frontend-styles token-bound 铁律）
+   暗色选择器 :root.dark（类挂 <html>，与 style.css 一致——挂 body 上不生效）。
+   ============================================================================ */
+:root {
+  color-scheme: light;
+
+  --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* 与 style.css 同源的字号档（基准 12px），预览不叠加 --ui-scale 保证可读 */
+  --font-size-xs: 9px;
+  --font-size-sm: 10px;
+  --font-size-base: 12px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+
+  --bg-page: #f5f4f0;
+  --bg-sidebar: #efede7;
+  --bg-card: #fdfcfa;
+  --bg-hover: #e7e4dc;
+  --bg-input: #fdfcfa;
+
+  --text-primary: #26231b;
+  --text-secondary: #7c7565;
+  --text-tertiary: #aba492;
+
+  --border: #e4e1d8;
+  --border-strong: #d6d2c4;
+  --border-input: #d6d2c4;
+
+  --color-primary: #1d1a14;
+  --color-primary-hover: #0f0d09;
+  --color-primary-light: #efede5;
+  --color-primary-contrast: #fdfcfa;
+
+  --color-success: #22c55e;
+  --color-success-light: rgba(34, 197, 94, 0.14);
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.16);
+  --color-danger: #ef4444;
+  --color-danger-light: rgba(239, 68, 68, 0.12);
+  --color-info: #2563eb;
+  --color-info-light: rgba(37, 99, 235, 0.12);
+
+  --radius-card: 10px;
+  --radius-button: 8px;
+  --radius-input: 8px;
+  --radius-tag: 6px;
+
+  --shadow-card: 0 1px 2px rgba(38, 35, 27, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(38, 35, 27, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(29, 26, 20, 0.08);
+
+  /* ---- 本方案新增 token（落地时按「3+ 组件复用」路径迁 style.css） ---- */
+  --radius-app-icon: 28%;   /* 应用图标圆角（squircle 近似）：图标网格的视觉核心 */
+  --radius-sheet: 16px;     /* 大圆角：卡片 / 弹窗 / 通知面板 */
+  --toolbar-h: 44px;        /* 顶部工具栏（含导航与窗口控制） */
+
+  /* 主屏壁纸：token 派生渐变（零新 hex）。遮罩层单独一层背景，强度由 --wall-dim 控制 */
+  --wall-aurora: linear-gradient(158deg, color-mix(in srgb, var(--color-info) 24%, var(--bg-page)) 0%, color-mix(in srgb, var(--color-success) 18%, var(--bg-page)) 52%, var(--bg-page) 100%);
+  --wall-dune: linear-gradient(158deg, color-mix(in srgb, var(--color-warning) 20%, var(--bg-page)) 0%, color-mix(in srgb, var(--color-primary) 10%, var(--bg-page)) 55%, var(--bg-page) 100%);
+  --wall-reef: linear-gradient(158deg, color-mix(in srgb, var(--color-info) 18%, var(--bg-page)) 0%, color-mix(in srgb, var(--color-primary) 14%, var(--bg-page)) 60%, var(--bg-page) 100%);
+}
+:root.dark {
+  color-scheme: dark;
+  --bg-page: #15130f;
+  --bg-sidebar: #191712;
+  --bg-card: #1d1a15;
+  --bg-hover: #2a261e;
+  --bg-input: #1d1a15;
+  --text-primary: #ece8dc;
+  --text-secondary: #9c9482;
+  --text-tertiary: #6b6455;
+  --border: #2e2a22;
+  --border-strong: #3c372b;
+  --border-input: #3c372b;
+  --color-primary: #ece8dc;
+  --color-primary-hover: #f5f2ea;
+  --color-primary-light: rgba(236, 232, 220, 0.12);
+  --color-primary-contrast: #15130f;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-input-focus: 0 0 0 3px rgba(236, 232, 220, 0.1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  font-size: var(--font-size-base);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  line-height: 1.5;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+button { font-family: inherit; font-size: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select { font-family: inherit; font-size: inherit; }
+/* 不要给 svg 强制 display:block —— 行内按钮里的图标会被顶到独立一行导致文字裁切 */
+svg { flex-shrink: 0; vertical-align: middle; }
+
+/* 焦点可见：键盘导航必须看得见落点（WCAG 2.2 焦点外观） */
+:focus-visible { outline: 2px solid var(--color-info); outline-offset: 1px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-delay: 0ms !important; }
+}
+
+/* ==================== 外框（窗口 = 设备） ==================== */
+.device { display: flex; flex-direction: column; height: 100vh; background: var(--bg-page); }
+
+/* ==================== 顶部工具栏（品牌 · 导航 · 全局入口 · 窗口控制） ==================== */
+.toolbar {
+  height: var(--toolbar-h); flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 8px 0 12px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+  user-select: none; position: relative; z-index: 30;
+}
+.tb-brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex-shrink: 0; }
+.tb-brand b { font-size: var(--font-size-lg); font-weight: 600; letter-spacing: -0.01em; }
+.tb-where { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tb-nav { display: flex; align-items: center; gap: 2px; margin-left: 10px; flex-shrink: 0; }
+.tb-btn { min-width: 32px; height: 28px; padding: 0 7px; border-radius: var(--radius-button);
+  color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; font-size: var(--font-size-base); position: relative;
+  transition: background-color 0.15s, color 0.15s; }
+.tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn:disabled { opacity: 0.35; cursor: default; }
+.tb-btn:disabled:hover { background: none; color: var(--text-secondary); }
+.tb-btn.on { background: var(--color-primary-light); color: var(--text-primary); }
+.tb-btn .bdg { position: absolute; top: 0; right: 0; min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 7px; background: var(--color-danger); color: var(--color-primary-contrast);
+  font-size: var(--font-size-xs); font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.tb-right { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.tb-sep { width: 1px; height: 16px; background: var(--border-strong); margin: 0 5px; flex-shrink: 0; }
+.tb-win { width: 34px; height: 28px; border-radius: var(--radius-button); color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
+.tb-win:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-win.close:hover { background: var(--color-danger); color: var(--color-primary-contrast); }
+
+/* ==================== 舞台（home / card 两屏 + 覆层） ==================== */
+.stage { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.screen { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+.screen[hidden] { display: none; }
+/* 屏幕进入动效：减速到达（ease-out），只动 transform/opacity，不碰布局属性 */
+.screen.entering { animation: scr-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1); }
+@keyframes scr-in { from { opacity: 0; transform: scale(0.97) translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ==================== 主屏（Home：运行卡片带 + 应用网格 + 系统网格） ==================== */
+.home { overflow-y: auto; padding: 18px 20px 20px; gap: 22px; }
+/* 壁纸只落主屏（卡片全屏保持纯色保证业务内容可读）。两层背景：上层可调强度遮罩
+  （护文字对比度）、下层渐变；背景随元素自身不随内容滚动，滚动时壁纸不动。 */
+.home.wall-aurora, .home.wall-dune, .home.wall-reef {
+  background-image: linear-gradient(color-mix(in srgb, var(--bg-page) calc(var(--wall-dim, 0.3) * 100%), transparent) 0%, color-mix(in srgb, var(--bg-page) calc(var(--wall-dim, 0.3) * 100%), transparent) 100%), var(--wall-active);
+}
+.home.wall-aurora { --wall-active: var(--wall-aurora); }
+.home.wall-dune { --wall-active: var(--wall-dune); }
+.home.wall-reef { --wall-active: var(--wall-reef); }
+/* 设置页壁纸预览色块（无遮罩层，直出渐变） */
+.pal-sw.wsw-aurora { background-image: var(--wall-aurora); }
+.pal-sw.wsw-dune { background-image: var(--wall-dune); }
+.pal-sw.wsw-reef { background-image: var(--wall-reef); }
+.home-sec { width: min(920px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.sec-h { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
+.sec-h .t { font-size: var(--font-size-lg); font-weight: 600; }
+.sec-h .n { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.sec-h .grow { flex: 1; }
+
+/* 运行卡片带：横滑，每张卡 = 一个打开中的应用或系统页 */
+.hstrip { display: flex; gap: 12px; overflow-x: auto; padding: 2px 2px 8px;
+  scroll-snap-type: x proximity; scrollbar-width: thin; }
+.hcard { flex: 0 0 auto; width: 250px; scroll-snap-align: start; display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sheet);
+  overflow: hidden; box-shadow: var(--shadow-card); cursor: pointer; position: relative;
+  animation: rc-up 0.24s cubic-bezier(0.2, 0.8, 0.3, 1) backwards; animation-delay: calc(var(--i) * 40ms);
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s; }
+.hcard:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-card-hover); }
+.hcard.active { border-color: var(--color-primary); box-shadow: var(--shadow-input-focus); }
+@keyframes rc-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.hcard-head { display: flex; align-items: center; gap: 7px; padding: 7px 7px 7px 10px;
+  border-bottom: 1px solid var(--border); }
+.hcard-head .glyph-box { width: 20px; height: 20px; border-radius: 30%; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0; }
+.hcard-head .nm { flex: 1; min-width: 0; font-size: var(--font-size-base); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hcard-x { width: 24px; height: 24px; border-radius: 50%; color: var(--text-tertiary); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
+.hcard-x:hover { background: var(--color-danger-light); color: var(--color-danger); }
+/* 卡片正文 = 内容的静态缩略：inert + pointer-events:none，交互只走卡片本身 */
+.hcard-view { height: 190px; overflow: hidden; background: var(--bg-page); pointer-events: none; }
+.hcard-view * { pointer-events: none; }
+.hcard-view .appbar { height: 30px; padding: 0 10px; }
+.hcard-view .appbar .nm { font-size: var(--font-size-base); }
+.hcard-view .appbar .sub { display: none; }
+.hcard-view .term { font-size: 8px; line-height: 1.6; padding: 8px 9px; }
+.hcard-view .msg { font-size: var(--font-size-sm); padding: 5px 7px; }
+.hcard-view .frow { padding: 5px 6px; }
+.hcard-view .frow .nm { font-size: var(--font-size-sm); }
+/* 系统页卡片缩略：骨架条 */
+.skel { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.skel i { display: block; height: 10px; border-radius: 5px; background: var(--bg-hover); }
+.skel i.w40 { width: 40%; } .skel i.w70 { width: 70%; } .skel i.w55 { width: 55%; } .skel i.w85 { width: 85%; }
+
+/* 图标网格 */
+.appgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px 4px; align-content: start; }
+.appicon { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 10px 4px 8px;
+  border-radius: var(--radius-card); cursor: pointer; position: relative; background: none;
+  transition: background-color 0.15s; }
+.appicon:hover { background: var(--bg-hover); }
+.appicon:active { transform: scale(0.96); }
+.appicon .glyph-wrap { position: relative; }
+.appicon .glyph-box { width: 52px; height: 52px; border-radius: var(--radius-app-icon);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.18s, box-shadow 0.18s; }
+.appicon:hover .glyph-box { transform: translateY(-2px); box-shadow: var(--shadow-card-hover); }
+.appicon .nm { font-size: var(--font-size-base); color: var(--text-primary); max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appicon .sdot { position: absolute; top: -1px; right: -1px; width: 9px; height: 9px; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-page); }
+.appicon .bdg-approval { position: absolute; top: -3px; right: -3px; min-width: 15px; height: 15px;
+  border-radius: 8px; background: var(--color-danger); color: var(--color-primary-contrast);
+  font-size: var(--font-size-xs); font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--bg-page); }
+.appicon.hit .glyph-box { outline: 2px solid var(--color-info); outline-offset: 2px; }
+/* 图标底色：color-mix 从既有语义 token 派生，双主题自动适配，零新 hex */
+.tone-primary { background: color-mix(in srgb, var(--color-primary) 14%, var(--bg-card)); color: var(--color-primary); border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent); }
+.tone-info    { background: var(--color-info-light);    color: var(--color-info);    border: 1px solid color-mix(in srgb, var(--color-info) 25%, transparent); }
+.tone-success { background: var(--color-success-light); color: var(--color-success); border: 1px solid color-mix(in srgb, var(--color-success) 25%, transparent); }
+.tone-warning { background: var(--color-warning-light); color: var(--color-warning); border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent); }
+.tone-mix     { background: color-mix(in srgb, var(--color-info) 10%, var(--color-success-light)); color: color-mix(in srgb, var(--color-info) 55%, var(--color-success)); border: 1px solid color-mix(in srgb, var(--color-info) 22%, transparent); }
+:root.dark .tone-primary { color: var(--text-primary); }
+.tone-system  { background: var(--bg-sidebar); color: var(--text-secondary); border: 1px solid var(--border); }
+
+/* 主屏搜索提示（type-to-search） */
+.qhint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5;
+  display: flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px;
+  background: var(--bg-card); border: 1px solid var(--border-strong); box-shadow: var(--shadow-card-hover);
+  font-size: var(--font-size-base); color: var(--text-primary); }
+.qhint .q { font-weight: 600; }
+.qhint .n { color: var(--text-tertiary); font-size: var(--font-size-sm); }
+
+/* ==================== 卡片全屏（应用视图 / 系统页共用承载） ==================== */
+.cardframe { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-card); }
+/* 应用自带 app-bar（属于应用视图内容，不是宿主窗口装饰） */
+.appbar { height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+.appbar .nm { font-size: var(--font-size-lg); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.appbar .sub { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.appbar .grow { flex: 1; min-width: 0; }
+.appbody { flex: 1; min-height: 0; overflow: auto; }
+
+/* ==================== 系统页（参考方案 B 的管理中心页面：密度优先、标准圆角） ==================== */
+.sysframe { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-page); }
+.sys-head { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 10px 16px 0; }
+.sys-head .t { font-size: 18px; font-weight: 650; }
+.sys-head .grow { flex: 1; min-width: 0; }
+.sys-tabs { flex-shrink: 0; display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--border); }
+.sys-tab { height: 32px; padding: 0 12px; font-size: var(--font-size-base); color: var(--text-secondary);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; display: flex; align-items: center; gap: 7px;
+  transition: color 0.15s, border-color 0.15s; }
+.sys-tab:hover { color: var(--text-primary); }
+.sys-tab.on { color: var(--text-primary); border-bottom-color: var(--color-primary); font-weight: 600; }
+.sys-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; }
+.sys-wrap { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+/* 系统页内卡片回到标准圆角（方案 B 管理中心的密度与尺度） */
+.sys-body .card { border-radius: var(--radius-card); padding: 12px 14px; }
+
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.card > .card-t { font-size: var(--font-size-lg); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card > .card-d { font-size: var(--font-size-sm); color: var(--text-tertiary); line-height: 1.55; }
+
+/* 设置行 */
+.row-sw { display: flex; align-items: center; gap: 10px; padding: 8px 2px; }
+.row-sw + .row-sw { border-top: 1px solid var(--border); }
+.row-sw .lb { flex: 1; min-width: 0; }
+.row-sw .lb b { display: block; font-size: var(--font-size-base); font-weight: 500; }
+.row-sw .lb span { display: block; font-size: var(--font-size-sm); color: var(--text-tertiary); margin-top: 1px; }
+.row-sw.off { opacity: 0.48; }
+
+/* 开关：原生 checkbox + token 外观，键盘可达 */
+.sw { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+.sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.sw .track { position: absolute; inset: 0; border-radius: 9px; background: var(--border-strong);
+  transition: background-color 0.2s; pointer-events: none; }
+.sw .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--bg-card); transition: transform 0.2s; pointer-events: none; }
+.sw input:checked ~ .track { background: var(--color-success); }
+.sw input:checked ~ .knob { transform: translateX(14px); }
+.sw input:focus-visible ~ .track { outline: 2px solid var(--color-info); outline-offset: 1px; }
+.sw.risk input:checked ~ .track { background: var(--color-danger); }
+
+/* 分段控件（主题三档 / 授权策略三档） */
+.seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-sidebar);
+  border: 1px solid var(--border); border-radius: var(--radius-button); }
+.seg button { min-width: 62px; height: 24px; padding: 0 10px; border-radius: 6px;
+  font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s; }
+.seg button:hover { color: var(--text-primary); }
+.seg button.on { background: var(--bg-card); color: var(--text-primary); font-weight: 500; box-shadow: var(--shadow-card); }
+.seg button.on.risky { background: var(--color-danger-light); color: var(--color-danger); box-shadow: none; }
+
+/* 色板卡 */
+.pal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.pal-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--radius-button);
+  border: 1px solid var(--border); background: var(--bg-card); text-align: left; cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s; }
+.pal-card:hover { border-color: var(--border-strong); }
+.pal-card.on { border-color: var(--color-primary); box-shadow: var(--shadow-input-focus); }
+.pal-sw { display: flex; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.pal-sw i { flex: 1; }
+.pal-sw i + i { border-left: 1px solid var(--border); }
+.pal-card .nm { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.pal-card.on .nm { color: var(--text-primary); font-weight: 500; }
+
+/* 表单控件 */
+.fld { display: flex; flex-direction: column; gap: 5px; }
+.fld .lb { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.fld .hint { font-size: var(--font-size-xs); color: var(--text-tertiary); }
+.inp { height: 28px; padding: 0 9px; background: var(--bg-input); border: 1px solid var(--border-input);
+  border-radius: var(--radius-input); color: var(--text-primary); outline: none; width: 100%;
+  font-size: var(--font-size-base); transition: border-color 0.2s, box-shadow 0.2s; }
+.inp:focus { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
+select.inp { cursor: pointer; }
+input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: pointer; }
+.size-row { display: flex; align-items: center; gap: 12px; }
+.size-row .val { font-family: var(--mono); font-size: var(--font-size-sm); color: var(--text-secondary);
+  min-width: 34px; text-align: right; }
+
+/* 按钮 */
+.btn { height: 28px; padding: 0 12px; border-radius: var(--radius-button); background: var(--color-primary);
+  color: var(--color-primary-contrast); font-size: var(--font-size-base); font-weight: 500;
+  transition: background-color 0.15s, filter 0.15s; white-space: nowrap; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.btn:hover { background: var(--color-primary-hover); }
+.btn.ghost { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-strong); }
+.btn.ghost:hover { background: var(--bg-hover); }
+.btn.danger-outline { background: var(--bg-card); color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent); }
+.btn.danger-outline:hover { background: var(--color-danger-light); }
+.btn.danger-fill { background: var(--color-danger); color: var(--color-primary-contrast); }
+.btn.danger-fill:hover { filter: brightness(0.92); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.mini { height: 24px; padding: 0 10px; border-radius: var(--radius-button); font-size: var(--font-size-sm);
+  border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--bg-card);
+  flex-shrink: 0; transition: background-color 0.15s, color 0.15s; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.mini:hover { background: var(--bg-hover); color: var(--text-primary); }
+.mini.danger { color: var(--color-danger); border-color: color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.mini.danger:hover { background: var(--color-danger-light); }
+
+/* 状态点 / chip / pill */
+.sdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.sdot.running { background: var(--color-success); }
+.sdot.degraded { background: var(--color-warning); }
+.sdot.dormant { background: var(--text-tertiary); }
+.sdot.approval { background: var(--color-danger); }
+.sdot.error { background: var(--color-danger); }
+.chip { font-size: var(--font-size-sm); padding: 2px 8px; border-radius: var(--radius-tag);
+  background: var(--color-primary-light); color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
+.chip.ok { background: var(--color-success-light); color: var(--color-success); }
+.chip.warn { background: var(--color-warning-light); color: var(--color-warning); }
+.chip.danger { background: var(--color-danger-light); color: var(--color-danger); }
+.chip.info { background: var(--color-info-light); color: var(--color-info); }
+.pill { font-family: var(--mono); font-size: var(--font-size-xs); padding: 2px 7px; border-radius: var(--radius-tag);
+  background: var(--bg-sidebar); border: 1px solid var(--border); color: var(--text-secondary); }
+.pill.risk { background: var(--color-danger-light); border-color: transparent; color: var(--color-danger); }
+
+/* 提示块 */
+.callout { display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; font-size: var(--font-size-sm);
+  line-height: 1.55; border-radius: var(--radius-button); }
+.callout svg { margin-top: 1px; flex-shrink: 0; }
+.callout.warn { background: var(--color-warning-light); color: var(--color-warning);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent); }
+.callout.danger { background: var(--color-danger-light); color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent); }
+
+/* kv / 记录行 */
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-size: var(--font-size-base); padding: 3px 0; }
+.kv b { font-weight: 500; flex-shrink: 0; }
+.kv span { color: var(--text-secondary); text-align: right; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--font-size-sm); }
+.rec { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--radius-button);
+  background: var(--bg-sidebar); border: 1px solid var(--border); }
+.rec + .rec { margin-top: 5px; }
+.rec .tg { font-family: var(--mono); font-size: var(--font-size-sm); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec.deny { border-color: color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.rec.deny .tg { color: var(--color-danger); }
+.rec.unconfirmed { border-color: color-mix(in srgb, var(--color-warning) 40%, transparent); }
+.blk-t { font-size: var(--font-size-xs); color: var(--text-tertiary); letter-spacing: 0.08em;
+  text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+
+/* 应用管理：左列表 + 右详情（方案 B 形态） */
+.amgr { display: flex; gap: 10px; align-items: flex-start; }
+.alist { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; gap: 5px; }
+.arow { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: var(--radius-button);
+  border: 1px solid transparent; text-align: left; cursor: pointer; width: 100%;
+  transition: background-color 0.15s, border-color 0.15s; }
+.arow:hover { background: var(--bg-hover); }
+.arow.on { background: var(--bg-card); border-color: var(--border-strong); box-shadow: var(--shadow-card); }
+.arow .glyph-box { width: 30px; height: 30px; border-radius: var(--radius-app-icon); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; }
+.arow .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.arow .nm b { font-size: var(--font-size-base); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arow .nm span { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adetail { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+/* 权限与授权：应用授权卡 */
+.pcard-head { display: flex; align-items: center; gap: 10px; }
+.pcard-head .glyph-box { width: 34px; height: 34px; border-radius: var(--radius-app-icon);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.pcard-head .nm { flex: 1; min-width: 0; }
+.pcard-head .nm b { display: block; font-size: var(--font-size-lg); font-weight: 600; }
+.pcard-head .nm span { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.strat-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+.strat-row + .strat-row { border-top: 1px solid var(--border); }
+.strat-row .lb { font-size: var(--font-size-base); width: 92px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+
+/* ==================== 通知中心（工具栏锚定下拉面） ==================== */
+.panel { position: absolute; top: calc(var(--toolbar-h) + 6px); right: 8px; z-index: 45; width: 364px;
+  max-height: min(480px, calc(100% - 60px)); display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-sheet);
+  box-shadow: var(--shadow-card-hover); overflow: hidden; }
+.panel[hidden] { display: none; }
+.panel-in { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.panel-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; }
+.panel-h .t { font-size: var(--font-size-lg); font-weight: 600; flex: 1; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.tile { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-button);
+  background: var(--bg-sidebar); border: 1px solid var(--border); text-align: left; cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s; }
+.tile:hover { border-color: var(--border-strong); }
+.tile.on { background: var(--color-primary-light); border-color: color-mix(in srgb, var(--color-primary) 30%, transparent); }
+.tile .tt { min-width: 0; }
+.tile .tt b { display: block; font-size: var(--font-size-base); font-weight: 500; white-space: nowrap; }
+.tile .tt span { display: block; font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; }
+/* 通知卡片（参考手机系统通知栏：来源图标 + 标题/时间 + 内容 + 动作行 + 单条关闭） */
+.ntf { display: flex; align-items: flex-start; gap: 9px; padding: 10px; border-radius: var(--radius-card);
+  background: var(--bg-sidebar); border: 1px solid var(--border); }
+.ntf.attn { border-color: color-mix(in srgb, var(--color-warning) 45%, transparent); background: var(--color-warning-light); }
+.ntf-ic { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ntf-b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ntf-top { display: flex; align-items: baseline; gap: 8px; }
+.ntf-top b { flex: 1; min-width: 0; font-size: var(--font-size-base); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ntf-time { font-size: var(--font-size-xs); color: var(--text-tertiary); flex-shrink: 0; }
+.ntf-src { font-size: var(--font-size-xs); color: var(--text-tertiary); }
+.ntf-body { font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.5; }
+.ntf-acts { display: flex; gap: 6px; margin-top: 4px; }
+.ntf-x { width: 22px; height: 22px; border-radius: 50%; color: var(--text-tertiary); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s; }
+.ntf-x:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ==================== 右键菜单 ==================== */
+.ctx { position: fixed; z-index: 60; min-width: 168px; padding: 5px; background: var(--bg-card);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-card-hover); }
+.ctx[hidden] { display: none; }
+.ctx button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px;
+  border-radius: 6px; font-size: var(--font-size-base); color: var(--text-primary); text-align: left;
+  transition: background-color 0.12s; }
+.ctx button:hover { background: var(--bg-hover); }
+.ctx button:disabled { color: var(--text-tertiary); cursor: not-allowed; }
+.ctx button:disabled:hover { background: none; }
+.ctx .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+/* ==================== 命令面板 ==================== */
+.ovl { position: fixed; inset: 0; z-index: 70; display: flex; }
+.ovl.center { align-items: center; justify-content: center; background: color-mix(in srgb, black 45%, transparent); }
+.ovl[hidden] { display: none; }
+.palette { width: min(460px, 92vw); max-height: 58vh; display: flex; flex-direction: column;
+  align-self: flex-start; margin: 14vh auto 0; background: var(--bg-card);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sheet);
+  box-shadow: var(--shadow-card-hover); overflow: hidden; }
+.palette .srch { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.palette .srch input { flex: 1; min-width: 0; border: none; outline: none; background: none;
+  color: var(--text-primary); font-size: var(--font-size-lg); }
+.palette .lst { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
+.palette .it { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  width: 100%; text-align: left; font-size: var(--font-size-base); color: var(--text-secondary);
+  transition: background-color 0.12s, color 0.12s; }
+.palette .it:hover, .palette .it.cur { background: var(--color-primary-light); color: var(--text-primary); }
+.palette .grp { font-size: var(--font-size-xs); color: var(--text-tertiary); padding: 8px 10px 3px; letter-spacing: 0.08em; }
+.palette .empty { padding: 18px; text-align: center; color: var(--text-tertiary); font-size: var(--font-size-base); }
+
+/* ==================== 全局弹窗层 ==================== */
+.dlg { width: min(500px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: var(--radius-sheet);
+  box-shadow: var(--shadow-card-hover); overflow: hidden;
+  animation: dlg-in 0.2s cubic-bezier(0.2, 0.8, 0.3, 1); }
+@keyframes dlg-in { from { opacity: 0; transform: scale(0.97) translateY(6px); } to { opacity: 1; transform: none; } }
+.dlg.wide { width: min(640px, 94vw); }
+.dlg-h { padding: 13px 16px 10px; display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); }
+.dlg-h .t { font-size: var(--font-size-lg); font-weight: 600; flex: 1; min-width: 0; }
+.dlg-b { padding: 13px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.dlg-f { padding: 10px 16px 12px; display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0;
+  border-top: 1px solid var(--border); }
+.dlg-path { font-family: var(--mono); font-size: var(--font-size-sm); padding: 8px 10px;
+  border-radius: var(--radius-button); background: var(--bg-sidebar); border: 1px solid var(--border);
+  overflow-wrap: anywhere; }
+.chk { display: flex; align-items: center; gap: 8px; font-size: var(--font-size-base);
+  color: var(--text-secondary); cursor: pointer; }
+.chk input { accent-color: var(--color-primary); width: 14px; height: 14px; cursor: pointer; }
+.risk-list { display: flex; flex-direction: column; gap: 6px; }
+.risk-it { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--color-danger-light); border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent); }
+.risk-it .tt { font-family: var(--mono); font-size: var(--font-size-sm); color: var(--color-danger); font-weight: 600; }
+.risk-it .dd { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.dlg-dir { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 7px; }
+
+/* ==================== Toast ==================== */
+.toast-wrap { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 80; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+.toast { display: flex; align-items: center; gap: 8px; padding: 8px 15px; border-radius: 999px;
+  background: var(--bg-card); border: 1px solid var(--border-strong); box-shadow: var(--shadow-card-hover);
+  font-size: var(--font-size-base); animation: rise 0.2s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ==================== 启动屏 ==================== */
+.boot { position: fixed; inset: 0; z-index: 100; background: var(--bg-page);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.boot[hidden] { display: none; }
+.boot .glyph { width: 52px; height: 52px; border-radius: var(--radius-app-icon); display: flex;
+  align-items: center; justify-content: center; background: var(--color-primary);
+  color: var(--color-primary-contrast); }
+.boot .line { font-family: var(--mono); font-size: var(--font-size-base); color: var(--text-secondary); }
+.boot .log { display: flex; flex-direction: column; gap: 3px; font-family: var(--mono);
+  font-size: var(--font-size-sm); color: var(--text-tertiary); min-width: 280px; }
+.boot .log div { display: flex; gap: 7px; }
+.boot .log .ok { color: var(--color-success); }
+.boot .bar { width: 280px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.boot .bar i { display: block; height: 100%; background: var(--color-primary); border-radius: 2px;
+  transition: width 0.3s; }
+
+/* ==================== Mock 应用内容（全屏形态） ==================== */
+.term { height: 100%; padding: 14px 16px; background: var(--bg-sidebar);
+  font-family: var(--mono); font-size: var(--font-size-base); line-height: 1.7;
+  color: var(--text-primary); overflow: auto; }
+.term .p { color: var(--color-success); }
+.term .cur { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom;
+  background: var(--color-success); border-radius: 1px; }
+.term .c { color: var(--text-tertiary); }
+.term .w { color: var(--color-warning); }
+.term-tabs { display: flex; gap: 2px; align-items: center; }
+.term-tabs .ttab { height: 24px; padding: 0 10px; border-radius: 8px; font-size: var(--font-size-sm);
+  color: var(--text-tertiary); display: inline-flex; align-items: center; gap: 6px; }
+.term-tabs .ttab.on { background: var(--bg-sidebar); color: var(--text-primary); }
+
+.chat { height: 100%; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.chat-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { max-width: 74%; padding: 8px 12px; border-radius: 14px; font-size: var(--font-size-base); line-height: 1.6; }
+.msg.u { margin-left: auto; background: var(--color-primary-light); border-bottom-right-radius: 4px; }
+.msg.a { background: var(--bg-input); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.composer { display: flex; gap: 7px; flex-shrink: 0; }
+.composer input { flex: 1; min-width: 0; height: 32px; padding: 0 12px; background: var(--bg-input);
+  border: 1px solid var(--border-input); border-radius: 999px; color: var(--text-primary); outline: none; }
+.composer input:focus { border-color: var(--border-strong); box-shadow: var(--shadow-input-focus); }
+
+.frows { padding: 10px 12px; }
+.frow { display: flex; align-items: center; gap: 10px; padding: 8px 9px; border-radius: var(--radius-button);
+  transition: background-color 0.12s; }
+.frow:hover { background: var(--bg-hover); }
+.frow .fico { width: 30px; height: 30px; border-radius: 8px; background: var(--color-primary-light);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-secondary); }
+.frow .nm { flex: 1; min-width: 0; font-size: var(--font-size-base); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.frow .mt { font-size: var(--font-size-sm); color: var(--text-tertiary); white-space: nowrap; }
+.bar { height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; margin-top: 4px; }
+.bar i { display: block; height: 100%; border-radius: 2px; background: var(--color-success); }
+
+.note { font-size: var(--font-size-sm); color: var(--text-tertiary); line-height: 1.55; }
+.note.warn { color: var(--color-warning); }
+.empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; color: var(--text-tertiary); text-align: center; padding: 24px; }
+.mono { font-family: var(--mono); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 780px) {
+  /* 结构性响应：应用管理从「左列表+右详情」塌成单列（列表在上、详情在下），不是藏起来 */
+  .amgr { flex-direction: column; }
+  .alist { width: 100%; flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+  .arow { width: auto; flex: 0 0 auto; }
+  .arow .nm span { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="device" id="device">
+  <!-- 顶部工具栏：品牌 · 导航（返回/主屏）· 全局入口 · 窗口控制 -->
+  <header class="toolbar" id="toolbar"></header>
+  <!-- 舞台：home（主屏）/ card（卡片全屏）两屏 + 通知面板覆层 -->
+  <main class="stage" id="stage">
+    <section class="screen home" id="scr-home" aria-label="主屏"></section>
+    <section class="screen" id="scr-card" aria-label="卡片" hidden></section>
+    <div class="panel" id="panel" hidden aria-label="通知与快捷设置"></div>
+  </main>
+</div>
+
+<!-- 全局覆层 -->
+<div class="ctx" id="ctx" hidden></div>
+<div class="ovl center" id="ovl" hidden></div>
+<div class="toast-wrap" id="toasts" aria-live="polite"></div>
+<div class="boot" id="boot"></div>
+
+<script>
+/* ============================================================================
+   数据：全部来自仓库真实事实（5 个 wasm-app 的 plugin.json + 真实授权读模型）
+   - 权限位取自 src/plugin/permission-vocabulary.ts（SDK VALID_PERMISSIONS 生成物）
+   - 高危位取自 src/plugin/contributionKinds.ts 的 HIGH_RISK_PERMISSIONS
+   - 授权模型取自 src/utils/authPolicy.ts：strategies + records（四分区）+ firstPartyDirs
+   - 内置免询问项逐条对齐 src-tauri/src/first_party_dirs.rs 的真实清单
+   ============================================================================ */
+const HIGH_RISK = ['process:run', 'pty:spawn', 'terminal:input', 'database:main'];
+const STRATEGIES = ['always_ask', 'default', 'always_allow'];
+const STRATEGY_LABEL = { always_ask: '总是询问', default: '按需询问', always_allow: '始终允许' };
+const RESOURCE_LABEL = { fs: '文件系统', network: '网络出站' };
+const APP_SOURCE_LABEL = { builtin: '内置', scanned: '已扫描', wasm: 'WASM', 'user-installed': '本地安装' };
+const STATE_TEXT = { running: '运行中', degraded: '降级', dormant: '未启动', approval: '待审批', error: '错误' };
+
+/* 应用图标的色调映射：全部 color-mix 自既有语义 token，零新 hex */
+const APP_TONE = {
+  'terminal-session': 'tone-primary',
+  'ai-chatbox': 'tone-info',
+  'file-transfer': 'tone-success',
+  'agent-hub': 'tone-warning',
+  'mobile-bridge': 'tone-mix',
+};
+
+const APPS = [
+  {
+    id: 'terminal-session', pid: 'com.bedcode.terminal-session', pluginType: 'rust-ts', name: '终端会话', full: 'Terminal Session Center',
+    version: '1.0.0-beta', icon: 'terminal', state: 'running', badge: '3 会话', views: 5, commands: 28,
+    kind: 'term', source: 'builtin', size: '4.2 MB',
+    granted: ['auth','broadcast','connection:read','fs:read','fs:write','network:http','peer','process:run',
+              'pty:io','pty:spawn','session:read','storage','task:run','terminal:input','timer:schedule',
+              'ui:input','ui:settings','ui:sidebar','ws:server'],
+    strategies: { fs: 'default', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/Documents/sessions', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/.ssh', effect: 'allow', ops: ['read'], prefixMatch: false, source: 'user' },
+      { resource: 'network', target: 'http://127.0.0.1:8317', effect: 'deny', ops: [], prefixMatch: false, source: 'user_deny' },
+    ],
+    firstPartyDirs: [
+      { kind: 'project-segment', value: '.claude' }, { kind: 'project-segment', value: '.codex' },
+      { kind: 'project-segment', value: '.pi' }, { kind: 'project-segment', value: '.opencode' },
+    ],
+  },
+  {
+    id: 'ai-chatbox', pid: 'com.bedcode.ai-chatbox', pluginType: 'rust-ts', name: 'AI 对话', full: 'AI Chatbox',
+    version: '1.0.0-beta', icon: 'ai', state: 'degraded', badge: 'provider: local-llm', views: 1, commands: 8,
+    kind: 'chat', source: 'builtin', size: '1.1 MB',
+    granted: ['broadcast','fs:read','fs:write','network:http','storage','ui:sidebar'],
+    strategies: { fs: 'default', network: 'always_ask' },
+    records: [
+      { resource: 'network', target: 'https://api.openai.com', effect: 'allow', ops: [], prefixMatch: true, source: 'always_allow' },
+      { resource: 'network', target: 'https://api.deepseek.com', effect: 'allow', ops: [], prefixMatch: true, source: 'user' },
+      { resource: 'network', target: 'http://127.0.0.1:11434', effect: 'allow', ops: [], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/Documents/ai-chatbox', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+    ],
+    firstPartyDirs: [],
+  },
+  {
+    id: 'file-transfer', pid: 'com.bedcode.file-transfer', pluginType: 'rust-ts', name: '文件传输', full: 'File Transfer',
+    version: '1.0.0-beta', icon: 'transfer', state: 'running', badge: '1 进行中', views: 1, commands: 34,
+    kind: 'files', source: 'builtin', size: '2.6 MB',
+    granted: ['broadcast','fs:pick','fs:read','fs:write','mdns','network:http','peer','storage',
+              'timer:schedule','ui:dialog','ui:sidebar','ui:statusbar'],
+    strategies: { fs: 'always_ask', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/Downloads/inbox', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+      { resource: 'fs', target: '~/Downloads/bedcode-received', effect: 'allow', ops: ['write'], prefixMatch: true, source: 'always_allow' },
+      { resource: 'fs', target: '/etc/shadow', effect: 'deny', ops: [], prefixMatch: false, source: 'user_deny' },
+    ],
+    firstPartyDirs: [],
+  },
+  {
+    id: 'agent-hub', pid: 'com.bedcode.agent-hub', pluginType: 'rust-ts', name: 'Agent Hub', full: 'Agent Hub',
+    version: '0.1.0', icon: 'hub', state: 'approval', badge: '待审批', views: 1, commands: 38,
+    kind: 'hub', source: 'builtin', size: '3.4 MB',
+    granted: ['broadcast','fs:pick','fs:read','fs:write','network:http','process:run','storage','task:run','ui:sidebar'],
+    strategies: { fs: 'default', network: 'default' },
+    records: [
+      { resource: 'fs', target: '~/work/agent-configs', effect: 'allow', ops: ['read','write'], prefixMatch: true, source: 'user' },
+    ],
+    firstPartyDirs: [
+      { kind: 'home', value: '.agents' }, { kind: 'home', value: '.claude/skills' },
+      { kind: 'home', value: '.pi/agent/skills' }, { kind: 'home', value: '.bedcode/agent-hub/runs' },
+    ],
+  },
+  {
+    id: 'mobile-bridge', pid: 'com.bedcode.mobile-bridge', pluginType: 'rust-ts', name: '移动桥接', full: 'Mobile Bridge',
+    version: '0.3.0', icon: 'transfer', state: 'dormant', badge: '未启动', views: 0, commands: 12,
+    kind: 'files', source: 'user-installed', size: '0.9 MB',
+    granted: ['peer','ws:client','ws:server','network:http','storage','broadcast'],
+    strategies: { fs: 'always_ask', network: 'default' },
+    records: [],
+    firstPartyDirs: [],
+  },
+];
+
+/* 系统页（宿主自有面）：不可卸载，与业务应用同形态——图标进网格、打开即成卡片 */
+const SYS_PAGES = [
+  { id: 'apps',     name: '应用管理', icon: 'grid',   desc: '安装 · 启停 · 卸载 · 配置' },
+  { id: 'perms',    name: '权限与授权', icon: 'shield', desc: '策略档位 · 授权记录 · 权限位' },
+  { id: 'settings', name: '设置',     icon: 'gear',   desc: '界面 · 链路加密 · 系统 · 关于' },
+];
+
+/* 服务器状态（真实命令 get_server_status）：只供通知面板一条就绪信息，不做看板 */
+const SERVER = { status: 'running', metrics: { connections: 3 } };
+
+/* 链路加密（get/set_traffic_encryption_config + get_link_crypto_fingerprint） */
+const LINK_CRYPTO = {
+  enabled: true, encrypt_http: true, encrypt_ws_terminal: true, encrypt_ws_event: true,
+  allow_plaintext_fallback: false, fingerprint: 'a3f1c9e27b4d8056',
+};
+
+/* 设置（stores/settings.ts 的键，蛇形照抄；show_nav / wallpaper / wall_dim 为本方案新增键） */
+const SETTINGS = {
+  ui: { theme: 'dark', theme_palette: 'warm', language: 'zh-CN', font_size: 12, animations_enabled: true,
+        show_nav: true, wallpaper: 'aurora', wall_dim: 0.3 },
+  network: { prevent_sleep: true, port: 8765 },
+};
+/* 色板 id 与中文名逐条对齐 locales/zh-CN/settings.ts；三色块取 style.css
+   :root[data-palette='xxx'] 的真实浅色取值（bg-page / bg-card / color-primary） */
+const PALETTES = [
+  { id: 'warm',   name: '暖调工作台', sw: ['#f5f4f0', '#fdfcfa', '#1d1a14'] },
+  { id: 'cool',   name: '冷灰调',     sw: ['#f3f5f7', '#fbfcfd', '#2563eb'] },
+  { id: 'forest', name: '森野绿',     sw: ['#f6f5ef', '#fdfcf7', '#3e6b4f'] },
+  { id: 'ocean',  name: '海洋青',     sw: ['#f2f7f9', '#fafcfd', '#0e7490'] },
+  { id: 'sunset', name: '落日晚霞',   sw: ['#fbf5ef', '#fefaf5', '#d9532a'] },
+  { id: 'violet', name: '星空紫',     sw: ['#f7f5fb', '#fcfbfe', '#6d4fc6'] },
+];
+const LOG_SETTINGS = { file_level: 'info', format: 'text', max_files: 7, capacity_mb: 512 };
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
+
+/* 主屏壁纸清单：渐变真源是 :root 的 --wall-*（token 派生），这里只列 id 与名称 */
+const WALLPAPERS = [
+  { id: 'none',   name: '无（纯色）' },
+  { id: 'aurora', name: '极光' },
+  { id: 'dune',   name: '沙丘' },
+  { id: 'reef',   name: '礁湖' },
+];
+
+/* 命令面板数据源（manifest contributes.commands 汇总 + 宿主动作） */
+const HOST_COMMANDS = [
+  { id: 'host.home', title: '主屏：返回', src: 'host' },
+  { id: 'host.settings.open', title: '设置：打开', src: 'host' },
+  { id: 'host.apps.open', title: '应用管理：打开', src: 'host' },
+  { id: 'host.perms.open', title: '权限与授权：打开', src: 'host' },
+  { id: 'host.dialogs.open', title: '弹窗目录：打开', src: 'host' },
+  { id: 'host.boot.replay', title: '启动屏：重演', src: 'host' },
+  { id: 'host.log.dir', title: '日志：打开日志目录', src: 'host' },
+  { id: 'host.app.update.check', title: '应用：检查更新', src: 'host' },
+];
+const PLUGIN_COMMAND_TITLES = {
+  'terminal-session': ['session.refresh', 'session.pair.new', 'session.history.open', 'task.stop-all', 'session.terminal.split'],
+  'ai-chatbox': ['chat.new', 'chat.clear', 'provider.pick', 'chat.export'],
+  'file-transfer': ['transfer.pause-all', 'transfer.retry-failed', 'roots.add', 'receive.policy.open'],
+  'agent-hub': ['agent.detect', 'agent.install', 'agent.skills.scan', 'agent.usage.stats', 'agent.providers.fetch'],
+};
+
+/* 应用配置 schema 演示（真实来源 manifest contributes.configuration.properties；
+   现状四个 manifest 均为空，正式页会显示「无可用的配置项」，此为控件形态演示） */
+const CONFIG_DEMO = {
+  'terminal-session': {
+    title: 'Terminal Session Settings',
+    properties: {
+      scrollback_lines: { type: 'number', title: '回滚行数', minimum: 100, maximum: 100000, default: 5000 },
+      default_shell: { type: 'string', title: '默认 shell', default: 'bash' },
+      renderer: { type: 'string', title: '渲染器', enum: ['auto', 'dom', 'webgl'], default: 'auto' },
+      confirm_close: { type: 'boolean', title: '关闭前确认', default: true },
+    },
+  },
+};
+
+const ALL_PERMS = [...new Set(APPS.flatMap(a => a.granted))].sort();
+const isRisk = p => HIGH_RISK.includes(p);
+
+/* ---- 授权读模型派生助手（对齐 src/utils/authPolicy.ts 的分区口径） ---- */
+const isAllow = r => r.effect === 'allow';
+const userGranted = a => a.records.filter(r => isAllow(r) && r.source !== 'always_allow');
+const autoAllowed = a => a.records.filter(r => isAllow(r) && r.source === 'always_allow');
+const denied = a => a.records.filter(r => !isAllow(r));
+const opsLabel = ops =>
+  !ops.length ? '—' : ops.includes('read') && ops.includes('write') ? '读写' : ops.includes('write') ? '写入' : '读取';
+const fpLabel = e => e.kind === 'home' ? '~/' + e.value : '<项目>/' + e.value;
+const RISK_RANK = { always_ask: 2, default: 1, always_allow: 0 };
+const appRiskRank = a => Math.min(...Object.values(a.strategies).map(s => RISK_RANK[s]));
+
+/* ==================== 图标（全部 SVG，零 emoji） ==================== */
+const P = {
+  terminal: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3"/><path d="M12 15h4"/>',
+  ai: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  transfer: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+  hub: '<path d="m21 16-9 5-9-5V8l9-5 9 5Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  play: '<path d="m6 4 14 8-14 8Z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
+  warn: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/>',
+  check: '<path d="m20 6-11 11-5-5"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  network: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
+  exit: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  trash: '<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  theme: '<path d="M12 3a6.4 6.4 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  minus: '<path d="M5 12h14"/>',
+  square: '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
+  back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  home: '<path d="m3 11 9-8 9 8"/><path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10"/>',
+  layers: '<path d="m12 2 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+  bolt: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/>',
+  sleep: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+};
+const svg = (k, size = 15, sw = 1.8) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[k] || ''}</svg>`;
+
+/* ==================== 状态 ====================
+   两屏模型：home（主屏）| card（卡片全屏）。
+   打开中的每个应用 / 系统页 = 一张卡片（MRU 排序），主屏顶部卡片带可见可切换。
+   覆层（dialog > palette > ctx > panel）不入屏、不产卡，Esc 逐层收。 */
+const state = {
+  screen: 'home',            // home | card
+  cards: [],                 // MRU 卡片键：'app:<id>' | 'sys:<id>'
+  activeCard: null,          // 当前全屏卡片键（screen==='card' 时非空）
+  detailApp: 'terminal-session',  // 应用管理页选中的应用
+  apps: {},                  // id -> 可变运行态副本
+  panelOpen: false,
+  paletteOpen: false, paletteQ: '', paletteCur: 0,
+  dialog: null, dlgApp: null, dlgRes: null,
+  ctx: null,                 // {appId, x, y}
+  homeQ: '',                 // 主屏 type-to-search
+  boot: true,
+  settings: JSON.parse(JSON.stringify(SETTINGS)),
+  crypto: JSON.parse(JSON.stringify(LINK_CRYPTO)),
+  /* 通知列表（卡片式通知中心）：宿主只承载机制面（来源/驻留/动作/时间），文案由来源方给出。
+     审批通知不进此列表——从 approvalIds() 动态派生，批准后自然消失，不会留尸体。 */
+  notifs: [
+    { id: 'n-transfer', kind: 'progress', sticky: false, icon: 'transfer', source: '文件传输', app: 'file-transfer',
+      title: 'backup-2026-10-08.tar', body: '', progress: 64, mins: 2, actions: [{ id: 'open', label: '查看' }] },
+    { id: 'n-bridge', kind: 'event', sticky: false, icon: 'network', source: '移动桥接', app: 'mobile-bridge',
+      title: '设备上线', body: 'device-02 经 mDNS 发现，等待配对确认。', mins: 8, actions: [{ id: 'open', label: '查看' }] },
+    { id: 'n-ready', kind: 'info', sticky: true, icon: 'check', source: '宿主',
+      title: '运行时就绪', body: `wasmtime 48 · ABI 38 · 服务器运行中（${SERVER.metrics.connections} 连接）`, mins: 12 },
+  ],
+};
+APPS.forEach(a => { state.apps[a.id] = { ...a }; });
+const byId = id => state.apps[id];
+
+/* ---- 通知机制（机制面） ---- */
+let notifSeq = 100;
+function pushNotif(n) {
+  state.notifs = [{ id: 'n' + (++notifSeq), mins: 0, sticky: false, actions: [], body: '', ...n }, ...state.notifs];
+}
+function dismissNotif(id) { state.notifs = state.notifs.filter(n => n.id !== id); }
+/* 清除全部：驻留项（sticky）与审批派生项不动，只清可清除的普通通知 */
+function clearNotifs() { state.notifs = state.notifs.filter(n => n.sticky); }
+/* 审批通知：从 approvalIds() 动态派生（不进 state.notifs，无独立生命周期） */
+function approvalNotifs() {
+  return approvalIds().map(id => {
+    const a = byId(id);
+    return { id: 'appr-' + id, kind: 'approval', sticky: true, icon: 'warn', source: a.name, app: id,
+      title: '等待权限审批', body: `manifest 声明 ${a.granted.length} 个权限位（${a.granted.filter(isRisk).length} 个高危），批准后才会激活。`,
+      mins: null, actions: [{ id: 'approve', label: '去审批' }] };
+  });
+}
+const notifCount = () => state.notifs.length + approvalIds().length;
+
+const approvalIds = () => Object.values(state.apps).filter(a => a.state === 'approval').map(a => a.id);
+const cardKeyOf = c => c;   // 键即字符串
+const cardTitle = key => {
+  const [kind, id] = key.split(':');
+  return kind === 'app' ? (byId(id) ? byId(id).name : id) : (SYS_PAGES.find(s => s.id === id) || {}).name || id;
+};
+
+/* ==================== Mock 应用内容（全屏形态） ==================== */
+const MOCK = {
+  term: () => `<div class="term">
+    <div><span class="p">user@bedcode ~ $</span> ls wasm-apps</div>
+    <div>agent-hub&nbsp; ai-chatbox&nbsp; file-transfer&nbsp; mobile-bridge&nbsp; terminal-session</div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="c"># 每个应用是一张全屏卡片，主屏卡片带可切换</span></div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="w">cargo test</span></div>
+    <div>&nbsp;&nbsp;running 42 tests ... <span class="p">ok</span></div>
+    <div><span class="p">user@bedcode ~ $</span> <span class="cur"></span></div>
+  </div>`,
+  chat: () => `<div class="chat">
+    <div class="chat-log">
+      <div class="msg a">你好，我是 AI Chatbox。现在以全屏卡片形态运行，宿主只提供屏幕与闸门。</div>
+      <div class="msg u">怎么切换应用？</div>
+      <div class="msg a">顶部工具栏点「主屏」或按 Esc 回主屏，顶部的卡片带列出所有打开的应用与系统页，点卡片即切换。</div>
+    </div>
+    <div class="composer"><input placeholder="输入消息…" aria-label="消息输入"/><button class="btn">发送</button></div>
+  </div>`,
+  files: () => `<div class="frows">
+    <div class="frow"><div class="fico">${svg('file', 14)}</div>
+      <div class="nm">backup-2026-10-08.tar<div class="bar"><i style="width:64%"></i></div></div>
+      <div class="mt">64% · 3.2 MB/s</div></div>
+    <div class="frow"><div class="fico">${svg('file', 14)}</div><div class="nm">notes.md</div><div class="mt">12 KB</div></div>
+    <div class="frow"><div class="fico">${svg('folder', 14)}</div><div class="nm">photos/</div><div class="mt">—</div></div>
+    <div class="frow"><div class="fico">${svg('file', 14)}</div><div class="nm">report.pdf</div><div class="mt">1.4 MB</div></div>
+    <div class="note" style="padding:8px 9px 0">peer 对等通道已建立 · mDNS 广播中 · 传输策略：仅接收已知设备</div>
+  </div>`,
+  hub: () => `<div class="frows">
+    <div class="card"><div class="kv"><b>检测到的 CLI</b><span>4</span></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">claude-code</div><div class="mt"><span class="chip ok">已安装</span></div></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">codex</div><div class="mt"><span class="chip ok">已安装</span></div></div>
+      <div class="frow"><div class="fico">${svg('hub', 14)}</div><div class="nm">gemini-cli</div><div class="mt"><span class="chip">未安装</span></div></div>
+    </div>
+    <div class="note" style="padding:8px 2px 0">Skills 24 · 供应商预设 3 · 本周用量 1.2M tokens</div>
+  </div>`,
+};
+
+/* 应用卡片内容：应用自带 app-bar（属于应用内容），宿主只给屏幕 */
+function appView(app) {
+  if (app.state === 'approval') {
+    return `<div class="empty">${svg('warn', 30, 1.4)}
+      <div style="font-size:var(--font-size-xl);color:var(--color-warning);font-weight:600">等待权限审批</div>
+      <div class="note" style="max-width:380px">manifest 声明 ${app.granted.length} 个权限位，其中
+        <b style="color:var(--color-danger)">${app.granted.filter(isRisk).length}</b> 个属高危位（可执行任意命令 / 读写主库）。
+        批准是整单裁决，不做逐位勾选。</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" data-act="open-sys" data-sys="perms">${svg('shield', 13)} 查看权限详情</button>
+        <button class="btn" data-act="approve" data-app="${app.id}">${svg('check', 13)} 批准并启动</button>
+      </div></div>`;
+  }
+  const sub = { term: '3 个会话', chat: 'provider: local-llm', files: '1 个传输进行中', hub: '4 个 CLI' }[app.kind] || '';
+  const tabs = app.kind === 'term'
+    ? `<div class="term-tabs"><span class="ttab on">${svg('terminal', 11)} 主会话</span><span class="ttab">build</span><span class="ttab">device-02</span></div>`
+    : '';
+  return `<div class="cardframe">
+    <div class="appbar">
+      <span class="nm">${svg(app.icon, 15)} ${app.full}</span>
+      <span class="sub">${sub}</span>${tabs}
+      <span class="grow"></span>
+      <span class="chip ${app.state === 'degraded' ? 'warn' : 'ok'}">${STATE_TEXT[app.state]}</span>
+    </div>
+    <div class="appbody">${MOCK[app.kind](app)}</div>
+  </div>`;
+}
+
+/* ==================== 卡片模型 ==================== */
+function activateCard(key) {
+  state.cards = [key, ...state.cards.filter(k => k !== key)];
+  state.activeCard = key;
+  state.screen = 'card';
+  state.panelOpen = false;
+  renderAll(true);
+}
+function openApp(id) {
+  const app = byId(id);
+  if (!app) return;
+  if (app.state === 'dormant') {
+    app.state = 'running';
+    toast(`${app.name} 已启动`);
+  }
+  activateCard('app:' + id);
+}
+function openSys(id) {
+  activateCard('sys:' + id);
+}
+/* 关卡片：应用卡 = 停用实例（dormant）并落一条事件通知；系统页卡 = 只关页面。
+   关的是当前活动卡 → 切到 MRU 次卡，无卡回主屏。silent 供「全部关闭」批量调用。 */
+function closeCard(key, silent) {
+  const [kind, id] = key.split(':');
+  state.cards = state.cards.filter(k => k !== key);
+  if (kind === 'app') {
+    const app = byId(id);
+    if (app && app.state !== 'approval' && app.state !== 'dormant') {
+      app.state = 'dormant';
+      if (!silent) {
+        pushNotif({ kind: 'event', icon: 'stop', source: app.name, app: id, title: '已停止',
+          body: '实例已停用，可在主屏重新打开。', actions: [{ id: 'open', label: '重新打开' }] });
+        toast(`${app.name} 已停止`);
+      }
+    }
+  }
+  if (state.activeCard === key) {
+    if (state.cards.length) { state.activeCard = state.cards[0]; renderAll(true); }
+    else goHome();
+  } else {
+    renderAll();
+  }
+}
+function goHome() {
+  state.screen = 'home';
+  state.activeCard = null;
+  state.panelOpen = false;
+  state.homeQ = '';
+  renderAll(true);
+}
+function goBack() {
+  // 覆层按 z 序先收（dialog/palette > ctx > panel），覆层耗尽后 card → home
+  if (state.dialog) { state.dialog = null; renderAll(); return; }
+  if (state.paletteOpen) { state.paletteOpen = false; renderAll(); return; }
+  if (state.ctx) { state.ctx = null; renderAll(); return; }
+  if (state.panelOpen) { state.panelOpen = false; renderAll(); return; }
+  if (state.screen !== 'home') goHome();
+}
+function stopAllCards() {
+  const n = state.cards.length;
+  // forEach 会把下标当第二参数传入，必须显式包箭头函数（否则 index>0 被当 silent=true）
+  [...state.cards].forEach(k => closeCard(k, true));
+  if (n) {
+    pushNotif({ kind: 'event', icon: 'layers', source: '宿主', title: `已关闭 ${n} 张卡片`,
+      body: '应用实例已全部停用，系统页已关闭。' });
+    toast(`已关闭 ${n} 张卡片`);
+  }
+  goHome();
+}
+
+/* ==================== 渲染：工具栏 ==================== */
+function renderToolbar() {
+  const tb = document.getElementById('toolbar');
+  const nCount = notifCount();
+  let where = '主屏';
+  if (state.screen === 'card' && state.activeCard) where = cardTitle(state.activeCard);
+  const atHome = state.screen === 'home';
+  const canBack = !atHome || state.dialog || state.paletteOpen || state.ctx || state.panelOpen;
+  tb.innerHTML = `
+    <div class="tb-brand">
+      <svg width="19" height="19" viewBox="0 0 100 100" aria-hidden="true">
+        <rect width="100" height="100" rx="22" fill="#16181C"/>
+        <g stroke="#F5F7F9" stroke-width="13" stroke-linecap="round">
+          <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+          <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+        </g>
+        <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/>
+      </svg>
+      <b>BedCode</b>
+      <span class="tb-where" role="status" aria-atomic="true">${where}</span>
+    </div>
+    ${state.settings.ui.show_nav ? `
+    <nav class="tb-nav" aria-label="导航">
+      <button class="tb-btn" data-act="back" ${canBack ? '' : 'disabled'} title="返回（Esc）" aria-label="返回">${svg('back', 15)} 返回</button>
+      <button class="tb-btn ${atHome ? 'on' : ''}" data-act="home" title="主屏：查看打开的卡片并切换" aria-label="主屏">${svg('home', 15)} 主屏</button>
+    </nav>` : ''}
+    <div class="tb-right">
+      <button class="tb-btn" data-act="palette" title="命令面板（Ctrl+Shift+P）" aria-label="命令面板">${svg('search', 14)}</button>
+      <button class="tb-btn ${state.panelOpen ? 'on' : ''}" data-act="panel" title="通知中心${nCount ? `（${nCount} 条）` : ''}"
+        aria-label="通知中心${nCount ? `，${nCount} 条` : ''}">${svg('bell', 14)}${nCount ? `<span class="bdg">${nCount}</span>` : ''}</button>
+      <button class="tb-btn" data-act="theme" title="切换浅色 / 深色" aria-label="切换浅色或深色主题">${svg('theme', 14)}</button>
+      <span class="tb-sep"></span>
+      <button class="tb-win" data-act="win-min" title="最小化" aria-label="最小化窗口">${svg('minus', 13)}</button>
+      <button class="tb-win" data-act="win-max" title="最大化" aria-label="最大化窗口">${svg('square', 11)}</button>
+      <button class="tb-win close" data-act="win-close" title="关闭" aria-label="关闭窗口">${svg('x', 13)}</button>
+    </div>`;
+}
+
+/* ==================== 渲染：主屏 ==================== */
+function iconBox(app, size) {
+  const tone = APP_TONE[app.id] || 'tone-system';
+  return `<span class="glyph-box ${tone}" style="${size ? `width:${size}px;height:${size}px;` : ''}">${svg(app.icon, Math.round((size || 52) * 0.46), 1.7)}</span>`;
+}
+/* 卡片静态缩略：应用渲染 mock 副本，系统页渲染骨架条 */
+function cardPreview(key) {
+  const [kind, id] = key.split(':');
+  if (kind === 'sys') {
+    return `<div class="skel"><i class="w40"></i><i class="w85"></i><i class="w70"></i><i class="w55"></i><i class="w70"></i></div>`;
+  }
+  const app = byId(id);
+  if (!app) return '';
+  if (app.state === 'approval') {
+    return `<div class="empty" style="padding:12px">${svg('warn', 22, 1.4)}<div class="note">等待权限审批</div></div>`;
+  }
+  return `<div class="appbar"><span class="nm">${svg(app.icon, 11)} ${app.full}</span></div>${MOCK[app.kind](app)}`;
+}
+function renderHome() {
+  const el = document.getElementById('scr-home');
+  const wall = state.settings.ui.wallpaper;
+  el.className = 'screen home' + (wall && wall !== 'none' ? ' wall-' + wall : '');
+  if (el.style && el.style.setProperty) el.style.setProperty('--wall-dim', String(state.settings.ui.wall_dim));
+  const apps = Object.values(state.apps);
+  const q = state.homeQ.trim().toLowerCase();
+  const matchQ = a => a.name.toLowerCase().includes(q) || a.id.includes(q) || a.pid.includes(q);
+  const shownApps = q ? apps.filter(matchQ) : apps;
+  const shownSys = q ? SYS_PAGES.filter(s => s.name.toLowerCase().includes(q) || s.id.includes(q)) : SYS_PAGES;
+  const cards = state.cards;
+  el.innerHTML = `
+    ${q ? `<div class="qhint">${svg('search', 13)}<span class="q">${state.homeQ}</span><span class="n">${shownApps.length + shownSys.length} 个匹配 · Enter 打开第一个</span></div>` : ''}
+    ${cards.length ? `
+    <div class="home-sec">
+      <div class="sec-h"><span class="t">正在运行</span><span class="n">${cards.length} 张卡片 · 点卡片切换</span>
+        <span class="grow"></span><button class="mini danger" data-act="close-all">${svg('trash', 12)} 全部关闭</button></div>
+      <div class="hstrip" role="listbox" aria-label="打开的卡片">
+        ${cards.map((k, i) => { const [kind, id] = k.split(':'); const app = kind === 'app' ? byId(id) : null;
+          const st = app ? app.state : null;
+          return `
+          <div class="hcard ${k === state.activeCard ? 'active' : ''}" style="--i:${i}" role="option" aria-selected="${k === state.activeCard}"
+               tabindex="0" data-act="resume-card" data-key="${k}" aria-label="切换到 ${cardTitle(k)}">
+            <div class="hcard-head">
+              ${kind === 'app' ? iconBox(app, 20) : `<span class="glyph-box tone-system" style="width:20px;height:20px;border-radius:30%;display:flex;align-items:center;justify-content:center">${svg((SYS_PAGES.find(s => s.id === id) || {}).icon || 'grid', 11)}</span>`}
+              <span class="nm">${cardTitle(k)}</span>
+              ${st ? `<span class="chip ${st === 'degraded' ? 'warn' : st === 'approval' ? 'danger' : 'ok'}" style="font-size:var(--font-size-xs)">${STATE_TEXT[st]}</span>` : '<span class="chip" style="font-size:var(--font-size-xs)">系统页</span>'}
+              <button class="hcard-x" data-act="close-card" data-key="${k}" title="${kind === 'app' ? '停止实例' : '关闭页面'}" aria-label="关闭 ${cardTitle(k)}">${svg('x', 12)}</button>
+            </div>
+            <div class="hcard-view" inert aria-hidden="true">${cardPreview(k)}</div>
+          </div>`; }).join('')}
+      </div>
+    </div>` : ''}
+    <div class="home-sec">
+      <div class="sec-h"><span class="t">应用</span><span class="n">${shownApps.length} 个已安装</span></div>
+      <div class="appgrid" role="list" aria-label="已安装应用">
+        ${shownApps.map(a => `
+          <div class="appicon ${q && shownApps[0] === a ? 'hit' : ''}" role="listitem" tabindex="0"
+               data-act="open-app" data-app="${a.id}" data-ctx="${a.id}" aria-label="${a.name}，${STATE_TEXT[a.state]}">
+            <span class="glyph-wrap">
+              ${iconBox(a)}
+              ${a.state === 'approval' ? `<span class="bdg-approval">!</span>` : `<span class="sdot ${a.state}"></span>`}
+            </span>
+            <span class="nm">${a.name}</span>
+          </div>`).join('')}
+        ${!shownApps.length ? `<div class="note" style="grid-column:1/-1;padding:14px 2px">没有匹配「${state.homeQ}」的应用</div>` : ''}
+      </div>
+    </div>
+    ${shownSys.length ? `
+    <div class="home-sec">
+      <div class="sec-h"><span class="t">系统</span><span class="n">全局管理页面，打开即成卡片</span></div>
+      <div class="appgrid" role="list" aria-label="系统页面">
+        ${shownSys.map(s => `
+          <div class="appicon" role="listitem" tabindex="0" data-act="open-sys" data-sys="${s.id}" aria-label="${s.name}：${s.desc}">
+            <span class="glyph-wrap"><span class="glyph-box tone-system">${svg(s.icon, 23, 1.6)}</span></span>
+            <span class="nm">${s.name}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}`;
+}
+
+/* ==================== 渲染：卡片全屏 ==================== */
+function renderCard() {
+  const el = document.getElementById('scr-card');
+  if (state.screen !== 'card' || !state.activeCard) { el.innerHTML = ''; return; }
+  const [kind, id] = state.activeCard.split(':');
+  if (kind === 'sys') { el.innerHTML = sysView(id); return; }
+  const app = byId(id);
+  el.innerHTML = app ? appView(app) : '';
+}
+
+/* ---- 系统页外壳：页头 + 三页互切 tab（切换 = 激活对应系统页卡片） ---- */
+function sysView(id) {
+  const cur = SYS_PAGES.find(s => s.id === id) || SYS_PAGES[0];
+  const body = id === 'apps' ? sysApps() : id === 'perms' ? sysPerms() : sysSettings();
+  return `<div class="sysframe">
+    <div class="sys-head">
+      <span class="glyph-box tone-system" style="width:34px;height:34px;border-radius:var(--radius-app-icon);display:flex;align-items:center;justify-content:center">${svg(cur.icon, 16, 1.7)}</span>
+      <div><div class="t">${cur.name}</div><div class="note">${cur.desc}</div></div>
+      <span class="grow"></span>
+      <span class="chip">系统页 · 卡片</span>
+    </div>
+    <div class="sys-tabs" role="tablist">
+      ${SYS_PAGES.map(s => `<button class="sys-tab ${s.id === id ? 'on' : ''}" role="tab"
+        aria-selected="${s.id === id}" data-act="open-sys" data-sys="${s.id}">${svg(s.icon, 13)} ${s.name}</button>`).join('')}
+    </div>
+    <div class="sys-body"><div class="sys-wrap">${body}</div></div>
+  </div>`;
+}
+
+/* ---- 系统页：设置（参考方案 B 设置分组） ---- */
+function sysSettings() {
+  const s = state.settings, c = state.crypto;
+  const themes = [['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']];
+  return `
+  <div class="card"><div class="card-t">${svg('theme', 15)} 界面</div>
+    <div class="row-sw"><div class="lb"><b>主题</b><span>外观亮度模式</span></div>
+      <div class="seg">${themes.map(([v, l]) => `<button class="${s.ui.theme === v ? 'on' : ''}"
+        data-act="set-theme" data-v="${v}">${l}</button>`).join('')}</div></div>
+    <div class="fld"><span class="lb">色板</span>
+      <div class="pal-grid">${PALETTES.map(p => `
+        <button class="pal-card ${s.ui.theme_palette === p.id ? 'on' : ''}" data-act="set-palette" data-v="${p.id}">
+          <span class="pal-sw"><i style="background:${p.sw[0]}"></i><i style="background:${p.sw[1]}"></i><i style="background:${p.sw[2]}"></i></span>
+          <span class="nm">${p.name}</span></button>`).join('')}</div></div>
+    <div class="row-sw"><div class="lb"><b>语言</b><span>界面语言（zh-CN / en 双语同步）</span></div>
+      <select class="inp" style="width:130px" data-act-inp="set-language" aria-label="语言">
+        <option value="zh-CN" ${s.ui.language === 'zh-CN' ? 'selected' : ''}>简体中文</option>
+        <option value="en" ${s.ui.language === 'en' ? 'selected' : ''}>English</option></select></div>
+    <div class="fld"><span class="lb">字号 · <span class="mono">${s.ui.font_size}px</span></span>
+      <div class="size-row"><input type="range" min="10" max="16" step="2" value="${s.ui.font_size}"
+        data-act-inp="set-fontsize" aria-label="字号"/><span class="val">${['较小','小','正常','大'][Math.max(0,(s.ui.font_size-10)/2)] || '正常'}</span></div></div>
+    <div class="row-sw"><div class="lb"><b>动画</b><span>屏幕切换与覆层动效（关闭即降级）</span></div>
+      ${sw('set-animations', s.ui.animations_enabled)}</div>
+    <div class="row-sw"><div class="lb"><b>导航按钮</b><span>在顶部工具栏显示「返回 / 主屏」（隐藏后 Esc 仍可用）</span></div>
+      ${sw('set-shownav', s.ui.show_nav)}</div>
+  </div>
+
+  <div class="card"><div class="card-t">${svg('layers', 15)} 背景</div>
+    <div class="fld"><span class="lb">主屏壁纸</span><span class="hint">只落主屏；卡片全屏保持纯色，保证业务内容可读</span>
+      <div class="pal-grid">${WALLPAPERS.map(w => `
+        <button class="pal-card ${s.ui.wallpaper === w.id ? 'on' : ''}" data-act="set-wall" data-v="${w.id}">
+          <span class="pal-sw ${w.id === 'none' ? '' : 'wsw-' + w.id}">${w.id === 'none' ? '<i style="background:var(--bg-page)"></i><i style="background:var(--bg-page)"></i><i style="background:var(--bg-page)"></i>' : ''}</span>
+          <span class="nm">${w.name}</span></button>`).join('')}</div></div>
+    <div class="fld"><span class="lb">遮罩强度 · ${Math.round(s.ui.wall_dim * 100)}%</span>
+      <span class="hint">壁纸之上的页面色遮罩：越高文字越清晰，越低壁纸越明显</span>
+      <div class="size-row"><input type="range" min="0" max="70" step="10" value="${Math.round(s.ui.wall_dim * 100)}"
+        data-act-inp="wall-dim" aria-label="遮罩强度"/><span class="val">${Math.round(s.ui.wall_dim * 100)}%</span></div></div>
+    <div><button class="mini" data-act="wall-custom">${svg('plus', 12)} 自定义图片…</button></div>
+  </div>
+
+  <div class="card"><div class="card-t">${svg('lock', 15)} 链路加密</div>
+    <div class="row-sw"><div class="lb"><b>启用链路加密</b><span>跨端通信逐跳加密（收紧项，关闭前需评估）</span></div>
+      ${sw('crypto-enabled', c.enabled, true)}</div>
+    ${[
+      ['encrypt_http', '加密 HTTP 通道'], ['encrypt_ws_terminal', '加密终端 WS'],
+      ['encrypt_ws_event', '加密事件 WS'], ['allow_plaintext_fallback', '允许明文回退（不推荐）'],
+    ].map(([k, l]) => `<div class="row-sw ${c.enabled ? '' : 'off'}"><div class="lb"><b>${l}</b></div>
+      ${sw('crypto-' + k, c[k], k === 'allow_plaintext_fallback', !c.enabled)}</div>`).join('')}
+    <div class="kv"><b>链路指纹（SHA-256 前 16 位，双端人工比对）</b><span>${c.fingerprint}</span></div>
+  </div>
+
+  <div class="card"><div class="card-t">${svg('gear', 15)} 系统</div>
+    <div class="row-sw"><div class="lb"><b>防止休眠</b><span>保持跨端链路在线</span></div>
+      ${sw('set-preventsleep', s.network.prevent_sleep)}</div>
+    <div class="row-sw"><div class="lb"><b>默认端口</b><span>HTTP / WS 入站端口（改后重启生效）</span></div>
+      <input class="inp" style="width:110px" type="number" value="${s.network.port}" data-act-inp="set-port" aria-label="默认端口"/></div>
+    <div class="row-sw"><div class="lb"><b>授权管理</b><span>策略档位与授权记录在「权限与授权」页</span></div>
+      <button class="mini" data-act="open-sys" data-sys="perms">${svg('shield', 12)} 打开权限与授权</button></div>
+  </div>
+
+  <div class="card"><div class="card-t">${svg('file', 15)} 日志 <span class="chip info">仅 DEV 构建显示</span></div>
+    <div class="grid2">
+      <div class="fld"><span class="lb">文件级别</span>
+        <select class="inp" data-act-inp="log-level" aria-label="日志级别">${LOG_LEVELS.map(l => `<option ${LOG_SETTINGS.file_level === l ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="fld"><span class="lb">格式</span>
+        <select class="inp" data-act-inp="log-format" aria-label="日志格式"><option ${LOG_SETTINGS.format === 'text' ? 'selected' : ''}>text</option><option>json</option></select></div>
+    </div>
+    <div class="row-sw"><div class="lb"><b>保留 ${LOG_SETTINGS.max_files} 个文件 · 单文件 ${LOG_SETTINGS.capacity_mb} MB</b></div>
+      <button class="mini" data-act="log-dir">打开日志目录</button></div>
+  </div>
+
+  <div class="card"><div class="card-t">${svg('info', 15)} 关于</div>
+    <div class="kv"><b>BedCode 桌面端</b><span>0.1.0 · wasmtime 48 · ABI 38</span></div>
+    <div class="kv"><b>构建</b><span>dev · 2026-10-13</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="mini" data-act="update-check">${svg('search', 12)} 检查更新</button>
+      <button class="mini" data-act="dialog" data-dlg="dir">${svg('layers', 12)} 弹窗目录</button>
+      <button class="mini" data-act="boot">${svg('play', 12)} 重演启动屏</button>
+    </div>
+  </div>`;
+}
+function sw(act, on, risk, disabled) {
+  return `<label class="sw ${risk ? 'risk' : ''}"><input type="checkbox" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+    data-act="${act}" aria-label="${act}"/><span class="track"></span><span class="knob"></span></label>`;
+}
+
+/* ---- 系统页：应用管理（参考方案 B 管理中心「应用」页） ---- */
+function sysApps() {
+  const apps = Object.values(state.apps).sort((x, y) => appRiskRank(x) - appRiskRank(y));
+  const sel = byId(state.detailApp) || apps[0];
+  if (sel) state.detailApp = sel.id;
+  return `
+  <div class="card" style="padding:9px 12px">
+    <div class="note">按授权风险排序（<b style="color:var(--color-danger)">始终允许</b> 最宽松置顶）。运行中的应用不可卸载；启用方向先过审批门。</div>
+  </div>
+  <div class="amgr">
+    <div class="alist" role="listbox" aria-label="已安装应用列表">
+      ${apps.map(a => `
+        <button class="arow ${sel && a.id === sel.id ? 'on' : ''}" role="option" aria-selected="${sel && a.id === sel.id}"
+          data-act="detail-app" data-app="${a.id}">
+          ${iconBox(a, 30)}
+          <span class="nm"><b>${a.name}</b><span>${APP_SOURCE_LABEL[a.source]} · ${a.size} · ${STATE_TEXT[a.state]}</span></span>
+          <span class="sdot ${a.state}"></span>
+        </button>`).join('')}
+      <button class="arow" data-act="install">
+        <span class="glyph-box tone-system" style="width:30px;height:30px;border-radius:var(--radius-app-icon);display:flex;align-items:center;justify-content:center">${svg('plus', 14)}</span>
+        <span class="nm"><b>安装应用</b><span>本地 zip（plugin_install_from_file）</span></span>
+      </button>
+    </div>
+    ${sel ? appDetail(sel) : ''}
+  </div>`;
+}
+function appDetail(a) {
+  const riskCnt = a.granted.filter(isRisk).length;
+  const running = a.state === 'running' || a.state === 'degraded';
+  const cfg = CONFIG_DEMO[a.id];
+  return `<div class="adetail">
+    <div class="card">
+      <div class="pcard-head">
+        ${iconBox(a, 34)}
+        <div class="nm"><b>${a.name}</b><span>${a.pid} · v${a.version}</span></div>
+        <span class="chip ${a.state === 'running' ? 'ok' : a.state === 'degraded' ? 'warn' : a.state === 'approval' ? 'danger' : ''}">${STATE_TEXT[a.state]}</span>
+      </div>
+      <div class="grid2">
+        <div class="kv"><b>来源</b><span>${APP_SOURCE_LABEL[a.source]}</span></div>
+        <div class="kv"><b>体积</b><span>${a.size}</span></div>
+        <div class="kv"><b>视图 / 命令</b><span>${a.views} / ${a.commands}</span></div>
+        <div class="kv"><b>类型</b><span>${a.pluginType}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${a.state === 'approval'
+          ? `<button class="btn" data-act="approve" data-app="${a.id}">${svg('check', 13)} 批准并启动</button>`
+          : running
+            ? `<button class="btn ghost" data-act="stop-app" data-app="${a.id}">${svg('stop', 12)} 停用</button>
+               <button class="btn" data-act="open-app" data-app="${a.id}">${svg('play', 13)} 打开</button>`
+            : `<button class="btn" data-act="open-app" data-app="${a.id}">${svg('play', 13)} 启动并打开</button>`}
+        <button class="btn danger-outline" data-act="uninstall" data-app="${a.id}" ${running ? 'disabled title="请先停用应用后再卸载"' : ''}>
+          ${svg('trash', 13)} 卸载</button>
+      </div>
+      ${a.state === 'approval' ? `<div class="callout danger">${svg('warn', 14)}<span>待审批：manifest 声明 ${a.granted.length} 个权限位（${riskCnt} 个高危）。批准是整单裁决，启用方向先过 <span class="mono">plugin_approve</span>。</span></div>` : ''}
+    </div>
+
+    <div class="card"><div class="card-t">${svg('shield', 15)} 授权策略</div>
+      ${authStratRows(a)}
+      <div class="note">策略切换不追溯已落账记录；收紧需逐条撤销。完整记录见「权限与授权」。</div>
+    </div>
+
+    <div class="card"><div class="card-t">${svg('layers', 15)} 权限位（manifest 声明 · 加载期整单裁决 · 只读）</div>
+      <div style="display:flex;flex-wrap:wrap;gap:5px">
+        ${a.granted.map(p => `<span class="pill ${isRisk(p) ? 'risk' : ''}">${p}</span>`).join('')}
+      </div>
+    </div>
+
+    <div class="card"><div class="card-t">${svg('gear', 15)} 应用配置</div>
+      ${cfg ? cfgForm(a, cfg) : `<div class="note">无可用的配置项（manifest contributes.configuration.properties 为空）。
+        下方案例为控件形态演示，非线上真值：</div>${cfgForm(a, CONFIG_DEMO['terminal-session'])}`}
+    </div>
+  </div>`;
+}
+function cfgForm(a, cfg) {
+  return `<div style="display:flex;flex-direction:column;gap:9px">
+    ${Object.entries(cfg.properties).map(([k, p]) => {
+      if (p.type === 'boolean') return `<div class="row-sw"><div class="lb"><b>${p.title}</b><span class="mono">${k}</span></div>${sw('cfg-bool', p.default)}</div>`;
+      if (p.enum) return `<div class="fld"><span class="lb">${p.title} <span class="mono" style="color:var(--text-tertiary)">${k}</span></span>
+        <select class="inp" aria-label="${p.title}">${p.enum.map(e => `<option ${e === p.default ? 'selected' : ''}>${e}</option>`).join('')}</select></div>`;
+      if (p.type === 'number' && p.minimum !== undefined) return `<div class="fld"><span class="lb">${p.title}（${p.minimum}–${p.maximum}）</span>
+        <div class="size-row"><input type="range" min="${p.minimum}" max="${p.maximum}" value="${p.default}" aria-label="${p.title}"/><span class="val">${p.default}</span></div></div>`;
+      return `<div class="fld"><span class="lb">${p.title}</span><input class="inp" value="${p.default}" aria-label="${p.title}"/></div>`;
+    }).join('')}
+    <div style="display:flex;gap:8px"><button class="mini" data-act="cfg-save" data-app="${a.id}">${svg('check', 12)} 保存</button>
+      <button class="mini" data-act="cfg-reset">重置为默认</button></div>
+  </div>`;
+}
+function authStratRows(a) {
+  return Object.entries(a.strategies).map(([res, cur]) => `
+    <div class="strat-row"><span class="lb">${res === 'fs' ? svg('folder', 13) : svg('network', 13)} ${RESOURCE_LABEL[res]}</span>
+      <div class="seg">${STRATEGIES.map(t => `<button class="${t === cur ? 'on' : ''} ${t === 'always_allow' && t === cur ? 'risky' : ''}"
+        data-act="set-strategy" data-app="${a.id}" data-res="${res}" data-v="${t}">${STRATEGY_LABEL[t]}</button>`).join('')}</div>
+    </div>`).join('');
+}
+
+/* ---- 系统页：权限与授权（参考方案 B 治理面的授权详情 + 四分区） ---- */
+function sysPerms() {
+  const apps = Object.values(state.apps).sort((x, y) => appRiskRank(x) - appRiskRank(y));
+  const pending = approvalIds();
+  return `
+  ${pending.length ? `<div class="callout warn">${svg('warn', 14)}<span><b>${pending.length} 个应用待审批</b>：${pending.map(id => byId(id).name).join('、')}。
+    审批是整单裁决——逐位勾选会让「高危位混在低位里被顺手放行」。</span>
+    <button class="mini" data-act="approve" data-app="${pending[0]}" style="margin-left:auto;flex-shrink:0">去审批</button></div>` : ''}
+  ${apps.map(a => {
+    const ug = userGranted(a), aa = autoAllowed(a), dn = denied(a);
+    return `<div class="card">
+      <div class="pcard-head">
+        ${iconBox(a, 34)}
+        <div class="nm"><b>${a.name}</b><span>${a.granted.length} 权限位 · ${a.granted.filter(isRisk).length} 高危 · ${a.records.length} 条授权记录</span></div>
+        <span class="chip ${a.state === 'approval' ? 'danger' : a.state === 'running' ? 'ok' : a.state === 'degraded' ? 'warn' : ''}">${STATE_TEXT[a.state]}</span>
+      </div>
+      ${authStratRows(a)}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span class="chip ok">已授权 ${ug.length}</span>
+        <span class="chip warn">免询问放行 ${aa.length}</span>
+        <span class="chip info">内置免询问 ${a.firstPartyDirs.length}</span>
+        <span class="chip danger">硬拒绝 ${dn.length}</span>
+        <span style="flex:1"></span>
+        <button class="mini" data-act="detail-app-jump" data-app="${a.id}">管理</button>
+      </div>
+      ${authRecords(a)}
+    </div>`;
+  }).join('')}`;
+}
+function authRecords(a) {
+  const sec = (t, list, cls, revocable, note) => list.length ? `
+    <div class="blk-t" style="margin-top:6px">${t}<span style="flex:1;height:1px;background:var(--border)"></span>${note || ''}</div>
+    ${list.map(r => `<div class="rec ${cls}">
+      <span class="tg">${r.target}</span>
+      <span class="chip">${RESOURCE_LABEL[r.resource]} · ${opsLabel(r.ops)}${r.prefixMatch ? ' · 前缀' : ''}</span>
+      ${r.source === 'always_allow' ? '<span class="chip warn">未经确认</span>' : ''}
+      ${revocable ? `<button class="mini danger" data-act="revoke" data-app="${a.id}" data-target="${r.target}">撤销</button>` : ''}
+    </div>`).join('')}` : '';
+  const parts = [
+    sec('用户已授权', userGranted(a), '', true),
+    sec('免询问自动放行', autoAllowed(a), 'unconfirmed', true),
+    sec('内置免询问（第一方清单只读投影）', a.firstPartyDirs.map(e => ({ target: fpLabel(e), resource: 'fs', ops: ['read','write'], prefixMatch: true, source: 'first-party' })), '', false),
+    sec('硬拒绝（命中即拒，不回退询问）', denied(a), 'deny', true),
+  ].filter(Boolean);
+  return parts.length ? `<div style="display:flex;flex-direction:column">${parts.join('')}</div>`
+    : '<div class="note">暂无授权记录。</div>';
+}
+
+/* ==================== 渲染：通知中心（卡片式，参考手机系统通知栏） ==================== */
+function notifTime(mins) { return mins === null || mins === undefined ? '' : mins === 0 ? '刚刚' : `${mins} 分钟前`; }
+function notifCard(n) {
+  const toneCls = n.kind === 'approval' ? 'tone-warning' : n.kind === 'progress' ? 'tone-success' : n.kind === 'info' ? 'tone-system' : 'tone-info';
+  return `<div class="ntf ${n.kind === 'approval' ? 'attn' : ''}">
+    <span class="ntf-ic glyph-box ${toneCls}">${svg(n.icon, 14)}</span>
+    <div class="ntf-b">
+      <div class="ntf-top"><b>${n.title}</b>${notifTime(n.mins) ? `<span class="ntf-time">${notifTime(n.mins)}</span>` : ''}</div>
+      <div class="ntf-src">${n.source}</div>
+      ${n.body ? `<div class="ntf-body">${n.body}</div>` : ''}
+      ${n.kind === 'progress' ? `<div class="bar" style="margin-top:5px"><i style="width:${n.progress}%"></i></div>
+        <div class="ntf-body">${n.progress}% · 3.2 MB/s</div>` : ''}
+      ${(n.actions && n.actions.length) ? `<div class="ntf-acts">${n.actions.map(x =>
+        `<button class="mini" data-act="notif-act" data-id="${n.id}" data-do="${x.id}">${x.label}</button>`).join('')}</div>` : ''}
+    </div>
+    ${n.sticky ? '' : `<button class="ntf-x" data-act="notif-x" data-id="${n.id}" aria-label="关闭通知：${n.title}">${svg('x', 11)}</button>`}
+  </div>`;
+}
+function renderPanel() {
+  const el = document.getElementById('panel');
+  el.hidden = !state.panelOpen;
+  if (!state.panelOpen) { el.innerHTML = ''; return; }
+  const s = state.settings, c = state.crypto;
+  const dark = document.documentElement.classList.contains('dark');
+  const appr = approvalNotifs();
+  const total = appr.length + state.notifs.length;
+  el.innerHTML = `
+    <div class="panel-h"><span class="t">通知中心</span><span class="n">${total} 条</span>
+      <span style="flex:1"></span>
+      ${state.notifs.some(n => !n.sticky) ? `<button class="mini" data-act="notif-clear">清除全部</button>` : ''}
+      <button class="mini" data-act="panel" aria-label="收起通知中心">${svg('x', 12)}</button></div>
+    <div class="panel-in">
+      <div class="tiles">
+        ${[
+          ['theme', 'theme', '深色主题', dark ? '开' : '关', dark],
+          ['set-animations', 'bolt', '动画', s.ui.animations_enabled ? '开' : '关', s.ui.animations_enabled],
+          ['crypto-toggle', 'lock', '链路加密', c.enabled ? '开' : '关', c.enabled],
+          ['set-preventsleep', 'sleep', '防止休眠', s.network.prevent_sleep ? '开' : '关', s.network.prevent_sleep],
+        ].map(([act, ic, l, st, on]) => `
+          <button class="tile ${on ? 'on' : ''}" data-act="${act}">
+            ${svg(ic, 15)}<span class="tt"><b>${l}</b><span>${st}</span></span>
+          </button>`).join('')}
+      </div>
+      ${appr.length ? `<div class="blk-t">待处理<span style="flex:1;height:1px;background:var(--border)"></span></div>
+        ${appr.map(notifCard).join('')}` : ''}
+      <div class="blk-t">通知<span style="flex:1;height:1px;background:var(--border)"></span></div>
+      ${state.notifs.length ? state.notifs.map(notifCard).join('')
+        : '<div class="note" style="text-align:center;padding:12px 0">没有通知</div>'}
+    </div>`;
+}
+
+/* ==================== 渲染：右键菜单 ==================== */
+function renderCtx() {
+  const el = document.getElementById('ctx');
+  if (!state.ctx) { el.hidden = true; el.innerHTML = ''; return; }
+  const a = byId(state.ctx.appId);
+  if (!a) { el.hidden = true; return; }
+  const running = a.state === 'running' || a.state === 'degraded';
+  el.hidden = false;
+  el.style.left = Math.min(state.ctx.x, window.innerWidth - 190) + 'px';
+  el.style.top = Math.min(state.ctx.y, window.innerHeight - 200) + 'px';
+  el.innerHTML = `
+    <button data-act="open-app" data-app="${a.id}">${svg('play', 13)} ${running ? '打开' : '启动并打开'}</button>
+    <button data-act="detail-app-jump" data-app="${a.id}">${svg('info', 13)} 应用详情</button>
+    <button data-act="perms-app-jump" data-app="${a.id}">${svg('shield', 13)} 权限与授权</button>
+    <div class="sep"></div>
+    <button data-act="stop-app" data-app="${a.id}" ${running ? '' : 'disabled'}>${svg('stop', 12)} 停用</button>
+    <button data-act="uninstall" data-app="${a.id}" ${running ? 'disabled title="请先停用应用后再卸载"' : ''}>
+      ${svg('trash', 13)} 卸载</button>`;
+}
+
+/* ==================== 渲染：命令面板 ==================== */
+function allCommands() {
+  const cmds = [...HOST_COMMANDS];
+  for (const [appId, list] of Object.entries(PLUGIN_COMMAND_TITLES)) {
+    const a = byId(appId);
+    if (!a) continue;
+    for (const c of list) cmds.push({ id: `${appId}.${c}`, title: `${a.name}：${c}`, src: appId });
+  }
+  return cmds;
+}
+function renderPalette() {
+  if (!state.paletteOpen) return '';
+  const q = state.paletteQ.toLowerCase();
+  const list = allCommands().filter(c => !q || c.title.toLowerCase().includes(q) || c.id.includes(q));
+  if (state.paletteCur >= list.length) state.paletteCur = 0;
+  let lastSrc = null;
+  return `<div class="palette" role="dialog" aria-label="命令面板">
+    <div class="srch">${svg('search', 15)}<input id="paletteInput" placeholder="输入命令或搜索…" value="${state.paletteQ}" aria-label="命令搜索"/></div>
+    <div class="lst">
+      ${list.map((c, i) => {
+        const grp = c.src !== lastSrc ? `<div class="grp">${c.src === 'host' ? '宿主' : byId(c.src).name}</div>` : '';
+        lastSrc = c.src;
+        return `${grp}<button class="it ${i === state.paletteCur ? 'cur' : ''}" data-act="run-cmd" data-cmd="${c.id}">${svg('terminal', 12)} ${c.title}</button>`;
+      }).join('') || '<div class="empty">没有匹配的命令</div>'}
+    </div>
+  </div>`;
+}
+
+/* ==================== 渲染：弹窗 ==================== */
+function dlgShell(title, body, foot, wide, icon) {
+  return `<div class="dlg ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${title}">
+    <div class="dlg-h">${svg(icon || 'shield', 16)}<span class="t">${title}</span>
+      <button class="mini" data-act="dialog-close" aria-label="关闭弹窗">${svg('x', 12)}</button></div>
+    <div class="dlg-b">${body}</div>
+    ${foot ? `<div class="dlg-f">${foot}</div>` : ''}
+  </div>`;
+}
+function renderDialog() {
+  const d = state.dialog;
+  if (!d) return '';
+  const a = state.dlgApp ? byId(state.dlgApp) : null;
+  const cancel = `<button class="btn ghost" data-act="dialog-close">取消</button>`;
+  switch (d) {
+    case 'approval': {
+      const risk = a.granted.filter(isRisk);
+      return dlgShell(`批准「${a.name}」`, `
+        <div class="note">manifest 声明 <b>${a.granted.length}</b> 个权限位。批准是<b>整单裁决</b>——逐位勾选会让高危位混在低位里被顺手放行。</div>
+        ${risk.length ? `<div class="risk-list">${risk.map(p => `<div class="risk-it">${svg('warn', 14)}
+          <div><div class="tt">${p}</div><div class="dd">${{ 'process:run': '在宿主机执行任意进程', 'pty:spawn': '在宿主机创建交互式终端（任意命令）', 'terminal:input': '向任意终端会话注入输入', 'database:main': '读写宿主主库' }[p]}</div></div>`).join('')}</div>` : ''}
+        <div class="note">批准后返回实际授予的权限位清单；未授予的位在运行期仍被闸门拒绝。</div>`,
+        `${cancel}<button class="btn" data-act="approve-ok" data-app="${a.id}">${svg('check', 13)} 批准并启动</button>`, true, 'shield');
+    }
+    case 'fs-single': return dlgShell('文件访问请求', `
+      <div class="note"><b>终端会话</b> 请求访问：</div><div class="dlg-path">~/Documents/sessions（读写 · 前缀匹配）</div>
+      <label class="chk"><input type="checkbox"/> 记住此授权（仅「按需询问」档位生效）</label>`,
+      `${cancel}<button class="btn" data-act="dialog-close">允许</button>`, false, 'folder');
+    case 'fs-picker': return dlgShell('文件访问请求 · 来自选择框', `
+      <div class="note"><b>文件传输</b> 通过系统文件选择框获得路径（选择框来源视同用户确认）：</div>
+      <div class="dlg-path">~/Downloads/inbox</div>`,
+      `${cancel}<button class="btn" data-act="dialog-close">允许</button>`, false, 'folder');
+    case 'fs-batch': return dlgShell('批量文件访问请求', `
+      <div class="note"><b>终端会话</b> 一次请求 3 条路径：</div>
+      <div class="dlg-path">~/Documents/sessions<br/>~/.config/bedcode<br/>/tmp/build-out</div>`,
+      `${cancel}<button class="btn" data-act="dialog-close">全部允许</button>`, true, 'folder');
+    case 'network': return dlgShell('网络出站请求', `
+      <div class="note"><b>AI 对话</b> 请求出站连接：</div><div class="dlg-path">https://api.openai.com（前缀匹配）</div>
+      <label class="chk"><input type="checkbox"/> 记住此授权</label>`,
+      `${cancel}<button class="btn" data-act="dialog-close">允许</button>`, false, 'network');
+    case 'strategy-confirm': return dlgShell('切换为「始终允许」？', `
+      <div class="callout warn">${svg('warn', 14)}<span>「始终允许」会让该资源的新请求<b>免询问自动放行</b>，且<strong>不会</strong>一次性放行既有记录——存量 ${a ? a.records.length : 0} 条记录保持原状。</span></div>`,
+      `${cancel}<button class="btn danger-fill" data-act="strategy-confirm-ok">确认切换</button>`, false, 'warn');
+    case 'uninstall': return dlgShell(`卸载「${a.name}」？`, `
+      <div class="callout danger">${svg('warn', 14)}<span>将删除安装目录、插件存储与启用状态，<b>不可恢复</b>。授权记录随之清除。</span></div>`,
+      `${cancel}<button class="btn danger-fill" data-act="uninstall-ok" data-app="${a.id}">${svg('trash', 13)} 确认卸载</button>`, false, 'trash');
+    case 'exit': return dlgShell('退出 BedCode？', `
+      <div class="note">以下应用登记了退出确认载荷（宿主只读 <span class="mono">id / name / status</span>，不解析业务内容）：</div>
+      <div class="rec"><span class="tg">终端会话</span><span class="chip warn">3 会话运行中</span></div>
+      <div class="rec"><span class="tg">文件传输</span><span class="chip warn">1 个传输进行中</span></div>`,
+      `${cancel}<button class="btn danger-fill" data-act="dialog-close">仍然退出</button>`, false, 'exit');
+    case 'loading': return dlgShell('加载中', `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+        <span class="sdot running"></span>
+        <span class="note">LoadingOverlay 演示：启停遮罩层，授权弹窗（更高语义层）压在其上。</span>
+      </div>`, `${cancel}`, false, 'clock');
+    case 'global': return dlgShell('插件全局弹窗', `
+      <div class="note">PluginGlobalDialog 演示：插件经 <span class="mono">ui:dialog</span> 权限位注册的模态面，宿主只提供挂载槽位。</div>
+      <div class="dlg-path">host-dialog:{"title":"…","body":"…"}</div>`,
+      `<button class="btn" data-act="dialog-close">知道了</button>`, false, 'layers');
+    case 'dir': {
+      const items = [
+        ['approval', '权限审批弹窗', 'shield'], ['fs-single', '文件授权 · 单路径', 'folder'],
+        ['fs-picker', '文件授权 · 选择框来源', 'folder'], ['fs-batch', '文件授权 · 批量列表', 'folder'],
+        ['network', '网络出站授权', 'network'], ['strategy-confirm', '「始终允许」二次确认', 'warn'],
+        ['uninstall', '卸载确认', 'trash'], ['exit', '退出确认', 'exit'],
+        ['loading', '加载遮罩', 'clock'], ['global', '插件全局弹窗', 'layers'],
+      ];
+      return dlgShell('全局弹窗目录', `
+        <div class="note">宿主全局弹窗体系（10 种），逐个打开预览：</div>
+        <div class="dlg-dir">${items.map(([k, l, ic]) => `<button class="mini" style="justify-content:flex-start" data-act="dialog" data-dlg="${k}">${svg(ic, 12)} ${l}</button>`).join('')}</div>`,
+        `${cancel}`, true, 'layers');
+    }
+  }
+  return '';
+}
+function renderOvl() {
+  const el = document.getElementById('ovl');
+  const inner = state.paletteOpen ? renderPalette() : renderDialog();
+  el.hidden = !inner;
+  el.innerHTML = inner;
+  if (state.paletteOpen) {
+    const inp = document.getElementById('paletteInput');
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }
+}
+
+/* ==================== Toast / 启动屏 ==================== */
+function toast(msg) {
+  const wrap = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = `${svg('check', 13)} ${msg}`;
+  wrap.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.25s'; setTimeout(() => t.remove(), 260); }, 2400);
+}
+function renderBoot() {
+  const el = document.getElementById('boot');
+  el.hidden = !state.boot;
+  if (!state.boot) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="glyph"><svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
+      <g stroke="currentColor" stroke-width="13" stroke-linecap="round" fill="none">
+        <line x1="23.2" y1="33" x2="36.8" y2="67"/><line x1="39.3" y1="67.1" x2="48.7" y2="46.9"/>
+        <line x1="51.3" y1="46.9" x2="60.7" y2="67.1"/><line x1="63.2" y1="67" x2="76.8" y2="33"/>
+      </g><path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C"/></svg></div>
+    <div class="line">BedCode · wasm-app 平台启动中</div>
+    <div class="bar"><i style="width:72%"></i></div>
+    <div class="log">
+      <div><span class="ok">✓</span> wasmtime 48 引擎就绪</div>
+      <div><span class="ok">✓</span> ABI 38 校验通过（form=1）</div>
+      <div><span class="ok">✓</span> 已装应用注册表加载（5）</div>
+      <div><span class="ok">✓</span> 授权策略层 fail-closed 自检</div>
+    </div>
+    <div class="note">点击任意处跳过</div>`;
+}
+
+/* ==================== renderAll ==================== */
+function renderAll(animate) {
+  renderToolbar();
+  renderHome();
+  renderCard();
+  renderPanel();
+  renderCtx();
+  renderOvl();
+  renderBoot();
+  document.getElementById('scr-home').hidden = state.screen !== 'home';
+  document.getElementById('scr-card').hidden = state.screen !== 'card';
+  if (animate && state.settings.ui.animations_enabled) {
+    const scr = document.getElementById(state.screen === 'card' ? 'scr-card' : 'scr-home');
+    scr.classList.remove('entering');
+    void scr.offsetWidth;   // 强制 reflow 让动画可重触发（类只是装饰，状态已先行正确）
+    scr.classList.add('entering');
+  }
+}
+
+/* ==================== 交互 ==================== */
+document.addEventListener('click', e => {
+  // 右键菜单 / 通知面板：点其他地方关闭
+  if (state.ctx && !e.target.closest('.ctx')) { state.ctx = null; renderCtx(); }
+  if (state.panelOpen && !e.target.closest('.panel') && !e.target.closest('[data-act="panel"]')) {
+    state.panelOpen = false; renderPanel(); renderToolbar();
+  }
+  const t = e.target.closest('[data-act]');
+  if (!t) {
+    if (e.target.id === 'ovl') { state.dialog = null; state.paletteOpen = false; renderOvl(); }
+    return;
+  }
+  const act = t.dataset.act, appId = t.dataset.app;
+  const app = appId ? byId(appId) : null;
+  switch (act) {
+    case 'open-app': openApp(appId); break;
+    case 'open-sys': openSys(t.dataset.sys); break;
+    case 'resume-card': activateCard(t.dataset.key); break;
+    case 'close-card': closeCard(t.dataset.key); break;
+    case 'close-all': stopAllCards(); break;
+    case 'home': goHome(); break;
+    case 'back': goBack(); break;
+    case 'panel': state.panelOpen = !state.panelOpen; renderAll(); break;
+    case 'theme': {
+      const dark = document.documentElement.classList.toggle('dark');
+      state.settings.ui.theme = dark ? 'dark' : 'light';
+      renderAll(); break;
+    }
+    case 'set-theme': {
+      state.settings.ui.theme = t.dataset.v;
+      document.documentElement.classList.toggle('dark', t.dataset.v !== 'light');
+      renderAll(); break;
+    }
+    case 'set-palette': state.settings.ui.theme_palette = t.dataset.v; toast('色板已切换（预览固定 warm 色值）'); renderAll(); break;
+    case 'set-animations': state.settings.ui.animations_enabled = !state.settings.ui.animations_enabled; renderAll(); break;
+    case 'set-shownav': state.settings.ui.show_nav = !state.settings.ui.show_nav; renderAll(); break;
+    case 'set-wall': state.settings.ui.wallpaper = t.dataset.v; renderAll(); break;
+    case 'wall-custom': toast('选择图片文件（预览不读盘；正式实现走 fs:pick 授权后由宿主下发）'); break;
+    case 'notif-x': dismissNotif(t.dataset.id); renderAll(); break;
+    case 'notif-clear': clearNotifs(); toast('已清除可清除的通知（驻留与待审批项保留）'); renderAll(); break;
+    case 'notif-act': {
+      const n = state.notifs.find(x => x.id === t.dataset.id) || approvalNotifs().find(x => x.id === t.dataset.id);
+      if (!n) break;
+      if (t.dataset.do === 'approve' && n.app) {
+        state.panelOpen = false; state.dialog = 'approval'; state.dlgApp = n.app; renderAll();
+      } else if (t.dataset.do === 'open' && n.app) {
+        openApp(n.app);
+      }
+      break;
+    }
+    case 'set-preventsleep': state.settings.network.prevent_sleep = !state.settings.network.prevent_sleep; renderAll(); break;
+    case 'crypto-enabled': case 'crypto-toggle': state.crypto.enabled = !state.crypto.enabled; renderAll(); break;
+    case 'crypto-encrypt_http': case 'crypto-encrypt_ws_terminal': case 'crypto-encrypt_ws_event': case 'crypto-allow_plaintext_fallback': {
+      const k = act.slice(7); state.crypto[k] = !state.crypto[k]; renderAll(); break;
+    }
+    case 'detail-app': state.detailApp = appId; renderAll(); break;
+    case 'detail-app-jump': state.detailApp = appId; openSys('apps'); break;
+    case 'perms-app-jump': openSys('perms'); break;
+    case 'install': toast('plugin_install_from_file：选择本地 zip'); break;
+    case 'stop-app': {
+      // 停用 = 关应用卡（若开着）+ 实例置 dormant（走 closeCard 同一路径，通知语义一致）
+      if (state.cards.includes('app:' + appId)) {
+        closeCard('app:' + appId);
+      } else if (app && app.state !== 'approval') {
+        app.state = 'dormant';
+        pushNotif({ kind: 'event', icon: 'stop', source: app.name, app: appId, title: '已停止',
+          body: '实例已停用，可在主屏重新打开。', actions: [{ id: 'open', label: '重新打开' }] });
+        toast(`${app.name} 已停止`);
+        renderAll();
+      }
+      break;
+    }
+    case 'approve': state.dialog = 'approval'; state.dlgApp = appId; renderAll(); break;
+    case 'approve-ok': {
+      app.state = 'running';
+      state.dialog = null;
+      toast(`${app.name} 已批准并启动（plugin_approve 整单裁决）`);
+      pushNotif({ kind: 'event', icon: 'check', source: app.name, app: appId, title: '已批准并启动',
+        body: '审批通知随之消失（派生自 approvalIds，无独立生命周期）。' });
+      openApp(appId); break;
+    }
+    case 'uninstall': state.dialog = 'uninstall'; state.dlgApp = appId; state.ctx = null; renderAll(); break;
+    case 'uninstall-ok': {
+      delete state.apps[appId];
+      state.cards = state.cards.filter(k => k !== 'app:' + appId);
+      if (state.activeCard === 'app:' + appId) {
+        state.activeCard = state.cards[0] || null;
+        if (!state.activeCard) state.screen = 'home';
+      }
+      state.dialog = null;
+      toast('已卸载：安装目录 + 存储 + 启用状态已删除');
+      renderAll(); break;
+    }
+    case 'set-strategy': {
+      const v = t.dataset.v;
+      if (v === 'always_allow' && app.strategies[t.dataset.res] !== 'always_allow') {
+        state.dialog = 'strategy-confirm'; state.dlgApp = appId; state.dlgRes = t.dataset.res; renderAll(); break;
+      }
+      app.strategies[t.dataset.res] = v;
+      toast('策略已更新（plugin_auth_set_strategy，需宿主凭证）');
+      renderAll(); break;
+    }
+    case 'strategy-confirm-ok': {
+      byId(state.dlgApp).strategies[state.dlgRes] = 'always_allow';
+      state.dialog = null;
+      toast('已切换为「始终允许」：新请求免询问放行，存量记录不变');
+      renderAll(); break;
+    }
+    case 'revoke': {
+      const a2 = byId(appId);
+      a2.records = a2.records.filter(r => r.target !== t.dataset.target);
+      toast('已撤销（plugin_auth_revoke，下次访问重新询问）');
+      renderAll(); break;
+    }
+    case 'cfg-save': toast('配置已保存（plugin config 写入插件存储）'); break;
+    case 'cfg-reset': toast('已重置为默认值'); break;
+    case 'palette': state.paletteOpen = true; state.paletteQ = ''; state.paletteCur = 0; renderAll(); break;
+    case 'run-cmd': {
+      state.paletteOpen = false;
+      const id = t.dataset.cmd;
+      if (id === 'host.home') goHome();
+      else if (id === 'host.settings.open') openSys('settings');
+      else if (id === 'host.apps.open') openSys('apps');
+      else if (id === 'host.perms.open') openSys('perms');
+      else if (id === 'host.dialogs.open') { state.dialog = 'dir'; renderAll(); }
+      else if (id === 'host.boot.replay') { state.boot = true; renderAll(); }
+      else { toast(`已执行：${id}`); renderAll(); }
+      break;
+    }
+    case 'dialog': state.dialog = t.dataset.dlg; if (!state.dlgApp) state.dlgApp = state.detailApp; state.paletteOpen = false; renderAll(); break;
+    case 'dialog-close': state.dialog = null; renderAll(); break;
+    case 'boot': state.boot = true; renderAll(); break;
+    case 'log-dir': toast('打开日志目录（宿主命令）'); break;
+    case 'update-check': toast('已是最新版本'); break;
+    case 'win-min': toast('最小化（预览无实际操作）'); break;
+    case 'win-max': toast('最大化（预览无实际操作）'); break;
+    case 'win-close': state.dialog = 'exit'; renderAll(); break;
+  }
+});
+
+/* 右键：应用图标上下文菜单 */
+document.addEventListener('contextmenu', e => {
+  const ic = e.target.closest('[data-ctx]');
+  if (!ic) return;
+  e.preventDefault();
+  state.ctx = { appId: ic.dataset.ctx, x: e.clientX, y: e.clientY };
+  renderCtx();
+});
+
+/* 键盘 */
+document.addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+    e.preventDefault(); state.paletteOpen = !state.paletteOpen; state.paletteQ = ''; state.paletteCur = 0; renderAll(); return;
+  }
+  if (mod && e.key === ',') { e.preventDefault(); openSys('settings'); return; }
+  if (state.boot && (e.key === 'Escape' || e.key === 'Enter')) { state.boot = false; renderAll(); return; }
+  if (state.paletteOpen) {
+    const list = allCommands().filter(c => !state.paletteQ || c.title.toLowerCase().includes(state.paletteQ.toLowerCase()) || c.id.includes(state.paletteQ.toLowerCase()));
+    if (e.key === 'Escape') { state.paletteOpen = false; renderAll(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); state.paletteCur = Math.max(0, Math.min(state.paletteCur + 1, list.length - 1)); renderAll(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); state.paletteCur = Math.max(0, state.paletteCur - 1); renderAll(); }
+    else if (e.key === 'Enter' && list[state.paletteCur]) {
+      state.paletteOpen = false; toast(`已执行：${list[state.paletteCur].id}`); renderAll();
+    }
+    return;
+  }
+  if (e.key === 'Escape') { goBack(); return; }
+  if (state.dialog || state.ctx || state.panelOpen) return;
+  // 主屏 type-to-search：可打印字符累积成查询串（IME 合成中的 CJK 走真实输入框时才可得，
+  // 全局 keydown 收不到 composition——预览以 ASCII 验证路径，正式实现挂隐藏 input）
+  if (state.screen === 'home' && !mod && !e.altKey && e.key.length === 1) {
+    state.homeQ += e.key;
+    renderAll();
+  } else if (state.screen === 'home' && e.key === 'Backspace') {
+    state.homeQ = state.homeQ.slice(0, -1);
+    renderAll();
+  } else if (state.screen === 'home' && e.key === 'Enter' && state.homeQ) {
+    const q = state.homeQ.toLowerCase();
+    const hitApp = Object.values(state.apps).find(a => a.name.toLowerCase().includes(q) || a.id.includes(q) || a.pid.includes(q));
+    const hitSys = SYS_PAGES.find(s => s.name.toLowerCase().includes(q) || s.id.includes(q));
+    state.homeQ = '';
+    if (hitApp) openApp(hitApp.id);
+    else if (hitSys) openSys(hitSys.id);
+    else renderAll();
+  }
+});
+
+/* 命令面板与设置控件的输入事件 */
+document.addEventListener('input', e => {
+  if (e.target.id === 'paletteInput') {
+    state.paletteQ = e.target.value; state.paletteCur = 0;
+    renderOvl();
+    const inp = document.getElementById('paletteInput');
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    return;
+  }
+  const act = e.target.dataset && e.target.dataset.actInp;
+  if (!act) return;
+  if (act === 'set-fontsize') { state.settings.ui.font_size = Number(e.target.value); renderAll(); }
+  else if (act === 'wall-dim') { state.settings.ui.wall_dim = Number(e.target.value) / 100; renderAll(); }
+  else if (act === 'set-language') { state.settings.ui.language = e.target.value; toast('界面语言已切换（预览固定中文文案）'); }
+  else if (act === 'set-port') { state.settings.network.port = Number(e.target.value) || 0; }
+  else if (act.startsWith('log-')) toast('日志设置已更新');
+});
+
+/* 启动屏：点击跳过 */
+document.getElementById('boot').addEventListener('click', () => { state.boot = false; renderAll(); });
+
+/* ==================== 启动 ==================== */
+renderAll();
+setTimeout(() => { if (state.boot) { state.boot = false; renderAll(); } }, 2600);
+
+/* 测试钩子（DOM 桩 / 浏览器审计驱动用，不影响交互） */
+window.__C = { state, openApp, openSys, goHome, goBack, closeCard, activateCard, renderAll, allCommands, byId, userGranted, autoAllowed, denied, cardTitle, pushNotif, dismissNotif, clearNotifs, approvalNotifs, notifCount };
+</script>
+</body>
+</html>
