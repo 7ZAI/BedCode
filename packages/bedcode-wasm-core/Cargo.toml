@@ -138,7 +138,15 @@ futures-util = "0.3"
 # 目录定位
 dirs = "6.0.0"
 # HTTP 客户端（host-http 出站代理）——双端共有（移动 http_engine 同用）
-reqwest = { version = "0.12", features = ["stream"] }
+# **必须 `default-features = false`**：reqwest 默认集含 `default-tls`（= native-tls
+# → openssl-sys），而交叉编译到 Android（aarch64-linux-android）时 openssl-sys 找不到
+# 目标侧 OpenSSL，构建脚本直接失败（2026-10-13 移动 dev 实测；本 crate 是共享 crate，
+# 它开的 feature 会经 feature 合并钉死两端）。
+# TLS 后端**由各端宿主声明**（合并后生效）：桌面 `src-tauri/Cargo.toml` 的 reqwest
+# 用默认集 = native-tls（Linux 有系统 OpenSSL）；移动宿主显式开 `rustls-tls`（可交叉
+# 编译，与退役 fork crate `bedcode-mobile/packages/bedcode-wasm-core` 的原声明同形）。
+# 本 crate 只保留与后端无关的 `stream`（body 流类型），不锁任何 TLS 后端。
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 # 数据库
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # 用户插件 zip 解压安装
