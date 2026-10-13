@@ -108,7 +108,7 @@ pub async fn setup_host() -> Arc<PluginHost> {
     let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
     std::fs::create_dir_all(&user_plugins_dir).expect("user plugins dir");
 
-    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts)).await;
+    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts), None).await;
 
     // 无头私有库根注入（认证中心配对/历史真源在插件私有库，无私有库则无法驱动）
     host.wasm_host_ctx().set_plugin_db_root(Some(

@@ -107,7 +107,7 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts)).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts), None).await;
         plugin_host.init_message_bus().await;
         // guest 事件派发器（生产同款）：缺省 `UnwiredGuestEvents` 会让总线投递
         // fail-visible（会话中心 dispatch 报错 → trap）；本 harness 自建 PluginHost

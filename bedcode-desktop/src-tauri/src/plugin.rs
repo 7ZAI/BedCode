@@ -45,6 +45,9 @@ pub mod mdns;
 pub mod notify;
 pub mod peer;
 pub mod platform;
+/// 平台选择器（`host-platform.pick-*` 的桌面实现：原生对话框）——与 `host_facts`
+/// 同批从内核迁出的端差异实现（内核只持 `PlatformPickerPort` 端口词汇）
+pub mod platform_picker;
 pub mod process;
 pub mod pty;
 pub mod task;

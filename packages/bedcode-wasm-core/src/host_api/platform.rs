@@ -2,28 +2,44 @@
 //!
 //! 系统对话框等与领域无关的平台交互。
 //!
-//! ## 选源对话框（`pick-*`）的双段口径（2026-09-27）
+//! ## 选源器（`pick-*`）的双段口径（2026-09-27）
 //!
 //! 1. **准入门**：manifest 必须**单独声明权限 `fs:pick`**。未声明 → 显性 `Err`，
-//!    且**在弹对话框之前**返回（不给「没权限也能弹框看路径列表」留缝）。
+//!    且**在弹选择器之前**返回（不给「没权限也能弹框看路径列表」留缝）。
 //!    选器与 `fs:read` / `fs:write` 分域：它只交付「用户亲手选中的路径」这一层。
-//! 2. **结果门**：系统原生对话框（Windows IFileDialog / Linux xdg-desktop-portal）
-//!    浏览面不设限（浏览由用户在系统对话框里驱动，宿主不读任何数据）；选择结束后
-//!    对**选中路径**做 [`FsAuthChecker::authorize_picked`] 授权校验——命中已授权
-//!    目录前缀则静默放行，未授权的弹一次授权框并按**所在目录**落账，拒绝 / 超时
-//!    → `Err` 且**不回传路径**（fail-visible：不得降级成空数组）。
+//! 2. **结果门**：选择器浏览面不设限（浏览由用户在系统选择器里驱动，宿主不读
+//!    任何数据）；选择结束后对**选中项**做 [`FsAuthChecker::authorize_picked`]
+//!    授权校验——命中已授权目录前缀则静默放行，未授权的弹一次授权框并按**所在
+//!    目录**落账，拒绝 / 超时 / 无弹窗通道 → `Err` 且**不回传路径**（fail-visible：
+//!    不得降级成空数组）。
 //!
-//! 实现本体在此（host-business-decarriage 收尾）：历史上选源对话框挂在
-//! `peer_engine_transfer`（对等传输域）下，经 `peer_net` 转发而来——那是
-//! 「peer 命令面复用」时期的错放（ADR 0022 v2 已把 pick-* 判归 host-platform）。
-//! 传输域不再承载平台对话框，插件一律走本域。
+//! ## 选择器本体 = 宿主装配的端口（ADR 0052 D1，2026-10-13）
+//!
+//! 选择器机制本身是**端差异**（桌面原生对话框 Windows IFileDialog / Linux
+//! xdg-desktop-portal；移动 SAF 目录树/文件选择器），落在
+//! [`crate::host_api::ports::PlatformPickerPort`]：
+//!
+//! - 桌面：宿主实现（`bedcode-desktop/src-tauri/src/plugin/platform_picker.rs`）
+//!   经 `PluginHost::new` 装配期注入；
+//! - 移动：`WasmHostContext::new_with_ports` 用
+//!   [`crate::host_api::ports::EnginePortsPlatformPicker`] 把既有 SAF 引擎端口
+//!   适配成选择器端口；
+//! - 本文件只持**共享机制**：`fs:pick` 权力门 + 选择后授权校验 + JSON 形状——
+//!   两端同源，不按端分叉。
+//!
+//! 历史（host-business-decarriage 收尾）：选源器曾挂在 `peer_engine_transfer`
+//! （对等传输域）下经 `peer_net` 转发——那是「peer 命令面复用」时期的错放
+//! （ADR 0022 v2 已把 pick-* 判归 host-platform）。单形态收口（2026-10-13）
+//! 合并 common（桌面对话框实现）/ bare（移动 SAF 端口）时只保留下桌面版，
+//! 移动构建因此编不过（`pick_folders` 在 tauri-plugin-dialog 中是 desktop-only
+//! API，Android 无此方法）——端口化后两端各自成立。
 
-use crate::host_api::context::{AppHandleScope, FsAuthScope, PermissionScope};
+use crate::host_api::context::{FsAuthScope, PermissionScope};
+use crate::host_api::ports::PlatformPickerPort;
 use crate::permission::PERMISSION_FS_PICK;
 use crate::runtime_util::block_on_async;
 use crate::security::fs_auth::FsAuthChecker;
 use std::sync::Arc;
-use tauri_plugin_dialog::DialogExt;
 
 /// 权限门（`fs:pick`）：未声明即拒绝，**且不弹对话框**
 ///
@@ -54,15 +70,17 @@ pub(crate) fn platform_id(facts: &dyn crate::host_api::ports::HostFactsPort) -> 
 }
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
+///
+/// 选择器本体经 [`PlatformPickerPort`] 注入（桌面原生对话框 / 移动 SAF）；
+/// 本函数只做共享机制：`fs:pick` 准入 → 选择结果授权校验 → JSON 序列化。
 pub(crate) fn platform_pick_files(
     perm: &dyn PermissionScope,
-    app: &dyn AppHandleScope,
     fs: &dyn FsAuthScope,
+    picker: &dyn PlatformPickerPort,
     plugin_id: &str,
 ) -> Result<String, String> {
     require_pick_permission(perm, plugin_id, "host_platform_pick_files")?;
-    let app = require_app(app)?;
-    let picked = sync_result(block_on_async(pick_files(app)))?;
+    let picked = sync_result(block_on_async(picker.pick_files()))?;
     let picked = authorize_picked(fs, plugin_id, "host_platform_pick_files", picked)?;
     serde_json::to_string(&picked).map_err(|e| format!("serialize picked files failed: {e}"))
 }
@@ -72,15 +90,15 @@ pub(crate) fn platform_pick_files(
 /// 2026-10-13 功能级统一（ADR 0052 D3）：原 `pick-folder`（单目录字符串）与桌面
 /// `host-platform-desktop.pick-folders`（多目录 JSON）是同一功能的两种形状 →
 /// 统一为本函数。移动端 SAF 目录树选择器为单选语义，返回 0/1 项。
+/// 选择器本体同 [`platform_pick_files`]（端口注入，两端各自实现）。
 pub(crate) fn platform_pick_folders(
     perm: &dyn PermissionScope,
-    app: &dyn AppHandleScope,
     fs: &dyn FsAuthScope,
+    picker: &dyn PlatformPickerPort,
     plugin_id: &str,
 ) -> Result<String, String> {
     require_pick_permission(perm, plugin_id, "host_platform_pick_folders")?;
-    let app = require_app(app)?;
-    let picked = sync_result(block_on_async(pick_folders(app)))?;
+    let picked = sync_result(block_on_async(picker.pick_folders()))?;
     let picked = authorize_picked(fs, plugin_id, "host_platform_pick_folders", picked)?;
     serde_json::to_string(&picked).map_err(|e| format!("serialize picked folders failed: {e}"))
 }
@@ -116,58 +134,6 @@ fn authorize_picked(
     ))
 }
 
-// ==================== 选源对话框（阻塞至用户选择；取消 → 空） ====================
-
-async fn pick_files(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_files(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("platform_pick_files: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "platform_pick_files: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-async fn pick_folders(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folders(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("platform_pick_folders: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "platform_pick_folders: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
-fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
-    let path = file_path
-        .into_path()
-        .map_err(|e| crate::AppError::InvalidInput(format!("platform pick: failed to convert selected path: {e}")))?;
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| crate::AppError::InvalidInput("platform pick: selected path is not valid UTF-8".to_string()))
-}
-
-fn require_app(app: &dyn crate::host_api::context::AppHandleScope) -> Result<tauri::AppHandle, String> {
-    app.app_handle()
-        .map(|a| a.clone())
-        .ok_or_else(|| "platform unavailable in headless context (no app_handle)".to_string())
-}
-
 fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
     r.map_err(|e| e.to_string())
 }
@@ -177,7 +143,9 @@ fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
 // `src-tauri/src/plugin/platform.rs`（路径 B：域函数 + 单测随域走宿主；内核不再
 // 持有桌面平台依赖 `local_ip_address` / `system::wsl`）。桌面原
 // `host-platform-desktop.pick-folders` 已随 2026-10-13 功能级统一（ADR 0052 D3）
-// 并入本文件 [`platform_pick_folders`]。
+// 并入本文件 [`platform_pick_folders`]。**桌面对话框本体**同日起改由宿主
+// `src-tauri/src/plugin/platform_picker.rs` 经 [`PlatformPickerPort`] 注入
+// （内核不再持 `tauri-plugin-dialog` 用法）。
 
 // ==================== Tests ====================
 
@@ -190,24 +158,59 @@ mod tests {
 
     const PLUGIN: &str = "com.test.pick";
 
+    /// 选择器替身：把「用户在系统选择器里选了什么」变成测试可控输入
+    ///
+    /// 真选择器（桌面对话框 / 移动 SAF）需要真 AppHandle，单元测试造不出来；
+    /// 端口把选择器与域机制隔开后，本替身直接驱动「门 → 选择器 → 授权 → JSON」
+    /// 全链（选择器本体各自的用例住两端宿主）。
+    struct FakePicker {
+        files: Vec<String>,
+        folders: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformPickerPort for FakePicker {
+        async fn pick_files(&self) -> crate::Result<Vec<String>> {
+            Ok(self.files.clone())
+        }
+
+        async fn pick_folders(&self) -> crate::Result<Vec<String>> {
+            Ok(self.folders.clone())
+        }
+    }
+
+    fn fake(files: Vec<String>, folders: Vec<String>) -> Arc<dyn PlatformPickerPort> {
+        Arc::new(FakePicker { files, folders })
+    }
+
+    /// 未授权选择器的 fail-visible 错误（[`crate::host_api::ports::PORT_NOT_WIRED`]
+    /// 的端口名前缀）——无头 / 测试上下文的缺省选择器命中它
+    fn assert_picker_not_wired(err: &str) {
+        assert!(
+            err.contains("not wired") && err.contains("platform_picker_"),
+            "缺省选择器必须 fail-visible（点名未装配的选择器端口）, got: {err}"
+        );
+    }
+
     // ==================== 权限门（`fs:pick`） ====================
 
-    /// C-101 未声明 `fs:pick` → 显性拒绝，且**在弹对话框之前**（无头上下文拿不到
-    /// AppHandle，若顺序反了错误会是 headless 那条）
+    /// C-101 未声明 `fs:pick` → 显性拒绝，且**在弹选择器之前**（若顺序反了错误
+    /// 会是选择器端口的 fail-visible 那条）
     #[test]
     fn pick_requires_fs_pick_permission() {
         let ctx = build_host_ctx();
         for perm in ["fs:read", "fs:write", "storage", "peer"] {
             grant_permissions(&ctx, PLUGIN, &[perm]);
-            let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
+            let picker = ctx.platform_picker();
+            let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
                 .expect_err("未声明 fs:pick 必须拒绝");
             assert!(
                 err.contains(PERMISSION_FS_PICK),
                 "错误必须点名缺失的权限位（插件作者据此知道 manifest 补什么），got: {err}"
             );
             assert!(
-                !err.contains("headless"),
-                "权限门必须早于对话框：拿到了 headless 报错说明顺序反了, got: {err}"
+                !err.contains("not wired"),
+                "权限门必须早于选择器：拿到了未装配报错说明顺序反了, got: {err}"
             );
         }
     }
@@ -217,24 +220,31 @@ mod tests {
     fn pick_bit_is_independent_from_read_write() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_PICK]);
-        // 声明了 fs:pick → 过得了权限门（下一步才会去要 AppHandle）
-        let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
-            .expect_err("无头上下文拿不到系统对话框");
-        assert!(err.contains("headless"), "声明 fs:pick 后应走到对话框环节, got: {err}");
+        // 声明了 fs:pick → 过得了权限门（下一步才会走到选择器端口；无头上下文
+        // 缺省选择器 fail-visible，不是权限错误）
+        let picker = ctx.platform_picker();
+        let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect_err("无头上下文没有装配选择器");
+        assert_picker_not_wired(&err);
+        assert!(
+            !err.contains(PERMISSION_FS_PICK),
+            "已声明 fs:pick 不得再报权限缺失, got: {err}"
+        );
     }
 
     /// `pick-folders`（2026-10-13 统一函数）与 `pick-files` 同门：未声明
-    /// `fs:pick` 拒绝且早于对话框（防「多选变体绕过准入」的回接形态）
+    /// `fs:pick` 拒绝且早于选择器（防「多选变体绕过准入」的回接形态）
     #[test]
     fn pick_folders_requires_fs_pick_permission() {
         let ctx = build_host_ctx();
-        let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
+        let picker = ctx.platform_picker();
+        let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
             .expect_err("未声明 fs:pick 必须拒绝");
         assert!(
             err.contains(PERMISSION_FS_PICK),
             "错误必须点名缺失的权限位（插件作者据此知道 manifest 补什么），got: {err}"
         );
-        assert!(!err.contains("headless"), "权限门必须早于对话框, got: {err}");
+        assert!(!err.contains("not wired"), "权限门必须早于选择器, got: {err}");
     }
 
     /// 权限五同步点：新位进了 CLI 与前端两份**生成物**（漏跑 gen:permissions 即红）
@@ -243,31 +253,89 @@ mod tests {
         generated_vocabulary_know("fs:pick");
     }
 
-    // ==================== 选择结果授权校验 ====================
+    // ==================== 选择器端口到授权链路的全链 ====================
     //
     // 授权判据本身的用例（已授权目录静默放行 / 未授权保守拒 / 取消不弹框 /
     // 落账粒度）在 `security::fs_auth` 的测试模块——那里能读 `pending_requests`
-    // 私有字段断言「没有多弹一个框」，本文件只锁宿主原语这一层的契约。
+    // 私有字段断言「没有多弹一个框」，本文件只锁宿主原语这一层的接线契约。
 
-    /// C-104 在原语层的体现：声明了 `fs:pick` 且选中路径已授权 → 走到对话框环节
-    /// 而不是被授权层拦下（无头上下文止步于 AppHandle，故错误必为 headless）
+    /// 唯一临时夹具目录（带 pid + 名字后缀，避免并行用例互踩）
+    fn fixture_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("bedcode-pick-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        dir
+    }
+
+    /// 注入选择器的结果**必须过结果门**：未授权 → 拒且不回传；授权后 → 原样交付
+    ///
+    /// 反向断言（先拒）防「结果门被短路」的回接；正向断言（后放行）防把已授权
+    /// 选择也一律拒掉的过度收紧。
     #[tokio::test]
-    async fn pick_passes_permission_gate_and_reaches_dialog() {
+    async fn picker_result_flows_through_authorization_gate() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_PICK]);
-        let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
-            .expect_err("无头上下文没有系统对话框");
-        assert!(err.contains("headless"), "got: {err}");
-        assert!(
-            !err.contains(PERMISSION_FS_PICK),
-            "已声明 fs:pick 不得再报权限缺失, got: {err}"
-        );
+        let dir = fixture_dir("files");
+        let file = dir.join("picked.txt");
+        std::fs::write(&file, b"x").expect("fixture file");
+        let file = file.to_string_lossy().to_string();
+        let picker = fake(vec![file.clone()], Vec::new());
+
+        let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect_err("未授权选择结果在无弹窗通道下必须拒绝，且不得回传路径");
+        assert!(err.contains("not authorized"), "got: {err}");
+        assert!(!err.contains(&file), "拒绝时不得把路径回传给插件, got: {err}");
+
+        ctx.fs_auth_checker()
+            .seed_legacy_granted_path(PLUGIN, &dir.to_string_lossy())
+            .await
+            .expect("seed granted dir");
+        let json = platform_pick_files(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect("已授权选择结果必须放行");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&json).expect("json"), vec![file]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `pick-folders` 同链：移动 SAF 单选语义的 0/1 项也走同一结果门
+    #[tokio::test]
+    async fn folders_picker_result_flows_through_authorization_gate() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_PICK]);
+        let dir = fixture_dir("folders");
+        let dir_str = dir.to_string_lossy().to_string();
+        let picker = fake(Vec::new(), vec![dir_str.clone()]);
+
+        let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect_err("未授权目录在无弹窗通道下必须拒绝");
+        assert!(err.contains("not authorized"), "got: {err}");
+
+        ctx.fs_auth_checker()
+            .seed_legacy_granted_path(PLUGIN, &dir_str)
+            .await
+            .expect("seed granted dir");
+        let json = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect("已授权目录必须放行");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&json).expect("json"), vec![dir_str]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 取消（空选择）不等价于「被拒」：直接回空数组，不需要任何授权弹窗通道
+    #[tokio::test]
+    async fn cancelled_pick_returns_empty_without_authorization_prompt() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_PICK]);
+        let picker = fake(Vec::new(), Vec::new());
+        let json = platform_pick_files(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect("取消必须成功返回");
+        assert_eq!(json, "[]");
+        let json = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), picker.as_ref(), PLUGIN)
+            .expect("取消必须成功返回");
+        assert_eq!(json, "[]");
     }
 
     // ==================== 既有域（本文件原有用例） ====================
     //
     // 桌面扩展原有用例（wsl_distro_names / wsl_distros_fail_loudly /
     // filter_ipv4 / collect_local_ipv4 一族）已随域函数迁宿主
-    // `src-tauri/src/plugin/platform.rs`（票 02 批次 06：域函数 + 单测随域走）。
-    // 本文件只留交集 pick-* 的用例（见上）。
+    // `src-tauri/src/plugin/platform.rs`（票 02 批次 06：域函数 + 单测随域走），
+    // 选择器本体用例同批随宿主实现走。本文件只留交集 pick-* 的机制用例（见上）。
 }

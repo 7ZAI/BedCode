@@ -273,6 +273,7 @@ async fn init_test_app_context() {
                 form: Some(bedcode_plugin_api::form::FORM_COMPONENT),
             }, // 桌面 ABI 规格（宿主注入；夹具为桌面 SDK 产物）
             std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts), // 桌面端事实（宿主注入；内核零端名）
+            None, // 平台选择器：无头夹具不开系统对话框（内核缺省 fail-visible 选择器）
         )
         .await;
         plugin_host.init_message_bus().await;

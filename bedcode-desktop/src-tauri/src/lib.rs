@@ -551,6 +551,12 @@ pub fn run() {
                 // 桌面端事实（平台标识 / 入站服务器端口；单形态收口后从 wasm-core
                 // 迁出的端差异实现——file-transfer 在激活期经 platform() 探测端值）
                 std::sync::Arc::new(crate::plugin::host_facts::DesktopHostFacts),
+                // 桌面平台选择器（host-platform.pick-* 的桌面对话框实现；同样从
+                // 内核迁出的端差异——移动侧是 SAF 端口，经 EnginePortsPlatformPicker
+                // 在 `new_with_ports` 装配）
+                Some(std::sync::Arc::new(crate::plugin::platform_picker::DesktopPlatformPicker::new(
+                    (*app_handle_arc).clone(),
+                ))),
             ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());

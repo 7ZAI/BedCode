@@ -415,6 +415,10 @@ impl PluginHost {
     ///   [`crate::host_api::ports::HostFactsPort`]）——端差异实现住各端宿主
     ///   （桌面 `plugin/host_facts.rs`），内核零端名；在实例化 / 激活**之前**
     ///   写入上下文，漏注入不 panic 但取值路径 fail-visible
+    /// * `platform_picker` - 平台选择器端口（`host-platform.pick-*` 的实现；
+    ///   [`crate::host_api::ports::PlatformPickerPort`]）——桌面传宿主实现
+    ///   （`plugin/platform_picker.rs`，原生对话框），无头/测试传 `None`
+    ///   （缺省 fail-visible）；与 `host_facts` 同处装配期写入（实例化 / 激活之前）
     /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
@@ -437,6 +441,8 @@ impl PluginHost {
         // 宿主端事实（平台标识 / 入站服务器端口；端实现住各端宿主，见
         // [`crate::host_api::ports::HostFactsPort`]——内核不得按端 `#[cfg]` 二选一）
         host_facts: Arc<dyn crate::host_api::ports::HostFactsPort>,
+        // 平台选择器（同上：端差异实现住宿主；None = 未装配，插件调用点 fail-visible）
+        platform_picker: Option<Arc<dyn crate::host_api::ports::PlatformPickerPort>>,
     ) -> Arc<Self> {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
@@ -469,8 +475,13 @@ impl PluginHost {
         // core-security × core-monitor：决策计数埋点两阶段注入
         // （monitor 生于 WasmRuntime，晚于宿主上下文构建）
         // 端事实在实例化 / 激活之前写入（file-transfer 等共享产物在激活期探测
-        // `host-platform.platform()`；晚注入 = 激活失败）
+        // `host-platform.platform()`；晚注入 = 激活失败）。选择器同批写入：
+        // 插件激活期若调 `pick-*` 也必须拿到宿主实现（漏传 None 时保持
+        // `UnimplementedPlatformPicker` fail-visible，不静默无选择器）
         wasm_host_ctx.set_host_facts(host_facts);
+        if let Some(picker) = platform_picker {
+            wasm_host_ctx.set_platform_picker(picker);
+        }
         wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
         // 授权记录容量丢弃计数（spec §8.2）：同一处两阶段注入（计数在落账点）
         wasm_runtime.fs_auth().set_monitor(wasm_runtime.monitor());

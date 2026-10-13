@@ -62,6 +62,15 @@ events-binary）。
 只装配共享契约的绑定。`host-http-endpoint` / `host-websocket-server` 的桌面专属
 引擎面按此整体外迁。
 
+**补录（2026-10-13，D1 同款判据落到 core 域内部实现）**：core 域的**选择器本体**
+也是端差异——`host-platform.pick-files` / `pick-folders` 的桌面对话框实现经
+`host_api::ports::PlatformPickerPort` 由宿主装配（桌面
+`plugin/platform_picker.rs`，`PluginHost::new` 在实例化 / 激活前注入；移动由
+`WasmHostContext::new_with_ports` 用 `EnginePortsPlatformPicker` 适配既有 SAF 引擎
+端口），内核只留共享机制（`fs:pick` 门 + `authorize_picked` 结果校验 + JSON 形状）。
+原因：`FileDialogBuilder::pick_folders` 是 tauri-plugin-dialog 的 desktop-only API，
+实现留内核会让 `aarch64-linux-android` 构建直接失败。
+
 ### D5 · 变更形态与失败可见
 
 - 契约搬家（interface 在文件间移动、union world 不变）→ 无 bump、产物免重建

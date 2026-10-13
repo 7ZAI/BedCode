@@ -259,17 +259,20 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
 // 内核自己实现、双端同源的那 8 个机制 interface。
 
 impl bedcode::plugin::host_platform::Host for WasmPluginState {
-    // `pick-*` 需三件 scope：权限门（`fs:pick`）+ AppHandle（弹系统原生对话框）
-    // + fs_auth（选择结果授权校验）
+    // `pick-*` 需两件 scope：权限门（`fs:pick`）+ fs_auth（选择结果授权校验）。
+    // 选择器本体不在内核：经宿主装配的 `PlatformPickerPort` 注入（桌面原生对话框
+    // / 移动 SAF，端差异实现住各端宿主，ADR 0052 D1；见 `host_api::ports`）。
     fn pick_files(&mut self) -> Result<String, String> {
-        platform::platform_pick_files(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
+        let picker = self.host_ctx().platform_picker();
+        platform::platform_pick_files(self.host_ctx(), self.host_ctx(), picker.as_ref(), &self.plugin_id)
     }
 
     /// `pick-folders`（2026-10-13 功能级统一，ADR 0052 D3：原
     /// `pick-folder` 单值形与桌面扩展多选形合并）：返回 string[] JSON，
     /// 空数组 = 用户取消 / 未选任何目录。
     fn pick_folders(&mut self) -> Result<String, String> {
-        platform::platform_pick_folders(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
+        let picker = self.host_ctx().platform_picker();
+        platform::platform_pick_folders(self.host_ctx(), self.host_ctx(), picker.as_ref(), &self.plugin_id)
     }
 
     /// 宿主平台标识（v38；无权限门——平台事实不是能力）

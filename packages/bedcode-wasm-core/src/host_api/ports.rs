@@ -15,6 +15,9 @@
 //!   管理器、peer 四模块、mDNS 共享守护、WS 重连状态机、Android 平台桥
 //!   （android_plugins / SAF）——端口只声明调用形状，实现由宿主装配
 //!   （宿主 `plugin/host_ports.rs`）。
+//! - **平台选择器独立窄端口**：[`PlatformPickerPort`]（`host-platform.pick-*` 的
+//!   端实现）不并入本 trait——桌面宿主没有 `HostEnginePorts` 整体实现（见该
+//!   trait 文档），两端按需各接一条。
 //! - **机制随 crate**：句柄表、属主仲裁、权限门、事件定向投递——域文件内，
 //!   不经端口。
 //! - **DTO 以原始值 / JSON 过界**：宿主侧类型（DialEndpoint、RemotePullFileDto、
@@ -398,6 +401,101 @@ pub trait HostEnginePorts: Send + Sync {
     /// 播放系统默认通知提示音
     async fn notify_play_sound(&self) -> std::result::Result<(), String>;
 }
+
+// ==================== 平台选择器端口（host-platform.pick-* 的端实现） ====================
+
+/// 系统选择器端口（`host-platform` 的 `pick-files` / `pick-folders` 端实现）
+///
+/// 端差异落宿主（ADR 0052 D1「差异应该在各自的宿主侧」）：桌面 = 原生对话框
+/// （宿主 `bedcode-desktop/src-tauri/src/plugin/platform_picker.rs`），移动 = SAF
+/// 选择器（经 [`EnginePortsPlatformPicker`] 适配本模块 `HostEnginePorts` 已有的两条
+/// SAF 端口）。内核只持共享机制——`fs:pick` 权限门 + 选择后 `authorize_picked`
+/// 授权校验 + JSON 形状（`host_api/platform.rs`），选择器本身由宿主装配注入。
+///
+/// 为什么单独一条窄端口：桌面宿主不存在 `HostEnginePorts` 整体实现（桌面引擎调用
+/// 不经端口，上下文持 [`UnimplementedPorts`] 占位），只为两条选择原语实现整条
+/// 端口 trait 会给桌面造出第二份装配面；窄端口让两端各实现真正需要的东西。
+#[async_trait]
+pub trait PlatformPickerPort: Send + Sync {
+    /// 选文件（用户取消为空数组；失败显性 `Err`，不得降级成空 = 静默丢选择）
+    ///
+    /// 无 `AppHandle` 参数：句柄在**装配期**由宿主实现捕获（桌面
+    /// `DesktopPlatformPicker::new` / 移动适配器捕获 `Option<Arc<AppHandle>>`）——
+    /// 无头/测试上下文因此也能构造选择器替身驱动域函数（不依赖 tao 事件循环
+    /// 建 AppHandle，测试面直接断言「门→选择器→授权」全链）。
+    async fn pick_files(&self) -> Result<Vec<String>>;
+
+    /// 选目录（桌面 = 原生多选目录对话框；移动 = SAF 目录树单选，0/1 个树 URI）
+    async fn pick_folders(&self) -> Result<Vec<String>>;
+}
+
+/// 未装配选择器（无头 / 测试上下文）：调用即 fail-visible
+///
+/// 与 [`UnimplementedPorts`] 同口径（禁 panic）：漏装配的宿主会在插件调用点拿到
+/// 显性错误而非静默空数组。
+pub struct UnimplementedPlatformPicker;
+
+#[async_trait]
+impl PlatformPickerPort for UnimplementedPlatformPicker {
+    async fn pick_files(&self) -> Result<Vec<String>> {
+        Err(port_err("platform_picker_pick_files"))
+    }
+
+    async fn pick_folders(&self) -> Result<Vec<String>> {
+        Err(port_err("platform_picker_pick_folders"))
+    }
+}
+
+/// 移动装配适配器：把 [`HostEnginePorts`] 的 SAF 选择器端口接到 [`PlatformPickerPort`]
+///
+/// 移动宿主的选择器实现本就住在 `HostEnginePorts`（`plugin/host_ports.rs`），
+/// `WasmHostContext::new_with_ports` 装配上下文时经本适配器接线——移动宿主不必
+/// 为选择器再造一个实现，构造器也不必为此再加参数。
+pub struct EnginePortsPlatformPicker {
+    ports: Arc<dyn HostEnginePorts>,
+    /// 装配期捕获的应用句柄（None = 无头）：SAF 端口调用需要它，缺句柄时显性
+    /// 报错（错误文案与旧 `platform.rs::require_app` 逐字一致，排障拼图不变）
+    app_handle: Option<Arc<tauri::AppHandle>>,
+}
+
+impl EnginePortsPlatformPicker {
+    /// 包装宿主引擎端口 + 应用句柄（构造器只做接线，不做能力判断）
+    pub fn new(ports: Arc<dyn HostEnginePorts>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
+        Self { ports, app_handle }
+    }
+}
+
+#[async_trait]
+impl PlatformPickerPort for EnginePortsPlatformPicker {
+    async fn pick_files(&self) -> Result<Vec<String>> {
+        let app = self
+            .app_handle
+            .as_ref()
+            .ok_or_else(|| crate::error::AppError::Internal(HEADLESS_PICKER_ERROR.to_string()))?;
+        self.ports.platform_pick_files(app).await
+    }
+
+    /// SAF 目录树选择器为单选语义：`Some((uri, doc_id, display_name))` → 0/1 项
+    /// （只交树 URI——doc-id / 展示名由共享目录注册表按 URI 自取）；用户取消 → 空数组
+    ///
+    /// 与 `pick_files` 不同，SAF 目录树端口无应用句柄参数（`run_mobile_plugin_async`
+    /// 自持句柄）——但仍先过同一句柄检查：无头上下文不许假成功（取消与未装配
+    /// 必须可区分），口径与 `pick_files` 一致。
+    async fn pick_folders(&self) -> Result<Vec<String>> {
+        if self.app_handle.is_none() {
+            return Err(crate::error::AppError::Internal(HEADLESS_PICKER_ERROR.to_string()));
+        }
+        Ok(self
+            .ports
+            .platform_pick_shared_directory()
+            .await?
+            .map(|(uri, _doc_id, _display_name)| vec![uri])
+            .unwrap_or_default())
+    }
+}
+
+/// 无头上下文取不到 `AppHandle` 的选择器错误文案（原 `platform.rs::require_app` 原文）
+const HEADLESS_PICKER_ERROR: &str = "platform unavailable in headless context (no app_handle)";
 
 // ==================== 无头默认实现 ====================
 

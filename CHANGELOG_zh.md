@@ -30,6 +30,18 @@ WIT 包 **minor bump `0.1.0 → 0.2.0`**（ADR 0051 D4：interface 增删 / 签�
 - **测试基建保持双消费面、共享符号单点化**：`test_support` 保留桌面（`common`）与移动（`bare`，fork 期历史名）两个消费面——运行时壳与 core 绑定早已单份；共享符号（`TEST_PLUGIN_ID` / `plugin_raw_store`）上提父模块单点定义。`.scratch/2026-10-13-runtime-single-form/spec.md` 第 8 条按实修正，ADR 0049 附收口补录。
 - 行为等价（取值与报错文案不变）。验证：wasm-core `cargo test --lib` 576/576；移动 `cargo test` 全绿（含共享产物探针实际跑移动 `HostPorts`）；桌面 `cargo test --lib` 155/155 + `crate_boundary_lock` 9/9 + `system_component_test` 10/10；移动 purity / fork 锁 7/7 + 6/6。
 
+#### 平台选择器改为宿主装配端口（修复 Android 构建；ADR 0052 D1）
+
+ADR 0052 目录选择统一时把桌面对话框实现留在了内核（`host_api/platform.rs`），而
+`FileDialogBuilder::pick_folders` 是 tauri-plugin-dialog 的 `#[cfg(desktop)]` 专属 API——
+`bedcode-mobile` 的 `aarch64-linux-android` 构建直接报 ``no method named `pick_folders` ``。
+按 ADR 0052 D1「差异应该在各自的宿主侧」改为窄端口：
+
+- **内核只留共享机制**（`fs:pick` 准入门 → 选择器 → `authorize_picked` 结果门 → JSON 形状，口径不变），新增 `host_api::ports::PlatformPickerPort` + `UnimplementedPlatformPicker`（fail-visible 缺省）+ `EnginePortsPlatformPicker`（移动适配器）；`WasmHostContext` 增加选择器槽（`set_platform_picker`，与 `host_facts` 同款两阶段注入）。
+- **桌面**：新增 `bedcode-desktop/src-tauri/src/plugin/platform_picker.rs`（`DesktopPlatformPicker`，原生对话框，实现自内核逐字搬出），经 `PluginHost::new` 新增的 `platform_picker` 参数注入——在实例化 / 激活之前，与 `HostFactsPort` 同装配点；无头 / 测试传 `None`。
+- **移动**：`WasmHostContext::new_with_ports` 把选择器接到既有 SAF 引擎端口（`platform_pick_files`；`platform_pick_shared_directory` → 0/1 个树 URI）——移动侧零改动；AppHandle 在装配期捕获。
+- **验证**：`cargo check -p bedcode-mobile --target aarch64-linux-android --lib` 绿；wasm-core `cargo test --lib` 579/579（platform 7/7，含新增的端口委派 + 授权门用例）；桌面 `cargo check --tests` 绿；移动 `cargo test --lib` 226/226 + purity / composition / fork 锁 16/16。
+
 #### WIT 契约搬上包 semver，整数 ABI 退役（ADR 0051）
 
 契约版本管理从「全局单一整数」搬上 wire：WIT 改为 `package bedcode:plugin@0.Y.Z;`，

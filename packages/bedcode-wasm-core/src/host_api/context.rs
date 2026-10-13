@@ -39,7 +39,10 @@ use bedcode_host_kit::state::WasmPluginState;
 pub type PeerCtxProvider = dyn Fn(&tauri::AppHandle) -> Arc<bedcode_server_peer_net::PeerCtx> + Send + Sync;
 
 use crate::db::Database;
-use crate::host_api::ports::{HostEnginePorts, HostFactsPort, UnimplementedHostFacts, UnimplementedPorts};
+use crate::host_api::ports::{
+    EnginePortsPlatformPicker, HostEnginePorts, HostFactsPort, PlatformPickerPort, UnimplementedHostFacts,
+    UnimplementedPlatformPicker, UnimplementedPorts,
+};
 use crate::permission::PermissionManager;
 use crate::security::fs_auth::FsAuthChecker;
 use crate::security::network_auth::NetworkAuthChecker;
@@ -313,6 +316,21 @@ pub struct WasmHostContext {
     /// `pub`：移动宿主（外部 crate）的域 adapter（`plugin/{auth,connection,fs_mobile}.rs`
     /// 等）直接读字段。
     pub ports: Arc<dyn HostEnginePorts>,
+    /// 平台选择器（`host-platform.pick-files` / `pick-folders` 的端实现）
+    ///
+    /// 机制在 `host_api/platform.rs`（`fs:pick` 权限门 + `authorize_picked` 授权
+    /// 校验 + JSON 形状），选择器本体是端差异（桌面原生对话框 / 移动 SAF），
+    /// 经 [`PlatformPickerPort`] 注入（ADR 0052 D1）：
+    ///
+    /// - 桌面：`PluginHost::new` 末参注入宿主实现
+    ///   （`bedcode-desktop/src-tauri/src/plugin/platform_picker.rs`）；
+    /// - 移动：[`Self::new_with_ports`] 自动用 [`EnginePortsPlatformPicker`] 适配
+    ///   已注入的 `ports`（SAF 端口）——与引擎端口同装配面，无需第二个构造参数；
+    /// - 缺省 [`UnimplementedPlatformPicker`] fail-visible（无头 / 测试）。
+    ///
+    /// 槽位形态与 `host_facts` 同款（构造后才注入，读时 clone 一个 Arc）：桌面
+    /// 注入发生在 `PluginHost::new` 内部、实例化之前。
+    platform_picker: Arc<std::sync::RwLock<Arc<dyn PlatformPickerPort>>>,
     /// 宿主端事实（平台标识 / 入站服务器端口；见 [`HostFactsPort`]）
     ///
     /// 单形态收口（2026-10-13）后内核不再按 `desktop-assembly` 编译期二选一端值；
@@ -510,6 +528,8 @@ impl WasmHostContext {
             // 移动装配面三字段缺省（ports 命中即 fail-visible / granted 恒空 /
             // status_reporter noop）
             ports: Arc::new(UnimplementedPorts),
+            // 选择器缺省 fail-visible（桌面在 `PluginHost::new` 注入宿主实现）
+            platform_picker: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedPlatformPicker))),
             // 端事实缺省：未注入即 fail-visible（`set_host_facts` 装配期覆盖）
             host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
             granted_permissions: HashSet::new(),
@@ -524,6 +544,10 @@ impl WasmHostContext {
     /// 移动实现退役——路径白名单 / 插件白名单语义不进入统一机制）；`permission` /
     /// `capabilities` 给空缺省（移动权限门走 `granted_permissions`，能力路由无
     /// 消费方）。
+    ///
+    /// 平台选择器**从 `ports` 派生**（[`EnginePortsPlatformPicker`]）：移动的 SAF
+    /// 选择器端口与引擎端口同住 `plugin/host_ports.rs`，本构造器把两者一次接线；
+    /// 端口未装配时推选即 `port_err` fail-visible（与 `new_headless` 同口径）。
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_ports(
         db: Arc<Mutex<Database>>,
@@ -535,6 +559,13 @@ impl WasmHostContext {
         ports: Arc<dyn HostEnginePorts>,
     ) -> Self {
         let net_auth = Arc::new(NetworkAuthChecker::new(db.clone(), app_handle.clone()));
+        // 选择器从引擎端口派生（SAF 端口是选择器的移动实现）——适配器只接线，
+        // 能力判断仍在端口方法内（未装配的端口推选即 fail-visible）。
+        // AppHandle 在此一并捕获：`pick_files` 需要它，字段随后被移进上下文。
+        let platform_picker: Arc<dyn PlatformPickerPort> = Arc::new(EnginePortsPlatformPicker::new(
+            ports.clone(),
+            app_handle.clone(),
+        ));
         Self {
             db,
             plugin_dbs: Arc::new(Mutex::new(HashMap::new())),
@@ -555,6 +586,7 @@ impl WasmHostContext {
             domain_ports: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             peer_ctx_provider: Arc::new(std::sync::RwLock::new(None)),
             ports,
+            platform_picker: Arc::new(std::sync::RwLock::new(platform_picker)),
             // 端事实缺省：移动/桌面宿主装配后经 `set_host_facts` 注入本端实现
             host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
             granted_permissions: HashSet::new(),
@@ -603,6 +635,7 @@ impl WasmHostContext {
             domain_ports: self.domain_ports.clone(),
             peer_ctx_provider: self.peer_ctx_provider.clone(),
             ports: self.ports.clone(),
+            platform_picker: self.platform_picker.clone(),
             host_facts: self.host_facts.clone(),
             granted_permissions,
             status_reporter: self.status_reporter.clone(),
@@ -684,6 +717,27 @@ impl WasmHostContext {
     ///
     pub fn ports(&self) -> &Arc<dyn crate::host_api::ports::HostEnginePorts> {
         &self.ports
+    }
+
+    /// 取平台选择器端口（core 交集 `host-platform.pick-*` 的端实现）
+    ///
+    /// 消费方是 `manager::runtime::core_binding` 的 host-platform 绑定。
+    /// 返回 clone 的 `Arc`（槽位见字段注释：桌面经 `set_platform_picker` 两阶段注入，
+    /// 与 [`Self::host_facts`] 同款）。
+    pub fn platform_picker(&self) -> Arc<dyn PlatformPickerPort> {
+        self.platform_picker
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// 装配期注入宿主平台选择器（桌面端；移动经 `new_with_ports` 自动派生）
+    ///
+    /// 与 [`Self::set_host_facts`] 同款两阶段注入：`PluginHost::new` 在实例化 /
+    /// 激活**之前**写入——插件激活期的选择器调用（如果有）也必须拿到宿主实现，
+    /// 不能只在运行期可用。宿主实现住 `plugin/platform_picker.rs`。
+    pub fn set_platform_picker(&self, picker: Arc<dyn PlatformPickerPort>) {
+        *self.platform_picker.write().unwrap_or_else(|e| e.into_inner()) = picker;
     }
 
     /// 装配期注入宿主端事实（平台标识 / 入站服务器端口）

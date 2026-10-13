@@ -83,3 +83,32 @@
 文件级清单第 8 条原计划「common/bare 合并」按实修正：两子模块是**宿主消费面**
 分叉（桌面夹具 vs 移动夹具，两侧消费物不同），运行时壳与 core 绑定早已统一；
 共享符号上提父模块单点定义，`bare` 为 fork 期历史名（模块头注明）。
+
+### 平台选择器端差异修复（2026-10-13 Android 构建实拍）
+
+单形态合并 common/bare 时漏掉了选择器的端差异：`host-api/platform.rs` 只留了
+桌面 `tauri-plugin-dialog` 实现，而 `FileDialogBuilder::pick_folders` 是
+`#[cfg(desktop)]` 专属 API——`bedcode-mobile` 的 `aarch64-linux-android` 构建
+在 wasm-core 上直接报 `no method named pick_folders`（桌面 x86_64 测试全绿，
+所以此前门禁未暴露）。按 ADR 0052 D1 改为**宿主装配端口**（不是内核 `#[cfg]`
+分支）：
+
+- wasm-core：新增 `host_api::ports::PlatformPickerPort`（`pick_files` /
+  `pick_folders`，无 AppHandle 参数——句柄装配期捕获，替身可脱离 tao 事件循环
+  驱动全链）+ `UnimplementedPlatformPicker`（fail-visible 缺省）+
+  `EnginePortsPlatformPicker`（移动适配器：`HostEnginePorts::platform_pick_files`
+  / `platform_pick_shared_directory` → 0/1 树 URI）；`WasmHostContext` 增加
+  `platform_picker` 槽（`set_platform_picker` 两阶段注入，`new_with_ports` 自动
+  派生移动适配器）；`platform.rs` 只留权限门 + `authorize_picked` + JSON。
+- 桌面宿主：`plugin/platform_picker.rs`（`DesktopPlatformPicker`，对话框实现逐字
+  自内核搬出），`PluginHost::new` 新增 `platform_picker` 参数在实例化 / 激活前
+  写入；无头 / 测试传 `None`。
+- 行为：桌面路径与错误文案逐字不变；移动 `pick-files` 恢复 SAF 选择器、
+  `pick-folders` 恢复 SAF 树 URI（0/1 项），`fs:pick` 门与结果授权校验双端同源。
+- 验证：wasm-core `cargo test --lib` 579/579（platform 7/7，新增端口委派 +
+  授权门正反例）；`cargo check -p bedcode-mobile --target aarch64-linux-android
+  --lib` 绿；桌面 `cargo check --tests` 绿；移动 `cargo test --lib` 226/226 +
+  纯净 / 组合 / fork 锁 16/16。
+
+**遗留**：wasm-core `Cargo.toml` 的 `tauri-plugin-dialog` 依赖现已无源码消费方
+（可随下次依赖治理摘除；本次不碰并行线的 Cargo.toml 在途改动）。
