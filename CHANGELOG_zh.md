@@ -9,6 +9,20 @@
 
 ## [未发布]
 
+#### 移动端宿主壳：修好插件状态 / i18n / 图标 / 主题链路，并做一轮壳内页面收口
+
+逐页走查 Android dev 构建（adb 截图 + 视觉审查）发现。以下每条都是真机复现的缺陷，不是风格偏好。
+
+- **插件状态从未被识别**：共享 `PluginState` 序列化为 camelCase（`{state:'activated'}`），而移动 SDK 类型与壳适配器按 PascalCase（`'Activated'`）分支——应用一律被读成未启动：应用页「0 个运行中」、多任务永远空、活着的应用显示「未启动」，插件加载器里的 `activating` / `degraded` 门禁也是死代码。移动 SDK 类型、`pluginAppSource.mapState`、`PluginLoader` 已改用线上值；桌面 SDK 类型仍写 PascalCase，疑似同源缺陷（已上报，未在本次修改）。
+- **插件 i18n 回退成 key 字面量**：`registerMessages` 把嵌套消息树前缀成「键名带点、值是对象」的形式（`'com.x.app' → {title}`），vue-i18n 按点号寻路径时在第二段就断了——terminal-session 整个运行面显示 `com.bedcode.terminal-session.app.title`。现改为合并前展平成叶子键，嵌套与扁平两种插件包都能命中。
+- **图片路径图标被当文本渲染**：清单里 `icon: "icon.svg"` 是相对插件目录的路径，壳的 `iconKindOf` 却当成 emoji，于是每个应用图标显示 `icon.svg` 字面量。现经共享的 `toPluginAssetUrl`（新增 `src/plugin/assets.ts`，loader 同用）解析为 asset URL 并以 `<img>` 渲染，失败回退首字母；URL 解析放在插件适配器侧，壳的「不得直接 import `@tauri-apps/api/core`」锁得以保持。
+- **浅色主题没覆盖到所有渲染根**：浅色 token 原先只挂在 `.mobile-ui` / `.mobile-app` 上，不带这两个类的根节点掉回 `:root` 的深色默认值——5 个设置二级页与 Teleport 到 body 的胶囊菜单在浅色主题下整片发黑。现改为挂 `html:not(.dark)`；流式字号变量移到 `:root`（它只与视口宽度有关，与主题无关），`App.vue` 恢复 `mobile-app mobile-ui` 祖先类。
+- **状态栏重复**：壳在真实 Android 状态栏下方又画了一条自己的时间/信号/电量。现在只在顶部安全区为 0（无系统状态栏）时才画。
+- **冷启动可能一直空**：壳只在挂载时拉一次应用清单，撞上「后端扫描未就绪」就停在「0 个应用 / 尚未安装 WASM 应用」。现按空清单轮询重试（250ms × 20s，与插件扫描同节奏）。
+- **重开已运行应用丢失运行面**：`launch()` 对 `state === 'running'` 早退，但后端实例跨 WebView 重载存活、前端模块不存活——重载后打开应用只看到占位屏。现始终走数据源的幂等 launch 路径。
+- **壳内页面收口**：应用页统计改为单行指标条（不再三张等宽卡片；零值用中性色而非绿色）；权限总览与应用详情补齐所有已声明权限的展示词表（新增 `auth` / `mdns` / `peer` / `ws:client` / `fs:pick` / `fileservice` / `transfer` / `broadcast` / `system:open` / `ui:*` / `notify` 的中英双语文案）并新增「设备与链路」分组；多任务空态说明自己并给出回首页出口（「上滑停止」提示只在真有卡片时出现）；详情页危险操作改描边按钮（淡粉底读起来像禁用态）；仅开发期可见的「演示：运行时授权弹窗」按 dev 构建门控；首页快捷卡片空态不再自称「尚未安装应用」；出站策略区的空态不再复用「暂无授权记录」；terminal-session 快捷卡片在 `0` 旁补状态说明。
+- **验证**：移动 `vitest run` 78 文件 / 896 用例全绿；`vue-tsc --noEmit` 干净；根 `eslint .` 0 error（97 条既有 warning）；真机重走首页 / 应用 / 我的 / 权限总览 / 应用详情 / 多任务 / 各应用运行面 / 5 个设置二级页 / 胶囊菜单。
+
 #### core 收窄为机制必需契约；功能级交集归能力域；端扩展归宿主（ADR 0052，票 04）
 
 WIT 包 **minor bump `0.1.0 → 0.2.0`**（ADR 0051 D4：interface 增删 / 签名变 = minor；file-transfer 双端单产物要求双端同步 bump，ADR 0051 D3）。规格与逐票记录：`.scratch/2026-10-13-domain-owned-contracts/`；决策：`docs/adr/0052-core-mechanism-only-and-domain-owned-contracts.md`。
