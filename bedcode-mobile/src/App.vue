@@ -1,5 +1,8 @@
 <template>
-  <div :class="themeClasses.container">
+  <!-- mobile-app / mobile-ui：这两个类是既有 CSS 的祖先选择器口径（流式排版、按类命中的移动端规则）。
+       旧宿主 MobileLayout 退役时它一度只在壳内（ShellView）挂着，导致旧路由（设置二级页 / 文件浏览器）
+       拿不到那套排版——现在回到全局容器上，与旧布局同口径。 -->
+  <div :class="['mobile-app mobile-ui', themeClasses.container]">
     <!-- 路由出口：旧宿主布局（MobileLayout + MobileNav）随阶段 B 退役，
          壳自行承担布局框与安全区（见 src/shell/views/ShellView.vue） -->
     <router-view />

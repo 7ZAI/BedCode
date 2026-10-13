@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="platformInfo.isMobile"
+    v-if="platformInfo.isMobile && showOwnStatusbar"
     class="flex items-center justify-between px-4 h-6 flex-shrink-0 text-[var(--font-size-xs)]"
     :style="{ color: 'var(--mobile-text-secondary)' }"
     aria-hidden="true"
@@ -28,13 +28,21 @@
 /**
  * 壳内状态条
  *
- * 只在移动端渲染（桌面预览没有系统状态栏，画上去反而像 bug）。
- * 高度固定 24px：状态条不参与滚动，也不承担交互，避免抢占内容区。
+ * 只在移动端**且系统状态栏不在屏幕上**时渲染（桌面预览没有系统状态栏，画上去反而像 bug）。
+ * 高度固定 24px：状态条不参与滚动，也不承担交互，避免抢内容区。
+ *
+ * 为什么还要看安全区（2026-10-14 修正）：Android 默认显示系统状态栏，壳又画了一条自己的，
+ * 实机就出现**上下两条时间/信号/电量**（实测截图：4:23 与 04:23 堆叠）。壳不做沉浸式全屏，
+ * 因此判据是「顶部安全区 > 0」= 系统状态栏占位中，此时壳不再重复画一条。
  */
-import { onUnmounted, ref } from 'vue'
+import { computed, inject, onUnmounted, ref, type Ref } from 'vue'
 import { usePlatform } from '../composables/usePlatform'
 
 const { platformInfo } = usePlatform()
+
+/** 顶部安全区（App.vue provide；缺省 0 = 无系统状态栏，壳自画） */
+const safeArea = inject<Ref<{ top: number }>>('safeArea', ref({ top: 0 }))
+const showOwnStatusbar = computed(() => (safeArea.value.top || 0) === 0)
 
 const currentTime = ref('')
 
