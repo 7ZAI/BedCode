@@ -35,7 +35,7 @@ import type { Disposable } from '../types'
 import '../styles/shell.css'
 
 const registry = getShellRegistry()
-const { refresh } = useShellApps()
+const { refresh, apps } = useShellApps()
 
 /**
  * App.vue 注入的宿主环境信息（缺省值用于单测 / 桌面预览：无安全区、非移动形态）。
@@ -55,20 +55,52 @@ const containerStyle = computed(() => {
 })
 
 let sourceDisposable: Disposable | null = null
+/** 冷启动清单轮询定时器（应用扫描未就绪时的补救） */
+let listRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 冷启动清单轮询：后端插件扫描是异步的，壳首次 refresh 可能撞上「还没扫完」而拿到空清单，
+ * 表现为首页「0 个应用 / 尚未安装 WASM 应用」且不再自愈（实测冷启动复现）。
+ * 这里只补「首次为空」这一种情形，拿到非空清单立即停：不把轮询做成常驻心跳。
+ * 参数与 PluginLoader 的启动扫描轮询同口径（250ms × 20s）。
+ */
+const LIST_RETRY_POLL_MS = 250
+const LIST_RETRY_TIMEOUT_MS = 20_000
+
+function scheduleListRetry(startedAt: number): void {
+  if (Date.now() - startedAt > LIST_RETRY_TIMEOUT_MS) {
+    logger.warn('[ShellView] app list still empty after startup timeout')
+    return
+  }
+  listRetryTimer = setTimeout(async () => {
+    try {
+      await refresh()
+    } catch (e) {
+      logger.error('[ShellView] app list retry failed', e)
+    }
+    if (apps.value.length === 0) scheduleListRetry(startedAt)
+  }, LIST_RETRY_POLL_MS)
+}
 
 onMounted(async () => {
   // 数据源在挂载时注册：壳本身不 import 任何具体形态的实现细节，
   // 只有这个入口知道「当前真源是插件系统」
   sourceDisposable = registry.registerSource(createPluginAppSource())
+  const startedAt = Date.now()
   try {
     await refresh()
   } catch (e) {
     // refresh 内部已逐源兜底并记录，这里只兜住意外抛出，避免挂了白屏
     logger.error('[ShellView] initial refresh failed', e)
   }
+  if (apps.value.length === 0) scheduleListRetry(startedAt)
 })
 
 onUnmounted(() => {
+  if (listRetryTimer !== null) {
+    clearTimeout(listRetryTimer)
+    listRetryTimer = null
+  }
   // 对称回收：先清该源写入的应用，再摘数据源，避免留下无主的记录
   registry.clearSource(PLUGIN_APP_SOURCE_ID)
   sourceDisposable?.dispose()
