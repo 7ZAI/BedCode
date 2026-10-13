@@ -161,3 +161,69 @@ pub(crate) fn build_sdk_fixture(feature: &str) -> Vec<u8> {
         .unwrap_or_else(|e| panic!("archive sdk fixture {feature}/{profile} artifact: {e}"));
     std::fs::read(&module_path).expect("read sdk fixture component after build")
 }
+
+// ==================== 系统组件夹具（plugin-system-test） ====================
+
+/// 系统组件夹具（`bedcode-desktop/packages/plugin-system-test`）产物是否需要重建
+///
+/// 与 [`fixture_needs_rebuild`] 同判据，但 watch 的是**本夹具自身 + 桌面 SDK 的 WIT
+/// 生成物目录**（夹具的 wit-bindgen 绑定直接吃 `plugin-sdk-desktop/rust/wit/`，
+/// WIT 变了必须重建，否则「wasm-core 全绿 + 宿主 e2e 用旧产物」）。
+fn system_test_fixture_needs_rebuild(module_path: &Path) -> bool {
+    let packages_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bedcode-desktop/packages");
+    let watched = [
+        packages_dir.join("plugin-system-test/src"),
+        packages_dir.join("plugin-system-test/Cargo.toml"),
+        packages_dir.join("plugin-sdk-desktop/rust/wit"),
+    ];
+    let newest = newest_source_mtime(&watched);
+    let module_modified = std::fs::metadata(module_path)
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    newest > module_modified
+}
+
+/// 构建系统组件夹具并返回产物字节（consumer = 桌面 `tests/system_component_test.rs`）
+///
+/// 与 [`build_sdk_fixture`] 分开的理由：它是**独立 crate**（不走
+/// `plugin-sdk-fixtures` 的 feature 合集），产物名固定（无 feature/profile 后缀），
+/// 但同样只由本 crate 的 keeper 用例构建、宿主测试只读——构建方与消费方分离，
+/// 「谁负责产出产物」必须有单一答案，否则产物缺失时那条红无人认领。
+pub(crate) fn build_system_test_fixture() -> Vec<u8> {
+    let packages_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bedcode-desktop/packages");
+    let plugin_dir = packages_dir.join("plugin-system-test");
+    // 该夹具固定 release profile（见其 Cargo.toml `[profile.release]`），无 debug 分支
+    let module_path =
+        fixture_target::artifact("wasm32-wasip3", "release", "bedcode_plugin_system_test");
+
+    if module_path.exists() && !system_test_fixture_needs_rebuild(&module_path) {
+        return std::fs::read(&module_path).expect("read cached system-test fixture component");
+    }
+
+    // 与 SDK 夹具共用互斥锁：两者写同一 target 目录的相邻路径，且 cargo 会争同一把
+    // 目录锁；显式串行避免"读到别的线程半写完的文件"。
+    let _guard = lock_sdk_fixture_build();
+
+    let manifest = plugin_dir.join("Cargo.toml");
+    let status = std::process::Command::new("cargo")
+        .env("RUSTUP_TOOLCHAIN", WASIP3_NIGHTLY)
+        .env("CARGO_TARGET_DIR", fixture_target::dir())
+        .args([
+            "build",
+            "--target",
+            "wasm32-wasip3",
+            "--release",
+            "--manifest-path",
+            manifest.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run cargo build for system-test fixture component");
+    assert!(
+        status.success(),
+        "system-test fixture component WASM build failed"
+    );
+
+    std::fs::read(&module_path).expect("read system-test fixture component after build")
+}

@@ -23,7 +23,7 @@ wit_bindgen::generate!({
 });
 
 use crate::exports::bedcode::plugin::{
-    abi, command, events, host_storage, lifecycle, manifest,
+    abi_form, command, events, host_storage, lifecycle, manifest,
 };
 use std::collections::HashMap;
 
@@ -90,6 +90,29 @@ impl events::Guest for Guest {
     // v27（票 10）：`on_session_lifecycle` / `on_input_submitted` 已从 WIT 删除
 
     fn on_process_done(_payload: String) -> Result<(), String> {
+        Ok(())
+    }
+
+    // 桌面 events 接口 = 双端并集七函数（ADR 0050：移动独有的 5 个生命周期回调
+    // 并入桌面 world，让单产物插件两端同形）。本夹具不消费事件，一律 Ok。
+
+    fn on_bus_message(_topic: String, _payload_json: String) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn on_auth_success() -> Result<(), String> {
+        Ok(())
+    }
+
+    fn on_disconnect(_reason: String) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn on_session_created(_session_id: String) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn on_session_stopped(_session_id: String) -> Result<(), String> {
         Ok(())
     }
 }

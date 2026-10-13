@@ -12,12 +12,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
+// 宿主测试统一入口模块：`setup_wasm_runtime` 在此是注入 DesktopGuestEvents 的包装
+// （内核 test_support 的同名入口不注入派发器，误用会让 `events` 投递走
+// `UnwiredGuestEvents`——intercall 到插件的请求无人处理 → api_call 5s 超时）。
+// 只显式引入所需一项，不用 glob（本文件自有大量同名 helper）。
+mod support;
+use support::setup_wasm_runtime;
+
 use bedcode_desktop_lib::wasm_core::manager::runtime::LoadedWasmPlugin;
 use bedcode_desktop_lib::wasm_core::runtime_util::block_on_async;
 use bedcode_desktop_lib::wasm_core::test_support::{
     lock_auth_center_desk, plugin_db_root, sdk_fixture_artifact_bytes, session_apis,
-    session_plugin_db_guard, setup_wasm_runtime, AuthCenterCaptureHandler,
-    TestInstanceDispatcher,
+    session_plugin_db_guard, AuthCenterCaptureHandler, TestInstanceDispatcher,
 };
 
 /// 经插件命令面向**配置真源**（插件私有库）播种一条配置 → 写入后的配置

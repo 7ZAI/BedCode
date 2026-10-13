@@ -225,7 +225,8 @@ impl PluginManager {
         // guest 事件派发器（票 05 绑定归位）：`events` 导出是各端契约事实，内核零绑定
         // ——注入移动实现（词汇：on-bus-message / on-auth-success / on-disconnect /
         // on-session-*），缺省 `UnwiredGuestEvents` 派发即 fail-visible。
-        // **必须在任何 instantiate_component 之前**（实例持有创建时的派发器快照）。
+        // 装配期注入即可（晚绑定共享槽）：派发时实时读取，早于/晚于实例化均生效；
+        // 缺省 `UnwiredGuestEvents` 派发即 fail-visible。
         runtime.set_guest_events(Arc::new(crate::plugin::guest_events::MobileGuestEvents));
 
         // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知

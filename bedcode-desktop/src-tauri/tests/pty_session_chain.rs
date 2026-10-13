@@ -109,6 +109,12 @@ async fn init_test_app_context() {
 
         let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }).await;
         plugin_host.init_message_bus().await;
+        // guest 事件派发器（生产同款）：缺省 `UnwiredGuestEvents` 会让总线投递
+        // fail-visible（会话中心 dispatch 报错 → trap）；本 harness 自建 PluginHost
+        // 须自行注入——晚绑定使注入对扫描期已建实例同样生效。
+        plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+            bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
+        ));
         plugin_host
             .wasm_host_ctx()
             .set_plugin_db_root(Some(session_plugin_db_root().clone()));

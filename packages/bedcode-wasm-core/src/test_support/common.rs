@@ -397,8 +397,8 @@ pub fn system_test_artifact_bytes() -> Vec<u8> {
         .join("../../bedcode-desktop/target/fixtures/wasm32-wasip3/release/bedcode_plugin_system_test.wasm");
     std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
-            "system-test fixture 产物缺失（{e}）：由 wasm-core 测试构建 \
-             （host/tests 的 system_component_test 原构建器，落点 bedcode-desktop/target/fixtures），\
+            "system-test fixture 产物缺失（{e}）：由 wasm-core 的 fixture_keeper 用例构建 \
+             （build_system_test_fixture，落点 bedcode-desktop/target/fixtures），\
              先跑 wasm-core 测试再跑本二进制"
         )
     })

@@ -156,6 +156,13 @@ bindings (ADR 0049).
   wiring fail visibly instead of silently dropping events. The mobile host gained the four
   end-specific lifecycle callbacks (`on_auth_success` / `on_disconnect` / `on_session_created` /
   `on_session_stopped`).
+- **Late-bound dispatcher (ticket-06 regression fix, 2026-10-13).** `PluginHost::new` instantiates
+  scanned plugins eagerly, while instances used to *snapshot* the dispatcher at creation and hosts
+  could only inject after `new` — every startup instance kept `UnwiredGuestEvents`, so the first bus /
+  WS-frame delivery trapped (five desktop integration targets failed for this one reason). Instances
+  now share the slot (`LoadedWasmPlugin` holds `Arc<RwLock<Arc<dyn GuestEventDispatcher>>>`, the same
+  one as `WasmRuntime`, read at dispatch time): assembly-time injection applies to already-created
+  instances, and an absent injection still fails visibly.
 - **One host context, neutral naming.** `context::WasmHostContext` and `bare_context::WasmHostContext`
   are merged into one neutral type; the zero-consumer `host_api/sql_guard.rs` shim and the
   call-less `host_context_registry.rs` are deleted rather than left as stubs. `host_api/ports.rs`

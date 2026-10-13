@@ -168,6 +168,11 @@ import / export 名自带版本；整数 `ABI_VERSION` 与 `interface abi` **同
   注入；缺省 `UnwiredGuestEvents` 让「漏接线」显性报错而不是静默丢事件。移动宿主因此多实现四个
   端专属生命周期回调（`on_auth_success` / `on_disconnect` / `on_session_created` /
   `on_session_stopped`）。
+- **派发器晚绑定（2026-10-13 票 06 回归修复）。** `PluginHost::new` 扫描期即实例化插件，而实例原先在
+  创建时**快照** dispatcher、宿主只能在 `new` 之后注入——启动期实例全持 `UnwiredGuestEvents`，总线 /
+  WS 帧投递即 trap（桌面 5 个集成目标同因红）。现改为**共享槽**：`LoadedWasmPlugin` 持
+  `Arc<RwLock<Arc<dyn GuestEventDispatcher>>>`（与 `WasmRuntime` 同一个槽），派发时实时读取——
+  装配期注入对已建实例即时生效；未注入仍 fail-visible。
 - **宿主上下文合一 + 命名中立。** `context::WasmHostContext` 与 `bare_context::WasmHostContext`
   并成一个中立类型；零消费者的 `host_api/sql_guard.rs` 垫片与已无调用点的 `host_context_registry.rs`
   按退役删除而非留垫片。`host_api/ports.rs` **刻意留内核**——它是那个统一上下文的端口词汇。

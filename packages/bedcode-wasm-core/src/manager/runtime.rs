@@ -434,8 +434,11 @@ impl WasmRuntime {
     /// 注入端专属 guest 事件派发器（生产在 `PluginHost::new` / 移动宿主
     /// `PluginManager::init_wasm_runtime_with`，与 monitor 同范式）
     ///
-    /// **必须在首次 `instantiate_component` 之前调用**：已加载实例持有创建时的派发器
-    /// 快照。漏注入的后果是事件派发 fail-visible 报错（不是静默丢消息）。
+    /// **晚绑定**：派发器存入与各实例共享的槽位，实例在派发时实时读取——
+    /// 因此对**已创建**的实例同样生效。这很重要：`PluginHost::new` 会在扫描阶段
+    /// 即实例化插件，宿主的注入调用只能发生在其后，快照语义会让这批实例永远停在
+    /// `UnwiredGuestEvents`。未注入时槽内是 `UnwiredGuestEvents`，派发 fail-visible
+    /// 报错（不是静默丢消息）。
     pub fn set_guest_events(
         &self,
         dispatcher: Arc<dyn crate::manager::runtime::guest_events::GuestEventDispatcher>,
@@ -568,10 +571,9 @@ impl WasmRuntime {
                 metrics: metrics.clone(),
             },
             self.abi_policy,
-            self.guest_events
-                .read()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
+            // 晚绑定共享槽：注入（`set_guest_events`，可能晚于扫描期实例化）对各实例
+            // 即时生效——实例不再持创建时快照，见 `LoadedWasmPlugin` 字段注释
+            self.guest_events.clone(),
         )?;
         metrics.record_lifecycle(LifecycleEvent::Instantiate);
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
@@ -602,7 +604,9 @@ impl WasmRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::fixture_build::build_sdk_fixture;
+    // fixture_keeper 用夹具构建器 + wasip3 工具链探针（consumer 在宿主 e2e，见该文件头注）；
+    // system-test 夹具走独立 crate 的构建器（同文件 keeper 用例）
+    use super::fixture_build::{build_sdk_fixture, build_system_test_fixture};
     // fixture_keeper 用 fixture 构建器 + wasip3 工具链探针（consumer 在宿主 e2e，见该文件头注）
     use super::*;
     // 测试基建上提（wasm-core 纯净性收口票 05b）：无头运行时装配 / 插件私有库根 /

@@ -26,7 +26,9 @@ fn keep_fixture_alive(feature: &str) {
     // 工具链未装（CI stable / 本地未 install）时跳过——与 preopen_e2e 的 skip 口径一致：
     // 夹具构建走 pinned nightly + wasm32-wasip3，缺工具链不是本用例要抓的回归。
     if !super::wasip3_toolchain_ready() {
-        eprintln!("[skip] wasip3 工具链未安装，{feature} 夹具产物由本用例的宿主侧消费方自建路径兜底");
+        eprintln!(
+            "[skip] wasip3 工具链未安装，{feature} 夹具产物未构建——宿主侧 e2e 会在产物缺失处显性报错（先补工具链跑本 keeper）"
+        );
         return;
     }
     let bytes = build_sdk_fixture(feature);
@@ -68,4 +70,25 @@ fn sdk_fixture_artifact_is_built_for_host_e2e() {
 #[test]
 fn http_fixture_artifact_is_built_for_host_e2e() {
     keep_fixture_alive("http");
+}
+
+/// 系统组件夹具（consumer = 桌面 `tests/system_component_test.rs` 的 L1 基础服务 /
+/// 能力路由 / trap 隔离场景）。它不走 `plugin-sdk-fixtures` 的 feature 合集，而是
+/// 独立 crate `bedcode-desktop/packages/plugin-system-test`，故构建器也独立；
+/// 缺本keeper 时该夹具**无人构建**，桌面集成测试会在 `test_support::
+/// system_test_artifact_bytes` 的「产物缺失」上红——6 个用例同因。
+#[test]
+fn system_test_fixture_artifact_is_built_for_host_e2e() {
+    if !super::wasip3_toolchain_ready() {
+        eprintln!(
+            "[skip] wasip3 工具链未安装，system-test 夹具产物未构建——桌面 system_component_test 会在产物缺失处显性报错（先补工具链跑本 keeper）"
+        );
+        return;
+    }
+    let bytes = super::build_system_test_fixture();
+    assert!(
+        bytes.len() > 1024,
+        "system-test 夹具产物异常（{} 字节）——构建成功但产物为空/截断",
+        bytes.len()
+    );
 }

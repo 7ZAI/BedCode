@@ -223,9 +223,13 @@ pub struct LoadedWasmPlugin {
     store: Store<WasmPluginState>,
     /// 端专属 guest 事件派发器（票 03 / ADR 0022：机制留内核、契约面上移）
     ///
-    /// 由 `WasmRuntime` 在实例化时透传——本壳不知道 `events` 导出在各端长什么样，
-    /// 只把 `(Store, Instance)` 与消息交给宿主侧实现。
-    guest_events: Arc<dyn GuestEventDispatcher>,
+    /// 与 [`WasmRuntime`] **共享同一槽位**而非实例化时快照：`PluginHost::new`
+    /// 会在宿主注入之前扫描即实例化（无头 harness 同序），快照会让这批实例
+    /// 永远停在 `UnwiredGuestEvents`。晚绑定使装配期注入对已建实例同样生效，
+    /// 派发时实时读取；未注入时槽内仍是 `UnwiredGuestEvents`（fail-visible）。
+    /// 本壳不知道 `events` 导出在各端长什么样，只把 `(Store, Instance)` 与消息
+    /// 交给宿主侧实现。
+    guest_events: Arc<std::sync::RwLock<Arc<dyn GuestEventDispatcher>>>,
 }
 
 impl Drop for LoadedWasmPlugin {
@@ -255,7 +259,7 @@ impl LoadedWasmPlugin {
         wasi_cfg: &WasiConfig,
         spec: StoreSpec,
         abi: AbiPolicy,
-        guest_events: Arc<dyn GuestEventDispatcher>,
+        guest_events: Arc<std::sync::RwLock<Arc<dyn GuestEventDispatcher>>>,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
         // 目录 /data…；无声明/未授权/配置关闭时为空上下文
@@ -665,6 +669,17 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的消息总线消息接收导出
     ///
+    /// 取当前 guest 事件派发器（晚绑定共享槽，见字段注释）
+    ///
+    /// 先 clone 出 `Arc` 再离开读锁：派发会进 guest（长调用），没有必要持锁跨调用，
+    /// 也避免与装配期 `set_guest_events` 的写锁互相阻塞。
+    fn dispatcher(&self) -> Arc<dyn GuestEventDispatcher> {
+        self.guest_events
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// 派发委托给宿主注入的 [`GuestEventDispatcher`]（票 03 / ADR 0022）：本壳不
     /// 持有 `events` 绑定。调用计时与燃料续费仍留机制侧。
     pub fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
@@ -672,8 +687,8 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         self.refill_call_fuel()?;
         let instance = self.instance;
-        self.guest_events
-            .on_message(&mut self.store, instance, topic, sender, &payload_str)
+        let dispatcher = self.dispatcher();
+        dispatcher.on_message(&mut self.store, instance, topic, sender, &payload_str)
     }
 
     /// 调用插件的消息总线二进制消息接收导出（v11，可选导出动态探测）
@@ -789,8 +804,8 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         self.refill_call_fuel()?;
         let instance = self.instance;
-        self.guest_events
-            .on_process_done(&mut self.store, instance, payload_json)
+        let dispatcher = self.dispatcher();
+        dispatcher.on_process_done(&mut self.store, instance, payload_json)
     }
 
     /// 调用插件的生命周期事件导出（移动端 `PluginLifecycleEvent` 枚举 → 导出映射）
@@ -825,25 +840,26 @@ impl LoadedWasmPlugin {
             PluginLifecycleEvent::AuthSuccess => {
                 self.refill_call_fuel()?;
                 let instance = self.instance;
-                self.guest_events.on_auth_success(&mut self.store, instance)
+                let dispatcher = self.dispatcher();
+                dispatcher.on_auth_success(&mut self.store, instance)
             }
             PluginLifecycleEvent::Disconnect { reason } => {
                 self.refill_call_fuel()?;
                 let instance = self.instance;
-                self.guest_events
-                    .on_disconnect(&mut self.store, instance, reason)
+                let dispatcher = self.dispatcher();
+                dispatcher.on_disconnect(&mut self.store, instance, reason)
             }
             PluginLifecycleEvent::SessionCreated { session_id } => {
                 self.refill_call_fuel()?;
                 let instance = self.instance;
-                self.guest_events
-                    .on_session_created(&mut self.store, instance, session_id)
+                let dispatcher = self.dispatcher();
+                dispatcher.on_session_created(&mut self.store, instance, session_id)
             }
             PluginLifecycleEvent::SessionStopped { session_id } => {
                 self.refill_call_fuel()?;
                 let instance = self.instance;
-                self.guest_events
-                    .on_session_stopped(&mut self.store, instance, session_id)
+                let dispatcher = self.dispatcher();
+                dispatcher.on_session_stopped(&mut self.store, instance, session_id)
             }
         }
     }

@@ -433,3 +433,51 @@ POC 1 周（R3）；双端 WIT 同步流程（ADR 0019）+ CHANGELOG + ADR。
   `a03_p2_fuel_async_semantics`，fixture 重建后归绿）· 桌面 lib 155/155 · 移动全量
   全绿（226 + component_e2e 8/8）· 能力 crate pty 100 / http 85 / ws 51 / peer 56 /
   discovery 35 / host-kit 全绿 · file-transfer-core 76/76 · 版本锁 5/5 · check:wit 9/9。
+
+- **2026-10-13 · 票 06 实施完成（全量重建与回归）**：
+  ① **重拼与产物**：`node scripts/compose-wit.mjs --all` 无漂移；桌面 4 + 移动 3 个
+  wasm-app 全量重建（`wasmHash` 注入并逐产物校验一致；首轮四个桌面产物 sha 与上一轮构建
+  逐一相同 = 源码未变；domain-owned-contracts 重拼 WIT 后按最终组合再重建一轮，哈希全量更新）；
+  全部 fixture 重建（sdk / http / pty / ws / crypto / task /
+  wasip3 / system-test / wasip2，随 wasm-core keeper 与测试触发）。
+  ② **回归**：wasm-core `cargo test` **576/576**（含原遗留红 `a03_p2_fuel_async_semantics`
+  归绿）· 桌面宿主 `cargo test --no-fail-fast` **288 通过 / 5 红**（红 = 3 个结构性锁
+  既有基线：`capability_crates_no_product_ids` 的 headless-host-probe/host-api-core 未登记、
+  `capability_crates_unit_tests_only` 的 host-api-core tests/ 越界、`empty_dir_lock` 的
+  移动 `plugins/` 目录缺失；另 1 条 dev-dep 项为并行线 HostFactsPort 在途，非本票。
+  末轮产物重建后复跑为 286/7——新增 2 红是 domain-owned-contracts 在途 0.2.0 bump 的
+  版本锁点名（`routing.rs` 字面量 / 生成物 package 行），非本票）·
+  移动宿主 **355/355** · 能力/引擎 crate 14 个全绿（pty 100 / http 85 / ws 51 / peer 56 /
+  discovery 34 / file-transfer-core 76 / host-api-core 40 / server-core 42 …；pty 与
+  host-kit 各有 1 例并行 flake，单跑/重跑均绿）· 桌面 vitest **117 文件 / 1624 用例**
+  （唯一红 = 既有 flake `terminalPreview.test.ts` resize 重试，2026-10-06 已有 HEAD 对照
+  证明）· 移动 vitest **78 文件 / 895 用例**全绿 · 根 `pnpm exec eslint .` **0 error**。
+  ③ **fail-visible 迁移期语义实测**：以旧 WIT（`4f7031d81`，无版本包名）现编两个「旧产物」
+  （pinned nightly + 现夹具源码）：旧 system-test（无版本导出）→ 新宿主
+  `WASM component missing required export abi-form.form（…请用当前 SDK 重建插件产物）`；
+  旧 sdk 夹具（无版本 import 名）→ `component imports instance bedcode:plugin/host-storage,
+  but a matching implementation was not found in the linker（…重建指引）`——两条判据
+  （缺失导出 / 缺失 import）实测命中 `stale_artifact_rebuild_hint`，旧产物在实例化期被拒。
+  ④ **重建暴露并修复的阻断缺陷（非版本化引入，用户批准方案 B）**：桌面 5 个 wasm 产物依赖
+  目标（`broadcast_shutdown` / `pty_session_chain` / `session_e2e` / `ws_auth_rules` /
+  `ws_e2e`）统一倒在 `WASM guest events unwired: host injected no dispatcher`。根因：
+  `PluginHost::new` 扫描期即 `instantiate_scanned_wasm_plugins()`，而
+  `WasmRuntime::instantiate_component` 在实例化时**快照** dispatcher、宿主只能在
+  `PluginHost::new` **之后**注入（注释却写「必须实例化之前」）⇒ 启动期实例全持
+  `UnwiredGuestEvents`，总线/WS 帧投递即 trap（可回溯到 `f24d0145c` guest 事件契约面上移，
+  非票 01–05 引入）。修复：dispatcher 改**晚绑定共享槽**——`LoadedWasmPlugin` 持
+  `Arc<RwLock<Arc<dyn GuestEventDispatcher>>>`（与 `WasmRuntime` 同一个槽），派发时实时
+  读取，`set_guest_events` 对已建实例即时生效；未注入仍 fail-visible。同步补三处宿主测试
+  harness 缺口：`pty_session_chain` / `ws_auth_rules` 自建 `PluginHost` 从未注入派发器
+  （补生产同款 `DesktopGuestEvents`）；`session_e2e` 显式引入内核同名 `setup_wasm_runtime`
+  遮蔽了宿主 `support` 包装（去掉内核项、改经 `support::setup_wasm_runtime`，与 `ws_e2e`
+  同款注释）。修复后 5 目标全绿（session_e2e 12/12）。
+  ⑤ **环境与边界**：本机 vitest 单 worker heap 跨文件累积会 OOM，全量按 4 shard 执行
+  （117 文件全部跑到，非跳过）；「stable 无 wasm32-wasip3 ⇒ 7 个目标无法转绿」的旧结论已
+  过时——pinned `nightly-2026-09-16` 本机已装，产物与 fixture 全部本机重建。回归在含并行在途
+  改动（HostFactsPort 端事实收口）的树上执行；**domain-owned-contracts（ADR 0052，0.2.0 bump +
+  域契约搬家）在收口过程中持续改写 WIT/宿主，最终产物重建需在其落定后按其 bump 重跑**
+  （其版本锁已点名 `routing.rs` 字面量与生成物 package 行待更新）。
+  ⑥ 跨端协议/认证/会话 wire 未动 ⇒ `cross-end-tests` 本票无涉，未跑（理由成立）；
+  `cargo fmt` 全仓非 clean（HEAD 即如此，无 rustfmt 配置），仅对本票改动文件做风格对齐；
+  `cargo clippy` 未单独跑（CI 非门禁，编译无新增 warning 归因本票）。

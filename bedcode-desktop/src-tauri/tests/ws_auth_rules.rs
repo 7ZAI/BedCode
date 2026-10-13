@@ -112,6 +112,12 @@ async fn init_test_app_context() {
 
         let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }).await;
         plugin_host.init_message_bus().await;
+        // guest 事件派发器（生产同款）：缺省 `UnwiredGuestEvents` 会让总线投递
+        // fail-visible（会话中心 dispatch 报错 → trap）；本 harness 自建 PluginHost
+        // 须自行注入——晚绑定使注入对扫描期已建实例同样生效。
+        plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+            bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
+        ));
         // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无
         // AppHandle，必须在 activation 前注入私有库根（activate 建表走
         // host-plugin-database；配对/信任链路无私有库即不可用）

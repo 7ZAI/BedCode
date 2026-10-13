@@ -127,7 +127,8 @@ async fn init_test_app_context() {
         // 本harness 自建 PluginHost，须自行注入——缺省 `UnwiredGuestEvents` 派发即
         // fail-visible，会话中心在 ws 断连事件上报时直接报错并被停用，随后
         // `/api/auth/pairing` 因认证中心不在册而 401（认证裁决 fail-closed）。
-        // **必须在 activate_plugin 之前**：已加载实例持有创建时的派发器快照。
+        // 装配期注入即可（晚绑定共享槽）：`PluginHost::new` 扫描期已实例化的插件在
+        // 派发时实时读取本槽位，注入对它同样生效。
         plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
             bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
         ));
