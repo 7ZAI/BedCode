@@ -151,8 +151,8 @@ pub trait HostEnginePorts: Send + Sync {
     // `host-config` 是 core.wit 的双端全等 interface，白名单词汇由内核持并集
     // （见 `host_api/config.rs`）。并集里属**端专属事实**的一项是移动下载目录
     // （Android SAF 路径），由移动宿主经本端口注入；未注入 ⇒ 域内 fail-visible
-    // 报错（不静默返回空值）。桌面侧无此需求（`network.port` 走 common-host
-    // 直读 supervisor，不经本端口）。
+    // 报错（不静默返回空值）。桌面侧无此需求（`network.port` 走桌面装配面
+    // `desktop-assembly` 直读 supervisor，不经本端口）。
 
     /// 本端应用下载目录绝对路径（`app.downloads_dir`；移动 SAF 路径事实）
     ///

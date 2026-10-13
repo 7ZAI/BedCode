@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use bedcode_host_kit::WasmPluginState;
-use bedcode_wasm_core::manager::runtime::{LoadedComponentPlugin, WasmRuntime};
+use bedcode_wasm_core::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
 use bedcode_mobile_lib::plugin::bindings::bedcode;
 use bedcode_wasm_core::test_support::{
     build_component_linker, build_host_ctx, build_terminal_session_component, build_test_component,
@@ -35,7 +35,16 @@ use bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE;
 /// 创建 runtime 后**注入 guest 事件派发器**——`events` 导出是宿主契约面，内核缺省
 /// `UnwiredGuestEvents` 派发即 fail-visible（不注入时 `on_bus_message` 必 Err）。
 fn mobile_runtime(aot_cache_dir: Option<std::path::PathBuf>) -> WasmRuntime {
-    let runtime = WasmRuntime::new(aot_cache_dir).expect("create wasm runtime");
+    // 统一壳 ABI 规格注入（单形态）：移动端事实 = SDK ABI_VERSION + 无 abi-form
+    // 导出（移动 WIT 无 form）——high-abi 拒绝用例依赖真实上限，不能用 UNCONSTRAINED
+    let runtime = bedcode_wasm_core::test_support::setup_headless_runtime_with_abi(
+        aot_cache_dir,
+        bedcode_wasm_core::manager::runtime::AbiPolicy {
+            version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
+            form: None,
+        },
+    )
+    .expect("create wasm runtime");
     runtime.set_guest_events(std::sync::Arc::new(
         bedcode_mobile_lib::plugin::guest_events::MobileGuestEvents,
     ));
@@ -58,41 +67,24 @@ fn test_component_roundtrip_and_host_impl() {
         let runtime =
             mobile_runtime(Some(tmp.path().join("aot")));
         // 组件必须用 runtime 自身 Engine 编译（跨 Engine 实例化被 wasmtime 拒绝）
-        let component = Component::from_binary(runtime.engine(), &build_test_component(&[]))
+        let component = Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&[]))
             .expect("compile test component");
         let mut plugin = runtime
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                host_ctx.clone(),
-                HashSet::from([PERMISSION_STORAGE.to_string()]),
+                Arc::new(host_ctx.for_plugin(HashSet::from([PERMISSION_STORAGE.to_string()]))),
+                &[],
+                None,
             )
             .expect("instantiate component");
 
-        // host_storage Host impl 直测（guest 侧调用发生在 invoke，03 覆盖）
-        let mut state = bedcode_wasm_core::test_support::build_component_state_with_ctx(
-            TEST_PLUGIN_ID,
-            Arc::new(host_ctx.for_plugin(HashSet::from([PERMISSION_STORAGE.to_string()]))),
-        );
-        let got = bedcode::plugin::host_storage::Host::get(&mut state, "test-key".into())
-            .expect("host_storage.get");
-        assert_eq!(got.as_deref(), Some(r#"{"k":"v"}"#));
-        bedcode::plugin::host_storage::Host::set(
-            &mut state,
-            "roundtrip-key".into(),
-            r#"{"n":1}"#.into(),
-        )
-        .expect("host_storage.set");
-        let got2 = bedcode::plugin::host_storage::Host::get(&mut state, "roundtrip-key".into())
-            .expect("host_storage.get #2");
-        assert_eq!(got2.as_deref(), Some(r#"{"n":1}"#));
-        // 权限拒绝：未授权插件读 storage 返回 Err（fail-closed 语义）
-        let mut unauth = bedcode_wasm_core::test_support::build_component_state_with_ctx(
-            TEST_PLUGIN_ID,
-            Arc::new(host_ctx.for_plugin(HashSet::new())),
-        );
-        let denied = bedcode::plugin::host_storage::Host::get(&mut unauth, "test-key".into());
-        assert!(denied.is_err(), "未授权 storage 访问必须被拒绝");
+        // 单形态（2026-10-13）：host-storage 域实现随统一迁内核 `core_binding`
+        //（双端全等 8 域单份；权限门收敛统一 PermissionManager，JSON 往返与
+        // 未授权拒绝的正反例由 wasm-core `host_api/storage.rs` 测试覆盖）——
+        // 本端不再直测移动版 trait（原 `host_domains/storage.rs` 已删除）。
+        // 预写 storage 仍在上面保留：实例化成功即验证 core_binding 的
+        // host_storage 注册进统一 linker（guest 闭环经 invoke 用例覆盖）。
 
         // abi.version() 协商：测试组件版本与 SDK ABI_VERSION 同步
         assert_eq!(
@@ -138,14 +130,18 @@ fn test_component_business_methods_roundtrip() {
             .expect("preset storage key");
 
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
-        let component = Component::from_binary(runtime.engine(), &build_test_component(&[]))
+        let component = Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&[]))
             .expect("compile test component");
+        // 统一权限门（单形态）：WASM 实例内 host-storage 走统一 PermissionManager——
+        // 测试须把 manifest 权限 grant 进统一词表（生产路径在 activate 批准时做）
+        host_ctx.grant_permissions(TEST_PLUGIN_ID, &[PERMISSION_STORAGE.to_string()]);
         let mut plugin = runtime
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                host_ctx,
-                HashSet::from([PERMISSION_STORAGE.to_string()]),
+                Arc::new(host_ctx.for_plugin(HashSet::from([PERMISSION_STORAGE.to_string()]))),
+                &[],
+                None,
             )
             .expect("instantiate component");
 
@@ -175,16 +171,15 @@ fn test_component_business_methods_roundtrip() {
             serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
         assert_eq!(manifest["id"], "com.bedcode.component-test");
 
-        // bus 事件回调（组件返回 Ok）
+        // bus 事件回调（组件返回 Ok）：统一壳 on_message（单形态）——
+        // BusMessage 拆为 topic/sender/payload 三参
         plugin
-            .on_bus_message(&bedcode_plugin_api_mobile::BusMessage {
-                topic: "t".to_string(),
-                sender: "s".to_string(),
-                payload: serde_json::json!({}),
-                payload_binary: None,
-                timestamp: 0,
-            })
-            .expect("on_bus_message");
+            .on_message(
+                &"t".to_string(),
+                &"s".to_string(),
+                &serde_json::json!({}),
+            )
+            .expect("on_message");
 
         // 生命周期事件映射（auth/disconnect/session 各走一遍）
         use bedcode_wasm_core::manager::types::PluginLifecycleEvent;
@@ -218,13 +213,14 @@ fn test_component_high_abi_rejected() {
         let host_ctx = build_host_ctx();
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
         let component =
-            Component::from_binary(runtime.engine(), &build_test_component(&["high-abi"]))
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["high-abi"]))
                 .expect("compile test component");
         let err = match runtime.instantiate_component(
             &component,
             TEST_PLUGIN_ID,
-            host_ctx,
-            HashSet::new(),
+            Arc::new(host_ctx.for_plugin(HashSet::new())),
+            &[],
+            None,
         ) {
             Err(e) => e,
             Ok(_) => panic!("高版本 ABI 组件必须被拒绝"),
@@ -248,10 +244,16 @@ fn test_component_fuel_trap() {
         let host_ctx = build_host_ctx();
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
         let component =
-            Component::from_binary(runtime.engine(), &build_test_component(&["spin-loop"]))
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["spin-loop"]))
                 .expect("compile test component");
         let mut plugin = runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, HashSet::new())
+            .instantiate_component(
+                &component,
+                TEST_PLUGIN_ID,
+                Arc::new(host_ctx.for_plugin(HashSet::new())),
+                &[],
+                None,
+            )
             .expect("实例化正常（死循环在调用期，不在构造器）");
 
         let err = plugin
@@ -296,10 +298,16 @@ fn test_component_limiter_rejects_over_limit_memory() {
         // 集成层：guest 直接 memory.grow 300MB → limiter 拒绝 → 返回 {"grow":"failed"}
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
         let component =
-            Component::from_binary(runtime.engine(), &build_test_component(&["big-alloc"]))
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["big-alloc"]))
                 .expect("compile test component");
         let mut plugin = runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, HashSet::new())
+            .instantiate_component(
+                &component,
+                TEST_PLUGIN_ID,
+                Arc::new(host_ctx.for_plugin(HashSet::new())),
+                &[],
+                None,
+            )
             .expect("实例化正常（分配发生在调用期）");
         let result = plugin.invoke_command("alloc", "{}");
         match result {
@@ -334,7 +342,7 @@ fn test_sdk_macro_component_loads_and_activates() {
         let host_ctx = build_host_ctx();
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
         let component =
-            Component::from_binary(runtime.engine(), &build_terminal_session_component())
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_terminal_session_component())
                 .expect("compile terminal-session component");
         // 生产 manifest 权限集（activate 期 ws 属主 topic 订阅 + 认证状态探测按声明放行）
         let granted: HashSet<String> = [
@@ -354,8 +362,9 @@ fn test_sdk_macro_component_loads_and_activates() {
             .instantiate_component(
                 &component,
                 "com.bedcode.terminal-session",
-                host_ctx,
-                granted,
+                Arc::new(host_ctx.for_plugin(granted)),
+                &[],
+                None,
             )
             .expect("instantiate terminal-session component");
 
@@ -465,23 +474,10 @@ fn test_component_aot_cache_hit() {
 /// 直接暴露）。用**宿主绑定**（`plugin::bindings`）验证 wasmtime 的
 /// "defined twice" 语义——内核侧只剩 WASI 面，等价断言见 wasm-core
 /// `bare/component.rs` 的 `test_component_linker_registers_wasi_by_default`。
-#[test]
-fn test_component_linker_rejects_duplicate_registration() {
-    use bedcode_mobile_lib::plugin::bindings::bedcode;
-    let engine = test_engine();
-    let mut linker = wasmtime::component::Linker::<WasmPluginState>::new(&engine);
-    type D = wasmtime::component::HasSelf<WasmPluginState>;
-    bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>(&mut linker, |s| s)
-        .expect("first registration");
-    let err = bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>(&mut linker, |s| s)
-        .expect_err("duplicate registration should fail");
-    // wasmtime 对已注册的同名 interface instance 报 "defined twice"
-    assert!(
-        err.to_string().contains("defined twice"),
-        "unexpected duplicate registration error: {}",
-        err
-    );
-}
+// 单形态（2026-10-13）：defined twice 语义由统一壳 `component::add_to_linker`
+// 覆盖（wasm-core `component/tests/linker.rs::test_add_to_linker_rejects_duplicate_registration`
+// ——同一 linker 装配面）。本端不再持有 host_storage 实现（双端全等 8 域在内核
+// core_binding），原移动绑定直测删除。
 
 // ==================== linker 装配契约（WASI 段） ====================
 //

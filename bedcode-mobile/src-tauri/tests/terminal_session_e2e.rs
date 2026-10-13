@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use bedcode_wasm_core::manager::runtime::{LoadedComponentPlugin, WasmRuntime};
+use bedcode_wasm_core::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
 use bedcode_wasm_core::test_support::{build_test_component, test_engine, TEST_PLUGIN_ID};
 use wasmtime::component::Component;
 
@@ -52,7 +52,16 @@ impl bedcode_wasm_core::bus::MessageDispatcher for CapturingDispatcher {
 /// 创建 runtime 后**注入 guest 事件派发器**——`events` 导出是宿主契约面，内核缺省
 /// `UnwiredGuestEvents` 派发即 fail-visible（不注入时 `on_bus_message` 必 Err）。
 fn mobile_runtime(aot_cache_dir: Option<std::path::PathBuf>) -> WasmRuntime {
-    let runtime = WasmRuntime::new(aot_cache_dir).expect("create wasm runtime");
+    // 统一壳 ABI 规格注入（单形态）：移动端事实 = SDK ABI_VERSION + 无 abi-form
+    // 导出（移动 WIT 无 form）——high-abi 拒绝用例依赖真实上限，不能用 UNCONSTRAINED
+    let runtime = bedcode_wasm_core::test_support::setup_headless_runtime_with_abi(
+        aot_cache_dir,
+        bedcode_wasm_core::manager::runtime::AbiPolicy {
+            version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
+            form: None,
+        },
+    )
+    .expect("create wasm runtime");
     runtime.set_guest_events(std::sync::Arc::new(
         bedcode_mobile_lib::plugin::guest_events::MobileGuestEvents,
     ));
@@ -79,20 +88,20 @@ fn terminal_session_domain_full_loop_with_real_component() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let runtime = mobile_runtime(Some(tmp.path().join("aot")));
         let component =
-            Component::from_binary(runtime.engine(), &build_test_component(&["terminal-session"]))
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["terminal-session"]))
                 .expect("compile terminal-session component");
         let mut plugin = runtime
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                host_ctx,
-                // 终端协议客户端三权限位：ws:client（连接面）+ bus（事件与帧
-                // 走消息总线属主 topic）+ terminal:output（输出窄转发出口）
-                HashSet::from([
+                // 权限经 for_plugin 派生 per-plugin 上下文注入（统一 instantiate 签名）
+                Arc::new(host_ctx.for_plugin(HashSet::from([
                     PERMISSION_WS_CLIENT.to_string(),
                     bedcode_plugin_api_mobile::permission::PERMISSION_BUS.to_string(),
                     bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT.to_string(),
-                ]),
+                ]))),
+                &[],
+                None,
             )
             .expect("instantiate terminal-session component");
 

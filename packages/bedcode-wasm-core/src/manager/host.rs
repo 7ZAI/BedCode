@@ -407,6 +407,9 @@ impl PluginHost {
     ///   宿主能力在调用处降级）
     /// * `peer_ctx_provider` - 对等网络上下文装配端口（无头/测试传 None）
     /// * `first_party_dirs` - 第一方免弹窗归属清单（宿主装配时注入）
+    /// * `abi` - ABI 规格（[`crate::manager::runtime::AbiPolicy`]，端事实：
+    ///   桌面 `bedcode_plugin_api::abi::{ABI_VERSION, FORM_COMPONENT}`；宿主装配时
+    ///   显式注入，wasm-core 零端 ABI 知识）
     /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
@@ -424,6 +427,8 @@ impl PluginHost {
         // 第一方免弹窗归属清单（票 08/P0-2：宿主装配时注入——产品数据出厂 lib，
         // 判定逻辑留 wasm-core；空表 = 无免弹窗项，无头/测试语义逐字不变）
         first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
+        // ABI 规格（端事实，宿主注入；见 [`crate::manager::runtime::AbiPolicy`]）
+        abi: crate::manager::runtime::AbiPolicy,
     ) -> Arc<Self> {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
@@ -431,9 +436,11 @@ impl PluginHost {
         let registry = Arc::new(PluginRegistry::new());
         let storage = Arc::new(PluginStorage::new(db.clone()));
 
-        // 构建 WASM 运行时和宿主上下文
+        // 构建 WASM 运行时和宿主上下文（ABI 规格经 WasmRuntime::new 注入：wasm-core
+        // 零端 ABI 知识，版本/形态要求是宿主事实；CoreConfig 仍按 app_handle 从
+        // 配置文件加载——编译期默认 < 配置文件 < 运行时覆盖）
         let wasm_runtime = Arc::new(
-            WasmRuntime::new(storage.clone(), app_handle.clone(), first_party_dirs)
+            WasmRuntime::new(storage.clone(), app_handle.clone(), first_party_dirs, abi)
                 .expect("Failed to initialize WASM runtime"),
         );
 

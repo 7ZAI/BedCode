@@ -41,7 +41,7 @@ pub(super) async fn setup_host() -> PluginHost {
     let registry = Arc::new(PluginRegistry::new());
     let message_bus = Arc::new(MessageBus::new());
 
-    let wasm_runtime = Arc::new(WasmRuntime::new(storage.clone(), None, Vec::new()).unwrap());
+    let wasm_runtime = Arc::new(WasmRuntime::new(storage.clone(), None, Vec::new(), crate::manager::runtime::AbiPolicy::UNCONSTRAINED).unwrap());
 
     let wasm_host_ctx = Arc::new(WasmHostContext::new(
         db,

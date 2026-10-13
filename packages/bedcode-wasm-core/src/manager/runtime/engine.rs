@@ -5,17 +5,17 @@
 //!
 //! ## 这份为什么能合一、绑定层为什么不能
 //!
-//! wasm-core 是单一 crate 双形态（ADR 0045）：桌面形态（`common-host`）与移动形态
-//! （`bare-host`）各挂一套 `bindgen!`，绑定各自的 WIT world。两套绑定都在同一 crate
-//! 里会生成同名 `bedcode` 模块 ⇒ 编译期互斥（`crate::lib` 的 `compile_error!` 守卫）。
+//! wasm-core 自 2026-10-13 起是**单一形态**（runtime-single-form 收口，ADR 0049）：
+//! 无 `common-host` / `bare-host` 之分，运行时壳双端共用一份（桌面形态）；WIT 绑定
+//! 与端差异全部在两端宿主（`HostModule` 自报汇入同一 Linker，票 04/05 绑定归位）。
 //! 插件产物静态 import 的是**本端 world 全集**，宿主必须按本端 world 生成绑定并全量
-//! 注册，所以「一份绑定服务两个 world」在工具链层就不成立——那是绑定层的固有分叉。
-//!
+//! 注册，所以「一份绑定服务两个 world」在工具链层就不成立——绑定层的固有分叉。
 //! 但**加载与实例化机制本身与 WIT 无关**：编译产物、AOT 缓存、Store 装配、资源限制、
-//! 燃料看门狗、实例生死观测，这些在两个形态里语义完全一致。本模块就是它们的唯一
-//! 真源；形态壳（`common/` / `bare/`）只保留「与 WIT 绑定或与端形态接线」的部分：
-//! `bindgen!`、`impl … Host`、`add_to_linker`、`verify_abi`、Engine 构建参数、
-//! `Loaded*Plugin` 实例类型与导出调用面。
+//! 燃料看门狗、实例生死观测，这些在双端语义完全一致。本模块就是它们的唯一
+//! 真源；统一运行时壳（`manager/runtime.rs` + `runtime/component.rs`，单形态起
+//! 无 common/bare 之分）只保留「与 WIT 绑定或与端形态接线」的部分：`bindgen!`、
+//! `impl … Host`、`add_to_linker`、`verify_abi`、Engine 构建参数、
+//! `LoadedWasmPlugin` 实例类型与导出调用面。
 //!
 //! ## 形态差异如何表达（参数化而非复制）
 //!
@@ -597,12 +597,14 @@ pub(crate) fn start_call_timer(
 mod tests {
     use super::*;
 
-    /// 四个形态壳文件（相对 crate 根）——防回接锁的扫描面
+    /// 运行时壳文件（相对 crate 根）——防回接锁的扫描面
+    ///
+    /// 单形态（2026-10-13）后壳收为一份（`runtime.rs` 本体 + `runtime/component.rs`），
+    /// 与 `src/lib.rs` 的 `SHELL_FILES` 同源两份（那边供 `binding_surface` 锁判「壳不
+    /// 得持 bindgen」，这边供本锁判「壳不许自持 Engine 构建」）。
     const SHELL_FILES: &[&str] = &[
-        "/src/manager/runtime/common.rs",
-        "/src/manager/runtime/bare.rs",
-        "/src/manager/runtime/common/component.rs",
-        "/src/manager/runtime/bare/component.rs",
+        "/src/manager/runtime.rs",
+        "/src/manager/runtime/component.rs",
     ];
 
     /// 读源码并剥掉整行 `//` 注释

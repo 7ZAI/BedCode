@@ -1,15 +1,18 @@
-//! Component Model 壳（迁移阶段 C：唯一形态）
+//! Component Model 壳（**单形态**，2026-10-13 起无 common/bare 之分 · 用户裁决）
 //!
-//! **票 04 起本模块不持有任何 WIT 绑定**（原全 world `bindgen!` 已删，其最后
-//! 消费者是内核测试替身，随夹具用例迁宿主一并退役）——桌面绑定面归宿主
-//! `src-tauri/src/plugin/bindings.rs`（cap 域 `Host` impl + 导出调用），core 交集
-//! 8 域归 `manager/runtime/core_binding.rs`（绑契约真源 `wit/core.wit`）。
-//! 本文件只剩**与 WIT 无关的实例化机制**：
+//! **本模块不持有任何 WIT 绑定**（原全 world `bindgen!` 已删，其最后消费者是内核
+//! 测试替身，随夹具用例迁宿主一并退役；移动那份票 05 一并迁移动宿主）——cap 域
+//! `Host` impl 归各端宿主（桌面 `src-tauri/src/plugin/bindings.rs`，移动
+//! `src-tauri/src/plugin/host_domains/`），core 交集 8 域归
+//! `manager/runtime/core_binding.rs`（绑契约真源 `wit/core.wit`）。
+//! 本文件只剩**与 WIT 无关的实例化机制**（桌面形态为准，移动宿主经同一壳装配）：
 //! - linker 组装：core 本地表（`core_binding`）+ `inventory` 自报能力模块 + WASI p2/p3
 //!   （WASI 实现与开关判据在核心模块 [`crate::manager::runtime::wasi`]，本壳只调用）；
 //! - [`LoadedWasmPlugin`]：Store + Instance 所有权、导出调用骨架（`command` /
 //!   `lifecycle` / `manifest` 走 core 绑定，`events` 走宿主注入的
 //!   [`GuestEventDispatcher`]）、`abi` / 可选导出的原生 `TypedFunc` 探测；
+//! - **ABI 版本 / 形态检查参数化**（[`AbiPolicy`]）：wasm-core 零端 ABI 知识，
+//!   版本上限与 abi-form 要求由宿主装配时注入（桌面 38 + form=1；移动 21 + None）；
 //! - WASI 预打开解析与装配已迁 [`crate::manager::runtime::wasi`]（用户裁决
 //!   2026-10-12：WASI 面住核心、双端同源、默认全开）。
 //!
@@ -21,7 +24,7 @@
 //!   组件形态暂无传递通道，见 wit/bedcode.wit 的 host-log 注释）
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
-use super::{StoreSpec, WasmHostContext, WasmPluginState};
+use super::{AbiPolicy, StoreSpec, WasmHostContext, WasmPluginState};
 use crate::config::WasiConfig;
 use crate::manager::runtime::engine;
 /// WASI 装配面（p2/p3 注册 + 预打开上下文）——核心常编译，双端同源
@@ -33,7 +36,6 @@ use crate::manager::runtime::guest_events::GuestEventDispatcher;
 use crate::monitor::LifecycleEvent;
 use crate::runtime_util::block_on_async;
 use crate::AppError;
-use bedcode_plugin_api::abi;
 use crate::manifest::WasiPreopenDir;
 use std::sync::Arc;
 use wasmtime::component::{Component, Instance, Linker};
@@ -81,97 +83,37 @@ use wasmtime::Store;
 
 // ==================== 能力模块注册 ====================
 
-/// 内建在册的能力模块白名单（仍随本 crate 链接的能力域，wasm-core-lib-split 票 03）
+/// 生效白名单 = **纯宿主自报期望**（单形态 2026-10-13 收口）
 ///
-/// **本常量随迁移批次收缩**（wasm-core 纯净性收口票 02）：批次 02 已把 pty 移出
-/// （其「强制引用行 + 白名单条目」随端口 adapter 一并迁宿主 `src/plugin/pty.rs`），
-/// 批次 03 把 mdns / peer / ws / http 四域一并移出（adapter 落宿主
-/// `src/plugin/<domain>.rs`）。
-///
-/// **现存条目不是 adapter 回流**：ws / peer / http 三条目保留，因为内核仍消费这三个
-/// crate 的**引擎面**（ws 帧投递窄端口与端点登记、peer 的 `release_node_for` /
-/// `PeerCtx`、http 的 `HttpUnitExecutor`）⇒ 它们必在最终二进制里、模块自报必被收集，
-/// 白名单条目（取值 = 能力域常量）因此保留；adapter 侧的「强制引用行 + 白名单」已迁
-/// 宿主，经宿主自报装配器接入（见 [`host_module_whitelist`]）。
-///
-/// 仍在本表里的域，四步缺一即红（新增能力域流程）：
-/// ① 能力 crate 实现 `HostModule` + `inventory::submit!`
-/// ② 宿主加一行强制引用 `use <crate> as _;`（本节）
-/// ③ 白名单加模块名 ④ `capability_registry_matches_whitelist` 绿
-///
-/// 为什么②必需：`inventory` 的注册靠 linker-section 静态，**未被引用的 rlib 不进
-/// 最终二进制，静态不执行 ⇒ 注册丢失**。漏掉②会让该能力域静默从插件 import 集
-/// 消失；③ 的 missing 方向断言会立即变红，不拖到插件实例化才炸。
-const IN_CRATE_HOST_MODULES: &[&str] = &[
-    // ws 的 adapter 已迁宿主（票 02 批次 03，`src-tauri/src/plugin/ws.rs`）；内核仍消费
-    // 该 crate 的引擎面（帧投递窄端口 / 端点登记）⇒ 它必在二进制里、模块自报必被收集，
-    // 白名单条目因此保留，取值直接引用能力域的常量（内核零字面量）。
-    bedcode_server_websocket::plugin_binding::MODULE_NAME,
-    // peer 的 adapter 已迁宿主（票 02 批次 03），但内核仍依赖该 crate 的**引擎面**
-    // （`release_node_for` / `PeerCtx`）⇒ 它必在最终二进制里、模块自报必被收集，
-    // 白名单条目因此保留；取值直接引用能力域的常量（内核零字面量）。
-    bedcode_server_peer_net::plugin_binding::MODULE_NAME,
-    // http 的 adapter 已迁宿主（票 02 批次 03，`src-tauri/src/plugin/http.rs`）；内核仅余
-    // `host_api/http.rs` 的 `HttpUnitExecutor`（host-task 面执行器，边保留的原因）⇒ 条目
-    // 保留，取值直接引用能力域的常量（内核零字面量）。
-    bedcode_server_http::plugin_binding::MODULE_NAME,
-    // `host-database` / `host-plugin-database` / `host-storage` 不在册：ADR 0036
-    // 撤销 sqlite 能力域 crate，三 interface 的 `Host` impl 回到本文件（见上）。
-];
-
-/// 白名单合并（纯函数）：内建在册 ∪ 宿主自报期望
-///
-/// 排序 + 去重是**集合语义**的口径：`verify_whitelist` 两侧都排序后整体比较，
-/// 重复项不影响判定（宿主侧同一模块被两处声明不构成漂移）。
-fn merge_host_module_whitelist(
-    in_crate: &[&'static str],
-    host_expected: &[&'static str],
-) -> Vec<&'static str> {
-    let mut whitelist: Vec<&'static str> = in_crate.to_vec();
-    whitelist.extend_from_slice(host_expected);
-    whitelist.sort_unstable();
-    whitelist.dedup();
-    whitelist
-}
-
-/// 生效白名单：内建在册（本 crate 仍链接的域）∪ 宿主自报期望
+/// 原「内建在册 ∪ 宿主自报」（`IN_CRATE_HOST_MODULES` 含 ws/peer/http 三条目）随
+/// 单形态删除：三个能力域 crate 的绑定层/自报由**各端宿主**开启（桌面
+/// `src-tauri/Cargo.toml` 依赖时带 `common-host` + `plugin/{http,ws,peer}.rs` 的
+/// `expect_host_module!`；移动用自有 `host_domains/{http,ws,peer,mdns}` 实现）——
+/// 端差异（用能力域 crate 还是自持实现）是宿主组装事实，不进内核。
 ///
 /// 宿主侧来源 = `bedcode_host_kit::expect_host_module!` 自报（与强制引用行同处，
 /// 见 host-kit `assembly` 模块文档）。**常编译 pub**：宿主侧集成锁
 /// （`src-tauri/tests/pty_wiring.rs`）要用同一份合并结果做双向比对——两侧各拼一份
 /// 就是第二真源。
 pub fn host_module_whitelist() -> Vec<&'static str> {
-    merge_host_module_whitelist(IN_CRATE_HOST_MODULES, &bedcode_host_kit::expected_host_modules())
+    bedcode_host_kit::expected_host_modules()
 }
 
-// 强制引用行（inventory 的 linker-section 静态必须被真正链接才执行；见上）。
-// 与 `IN_CRATE_HOST_MODULES` 同处，两者不漂移——漏掉这行 ⇒ `verify_whitelist` 的
-// missing 方向立即变红。
-// 能力域脱绑 P2：自报只在 `common-host`（绑定层装配）下需要——无该 feature 的
-// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
-// （`bedcode-discovery-engine` 的强制引用行与白名单条目自票 02 批次 03 起随端口
-//  adapter 迁宿主 `src-tauri/src/plugin/mdns.rs`；本 crate 不再依赖该 crate。）
-// `bedcode-server-websocket` 本就是宿主依赖（传输面）；此处强制引用只为让该
-// rlib 的能力模块自报静态进入最终二进制（见上）。
-// 能力域脱绑 P3：自报只在 `common-host`（绑定层装配）下需要——无该 feature 的
-// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
-#[cfg(feature = "common-host")]
+// 强制引用行（无条件保留）：三个能力域 crate 的 **rlib 静态必须进最终二进制**
+// ——不只 HostModule 自报（那是 `common-host` feature 门控、由宿主决定开不开），
+// 还有 **DomainHooks 停用回收钩子**（server-websocket 的 HOOKS，host 的
+// deactivate 经 `DomainHooksRegistry::collected().on_plugin_purge` 遍历——漏了
+// 这行，ws 出站连接/服务端端点停用不清理）。引擎面消费经普通 `use` 已链接
+// rlib，但 inventory/linkme 静态的 linker-section 需要 rlib 被**显式引用**才进
+// 二进制（`use <crate> as _;`）。白名单本身已是纯宿主自报（`expected_host_modules`，
+// 见 [`host_module_whitelist`]）；桌面宿主另在 `plugin/{http,ws,peer}.rs` 声明
+// 这三个模块的期望（其 `common-host` feature 在 src-tauri Cargo 开启），移动
+// 不自报（用自有 `host_domains/{http,ws,peer,mdns}` 实现）。
+// （`bedcode-discovery-engine` 的强制引用行随端口 adapter 迁宿主
+//  `src-tauri/src/plugin/mdns.rs`；本 crate 不依赖该 crate。）
 use bedcode_server_websocket as _;
-// `bedcode-server-peer-net` 同理（宿主命令面 / 生命周期已在用它）。
-// 能力域脱绑 P4：自报只在 `common-host`（绑定层装配）下需要——无该 feature 的
-// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
-#[cfg(feature = "common-host")]
 use bedcode_server_peer_net as _;
-// `bedcode-server-http` 同理（宿主 HTTP 服务器面 + 内核 `HttpUnitExecutor` 都在用它）；
-// 该能力域（入站 2 + 出站 1 原语）的自报静态靠这行进入最终二进制——adapter 已迁宿主
-// `src-tauri/src/plugin/http.rs`（票 02 批次 03），此处保留的是**引擎面消费**这一半。
-// 能力域脱绑 P1：自报只在 `common-host`（绑定层装配）下需要——无该 feature 的
-// 宿主（移动端 / 无头）拿纯引擎、**不应**注册（它没有插件宿主机制）。
-#[cfg(feature = "common-host")]
 use bedcode_server_http as _;
-// 票 02 批次 02：`bedcode-pty-engine` 的强制引用行与白名单条目已随端口 adapter
-// 迁宿主 `src-tauri/src/plugin/pty.rs`（两者同处——host-kit `assembly` 模块的纪律）。
-// 本 crate 不再依赖该 crate，也不再出现它的任何路径。
 
 /// 收集已自报的能力模块并与白名单双向比对
 fn host_module_registry() -> crate::Result<bedcode_host_kit::ModuleRegistry> {
@@ -312,6 +254,7 @@ impl LoadedWasmPlugin {
         declared_preopen_dirs: &[WasiPreopenDir],
         wasi_cfg: &WasiConfig,
         spec: StoreSpec,
+        abi: AbiPolicy,
         guest_events: Arc<dyn GuestEventDispatcher>,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
@@ -347,7 +290,7 @@ impl LoadedWasmPlugin {
                 ))
             })?;
 
-        Self::verify_abi(&mut store, &instance)?;
+        Self::verify_abi(&mut store, &instance, abi)?;
 
         // core-plugin-manager：探测能力接口导出（系统组件据此注册为
         // 能力提供者；含票 12 auth-policy 仅探测能力——所有新 SDK 插件默认
@@ -467,9 +410,14 @@ impl LoadedWasmPlugin {
         }
         "（该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）".to_string()
     }
-    /// - `abi.version()` 语义与 `abi::ABI_VERSION` 完全一致
-    /// - `abi.form()` 必须为 1（component 形态）；0 是 core 形态的自研 ABI
-    fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
+    /// - `abi.version()` 语义与宿主注入的 [`AbiPolicy::version`] 完全一致
+    /// - `abi.form()` 必须等于 [`AbiPolicy::form`] 要求值（桌面 = 1（component 形态）；
+    ///   移动 WIT 无 `abi-form` 导出 ⇒ 宿主注入 `form: None` = 不要求）
+    fn verify_abi(
+        store: &mut Store<WasmPluginState>,
+        instance: &Instance,
+        abi: AbiPolicy,
+    ) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
         engine::inject_call_fuel(store)?;
 
@@ -486,34 +434,39 @@ impl LoadedWasmPlugin {
                 )
             })?;
 
-        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面独有
-        // cap 导出），SDK 按新契约导出两接口（旧 v35 产物缺 abi-form 导出 ⇒ 此处
-        // 实例化期被拒，fail-visible 形态②，见 stale_artifact_rebuild_hint 判据扩展）。
-        // `abi-form.form()` 无 `result` 返回（`() -> u32`），**可以**原生探测——
-        // 与 `events.*` 那类带 `result` 的导出不同（`Result` 不实现
-        // `ComponentNamedList`，原生 TypedFunc 表达不了，见 ticket-03 §9.6）。
-        let form = crate::manager::runtime::core_binding::abi_form(store, instance)?
-            .ok_or_else(|| {
-                AppError::Plugin(
-                    "WASM component missing required export `abi-form.form` \
-                     （该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）"
-                        .to_string(),
-                )
-            })?;
+        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面 cap
+        // 导出），SDK 按新契约导出；移动 WIT 无此导出（宿主注入 `form: None` 跳过，
+        // 见上方 [`Self::verify_abi`] 的形态检查段）。`abi-form.form()` 无 `result`
+        // 返回（`() -> u32`），**可以**原生探测——与 `events.*` 那类带 `result` 的
+        // 导出不同（`Result` 不实现 `ComponentNamedList`，原生 TypedFunc 表达不了，
+        // 见 ticket-03 §9.6）。
+        let _form_probe = ();
 
-        if form != abi::FORM_COMPONENT {
-            return Err(AppError::Plugin(format!(
-                "WASM component for plugin declares abi form {} (expected {})",
-                form,
-                abi::FORM_COMPONENT
-            )));
-        }
-        if version > abi::ABI_VERSION {
+        if version > abi.version {
             return Err(AppError::Plugin(format!(
                 "Plugin requires ABI v{} but host supports v{} — please upgrade BedCode",
                 version,
-                abi::ABI_VERSION
+                abi.version
             )));
+        }
+
+        // 形态检查（`abi-form` 是桌面 cap 导出；移动 WIT 无此导出，宿主注入
+        // `form: None` 即跳过——统一壳按注入规格检查，wasm-core 零端形态知识）
+        if let Some(expected_form) = abi.form {
+            let form = crate::manager::runtime::core_binding::abi_form(store, instance)?
+                .ok_or_else(|| {
+                    AppError::Plugin(
+                        "WASM component missing required export `abi-form.form` \
+                         （该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）"
+                            .to_string(),
+                    )
+                })?;
+            if form != expected_form {
+                return Err(AppError::Plugin(format!(
+                    "WASM component for plugin declares abi form {} (expected {})",
+                    form, expected_form
+                )));
+            }
         }
 
         // v11：动态探测可选导出 events-binary#on-message-binary。该接口不声明进
@@ -861,6 +814,61 @@ impl LoadedWasmPlugin {
         let instance = self.instance;
         self.guest_events
             .on_process_done(&mut self.store, instance, payload_json)
+    }
+
+    /// 调用插件的生命周期事件导出（移动端 `PluginLifecycleEvent` 枚举 → 导出映射）
+    ///
+    /// 映射表：AppStartup/AppShutdown → `lifecycle.on-startup/on-shutdown`（core 绑定）；
+    /// AuthSuccess → `events.on-auth-success`；Disconnect → `events.on-disconnect`；
+    /// SessionCreated/SessionStopped → `events.on-session-created/on-session-stopped`
+    /// （后四者是**移动独有导出**，经宿主注入的派发器投递；桌面 events 词汇不同，
+    /// 该方法在桌面不调用——同一 `GuestEventDispatcher` trait 双端各自实现）。
+    pub fn call_lifecycle_event(
+        &mut self,
+        event: &crate::manager::types::PluginLifecycleEvent,
+    ) -> crate::Result<()> {
+        use crate::manager::types::PluginLifecycleEvent;
+        // 事件导出同样消耗 guest 燃料：派发前续费（与 on_bus_message 同款；
+        // AppStartup/AppShutdown 走 lifecycle 导出，其续费在 exports() 内）
+        match event {
+            PluginLifecycleEvent::AppStartup => self
+                .on_startup()
+                .and_then(|inner| {
+                    inner.map_err(|msg| {
+                        AppError::Plugin(format!("WASM on_startup() failed: {}", msg))
+                    })
+                }),
+            PluginLifecycleEvent::AppShutdown => self
+                .on_shutdown()
+                .and_then(|inner| {
+                    inner.map_err(|msg| {
+                        AppError::Plugin(format!("WASM on_shutdown() failed: {}", msg))
+                    })
+                }),
+            PluginLifecycleEvent::AuthSuccess => {
+                self.refill_call_fuel()?;
+                let instance = self.instance;
+                self.guest_events.on_auth_success(&mut self.store, instance)
+            }
+            PluginLifecycleEvent::Disconnect { reason } => {
+                self.refill_call_fuel()?;
+                let instance = self.instance;
+                self.guest_events
+                    .on_disconnect(&mut self.store, instance, reason)
+            }
+            PluginLifecycleEvent::SessionCreated { session_id } => {
+                self.refill_call_fuel()?;
+                let instance = self.instance;
+                self.guest_events
+                    .on_session_created(&mut self.store, instance, session_id)
+            }
+            PluginLifecycleEvent::SessionStopped { session_id } => {
+                self.refill_call_fuel()?;
+                let instance = self.instance;
+                self.guest_events
+                    .on_session_stopped(&mut self.store, instance, session_id)
+            }
+        }
     }
 
     /// 获取插件的 manifest JSON

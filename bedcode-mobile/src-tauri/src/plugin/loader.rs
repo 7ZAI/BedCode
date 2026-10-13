@@ -5,7 +5,7 @@
 
 use crate::plugin::types::*;
 use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
-use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -90,7 +90,7 @@ impl PluginLoader {
         plugins_dir: &Path,
         wasm_runtime: &WasmRuntime,
         wasm_host_ctx: &Arc<WasmHostContext>,
-    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedComponentPlugin>) {
+    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedWasmPlugin>) {
         tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
 
         if !plugins_dir.exists() {
@@ -192,11 +192,16 @@ impl PluginLoader {
                                         manifest.permissions.iter().cloned().collect();
                                     granted
                                         .insert(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string());
+                                    // 统一 instantiate（单形态）：权限经 for_plugin 派生 per-plugin
+                                    // 上下文注入（移动语义保留）；preopen 声明与资源覆盖移动无
+                                    // 桌面 worker 通道 / manifest 覆盖面 ⇒ 传空与 None
+                                    let plugin_ctx = Arc::new(wasm_host_ctx.for_plugin(granted));
                                     match wasm_runtime.instantiate_component(
                                         &component,
                                         &plugin_id,
-                                        wasm_host_ctx.clone(),
-                                        granted,
+                                        plugin_ctx,
+                                        &[],
+                                        None,
                                     ) {
                                         Ok(loaded_wasm) => {
                                             tracing::info!(
@@ -373,7 +378,11 @@ mod tests {
             )
             .expect("write component wasm");
 
-            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
+            // 统一运行时壳（单形态 2026-10-13）：无头测试无 storage/app_handle——
+            // 用 test_support 的无头装配（含 ABI 规格 UNCONSTRAINED：夹具是桌面 SDK
+            // 产物，版本/形态检查对无头装配不设上限）
+            let runtime = bedcode_wasm_core::test_support::setup_headless_runtime(Some(tmp.path().join("aot")))
+                .expect("wasm runtime");
             let host_ctx = bedcode_wasm_core::test_support::build_host_ctx();
 
             let (plugins, wasm_plugins) = PluginLoader::load_all(tmp.path(), &runtime, &host_ctx);

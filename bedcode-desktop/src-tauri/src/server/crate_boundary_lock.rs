@@ -145,7 +145,6 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
         &[
             "bedcode-server-base",
             "bedcode-server-core",
-            "bedcode-crypto-engine",
             "bedcode-host-kit",
             "bedcode-server-websocket",
             "bedcode-server-peer-net",
@@ -154,16 +153,12 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
             // `src/plugin/pty.rs` 且内核不再引用该 crate）。
             //
             // **peer / ws / http 三条边仍是保留边**（本清单 + 下方 REQUIRED 表同时登记）：
-            // 批次 03 只把它们的**端口 adapter** 迁宿主（`src/plugin/{peer,...}.rs`），
             // 内核继续消费这些 crate 的**引擎面**（peer 的 `release_node_for` / ws / http
             // 的帧投递与连接清单）——摘边要把那些消费点一并搬出内核，属另一件事。
             //
-            // **票 06 批次 03 新增 `bedcode-discovery-engine` 边（bare-host 面）**：
-            // 桌面形态该域 adapter 在宿主 `src/plugin/mdns.rs`（内核无边）；移动形态无
-            // 宿主 adapter——fork 迁入的 `mobile/host_impl` 域 impl 在 crate 内直接消费
-            // discovery-engine 引擎面（装配形态差异，非桌面回接）。此后再出现
-            // wasm-core → 能力域的**新**边即红（反向/横向同理）。
-            "bedcode-discovery-engine",
+            // 单形态（2026-10-13）：`bedcode-crypto-engine` 与 `bedcode-discovery-engine`
+            // 边已摘除（源码零引用实证——认证中心/密码学走桌面宿主依赖，mdns 引擎由
+            // 两端宿主各自直连；端 SDK 依赖归两端宿主，wasm-core 只持机制面）。
         ],
     ),
 ];
@@ -200,15 +195,16 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     // 内核——两种都是票 02 明令禁止的形态）。
     ("bedcode-wasm-core", "bedcode-server-base"),
     ("bedcode-wasm-core", "bedcode-host-kit"),
-    ("bedcode-wasm-core", "bedcode-crypto-engine"),
+    // 单形态（2026-10-13）：wasm-core → crypto-engine 必须边已摘除（认证中心 /
+    // 密码学由桌面宿主直连 bedcode-crypto-engine，内核零引用）
     ("bedcode-wasm-core", "bedcode-server-core"),
     ("bedcode-wasm-core", "bedcode-server-websocket"),
     ("bedcode-wasm-core", "bedcode-server-peer-net"),
     ("bedcode-wasm-core", "bedcode-server-http"),
     // 票 02 批次 02：wasm-core → pty-engine 必须边已摘除（连同内核侧 adapter 一起
     // 消失）；ws / peer-net / http 三条边因内核仍用其引擎面（bus 帧投递 / 连接清单 /
-    // 端点登记）保留。discovery-engine 不进必填段：它是 bare-host 形态的可选边
-    // （桌面形态走宿主 adapter，不上该依赖；见上方 ALLOWED 表注释）。
+    // 端点登记）保留。discovery-engine 不进必填段且已整体摘边（单形态：mdns 引擎由
+    // 两端宿主各自直连；见上方 ALLOWED 表注释）。
 ];
 
 /// 宿主源码里**允许**同时认识两个传输面 crate 的文件（断言 ④ 的登记表）

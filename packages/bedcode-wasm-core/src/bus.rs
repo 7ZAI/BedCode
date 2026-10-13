@@ -441,22 +441,20 @@ impl MessageBus {
 
 // ==================== HostBusPort（wasm-core-whole-crate 票 M11，从 lib server/ports_impl.rs 抽入） ====================
 //
-// 桌面装配面（票 06 批次 03）：HostBusPort 打包 MessageBus + 能力域 WsPorts 帧投递，
-// 依赖 `bedcode-server-websocket`（common-host optional 依赖）——移动形态无 WS
-// 服务端域，整段不编译（bare 装配面无此端口）。
+// 统一总线插座词汇（单形态，双端编译）：HostBusPort 打包 MessageBus + 能力域
+// WsPorts 帧投递，依赖 `bedcode-server-websocket`（单形态起无条件依赖）——
+// 双端同源（移动链接同一 crate，模块不被 import 即惰性无害）。
 
 /// 插件消息总线 + WS 帧投递（`bus::MessageBus` + 能力域 `deliver_endpoint_frame` 包装）
 ///
 /// 原属 lib 的 `server/ports_impl.rs`（包 `MessageBus`——crate 属物），随整核抽出
 /// 迁入本 crate；lib 的 `server/ports_impl.rs` 经 `pub use` 垫片再导出，`assemble()`
 /// 本体留 lib（组合根唯一性）。
-#[cfg(feature = "common-host")]
 pub struct HostBusPort {
     binding: BusBinding,
 }
 
 /// 总线绑定形态：装配期钉死 / 逐次调用解析（late-bound）
-#[cfg(feature = "common-host")]
 enum BusBinding {
     /// 装配期即持有真实总线（bootstrap 之后装配的端口走这一支）
     Fixed {
@@ -478,7 +476,6 @@ enum BusBinding {
     ),
 }
 
-#[cfg(feature = "common-host")]
 impl HostBusPort {
     /// 钉死构造：`ws_ports` 由**构造方**给出（绑定到 `bus` 的窄端口）
     ///
@@ -544,12 +541,10 @@ impl HostBusPort {
 /// - [`HostBusPort`] 的帧回灌路径（`ws_ports()` 未注入时的兜底不存在——注入由构造方
 ///   提供；本类型是**内核侧构造方**用的那一份）；
 /// - `manager/host/register.rs` 的 WS 端点登记（需要 `bus_port()`）。
-#[cfg(feature = "common-host")]
 pub(crate) struct BusBoundWsPorts {
     bus: Arc<MessageBus>,
 }
 
-#[cfg(feature = "common-host")]
 impl BusBoundWsPorts {
     /// 绑定到给定总线（窄端口：无宿主上下文 ⇒ 权限门恒拒）
     pub(crate) fn new(bus: Arc<MessageBus>) -> Self {
@@ -557,7 +552,6 @@ impl BusBoundWsPorts {
     }
 }
 
-#[cfg(feature = "common-host")]
 impl bedcode_server_websocket::plugin_binding::ports::WsPorts for BusBoundWsPorts {
     fn check_permission(&self, _plugin_id: &str, _permission: &str, _api: &str) -> bool {
         // 窄端口没有权限管理器 ⇒ 拒绝（fail-safe）。消费它的两条路径（帧回灌 / 端点登记）
@@ -644,7 +638,6 @@ impl BusMessageHandler for WasmHandlerAdapter {
 }
 
 #[async_trait]
-#[cfg(feature = "common-host")]
 impl bedcode_server_base::ports::BusPort for HostBusPort {
     fn publish(&self, topic: &str, sender: &str, payload: serde_json::Value) {
         self.bus().publish(topic, sender, payload);
@@ -698,10 +691,9 @@ mod tests {
     /// 测试用帧投递端口工厂：真实能力域窄端口（绑定传入的总线、无权限管理器）
     ///
     /// 生产路径这份由宿主 adapter 喂入（票 02 批次 03）；内核测试二进制里
-    /// 直接以 [`BusBoundWsPorts::new`] 构造。桌面装配面（common-host）专属——
+    /// 直接以 [`BusBoundWsPorts::new`] 构造。统一总线插座词汇（单形态，双端编译）——
     /// HostBusPort / BusBoundWsPorts 属桌面总线插座词汇（票 02 M3 语义边界：
     /// 随 T-04 迁宿主）。
-    #[cfg(feature = "common-host")]
     fn test_ws_ports_factory() -> Arc<
         dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
             + Send
@@ -1154,8 +1146,7 @@ mod tests {
     ///
     /// 杀死「构造期捕获总线」的写法（那条写法下第二次仍投 A，本用例红）
     #[tokio::test(flavor = "multi_thread")]
-    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
-    #[cfg(feature = "common-host")]
+    // 统一总线插座词汇（单形态，双端编译）：HostBusPort（票 02 M3，随 T-04 迁宿主）
     async fn late_bound_bus_port_publishes_to_current_bus_each_call() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1192,8 +1183,7 @@ mod tests {
 
     /// late-bound 反例：静态订阅注册在**调用当时**的总线上，切目标后旧总线收不到订阅
     #[tokio::test(flavor = "multi_thread")]
-    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
-    #[cfg(feature = "common-host")]
+    // 统一总线插座词汇（单形态，双端编译）：HostBusPort（票 02 M3，随 T-04 迁宿主）
     async fn late_bound_bus_port_registers_static_subscriber_on_current_bus() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1226,8 +1216,7 @@ mod tests {
 
     /// late-bound 二进制面：`publish_binary` 同样走当前解析目标
     #[tokio::test(flavor = "multi_thread")]
-    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
-    #[cfg(feature = "common-host")]
+    // 统一总线插座词汇（单形态，双端编译）：HostBusPort（票 02 M3，随 T-04 迁宿主）
     async fn late_bound_bus_port_publish_binary_to_current_bus() {
         use bedcode_server_base::ports::BusPort as _;
 
@@ -1258,8 +1247,7 @@ mod tests {
 
     /// 钉死形态回归：`new()` 仍只投给构造时给定的那条总线（无头 harness / 单测装配面）
     #[tokio::test(flavor = "multi_thread")]
-    // 桌面装配面（common-host）专属：HostBusPort（票 02 M3，随 T-04 迁宿主）
-    #[cfg(feature = "common-host")]
+    // 统一总线插座词汇（单形态，双端编译）：HostBusPort（票 02 M3，随 T-04 迁宿主）
     async fn fixed_bus_port_publishes_only_to_its_own_bus() {
         use bedcode_server_base::ports::BusPort as _;
 

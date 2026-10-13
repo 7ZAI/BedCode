@@ -429,11 +429,6 @@ pub fn aot_cache_key(path: &std::path::Path, source_len: u64) -> u64 {
     crate::manager::runtime::engine::aot_cache_key(path, source_len)
 }
 
-/// 取运行时的 Engine 句柄（引擎生效配置断言用：`Config` 不可回读，`Engine` 才完整）
-pub fn runtime_engine(runtime: &WasmRuntime) -> &wasmtime::Engine {
-    runtime.engine()
-}
-
 /// 日志捕获（引擎 / trap 证据链断言用：`capture(|| ...)` 收集 tracing 事件）
 ///
 /// `host_api::log` 是 `pub(super)`（crate 内可见）——宿主测试经本 re-export 取用，
@@ -681,12 +676,3 @@ pub(crate) mod kernel_test_domain_ports {
     }
 }
 
-// ==================== 移动形态测试基建（bare-host + test-support，fork 迁入，票 06 批次 03） ====================
-//
-// fork test_support.rs 原样迁入（MockPorts / 夹具组件构建器 / mock_plugin_ws /
-// build_host_ctx 等）；桌面形态测试基建（本文件主体：setup_wasm_runtime /
-// build_host_ctx_at / TestInstanceDispatcher…）随 common 编译。两套基建按形态
-// 互斥（同一 compile 图只有一份）。
-
-#[cfg(all(feature = "bare-host", feature = "test-support"))]
-pub mod bare;

@@ -46,7 +46,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     // 本函数只保住两处入口（目录扫描 / zip 安装）共用的结构性必填字段。
     // 生命周期 / preopen 校验为桌面 manifest 专属面（移动 manifest 无这两个字段，
     // fork 票 17 §3.2）——随 common-host
-    #[cfg(feature = "common-host")]
+    #[cfg(feature = "desktop-assembly")]
     {
         validate_lifecycle(manifest)?;
         validate_preopen_category(manifest)?;
@@ -64,7 +64,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
 /// 单实例限额（`runtime.rs::memory_growing` 拒绝增长 → guest trap）且不重启进程
 /// 好不了。静默降级会让作者以为 worker 生效了，实际既没省内存又没省限额。
 /// 拒绝时点名缺什么（缺调度方 + 传参协议 + 配额），便于对着清单补齐后再启用。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
     if manifest.lifecycle != InstanceLifecycle::Persistent {
         return Err(crate::AppError::Plugin(format!(
@@ -87,7 +87,7 @@ pub fn validate_lifecycle(manifest: &PluginManifest) -> crate::Result<()> {
 /// worker 未实现期间（ADR 0032 §6 双侧拒绝）`ephemeral` 本身被 [`validate_lifecycle`]
 /// 拒绝，故本字段当前对一切 manifest 不可达——此处的类别闸门是取值域层面的落死，
 /// worker 启用（ephemeral 放行）后 preopen 即恢复为 worker 专属能力。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub fn validate_preopen_category(manifest: &PluginManifest) -> crate::Result<()> {
     if !manifest.wasi_preopen_dirs.is_empty() && manifest.lifecycle != InstanceLifecycle::Ephemeral {
         return Err(crate::AppError::Plugin(
@@ -324,7 +324,7 @@ mod tests {
     /// 反例：`ephemeral` 必须加载期失败并点名缺什么——静默当常驻处理会让作者
     /// 以为 worker 已生效，而常驻恰好是 worker 存在理由的反面（线性内存只增不减）。
     // 生命周期声明面 = 桌面 manifest 专属（移动 SDK 无 InstanceLifecycle，fork 票 17 §3.2）
-    #[cfg(feature = "common-host")]
+    #[cfg(feature = "desktop-assembly")]
     #[test]
     fn lifecycle_ephemeral_is_rejected_at_load_persistent_and_absent_pass() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {
@@ -367,10 +367,10 @@ mod tests {
     ///
     /// 变异判据：把 `validate_preopen_category` 从 `validate_manifest_required` 摘掉，
     /// 反例全部转红（preopen 声明会静默进入宿主、按 manifest 预打开目录）。
-    // 桌面装配面（common-host）专属：WASI preopen / 角色 `type` 词汇是桌面
+    // 桌面装配面（desktop-assembly）专属：WASI preopen / 角色 `type` 词汇是桌面
     // 契约事实（ADR 0032/0034；移动 Manifest 无 kind 字段、无 WASI 面——
     // 移动形态零 preopen、零角色驱动加载，票 02 M12 语义边界）。
-    #[cfg(feature = "common-host")]
+    #[cfg(feature = "desktop-assembly")]
     #[test]
     fn wasi_preopen_dirs_on_non_worker_is_rejected_at_load() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {
@@ -413,10 +413,10 @@ mod tests {
     /// 角色（`type`）的取值域在反序列化期收口：三角色 + 旧拼写别名，
     /// 其余一律拒（不回落缺省 L3——那会让「声明了基础服务却被当业务应用装配」
     /// 这类错误一路活到运行期）
-    // 桌面装配面（common-host）专属：WASI preopen / 角色 `type` 词汇是桌面
+    // 桌面装配面（desktop-assembly）专属：WASI preopen / 角色 `type` 词汇是桌面
     // 契约事实（ADR 0032/0034；移动 Manifest 无 kind 字段、无 WASI 面——
     // 移动形态零 preopen、零角色驱动加载，票 02 M12 语义边界）。
-    #[cfg(feature = "common-host")]
+    #[cfg(feature = "desktop-assembly")]
     #[test]
     fn manifest_role_spelling_domain_is_closed_at_load() {
         let parse = |kind: &str| -> crate::Result<PluginManifest> {

@@ -71,7 +71,7 @@ const DEFAULT_QR_TOKEN_TTL_SECS: u64 = 300;
 /// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移。
 pub(crate) fn config_get(
     db: &dyn crate::host_api::context::DbScope,
-    #[cfg_attr(not(feature = "common-host"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(unused_variables))]
     ports: &dyn HostEnginePorts,
     plugin_id: &str,
     key: &str,
@@ -88,9 +88,9 @@ pub(crate) fn config_get(
         // 未启动）时报错而非回退配置默认值——回退会让插件拿到一个看似合法实则连不上
         // 的端口，排查成本远高于一次显式失败。
         //
-        // 形态门控是**过渡缝**（票 03 / T-04 收口）：随桌面绑定层整体迁出后本臂与
-        // `common-host` 一同消失，非桌面侧恒走下方 fail-visible 分支。
-        #[cfg(feature = "common-host")]
+        // 桌面装配面门控（`desktop-assembly`）：随桌面绑定层整体迁出后本臂归
+        // 桌面专属装配面，非桌面侧恒走下方 fail-visible 分支。
+        #[cfg(feature = "desktop-assembly")]
         ConfigKey::NetworkPort => {
             let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
             let actual_port = crate::runtime_util::block_on_async(supervisor.get_status_info()).port;
@@ -103,7 +103,7 @@ pub(crate) fn config_get(
                 ));
             }
         }
-        #[cfg(not(feature = "common-host"))]
+        #[cfg(not(feature = "desktop-assembly"))]
         ConfigKey::NetworkPort => {
             return Err(format!(
                 "network.port unavailable: this host has no inbound server (plugin {})",

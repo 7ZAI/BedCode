@@ -1,5 +1,6 @@
-//! 错误类型（票 17 批次 2b：真源 = 单一 wasm-core `bedcode-wasm-core` 的
-//! `bare-host` 面；`bedcode-wasm-core-mobile` 为 package rename 别名）
+//! 错误类型（票 17 批次 2b：真源 = 单一 wasm-core `bedcode-wasm-core`，
+//! 单形态 2026-10-13 起无 common/bare 之分；`bedcode-wasm-core-mobile`
+//! rename 别名已随票 05 删除）
 //!
 //! 宿主侧经本模块 re-export 保 `crate::system::error::AppError` /
 //! `crate::AppError` 历史路径零改动。移动 `AppError` 形状与批次 1 fork 对齐；

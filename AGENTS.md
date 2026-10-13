@@ -133,29 +133,42 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ### 5.4 双端差异（勿把桌面结论套到移动端）
 
-**wasm-core 是单一 crate**（ADR 0045 accepted，2026-10-10）：`packages/bedcode-wasm-core` 双端共用——桌面形态 = 默认 feature `common-host`，移动形态 = `default-features = false, features = ["bare-host"]`（移动 `src-tauri` **直连**根 crate，package rename 别名已随票 05 删除；移动 fork crate 已删除，回接由 `bedcode-mobile/src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` 拦截）。
-
-**wasm-core 是单形态**（ADR 0049 accepted，2026-10-13，票 04/05 落地）：**机制零分叉、绑定归位宿主**——wasm-core 内**只有一份机制**（Engine / Store / 生命周期 / 事件循环 / 安全 / 存储 / 授权 / db 机制 / WASI 装配），双端不再有任何机制分叉代码；**WIT 绑定与端事实全部在宿主**：
+**wasm-core 是单一 crate + 单形态**（ADR 0045 / 0049；2026-10-13 runtime-single-form 收口，
+`.scratch/2026-10-13-runtime-single-form/spec.md`）：`packages/bedcode-wasm-core` 双端共用
+**一份运行时壳**（无 common/bare 之分）——`common-host` / `bare-host` 形态 feature 已退役
+（桌面专属装配面收进 `desktop-assembly`，移动 `default-features = false` + `test-support`）。
+wasm-core 内**只有一份机制 + 一份壳**（Engine / Store / 生命周期 / 事件循环 / 安全 /
+存储 / 授权 / db 机制 / WASI 装配 + `manager/runtime.rs` 的 `WasmRuntime` 与
+`runtime/component.rs` 的导出调用骨架），**WIT 绑定、端事实与端 SDK 依赖全部在宿主**：
 
 ```text
 宿主（bedcode-{desktop,mobile}/src-tauri/src/plugin/*）
-  各端完整 world 的 bindgen + 各域 Host impl + linker 装配 + 导出调用面
-        ↓ 消费 wasm-core 的纯机制
+  各端完整 world 的 bindgen + 各域 Host impl（HostModule 自报汇入同一 Linker）
+  + GuestEventDispatcher 注入（events 导出契约）+ AbiPolicy 注入（ABI 版本/形态）
+        ↓ 消费 wasm-core 的纯机制 + 统一运行时壳
 wasm-core（packages/bedcode-wasm-core）
-  机制核心 + core.wit 交集绑定层（manager/runtime/core_binding.rs，17 个双端全等 interface）
+  机制核心 + core.wit 交集绑定层（manager/runtime/core_binding.rs，17 个双端全等 interface，
+  双端全等 8 域单份实现——移动 host_domains 只留 http/peer/mdns/ws 端差异 4 域）
   + 组件引擎机制唯一一份（manager/runtime/engine.rs）
   + WASI 装配面双端同源（manager/runtime/wasi.rs，开/关走 CoreConfig::wasi）
   + 事件派发契约面上移（guest_events.rs，各端宿主实现本 trait 并注入）
+  + ABI 规格参数化（AbiPolicy：wasm-core 零端 ABI 知识，版本上限宿主注入）
         ↑ cap 与端差异由各端 HostModule 自报汇入同一个 Linker
 SDK（plugin-sdk-{desktop,mobile}）
-  compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（37 / 20）
+  compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（38 / 21）
 ```
+
+**ABI 与 wasm-core 无关**（用户裁决 2026-10-13）：wasm-core 提供统一基础 ABI
+（core.wit），真正 ABI = 宿主组装各自 SDK WIT 后的产物——`verify_abi` 的版本上限 /
+`abi-form` 要求经 `AbiPolicy` 由宿主装配时注入（桌面 `bedcode_plugin_api` 38 + form=1；
+移动 `bedcode_plugin_api_mobile` 21 + form=None）；两端 SDK crate 均不在 wasm-core
+依赖（`mobile_wasm_core_purity_lock` 判据 7c 钉移动 SDK 词汇零命中）。
 
 **WASI 面是双端共享机制不是形态差异轴**（用户裁决 2026-10-12）：p2/p3 装配住内核、双端默认全开，开 / 关走运行期配置 `CoreConfig::wasi`（为将来 worker 类别插件双端都要跑 wasm 预备，ADR 0034 L3.b）。
 
 **双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（17 个双端全等 interface），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http / cap-ws，移动 cap-mobile）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`），可被任意端组合。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
 
-**形态命名与落点纪律**（ADR 0047，2026-10-10 收口；票 06 补端词汇判据）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——形态只取中立词 `common` / `bare`，机制差写注释与文档；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），形态壳只做机制接线与薄转发（peer → `server-peer-net`、http → `server-http`、fs → `host-api-core::fs`、db/storage/bus/events → `host-api-core`）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——notify / terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已在票 04/05 一并删除**，别再照旧文加回来）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 端 SDK 词汇封顶）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 形态壳或端域 adapter 前先看它）。
+**命名与落点纪律**（ADR 0047 + 单形态收口，2026-10-13）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（peer → `server-peer-net`、http → `server-http`、ws → `server-websocket` / `ws-client-engine`、fs/storage/bus/db → `host-api-core` 或内核 `core_binding`）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——notify / terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已在票 04/05 一并删除**，别再照旧文加回来；双端全等 8 域由内核 `core_binding` 单份实现，移动 host_domains 只留 http/peer/mdns/ws）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
 
 ---
 

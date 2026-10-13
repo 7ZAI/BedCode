@@ -61,9 +61,9 @@
 // `bare_context` 已并入超集删除）与 `ports`（统一上下文 `ports`/`fs_auth` 槽的
 // trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余域维持形态门控
 // （执行本体经桌面形态的单元执行器 / 回复道编排消费；移动侧对应面在宿主自报）。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub mod api;
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub mod auth_center;
 pub(super) mod bus;
 pub(super) mod config;
@@ -71,7 +71,7 @@ pub mod context;
 pub(super) mod database;
 pub(super) mod events;
 pub(crate) mod fs;
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub(crate) mod http;
 pub(super) mod log;
 
@@ -88,7 +88,7 @@ pub mod unit_executor;
 // `check_permission` 提 pub 同款裁决）——此处显式公开三个函数供宿主经
 // `bedcode_wasm_core::host_api::fs::{fs_read_dir, fs_canonicalize, fs_stat}` 引用
 // （fs 模块本体保持 `pub(crate)`，不整模块曝面）。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub use crate::host_api::fs::{fs_canonicalize, fs_read_dir, fs_stat};
 mod wsl_fs;
 
@@ -125,7 +125,7 @@ pub use ports::{
 /// `pub(in wasm_core::host_api)`，故 `database::tests` / `storage::tests` 都够得着）
 /// 桌面装配面专属（common-host）：假端口实现 SqlitePorts（sqlite_ports 为
 /// common-host 模块，票 02 M12 语义边界——移动形态 db 域走宿主侧 host_domains/db）。
-#[cfg(all(test, feature = "common-host"))]
+#[cfg(all(test, feature = "desktop-assembly"))]
 pub(crate) mod sqlite_scaffold;
 
 // `test_seed_plugin_secret` 再导出已随 host-auth 域迁宿主退役（票 02 批次 04）：
@@ -178,7 +178,7 @@ pub fn check_permission(
 ///
 /// **`capability` 参数由调用方给**（取值 `bedcode_discovery_engine::routing::CAPABILITY`）：
 /// 能力名字面量的真源在该域自报的词汇里（票 02 批次 03），内核侧零字面量。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub use crate::manager::capability::{
     forward_mdns_advertise, forward_mdns_browse, forward_mdns_is_advertising,
     forward_mdns_stop_advertise, forward_mdns_stop_browse,
@@ -200,7 +200,7 @@ pub use crate::manager::capability::{
 /// 域（host-kit 装配自报面，票 02 批次 02 起——域实现迁出内核后内核不点名该域）。
 ///
 /// 幂等：各域 `install_ports` 是 `OnceLock::set`，重复装配被忽略而非替换。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub(crate) fn install_capability_domain_ports(
     host_ctx: &std::sync::Arc<crate::host_api::context::WasmHostContext>,
 ) {
@@ -231,13 +231,13 @@ pub(crate) fn install_capability_domain_ports(
 /// （wasm-core 内部测试可见）；lib 集成测试（task_e2e 等，独立测试二进制）
 /// 看不到 cfg(test) 项，提为常编译 pub 供 `bedcode_desktop_lib::wasm_core::
 /// host_api::grant_permissions` 消费（调用点形态与原名一致，零逻辑改动）。
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub fn grant_permissions(ctx: &WasmHostContext, plugin_id: &str, perms: &[&str]) {
     let requested: Vec<String> = perms.iter().map(|s| s.to_string()).collect();
     ctx.permission.grant_permissions(plugin_id, &requested);
 }
 
-#[cfg(all(test, feature = "common-host"))]
+#[cfg(all(test, feature = "desktop-assembly"))]
 pub(crate) mod tests {
     use super::*;
     use crate::db::Database;

@@ -206,6 +206,39 @@ pub fn build_host_ctx() -> std::sync::Arc<crate::host_api::WasmHostContext> {
     ))
 }
 
+/// 统一运行时壳的无头构造（单形态 2026-10-13）
+///
+/// 无 storage / app_handle / first_party_dirs，ABI 规格 [`AbiPolicy::UNCONSTRAINED`]
+/// （无头装配不设上限——夹具是桌面 SDK 产物）。供移动宿主集成测试构造
+/// `WasmRuntime`（loader / manager / 终端会话夹具均需真实 Engine）。
+pub fn setup_headless_runtime(
+    aot_cache_dir: Option<std::path::PathBuf>,
+) -> crate::Result<crate::manager::runtime::WasmRuntime> {
+    setup_headless_runtime_with_abi(aot_cache_dir, crate::manager::runtime::AbiPolicy::UNCONSTRAINED)
+}
+
+/// 同 [`setup_headless_runtime`]，但显式注入 ABI 规格（端事实）
+///
+/// 单形态（2026-10-13）：ABI 版本上限检查是宿主注入的策略（wasm-core 零端 ABI
+/// 知识）——端宿主测试要断言「高版本组件被拒绝」（如移动 `high-abi` 用例），
+/// 必须注入端真实规格（移动 21 / None），不能全用 UNCONSTRAINED。
+pub fn setup_headless_runtime_with_abi(
+    aot_cache_dir: Option<std::path::PathBuf>,
+    abi: crate::manager::runtime::AbiPolicy,
+) -> crate::Result<crate::manager::runtime::WasmRuntime> {
+    let storage = crate::storage::PluginStorage::test_storage();
+    let mut runtime = crate::manager::runtime::WasmRuntime::with_setup(
+        storage,
+        None,
+        crate::manager::runtime::EngineSetup::new(crate::config::CoreConfig::default())
+            .with_abi(abi),
+    )?;
+    // AOT 缓存目录：无头装配注入（生产路径经 app_handle 取；测试用例断言
+    // 缓存产物落点需要显式注入——aot_cache_dir 是 pub(crate)，crate 内可达）
+    runtime.aot_cache_dir = aot_cache_dir;
+    Ok(runtime)
+}
+
 /// 构造插件实例 state（统一 host-kit 形态，wasm-core-mobile-purity 票 04）
 ///
 /// 取代旧自持 `WasmPluginState { plugin_id, host_ctx, runtime_handle,
@@ -253,23 +286,24 @@ pub const SYSTEM_PLUGIN_ID: &str = crate::storage::SYSTEM_PLUGIN_ID;
 /// 宿主 e2e 用它断言「产物 `abi.version()` == SDK `ABI_VERSION`」——不另拼探测逻辑，
 /// 避免测试与生产各钉一份（漂移时测试反而会掩盖问题）。
 pub fn plugin_abi_version(
-    plugin: &mut crate::manager::runtime::LoadedComponentPlugin,
+    plugin: &mut crate::manager::runtime::LoadedWasmPlugin,
 ) -> crate::Result<Option<u32>> {
     let (store, instance) = plugin.raw_store();
     crate::manager::runtime::core_binding::abi_version(store, instance)
 }
 
-/// linker 装配面（与生产同一函数：宿主自报能力模块 + WASI 段）
+/// linker 装配面（与生产同一函数：core 交集 + 宿主自报能力模块 + WASI 段）
 ///
-/// 宿主集成测试据此断言 linker 装配契约（WASI 默认注册 / 配置关闭可重注册）——
-/// 这两条判据只有在**宿主 adapter 在链接图里**的测试二进制中才有意义（内核自己的
-/// cfg(test) 里 registry 为空；且 bare 形态的 `cargo test --lib` 目前整体不可编译，
-/// 见票 05 §7 记录）。
+/// 单形态（2026-10-13）起与桌面壳同一实现：`component::add_to_linker`——core
+/// 交集 8 域（core_binding）+ `inventory` 自报能力模块 + WASI p2/p3。宿主集成
+/// 测试据此断言 linker 装配契约（WASI 默认注册 / 配置关闭可重注册）。
 pub fn build_component_linker(
     engine: &wasmtime::Engine,
     wasi_cfg: &crate::config::WasiConfig,
 ) -> crate::Result<wasmtime::component::Linker<crate::manager::runtime::WasmPluginState>> {
-    crate::manager::runtime::bare::component::build_component_linker(engine, wasi_cfg)
+    let mut linker = wasmtime::component::Linker::new(engine);
+    crate::manager::runtime::component::add_to_linker(&mut linker, wasi_cfg)?;
+    Ok(linker)
 }
 
 /// 探针：对给定 linker 尝试再次注册 WASI p2
@@ -288,7 +322,7 @@ pub fn probe_wasi_p2_reregistration(
 ///
 /// 形状与壳内 `raw_store` 逐字一致，只是把可达性从 `pub(crate)` 提到本转发面。
 pub fn plugin_raw_store(
-    plugin: &mut crate::manager::runtime::LoadedComponentPlugin,
+    plugin: &mut crate::manager::runtime::LoadedWasmPlugin,
 ) -> (
     &mut wasmtime::Store<crate::manager::runtime::WasmPluginState>,
     &wasmtime::component::Instance,

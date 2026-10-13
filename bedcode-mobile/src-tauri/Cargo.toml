@@ -17,11 +17,12 @@ tauri-build = { version = "2", features = [] }
 # 插件机制整核（fork crate，票 17 批次 2b：运行时/16 域/绑定层真源迁移至此，
 # 宿主 plugin/ 经垫片转发；路径基准 = AGENTS「能力域/引擎 crate 落仓库根 packages」
 # 的移动形态——本 crate 落 bedcode-mobile/packages/）
-# 票 06 批次 03（ADR 0045 D6）：移动 fork 退役——单一 wasm-core（仓库根 packages/）
-# 的移动形态装配树（bare-host feature）。**票 05 收口**：package rename 别名
-# （`bedcode-wasm-core-mobile`）删除，直连单 crate、源码 `bedcode_wasm_core::`
-# 导入路径；回接由 `tests/retired_mobile_wasm_core_fork_lock.rs` 拦截。
-bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false, features = ["bare-host"] }
+# 单形态（2026-10-13 runtime-single-form）：wasm-core 无 common/bare 之分（形态
+# feature 已退役）——移动不开 `desktop-assembly`（桌面专属装配面），default-features
+# = false 拿统一机制 + 运行时壳；ABI 规格（AbiPolicy）由本宿主构造 WasmRuntime 时
+# 注入（移动 SDK 常量）。回接（fork crate / rename 别名）由
+# `tests/retired_mobile_wasm_core_fork_lock.rs` 拦截。
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false }
 tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -146,7 +147,7 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 # 测试支持面（夹具构建器 + MockPorts；批次 2b 宿主集成测试消费）。
 # 票 06 批次 03：随主依赖切根 crate——`test-support` feature 的移动面
 # （test_support/bare.rs = fork test_support.rs 迁入）已就位；票 05 起无 rename 别名。
-bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false, features = ["bare-host", "test-support"] }
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false, features = ["test-support"] }
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"

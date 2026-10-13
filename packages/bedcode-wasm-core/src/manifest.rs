@@ -620,7 +620,7 @@ pub struct SettingsContribution {
 
 // ==================== 测试（serde 形状漂移锁） ====================
 
-#[cfg(all(test, feature = "common-host"))]
+#[cfg(all(test, feature = "desktop-assembly"))]
 mod drift_lock {
     use super::*;
 

@@ -10,6 +10,13 @@
 >
 > 本文件是本次合并的计划真源。原方向（2026-10-11 凌晨版本：union world / 单一 SDK / ADR 0018 撤销）**作废**，本版取代之。
 
+> **状态（2026-10-13）**：票 T-01–T-06 **全 done**，ADR 0049 accepted。
+> - 契约**零变更**（双端 `compose.json` 未动，ABI 37 / 20 维持，ADR 0018 不撤销）；
+> - 机制**单形态**、绑定**归位宿主**（内核唯一合法绑定 = `manager/runtime/core_binding.rs` 绑 `wit/core.wit` 的 `world core`）；
+> - WASI 装配面**住核心**、双端默认全开、配置驱动（裁决 3）。
+> - 逐票记录：`ticket-01`–`ticket-06-*.md`（**票 06 含全量门禁实跑结果 + 6 条遗留项声明**）。
+> - 终局决策文件 = `docs/adr/0049-wasm-core-single-form-and-binding-in-host.md`（含 6 条判决性事实）。
+
 ## 1. 目标终态（裁定后）
 
 ```text

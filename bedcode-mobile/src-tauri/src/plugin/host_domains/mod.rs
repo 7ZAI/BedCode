@@ -1,37 +1,30 @@
-//! core 域 WIT 实现（移动宿主 adapter；票 05 绑定归位收口）
+//! core 域 WIT 实现（移动宿主 adapter；票 05 绑定归位收口 → 2026-10-13 单形态收口）
 //!
-//! ## 为什么这 12 个接口的实现住移动宿主
+//! ## 单形态（2026-10-13）后本模块只留**移动独有 / 端差异实现**
 //!
-//! `core.wit` 的 17 个双端全等 interface 里，**实现按端不同**的有 12 个（本模块
-//! 覆盖）+ 5 个移动独有域（`plugin/{notify,fs_mobile,terminal_stream,connection,auth}.rs`）。
-//! 桌面这 12 个里属「双端全等语义」的 8 域由内核 `manager::runtime::core_binding`
-//! 单份实现；移动不能复用那份，因为**权限门不同源**（移动 = 实例级
-//! `granted_permissions` 集，桌面 = `PermissionManager` 桌面词表）且**插件私有库
-//! 布局不同**（移动 `plugins/<id 去点划>.db`，内核 `plugins/<plugin_id>/plugin.db`）
-//! ——直接切会让 storage / fs / db 门恒拒、既有插件私有库失联。
-//! ⇒ 按「绑定层归位」原则（T-05），这 12 域的实现随宿主自报（`HostModule` +
-//! `inventory`），行为与保留在 wasm-core `bare/host_impl` 时逐字一致。
+//! `core.wit` 的 17 个双端全等 interface 里，**双端全等语义的 8 域**（host-log /
+//! host-storage / host-plugin-database / host-events / host-fs / host-config /
+//! host-bus / host-platform）由内核 `manager::runtime::core_binding` 单份实现
+//! （统一 Linker 装配；权限门收敛统一 `PermissionManager`，私有库布局统一内核
+//! `plugins/<plugin_id>/plugin.db`）——移动宿主**不再自报**这 8 域（同一 interface
+//! 两份 `add_to_linker` 注册 ⇒ 装配期 `defined twice`）。
+//!
+//! 本模块保留**实现按端不同**的 4 个 core 域（host-http / host-peer / host-mdns /
+//! host-websocket）——端差异经移动宿主自报（`HostModule` + `inventory`）；移动独有
+//! 5 域（`plugin/{notify,fs_mobile,terminal_stream,connection,auth}.rs`）各自自报。
 //!
 //! ## 结构
 //!
 //! - 每域一个文件：域逻辑（共享核 adapter）+ 该 interface 的 `Host` impl 同处；
-//! - 域逻辑的机制语义在共享 crate（`bedcode-host-api-core` / `bedcode-server-http`
-//!   / `bedcode-server-peer-net` / `bedcode-discovery-engine` / `bedcode-ws-client-engine`），
-//!   本层只做「`WasmPluginState` → 端口」接线；
-//! - 装配经 [`MobileHostCoreModule`] 自报：12 个 interface 一次注册，
+//! - 域逻辑的机制语义在共享 crate（`bedcode-server-http` / `bedcode-server-peer-net`
+//!   / `bedcode-discovery-engine` / `bedcode-ws-client-engine`），本层只做
+//!   「`WasmPluginState` → 端口」接线；
+//! - 装配经 [`MobileHostCoreModule`] 自报：4 个 interface 一次注册，
 //!   `expect_host_module!` 与自报同处（漏一处即装载期 `missing` / `unlisted` 点名）。
 
-pub(crate) mod bus;
-pub(crate) mod config;
-pub(crate) mod db;
-pub(crate) mod event;
-pub(crate) mod fs;
 pub(crate) mod http;
-pub(crate) mod log;
 pub(crate) mod mdns;
 pub(crate) mod peer;
-pub(crate) mod platform;
-pub(crate) mod storage;
 pub(crate) mod support;
 pub(crate) mod ws;
 
@@ -80,29 +73,17 @@ pub fn purge_for_plugin(
 /// 能力模块名（白名单键 = 装载期日志与错误文案里的模块名）
 pub const MODULE_NAME: &str = "mobile-host-core";
 
-/// 本模块提供的 WIT 接口（必须与 `core.wit` 逐字一致；改错即 guest import 失配）
+/// 本模块提供的 WIT 接口（移动独有 / 端差异 core 域；与 `core.wit` 逐字一致）
 pub const MODULE_INTERFACES: &[&str] = &[
-    "bedcode:plugin/host-log",
-    "bedcode:plugin/host-storage",
-    "bedcode:plugin/host-plugin-database",
-    "bedcode:plugin/host-events",
     "bedcode:plugin/host-http",
-    "bedcode:plugin/host-fs",
-    "bedcode:plugin/host-config",
-    "bedcode:plugin/host-bus",
     "bedcode:plugin/host-peer",
     "bedcode:plugin/host-mdns",
-    "bedcode:plugin/host-platform",
     "bedcode:plugin/host-websocket",
 ];
 
 /// 本模块读写的权限位（各域权限门的并集；装载期一致性核对用）
 pub const MODULE_PERMISSIONS: &[&str] = &[
-    "storage",
     "network:http",
-    "fs:read",
-    "fs:write",
-    "bus",
     "peer",
     "mdns",
     "ws:client",
@@ -113,11 +94,11 @@ const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
     permissions: MODULE_PERMISSIONS,
-    // 移动 ABI 20（core 12 域的当前契约面；接口自 v15 起未破坏性变更）
+    // 移动 ABI 20（core 域的当前契约面；接口自 v15 起未破坏性变更）
     abi_min: 20,
 };
 
-/// core 12 域能力模块
+/// 移动独有 / 端差异 core 域能力模块（4 个；双端全等 8 域在内核 core_binding）
 pub struct MobileHostCoreModule;
 
 impl HostModule for MobileHostCoreModule {
@@ -131,17 +112,9 @@ impl HostModule for MobileHostCoreModule {
     ) -> wasmtime::Result<()> {
         type D = wasmtime::component::HasSelf<WasmPluginState>;
         for iface in [
-            bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,
             bedcode::plugin::host_http::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
             bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
             bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
-            bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
             bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, D>,
         ] {
             iface(linker, |s| s)?;

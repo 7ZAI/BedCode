@@ -369,7 +369,7 @@ impl Default for PermissionManager {
     }
 }
 
-#[cfg(all(test, feature = "common-host"))]
+#[cfg(all(test, feature = "desktop-assembly"))]
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};

@@ -1,9 +1,17 @@
 //! 能力模块白名单双向校验 + 描述符零产品名词锁（component.rs 专用）
 //!
-//! 自 `common/component.rs` 的 `mod tests` 拆出（共享脚手架在父 `mod tests`，
+//! 自 `component.rs` 的 `mod tests` 拆出（共享脚手架在父 `mod tests`，
 //! 经 `use super::*` 可见）；fixture 互斥与产物构建语义不变。
 
 use super::*;
+
+// 单形态（2026-10-13）：lib test 二进制经 dev-deps 开启 server crates 的
+// `common-host`（DomainHooks 停用回收钩子必需）——其 HostModule 自报进测试
+// 二进制，白名单（纯 `expected_host_modules`）须在此声明同 3 个模块名才能双向
+// 匹配（与生产形态解耦：桌面宿主在生产二进制声明，移动不自报）。
+bedcode_host_kit::expect_host_module!(bedcode_server_websocket::plugin_binding::MODULE_NAME);
+bedcode_host_kit::expect_host_module!(bedcode_server_peer_net::plugin_binding::MODULE_NAME);
+bedcode_host_kit::expect_host_module!(bedcode_server_http::plugin_binding::MODULE_NAME);
 
 /// 自动收集到的能力模块集与树内白名单**完全相等**（双向）
 ///
@@ -21,35 +29,10 @@ fn capability_registry_matches_whitelist() {
         .unwrap_or_else(|e| panic!("capability module whitelist must match collected set: {e}"));
 }
 
-/// 内建在册清单含重复模块名即自检失败（防同一能力域被登记两次）
-#[test]
-fn in_crate_host_module_list_has_no_duplicates() {
-    let mut seen = IN_CRATE_HOST_MODULES.to_vec();
-    seen.sort_unstable();
-    let before = seen.len();
-    seen.dedup();
-    assert_eq!(
-        seen.len(),
-        before,
-        "in-crate host module list contains duplicates: {IN_CRATE_HOST_MODULES:?}"
-    );
-}
-
-/// 合并判据：并集 + 去重 + 字典序（两侧来源各贡献自己的名字）
-#[test]
-fn merge_whitelist_unions_and_dedups_both_sources() {
-    let merged = merge_host_module_whitelist(&["beta", "alpha"], &["gamma", "alpha"]);
-    assert_eq!(
-        merged,
-        vec!["alpha", "beta", "gamma"],
-        "合并必须去重且字典序（集合语义）"
-    );
-    // 空的一侧不改语义：宿主未自报任何期望时白名单 = 内建在册
-    assert_eq!(
-        merge_host_module_whitelist(&["beta", "alpha"], &[]),
-        vec!["alpha", "beta"]
-    );
-}
+/// 白名单 = 纯宿主自报期望（单形态 2026-10-13）：`expected_host_modules` 去重 +
+/// 字典序（host-kit 实现语义），原「内建在册 ∪ 宿主期望」合并函数随
+/// `IN_CRATE_HOST_MODULES` 一并删除（端差异宿主组装——白名单不承载内建列表）。
+/// 双向校验本体仍由 [`capability_registry_matches_whitelist`] 覆盖。
 
 /// fail-visible 形态①：能力模块**缺失**时实例化期显性失败，并点名缺哪个
 ///

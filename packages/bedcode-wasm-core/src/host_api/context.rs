@@ -757,11 +757,12 @@ impl WasmHostContext {
     /// 互调门禁（ADR 0017 层 1）只校验目标 api 已声明、不校验调用方——未激活
     /// 插件在注册表无登记 → 门禁拒绝 → 调用方降级宿主实现。
     ///
-    /// **common-host 门控（票 02 B5 保留）**：`host_api::api`（回复道编排）是
-    /// 桌面 WIT 绑定域，随 T-03/04 迁宿主前保持桌面装配面门控——统一上下文
-    /// 常编译化后本方法在 bare / 无 feature 形态不编译（移动互调经宿主侧
+    /// **桌面装配面门控（`desktop-assembly`，票 02 B5 保留）**：`host_api::api`
+    /// （回复道编排）是桌面 WIT 绑定域，随 T-03/04 迁宿主前保持桌面装配面门控——
+    /// 单形态（2026-10-13）起统一上下文常编译，但本方法随 `desktop-assembly`
+    /// （桌面专属装配面，移动不开——移动互调经宿主侧
     /// `bedcode-mobile/src-tauri/src/plugin/host_domains/` 域实现，不经本入口）。
-    #[cfg(feature = "common-host")]
+    #[cfg(feature = "desktop-assembly")]
     pub fn call_plugin_api_host(
         &self,
         request_topic: &str,

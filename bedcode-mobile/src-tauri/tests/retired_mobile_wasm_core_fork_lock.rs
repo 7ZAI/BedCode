@@ -4,12 +4,16 @@
 //!
 //! 票 06 把移动 fork crate `bedcode-mobile/packages/bedcode-wasm-core`
 //! （package `bedcode-wasm-core-mobile`）整面退役：移动 `src-tauri` 改为依赖**仓库根
-//! 单一 wasm-core**（`packages/bedcode-wasm-core` + `bare-host` feature），
-//! 当时以 **package rename 别名**（依赖键 `bedcode-wasm-core-mobile`）过渡。
+//! 单一 wasm-core**（`packages/bedcode-wasm-core`），当时以 **package rename 别名**
+//! （依赖键 `bedcode-wasm-core-mobile`）过渡。
 //! **票 05 收口**：别名删除——移动侧直连单 crate（依赖键就是 `bedcode-wasm-core`），
 //! 源码 `bedcode_wasm_core::` 导入路径。本锁自此泛化为「禁止任何 fork / rename
 //! 织体回归」：第二 crate、独立包名、别名键、fork 形态路径、同名新目录（判据 5，
 //! 票 06 补），五者任一落回即红。
+//! **单形态收口（2026-10-13 runtime-single-form）**：`bare-host` feature 已退役——
+//! 移动依赖形态 = `default-features = false`（不开桌面专属装配面 `desktop-assembly`，
+//! dev 依赖加 `test-support`）；判据 4 随之从「必须走 bare-host」改为「不得出现
+//! 退役形态词 bare-host / common-host、不得开 desktop-assembly」。
 //!
 //! 退役走 fail-visible 三形态（AGENTS §5.1.4）：
 //! - ① 旧读路径删除：fork 目录删除 + 别名键删除，残留引用编译期即红；
@@ -23,10 +27,11 @@
 //! 3. 移动侧构建面文件不得出现 fork 形态路径（上跳一级 / 裸引用
 //!    `"../packages/bedcode-wasm-core"`；根 crate 的合法形态是上跳两级
 //!    `"../../packages/bedcode-wasm-core"`）；
-//! 4. 移动 `src-tauri` **直连**根 crate：依赖键为 `bedcode-wasm-core` + 走
-//!    `bare-host` feature，且不存在任何 `bedcode-wasm-core-mobile` 依赖键（rename
-//!    别名回归）；移动 `src` / `tests` 源码不得再出现 `bedcode_wasm_core_mobile`
-//!    标识符；
+//! 4. 移动 `src-tauri` **直连**根 crate：依赖键为 `bedcode-wasm-core` +
+//!    `default-features = false`（单形态起无 bare-host；不开 `desktop-assembly`
+//!    桌面专属装配面，dev 依赖加 `test-support`），且不存在任何
+//!    `bedcode-wasm-core-mobile` 依赖键（rename 别名回归）；移动 `src` / `tests`
+//!    源码不得再出现 `bedcode_wasm_core_mobile` 标识符；
 //! 5. **（票 06 补）仓库内只有一份 wasm-core 织体**：`packages/bedcode-wasm-core`
 //!    之外不得再有任何 `bedcode-wasm-core*` 目录。
 //!
@@ -96,7 +101,8 @@ fn mobile_wasm_core_fork_directory_is_retired() {
     assert!(
         !fork_dir.exists(),
         "移动 fork crate 目录复活：{}（票 06 批次 04 已整面退役——单一 wasm-core 在仓库根 \
-         `packages/bedcode-wasm-core`，移动侧经 `bare-host` feature 消费）",
+         `packages/bedcode-wasm-core`，移动侧 `default-features = false` 消费，\
+         单形态 2026-10-13 起无 bare-host feature）",
         fork_dir.display()
     );
 }
@@ -203,9 +209,18 @@ fn mobile_wasm_core_dep_is_direct_single_crate() {
                 idx + 1
             ));
         }
-        if !t.contains("bare-host") {
+        if !t.contains("default-features = false") {
             violations.push(format!(
-                "Cargo.toml:{}: 未走 bare-host feature（移动形态必须 default-features=false）：{t}",
+                "Cargo.toml:{}: 未走 default-features = false（单形态起移动不开桌面专属装配面 \
+                 desktop-assembly，dev 依赖另加 test-support）：{t}",
+                idx + 1
+            ));
+        }
+        // 退役形态词回接（common-host / bare-host 已是 wasm-core 不存在的 feature）
+        if t.contains("bare-host") || t.contains("common-host") || t.contains("desktop-assembly") {
+            violations.push(format!(
+                "Cargo.toml:{}: 出现退役形态词 / 桌面专属装配面（单形态 2026-10-13 起 \
+                 wasm-core 无 common/bare 之分，移动不开 desktop-assembly）：{t}",
                 idx + 1
             ));
         }
@@ -253,11 +268,7 @@ fn mobile_sources_never_use_the_rename_alias_identifier() {
             }
         }
     }
-    assert!(
-        files.len() >= 20,
-        "源码文件收集过少（{}），锁可能空转",
-        files.len()
-    );
+    assert!(files.len() >= 20, "源码文件收集过少（{}），锁可能空转", files.len());
     let mut violations: Vec<String> = Vec::new();
     // 自排除：本锁的禁用名单（字面量）与说明注释自身就带该标识符——不排除即恒红
     // （「锁自己判红 = 锁空转」，T-04 `desktop_binding_surface…` 同款纪律）。

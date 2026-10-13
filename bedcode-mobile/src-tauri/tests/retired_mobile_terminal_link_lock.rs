@@ -68,8 +68,9 @@ const RETIRED_FRONTEND_LITERALS: [&str; 8] = [
 ];
 
 /// 宿主保留面（窄转发 + ABI v15 原语）必须仍在：本票只摘协议编排，不摘传输面。
-/// 票 06 批次 03/04 后真源随 fork 退役迁入**仓库根**单一 wasm-core 的 `bare-host`
-/// 面（`bedcode_wasm_core` 现为 package rename 别名），锁钉根 crate 路径。
+/// 票 06 批次 03/04 后真源随 fork 退役迁入**仓库根**单一 wasm-core
+/// `bedcode-wasm-core`（单形态 2026-10-13 起无 common/bare 之分，rename 别名已随
+/// 票 05 删除），锁钉根 crate 路径。
 const RETAINED_FACE: [(&str, &str); 7] = [
     (
         // 票 05 绑定归位：窄转发表整表自 wasm-core `terminal_stream_gateway.rs`

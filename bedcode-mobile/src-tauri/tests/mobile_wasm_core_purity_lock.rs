@@ -9,22 +9,28 @@
 //! 1. **移动独有域不得回流内核**：wasm-core 源码树不得出现 notify / fs_mobile /
 //!    terminal_stream / connection-target / auth-client 五域的 `Host` impl 或域实现
 //!    文件；反向钉住移动宿主 adapter 在场（能力去内核化 ≠ 能力消失）。
-//! 2. **core 12 域的绑定与实现不得回流内核**：wasm-core 不得再出现任何
+//! 2. **core 域绑定/实现不得回流内核形态壳**：wasm-core 不得再出现任何
 //!    `impl bedcode::plugin::host_*::Host`——**唯一合法例外**是
-//!    `manager/runtime/core_binding.rs`（桌面 core 交集 8 域，绑契约真源
-//!    `wit/core.wit`）；移动壳（`runtime/bare.rs` / `runtime/bare/component.rs`）
-//!    不得出现 `bindgen!` 与 `bedcode::plugin::` 路径。
+//!    `manager/runtime/core_binding.rs`（双端全等 8 域，绑契约真源
+//!    `wit/core.wit`）；**统一壳**（`runtime.rs` / `runtime/component.rs`）
+//!    不得出现 `bindgen!` 与 `bedcode::plugin::` 路径。单形态（2026-10-13）起
+//!    移动 host_domains 收为 4 域（http / peer / mdns / ws），双端全等 8 域
+//!    （storage / log / config / plugin-database / events / fs / bus / platform）
+//!    由内核 core_binding 单份实现（权限门收敛统一 PermissionManager、私有库布局
+//!    统一内核）——移动侧对应 adapter 文件不再要求在场。
 //! 3. **共享实现核不得消失**（正向）：搬出内核的域逻辑必须在共享 crate 里可寻址，
 //!    且宿主 adapter 真的转发到共享核（薄转发的最低证据）——否则「壳变薄」会退化
 //!    成「能力没了」（fail-visible）。
-//! 4. **移动壳行数上限**：单文件与合计双重上限，防止有人把域逻辑改写成「壳里的
-//!    实现」再慢慢长回来。
+//! 4. **统一壳行数上限**：单文件与合计双重上限，防止有人把域逻辑改写成「壳里的
+//!    实现」再慢慢长回来（单形态起壳双端共用，上限按统一壳实际体量校准）。
 //! 5. **移动独有机制与退役垫片不得回流**：`host-terminal-stream` 的窄转发表
 //!    （网关）随域迁移动宿主；零消费者的 `sql_guard` 垫片退役不复活。
 //! 6. **退役的 http 引擎不得回接**（保留自 purity 票 06）。
-//! 7. **端词汇全集**（票 06 补）：7a cap 分片 world 名在**代码行**零命中（注释放行，
-//!    因为模块文档必须说明「cap 组合不在内核」）/ 7b 声明位零端名（ADR 0047 D2，
-//!    豁免走登记表）/ 7c 移动端 SDK 词汇封顶在唯一已知落点 /
+//! 7. **端词汇全集**（票 06 补，单形态收口）：7a cap 分片 world 名在**代码行**零命中
+//!    （注释放行，因为模块文档必须说明「cap 组合不在内核」）/ 7b 声明位零端名
+//!    （ADR 0047 D2，豁免走登记表）/ 7c **移动端 SDK 词汇零命中**（单形态起
+//!    `bedcode_plugin_api_mobile` 完全退出 wasm-core——ABI 规格宿主注入、BusMessage
+//!    经统一 `on_message` 拆分，端 SDK 依赖归两端宿主）/
 //!    7d 正向锚点（core 交集绑定在场，防 7a–7c 空转）。
 //!
 //! **WASI 不在判据内**（票 06 修正票面表述）：本票 §2 初稿写的是「禁一切
@@ -122,7 +128,8 @@ fn mobile_owned_domains_stay_in_mobile_host() {
             );
         }
     }
-    // 域实现文件同样不得在内核形态目录出现（旧 bare/host_impl/ 整体已迁出）
+    // 域实现文件同样不得在内核出现（旧 bare/host_impl/ 整体已迁出；单形态起
+    // 无形态壳目录，只查 runtime 目录本体）
     let runtime_dir = wasm_core_src().join("manager/runtime");
     for name in [
         "notify.rs",
@@ -131,14 +138,12 @@ fn mobile_owned_domains_stay_in_mobile_host() {
         "connection.rs",
         "auth.rs",
     ] {
-        for dir in [runtime_dir.clone(), runtime_dir.join("bare")] {
-            let p = dir.join(name);
-            assert!(
-                !p.exists(),
-                "移动独有域文件回流 wasm-core：{}（应住移动宿主 src/plugin/{name}）",
-                p.display()
-            );
-        }
+        let p = runtime_dir.join(name);
+        assert!(
+            !p.exists(),
+            "移动独有域文件回流 wasm-core：{}（应住移动宿主 src/plugin/{name}）",
+            p.display()
+        );
     }
     for file in MOBILE_ADAPTER_FILES {
         let in_host = mobile_plugin_dir().join(file);
@@ -181,29 +186,32 @@ fn core_domain_bindings_stay_out_of_wasm_core() {
         }
     }
 
-    // 移动壳不得持绑定：`bindgen!` 与绑定生成物路径一律不出现
-    for rel in ["manager/runtime/bare.rs", "manager/runtime/bare/component.rs"] {
+    // 统一壳不得持绑定：`bindgen!` 与绑定生成物路径一律不出现（单形态：唯一
+    // 壳 = 桌面形态，移动宿主经同一壳装配；双端全等 8 域实现在内核 core_binding）
+    for rel in ["manager/runtime.rs", "manager/runtime/component.rs"] {
         let content = read(&wasm_core_src().join(rel));
         for (idx, line) in code_lines(&content) {
             for needle in ["bindgen!", "bedcode::plugin::"] {
                 assert!(
                     !line.contains(needle),
-                    "{rel}:{} 出现 `{needle}`——移动壳不再持有 WIT 绑定（票 05 归位）",
+                    "{rel}:{} 出现 `{needle}`——统一壳不再持有 WIT 绑定（票 04/05 归位）",
                     idx + 1
                 );
             }
         }
     }
 
-    // 正向：宿主侧的绑定与域实现必须在场
+    // 正向：宿主侧的绑定与保留的 4 个端差异 core 域必须在场（单形态收口：
+    // 双端全等 8 域 storage/log/config/plugin-database/events/fs/bus/platform
+    // 已迁内核 core_binding，移动 host_domains 只留 http/peer/mdns/ws）
     for rel in [
         "bindings.rs",
         "guest_events.rs",
         "host_domains/mod.rs",
-        "host_domains/storage.rs",
-        "host_domains/bus.rs",
-        "host_domains/ws.rs",
+        "host_domains/http.rs",
         "host_domains/peer.rs",
+        "host_domains/mdns.rs",
+        "host_domains/ws.rs",
     ] {
         let p = mobile_plugin_dir().join(rel);
         assert!(p.exists(), "移动宿主绑定层缺失：{}", p.display());
@@ -229,10 +237,17 @@ const SHARED_CORES: [(&str, &str); 4] = [
 ];
 
 /// `(宿主 adapter 相对 plugin/ 路径, 必须转发的共享核针脚)`
+///
+/// 单形态（2026-10-13）：fs / storage 的 host_domains adapter 已随「双端全等 8 域
+/// 迁内核 core_binding」删除——对应薄转发在 `packages/bedcode-wasm-core/src/
+/// host_api/{fs,storage}.rs`（同走 bedcode-host-api-core 共享核），由 wasm-core
+/// 自身测试覆盖；本表只钉移动宿主仍持有的端差异域。
 const HOST_ADAPTER_CORE_FORWARDS: [(&str, &str); 3] = [
     ("host_domains/http.rs", "bedcode_server_http"),
-    ("host_domains/fs.rs", "bedcode_host_api_core::fs"),
-    ("host_domains/storage.rs", "bedcode_host_api_core::storage"),
+    ("host_domains/peer.rs", "bedcode_server_peer_net"),
+    // 移动 host-websocket 是**客户端域**（5 函数），引擎面在 ws-client-engine
+    //（ADR 0043 双端共享 crate）；桌面服务端域（host-websocket-server）不经此表。
+    ("host_domains/ws.rs", "bedcode_ws_client_engine"),
 ];
 
 #[test]
@@ -259,17 +274,19 @@ fn shared_implementation_cores_stay_addressable() {
 
 // ==================== 判据 4：移动壳行数上限 ====================
 
-/// 单文件上限（当前最大 = `bare/component.rs` 437 行；留 ~35% 给注释与说明）
-const SHELL_FILE_LINE_LIMIT: usize = 600;
+/// 单文件上限（统一壳 `runtime/component.rs` 当前 ~950 行——含长文档注释与
+/// 可选导出探测；留余量给注释与说明）
+const SHELL_FILE_LINE_LIMIT: usize = 1300;
 
-/// 壳合计上限（`bare.rs` + `bare/component.rs`，当前 632 行）
-const SHELL_TOTAL_LINE_LIMIT: usize = 800;
+/// 壳合计上限（`runtime.rs` + `runtime/component.rs`）
+const SHELL_TOTAL_LINE_LIMIT: usize = 1800;
 
 #[test]
 fn mobile_shell_stays_thin() {
+    // 单形态（2026-10-13）：壳双端共用一份（桌面形态），行数上限按统一壳校准
     let shell_files = [
-        wasm_core_src().join("manager/runtime/bare.rs"),
-        wasm_core_src().join("manager/runtime/bare/component.rs"),
+        wasm_core_src().join("manager/runtime.rs"),
+        wasm_core_src().join("manager/runtime/component.rs"),
     ];
     let mut total = 0usize;
     for path in &shell_files {
@@ -283,7 +300,7 @@ fn mobile_shell_stays_thin() {
     }
     assert!(
         total <= SHELL_TOTAL_LINE_LIMIT,
-        "移动壳合计 {total} 行 > 上限 {SHELL_TOTAL_LINE_LIMIT}（域逻辑回流的典型征兆）"
+        "统一壳合计 {total} 行 > 上限 {SHELL_TOTAL_LINE_LIMIT}（域逻辑回流的典型征兆）"
     );
 }
 
@@ -364,30 +381,13 @@ fn retired_mobile_http_engine_stays_retired() {
 /// 对自己的边界闭嘴。
 const CAP_SLICE_WORDS: [&str; 5] = ["cap-desktop", "cap-mobile", "cap-pty", "cap-http", "cap-ws"];
 
-/// 移动端 SDK crate 名（双 SDK 收敛项的「移动那半」）
+/// 移动端 SDK crate 名（单形态起**零命中**）
 ///
-/// **为什么单独钉**：内核目前消费两个端 SDK——桌面 `bedcode_plugin_api`（集中在
-/// `common-host` 门控的桌面装配树：`manager/host*` / `host_api/api.rs` /
-/// `common/component.rs`）与移动 `bedcode_plugin_api_mobile`（只在一处，见下）。
-/// 双 SDK 合一是**已声明的遗留项**（票 05 §7.10-1 ③，收口票只声明不修），
-/// 所以本判据不查「零命中」——那会立刻判红；而是**封顶**：出现处不得超过唯一
-/// 已知落点，防止收敛工作推进前先扩散。
+/// 用户裁决（2026-10-13）：wasm-core 零端 ABI 知识、端 SDK 依赖归两端宿主。
+/// 单形态收口后移动 SDK 词汇（`abi::ABI_VERSION` / `BusMessage`）已完全退出
+/// wasm-core——ABI 规格经 `AbiPolicy` 由宿主注入、`BusMessage` 由移动宿主拆分后
+/// 走统一 `on_message`。本判据查**零命中**（含注释，防回归到封顶语义）。
 const MOBILE_SDK_CRATE: &str = "bedcode_plugin_api_mobile";
-
-/// 移动端 SDK 词汇在内核的唯一合法落点（相对 wasm-core src）
-const MOBILE_SDK_ALLOWED_FILE: &str = "manager/runtime/bare/component.rs";
-
-/// 允许在该落点内使用的两个具体符号（逐字形式，`::` 后段）
-///
-/// - `abi::ABI_VERSION`：移动 world 的 ABI 协商上限（移动 ABI 20 与桌面 37
-///   各自演进，ADR 0018）；桌面壳走自己的 `bedcode_plugin_api::abi`。
-/// - `BusMessage`：`on_bus_message` 的形参类型。
-///
-/// 除这两个符号外再出现 `bedcode_plugin_api_mobile::` 即判红（新增端 SDK 依赖点）。
-const MOBILE_SDK_ALLOWED_SYMBOLS: [&str; 2] = [
-    "bedcode_plugin_api_mobile::abi::ABI_VERSION",
-    "bedcode_plugin_api_mobile::BusMessage",
-];
 
 /// ADR 0047 D2「自持标识符零端名」的**声明位**豁免：`(文件, 声明名, 理由)`
 ///
@@ -411,9 +411,7 @@ const DECLARED_NAME_EXEMPTIONS: [(&str, &str, &str); 1] = [(
 /// 描述性文案（如 `"… in mobile headless context"`）。全行子串匹配会把这两类
 /// 正当内容判红，判红即锁空转。声明位是「自持标识符」的最小无歧义口径。
 fn declared_names(content: &str) -> Vec<(usize, String)> {
-    const KEYWORDS: [&str; 8] = [
-        "mod", "struct", "enum", "trait", "fn", "type", "const", "static",
-    ];
+    const KEYWORDS: [&str; 8] = ["mod", "struct", "enum", "trait", "fn", "type", "const", "static"];
     let mut out = Vec::new();
     for (idx, raw) in content.lines().enumerate() {
         let line = raw.trim();
@@ -433,10 +431,7 @@ fn declared_names(content: &str) -> Vec<(usize, String)> {
             },
             None => line,
         };
-        let Some((keyword, tail)) = KEYWORDS
-            .iter()
-            .find_map(|kw| rest.strip_prefix(kw).map(|t| (*kw, t)))
-        else {
+        let Some((keyword, tail)) = KEYWORDS.iter().find_map(|kw| rest.strip_prefix(kw).map(|t| (*kw, t))) else {
             continue;
         };
         // `mod` 后必须跟空白（挡 `module` / `model` 同前缀标识符）
@@ -468,7 +463,11 @@ fn wasm_core_carries_no_end_slice_or_sdk_vocabulary() {
     // 按 cap 分支 / 按 cap 绑定的实际逻辑。
     let mut cap_violations: Vec<String> = Vec::new();
     for path in &files {
-        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let rel = path
+            .strip_prefix(&src)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
         for (idx, line) in code_lines(&read(path)) {
             for needle in CAP_SLICE_WORDS {
                 if line.contains(needle) {
@@ -487,7 +486,11 @@ fn wasm_core_carries_no_end_slice_or_sdk_vocabulary() {
     // ---- 7b · 声明位零端名（ADR 0047 D2），豁免走登记表 ----
     let mut name_violations: Vec<String> = Vec::new();
     for path in &files {
-        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let rel = path
+            .strip_prefix(&src)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
         for (line_no, decl) in declared_names(&read(path)) {
             let lower = decl.to_lowercase();
             if !lower.contains("desktop") && !lower.contains("mobile") {
@@ -520,34 +523,27 @@ fn wasm_core_carries_no_end_slice_or_sdk_vocabulary() {
         );
     }
 
-    // ---- 7c · 移动端 SDK 词汇封顶在唯一已知落点（双 SDK 收敛遗留项的看门狗）----
+    // ---- 7c · 移动端 SDK 词汇零命中（单形态收口：端 SDK 依赖归两端宿主）----
+    // 只查**代码行**（跳整行注释）：`runtime.rs` 的 AbiPolicy 文档必须点名
+    // 「移动 SDK 作为 AbiPolicy 注入来源」——那是本判据存在的理由本身。
     let mut sdk_files: Vec<String> = Vec::new();
     for path in &files {
-        let rel = path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/");
-        if read(path).contains(MOBILE_SDK_CRATE) {
+        let rel = path
+            .strip_prefix(&src)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let hit = code_lines(&read(path)).any(|(_, line)| line.contains(MOBILE_SDK_CRATE));
+        if hit {
             sdk_files.push(rel);
         }
     }
     assert!(
-        sdk_files.len() == 1 && sdk_files[0] == MOBILE_SDK_ALLOWED_FILE,
-        "移动端 SDK `{MOBILE_SDK_CRATE}` 在 wasm-core 的落点漂移（现状应恰好一处：\
-         `{MOBILE_SDK_ALLOWED_FILE}`；实际：{sdk_files:?}）——新增落点说明双 SDK 词汇在内核\
-         扩散，要么走双 SDK 收敛（票 05 §7.10-1 遗留项），要么把该依赖上移到端宿主"
+        sdk_files.is_empty(),
+        "移动端 SDK `{MOBILE_SDK_CRATE}` 出现在 wasm-core 代码行：{sdk_files:?}——单形态起\
+         端 SDK 依赖归两端宿主（ABI 规格经 `AbiPolicy` 注入、`BusMessage` 由移动宿主\
+         拆分走统一 `on_message`）；新增依赖点须上移到端宿主，不要在内核扩端 SDK 依赖"
     );
-    let mobile_sdk_file = read(&src.join(MOBILE_SDK_ALLOWED_FILE));
-    for (idx, line) in mobile_sdk_file.lines().enumerate() {
-        if !line.contains(&format!("{MOBILE_SDK_CRATE}::")) {
-            continue;
-        }
-        assert!(
-            MOBILE_SDK_ALLOWED_SYMBOLS.iter().any(|s| line.contains(s)),
-            "{MOBILE_SDK_ALLOWED_FILE}:{} 出现 `{MOBILE_SDK_CRATE}::` 的新符号（行：{}）——\
-             允许清单只有 {:?}；新增须先上移到端宿主，不要在内核扩端 SDK 依赖",
-            idx + 1,
-            line.trim(),
-            MOBILE_SDK_ALLOWED_SYMBOLS
-        );
-    }
 
     // ---- 7d · 正向锚点（防空转）：core 交集绑定必须在场且确实在绑契约真源 ----
     // 「端词汇零命中」最危险的失效方式是判据扫描器扫空了。正向锚点：

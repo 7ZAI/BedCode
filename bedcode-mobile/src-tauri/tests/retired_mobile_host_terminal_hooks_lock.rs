@@ -100,10 +100,7 @@ const RETAINED_FACE: [(&str, &str); 6] = [
         "src/plugin/terminal_stream.rs",
         "pub fn terminal_stream_gateway()",
     ),
-    (
-        "src/plugin/terminal_stream.rs",
-        "fn forward_output(",
-    ),
+    ("src/plugin/terminal_stream.rs", "fn forward_output("),
 ];
 
 fn mobile_root() -> PathBuf {
@@ -245,8 +242,7 @@ fn mobile_terminal_stream_retained_face_stays() {
     // 输出通道一起删掉，前端页面将收不到任何终端输出。
     let root = mobile_root();
     for (rel, needle) in RETAINED_FACE {
-        let content =
-            std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("读取 {rel} 失败：{e}"));
+        let content = std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("读取 {rel} 失败：{e}"));
         assert!(
             content.contains(needle),
             "终端输出流保留面缺失（票 15 阶段 B 只摘回调面，不摘传输面）：{rel} 中找不到 `{needle}`"

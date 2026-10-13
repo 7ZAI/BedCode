@@ -269,6 +269,10 @@ async fn init_test_app_context() {
             None,
             None, // 整核抽出 §3.3：无头测试不注入 PeerCtxProvider（HEADLESS_UNAVAILABLE 语义不变）
             Vec::new(), // 票 08/P0-2：第一方豁免表宿主注入，无头测试空表（无免弹窗项）
+            bedcode_wasm_core::manager::runtime::AbiPolicy {
+                version: bedcode_plugin_api::abi::ABI_VERSION,
+                form: Some(bedcode_plugin_api::abi::FORM_COMPONENT),
+            }, // 桌面 ABI 规格（宿主注入；夹具为桌面 SDK 产物）
         )
         .await;
         plugin_host.init_message_bus().await;

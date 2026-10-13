@@ -12,24 +12,23 @@
 //! 宿主对外接口（host-* 原语实现与前端命令桥）已归位到 `crate::host_api`；
 //! 插件存储（`PluginStorage`）中立化到 `crate::storage`（票 03）。
 
-// 装配面模块按形态 cfg 分叉（票 06 批次 03，ADR 0045 D6）：桌面 PluginHost 装配树
-// （capability / host / task / watcher + runtime 桌面分支）随 `common-host`；移动
-// 装配树（fork 迁入的 runtime/bare.rs + component）随 `bare-host`——票 05 绑定归位
-// 后它只剩机制接线，域实现真源在
-// `bedcode-mobile/src-tauri/src/plugin/host_domains/`。
+// 装配面（单形态 2026-10-13，runtime-single-form）：无 common/bare 分叉——桌面
+// PluginHost 装配树（capability / host / task / watcher）随 `desktop-assembly`
+// （桌面专属装配面，移动不开）；统一运行时壳（runtime.rs + component.rs）双端共用。
+// 域实现真源在两端宿主 `src-tauri/src/plugin/host_domains/`。
 // 机制面（downloader / loader / registry / types / validation）双端共享。
 pub(crate) mod capability;
 // 插件 zip 分发包解压安装：core-plugin-manager 的安装职责，已自 `plugin/downloader`
 // 归位到此（票 11 第 5 项），引用方改为 `crate::manager::downloader`。
 pub mod downloader;
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub mod host;
 pub mod loader;
 pub mod registry;
 pub mod runtime;
-#[cfg(feature = "common-host")]
+#[cfg(feature = "desktop-assembly")]
 pub(crate) mod task;
 pub mod types;
 pub mod validation;
-#[cfg(all(debug_assertions, feature = "common-host"))]
+#[cfg(all(debug_assertions, feature = "desktop-assembly"))]
 pub mod watcher;

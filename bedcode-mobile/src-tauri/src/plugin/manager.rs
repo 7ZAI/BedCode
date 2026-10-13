@@ -11,7 +11,7 @@ use crate::plugin::loader::PluginLoader;
 use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::*;
-use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::PLUGIN_DATA_DIR;
 use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::settings::SettingsManager;
@@ -88,7 +88,7 @@ pub struct PluginManager {
     ///
     /// 每插件独立 Mutex：map 守卫只短持有（查找/增删），同步执行 WASM 期间
     /// 仅持有单插件实例锁，避免持 map 守卫执行 WASM 导致 host function 重入死锁
-    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedComponentPlugin>>>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
     /// WASM 宿主上下文（延迟初始化）
     wasm_host_ctx: OnceLock<Arc<WasmHostContext>>,
     /// 插件键值存储
@@ -211,7 +211,18 @@ impl PluginManager {
                 );
             }
         }
-        let runtime = Arc::new(WasmRuntime::new(aot_cache_dir)?);
+        // 统一运行时壳（单形态 2026-10-13）：wasm-core 零端 ABI 知识——
+        // 构造注入移动 ABI 规格（20，无 abi-form 导出）；first_party_dirs 移动
+        // 无此概念（桌面 worker 免弹窗通道，ADR 0034）传空表
+        let runtime = Arc::new(WasmRuntime::new(
+            self.storage.clone(),
+            self.app_handle.as_ref().cloned(),
+            Vec::new(),
+            crate::plugin::wasm_runtime::AbiPolicy {
+                version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
+                form: None,
+            },
+        )?);
         // guest 事件派发器（票 05 绑定归位）：`events` 导出是各端契约事实，内核零绑定
         // ——注入移动实现（词汇：on-bus-message / on-auth-success / on-disconnect /
         // on-session-*），缺省 `UnwiredGuestEvents` 派发即 fail-visible。
@@ -658,6 +669,14 @@ impl PluginManager {
                             .unwrap_or_default()
                     };
                     let effective = effective_permissions(&requested, approval.as_ref(), false);
+                    // 统一权限门（单形态 2026-10-13）：WASM 实例内的 host-* 权限判定
+                    // 收敛内核 `PermissionManager`（core_binding 8 域）——把生效权限
+                    // 集 grant 进统一词表（词表外词静默过滤，不影响移动独有域读
+                    // `granted_permissions` 全量）
+                    if let Some(ctx) = self.wasm_host_ctx.get() {
+                        let granted: Vec<String> = effective.iter().cloned().collect();
+                        ctx.grant_permissions(plugin_id, &granted);
+                    }
                     let mut plugins = self.plugins.write().await;
                     if let Some(p) = plugins.get_mut(plugin_id) {
                         p.granted_permissions = effective;
@@ -754,8 +773,18 @@ impl PluginManager {
             match loaded.activate() {
                 Ok(0) => {
                     // phase 1b: 激活成功后立即调用 on_startup 导出，结果驱动终态
+                    // 统一壳 on_startup 返回双层 Result（桌面语义）：外层 = 调用
+                    // 故障（trap/燃料），内层 = guest 自报启动失败 → 都进 Degraded
                     match loaded.on_startup() {
-                        Ok(()) => Ok(PluginState::Activated),
+                        Ok(Ok(())) => Ok(PluginState::Activated),
+                        Ok(Err(msg)) => {
+                            tracing::error!(
+                                plugin_id = %plugin_id,
+                                error = %msg,
+                                "WASM plugin on_startup reported failure, state degraded"
+                            );
+                            Ok(PluginState::Degraded { error: msg })
+                        }
                         Err(e) => {
                             tracing::error!(
                                 plugin_id = %plugin_id,
@@ -1059,7 +1088,7 @@ impl PluginManager {
         // Activated + Degraded 插件投递 —— Degraded 实例是活的，运行期回调仍应收到。
         if !matches!(event, PluginLifecycleEvent::AppStartup) {
             // 快照：声明了该事件的已激活（或降级）WASM 插件 id + 实例句柄（短锁）
-            let targets: Vec<(String, Option<Arc<TokioMutex<LoadedComponentPlugin>>>)> = {
+            let targets: Vec<(String, Option<Arc<TokioMutex<LoadedWasmPlugin>>>)> = {
                 let ids: Vec<String> = {
                     let plugins = self.plugins.read().await;
                     plugins
@@ -1139,7 +1168,7 @@ impl PluginManager {
 /// 独立结构体避免 PluginManager 直接实现 trait 导致的生命周期问题
 struct PluginManagerDispatcher {
     plugins: Arc<RwLock<HashMap<String, LoadedPlugin>>>,
-    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedComponentPlugin>>>>>,
+    wasm_plugins: Arc<RwLock<HashMap<String, Arc<TokioMutex<LoadedWasmPlugin>>>>>,
 }
 
 impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
@@ -1179,7 +1208,9 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
             if let Some(bytes) = &msg.payload_binary {
                 Ok(loaded.on_message_binary(&msg.topic, &msg.sender, bytes)?)
             } else {
-                Ok(loaded.on_bus_message(&msg)?)
+                // 统一壳 on_message（单形态）：BusMessage → topic/sender/payload
+                //（移动 WIT `events.on-bus-message` 无 sender 参数，宿主派发器不消费）
+                Ok(loaded.on_message(&msg.topic, &msg.sender, &msg.payload)?)
             }
         })
     }
@@ -1212,7 +1243,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::wasm_runtime::LoadedComponentPlugin;
+    use crate::plugin::wasm_runtime::LoadedWasmPlugin;
     use bedcode_wasm_core::test_support::{build_host_ctx, build_test_component};
     use std::collections::HashSet;
     use std::sync::Arc as StdArc;
@@ -1302,14 +1333,16 @@ mod tests {
         );
     }
 
-    /// 用真组件实例化一个 LoadedComponentPlugin 并塞入 manager.wasm_plugins
+    /// 用真组件实例化一个 LoadedWasmPlugin 并塞入 manager.wasm_plugins
     async fn attach_wasm(manager: &PluginManager, pid: &str, features: &[&str]) {
         let host_ctx = build_host_ctx();
         let runtime = manager.wasm_runtime.get().expect("wasm runtime initialized");
         let component =
-            Component::from_binary(runtime.engine(), &build_test_component(features)).expect("compile test component");
-        let loaded: LoadedComponentPlugin = runtime
-            .instantiate_component(&component, pid, host_ctx, HashSet::new())
+            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(runtime), &build_test_component(features)).expect("compile test component");
+        // 统一 instantiate（单形态）：权限经 for_plugin 派生上下文注入
+        let plugin_ctx = Arc::new(host_ctx.for_plugin(HashSet::new()));
+        let loaded: LoadedWasmPlugin = runtime
+            .instantiate_component(&component, pid, plugin_ctx, &[], None)
             .expect("instantiate component");
         let mut wasm_plugins = manager.wasm_plugins.write().await;
         wasm_plugins.insert(pid.to_string(), StdArc::new(tokio::sync::Mutex::new(loaded)));

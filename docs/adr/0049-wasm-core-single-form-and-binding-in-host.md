@@ -96,8 +96,8 @@ wasm-core 内**只有一份机制**，双端零机制分叉代码：Engine 构�
 
 ## 遗留项（本 ADR 显式不修，明列不隐藏）
 
-1. **形态 feature 与双 SDK 词汇收敛未做**：`common-host` / `bare-host` 退役、`lib.rs` 的 `compile_error!` 守卫删除、`bedcode-plugin-api` vs `bedcode-plugin-api-mobile` 的类型词汇合一份。证据：① 内核对 `bedcode-discovery-engine` / `bedcode-ws-client-engine` **零引用**（两者仍留在 `bare-host` feature 列表，`Cargo.toml` 已注为待摘过渡项）② `bare/component.rs` 仍消费移动 SDK 的 `abi::ABI_VERSION` 与 `BusMessage`（判据 7c 已**封顶**这两处，防扩散）③ bare 形态 `cargo check --lib` 的 dead_code warning 从 9–10 升到 ~102（桌面向 `host_api` 机制在移动形态已零消费者）。
-2. **移动 core-8 不切 `core_binding`**（D7）。
+1. ~~**形态 feature 与双 SDK 词汇收敛未做**~~ **已收口（2026-10-13 runtime-single-form，`.scratch/2026-10-13-runtime-single-form/spec.md`）**：`common-host` / `bare-host` 退役（`desktop-assembly` 收桌面专属装配面）、`compile_error!` 守卫删除、移动 SDK 词汇退出 wasm-core（ABI 规格经 `AbiPolicy` 宿主注入、`BusMessage` 由移动宿主拆分走统一 `on_message`）。桌面 `bedcode-plugin-api` 仍在 wasm-core（`desktop-assembly`：Rust 插件体系 / intercall 词汇）——它是端专属装配面依赖而非形态依赖。
+2. ~~**移动 core-8 不切 `core_binding`**（D7）~~ **已收口（2026-10-13 runtime-single-form）**：移动 8 个双端全等域（storage / log / config / plugin-database / events / fs / bus / platform）删除移动实现、改走内核 `core_binding` 单份——权限门收敛统一 `PermissionManager`（激活授予进统一词表）、插件私有库布局统一内核（研发起步期无用户数据，按 AGENTS §0 无迁移直接切）；移动 host_domains 只留端差异 4 域（http / peer / mdns / ws）。
 3. **`on_message_binary` 平名探测缺陷**：`bare/component.rs::verify_abi` 沿用 `"bedcode:plugin/events-binary#on-message-binary"` 平名串，组件接口导出是嵌套实例形态 ⇒ 探测恒 `None`。修它 = 行为变更（二进制消息开始真的投进插件），留给专项；已在代码注释点名。
 4. **桌面 app 产物过期**（`host-connection` → `host-connection-registry`）致 `session_e2e` 红，票 06 全量门禁时重建覆盖。
 
