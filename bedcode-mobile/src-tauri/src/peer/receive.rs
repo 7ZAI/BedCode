@@ -14,7 +14,7 @@ use tauri::AppHandle;
 
 pub use bedcode_server_peer_net::peer_engine_receive::PeerReceiveState;
 
-use super::peer_net::peer_ctx;
+use super::net::peer_ctx;
 
 /// 接收策略模式（wire/持久化字符串；前端分段控件直用）
 pub const POLICY_ASK: &str = "ask";

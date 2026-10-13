@@ -4,8 +4,8 @@
 //! 票 09 摘掉发现投影与连接编排命令面；本票收掉**最后一段宿主前端命令面**——
 //! 传输调度面（取消 / 暂停 / 恢复 / 选源）、接收设置面（读面 / 加密开关 /
 //! 并发上限）与远端浏览拉取面（列共享根 / 浏览 / 拉取）。票 09 + 票 10 之后，
-//! 移动端宿主 `peer_net` / `peer_transfer` / `peer_receive` / `peer_remote`
-//! 四个模块的**前端命令面为零**，真入口只有：
+//! 移动端宿主 `src/peer/` 模块（net / ports / seam / transfer / receive / remote）
+//! 的**前端命令面为零**，真入口只有：
 //! - 插件 activate-deactivate 外壳（节点生命周期）；
 //! - WIT `host-peer` 原语（拨号 / 发送 / 暂停恢复 / 应答 / 策略 / 落点 /
 //!   共享根镜像 / 浏览 / 拉取 / 节点启停）与 `host-platform` 选源原语。
@@ -42,9 +42,9 @@ const RETIRED_TRANSFER_SETTINGS_FACE: [&str; 4] = [
     "PeerReceiveSettingsDto",
 ];
 
-/// `invoke_handler!` 里不得出现的宿主 peer 模块注册前缀（前缀收窄，避免误伤
-/// 函数体内的 crate 路径引用）
-const RETIRED_HANDLER_PREFIXES: [&str; 4] = ["peer_transfer::", "peer_receive::", "peer_remote::", "peer_net::"];
+/// `invoke_handler!` 里不得出现的宿主 peer 模块注册路径（含 `crate::peer::`
+/// 与 `peer::` 两种写法；只在该注册块内扫描，不致误伤函数体引用）
+const RETIRED_HANDLER_NEEDLES: [&str; 1] = ["peer::"];
 
 fn mobile_src_root() -> PathBuf {
     // CARGO_MANIFEST_DIR = <repo>/bedcode-mobile/src-tauri
@@ -56,9 +56,7 @@ fn scan(files: &[&str], needles: &[&str]) -> Vec<String> {
     let mut violations: Vec<String> = Vec::new();
     for rel in files {
         let path = mobile_src_root().join(rel);
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {rel} 失败：{e}"));
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") {
@@ -79,10 +77,12 @@ fn peer_host_modules_have_no_tauri_command_attribute() {
     // 票 09 + 票 10 后这四个模块不得再有任何 Tauri 命令：引擎原语只经
     // host_impl 调用，投影与业务编排在插件侧。
     let files = [
-        "src/peer_net.rs",
-        "src/peer_transfer.rs",
-        "src/peer_receive.rs",
-        "src/peer_remote.rs",
+        "src/peer/net.rs",
+        "src/peer/ports.rs",
+        "src/peer/seam.rs",
+        "src/peer/transfer.rs",
+        "src/peer/receive.rs",
+        "src/peer/remote.rs",
     ];
     let violations = scan(&files, &["tauri::command"]);
     assert!(
@@ -110,8 +110,11 @@ fn peer_host_modules_are_not_registered_in_invoke_handler() {
             if line.starts_with(']') {
                 break;
             }
-            for prefix in RETIRED_HANDLER_PREFIXES {
-                if line.starts_with(prefix) {
+            if line.starts_with("//") {
+                continue;
+            }
+            for needle in RETIRED_HANDLER_NEEDLES {
+                if line.contains(needle) {
                     violations.push(format!("src/lib.rs:{}: {}", idx + 1, line));
                 }
             }
@@ -130,7 +133,7 @@ fn retired_peer_transfer_settings_command_face_is_not_reintroduced() {
     // 闸门（策略 / 落点）与引擎侧拉取编排。加密开关由插件随 `send-files` 载荷
     // 逐项下发，宿主兜底分支恒为 false；拉取并发上限的写入侧消失后读值退化为
     // 磁盘既有值或缺省 3——两者的读面 DTO 一并退役。
-    let files = ["src/peer_receive.rs", "src/peer_transfer.rs", "src/peer_remote.rs"];
+    let files = ["src/peer/receive.rs", "src/peer/transfer.rs", "src/peer/remote.rs"];
     let violations = scan(&files, &RETIRED_TRANSFER_SETTINGS_FACE);
     assert!(
         violations.is_empty(),
@@ -145,7 +148,7 @@ fn peer_transfer_scheduling_entrypoints_stay_engine_only() {
     // 与 `peer_host_modules_have_no_tauri_command_attribute` 配对，构成
     // 「定义在、命令面不在」的完整断言——只锁其中一半会漏掉「删了注册又挂回
     // 属性」或「挂了属性没注册」的中间态漂移。
-    let files = ["src/peer_transfer.rs", "src/peer_remote.rs"];
+    let files = ["src/peer/transfer.rs", "src/peer/remote.rs"];
     let violations = scan(&files, &TRANSFER_SCHEDULING_FACE);
     // 反向断言：五个引擎原语必须仍在（防止有人连原语一起删掉，让 host_impl
     // 编译失败后改走别的旁路）

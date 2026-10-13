@@ -6,8 +6,8 @@
 //! 命令）在移动宿主侧是**零活消费者死面**（App.vue 全注释，2026-10-10 前已无
 //! 生产调用）；引擎广播能力由共享守护 `bedcode-discovery-engine::engine` 承载
 //! （`shared_daemon` / `register_host_service` / `stop_host_service`），移动端
-//! `MdnsPort` 已直接复用（peer_net.rs 适配层）。谁把这些符号加回移动宿主，谁就
-//! 再造了第二份广播实现与第二份死面——本锁直接测红。
+//! `MdnsPort` 已直接复用（`src/peer/ports.rs` 适配层）。谁把这些符号加回移动
+//! 宿主，谁就再造了第二份广播实现与第二份死面——本锁直接测红。
 //!
 //! ## 两面判据
 //!
@@ -15,7 +15,7 @@
 //!    广播命令字面量 / `AdvertiseConfig` / 自建 `ServiceDaemon::new` 归零；
 //! 2. **browse 薄壳在场**（防「删 browse 绕过锁」）：宿主浏览面 `MdnsDiscovery`
 //!    与其三条命令必须仍在（browse 有活消费者：terminal-session 宿主页经
-//!    `mobileApi` 消费）；共享守护复用锚点在 `src/peer_net.rs` 在场。
+//!    `mobileApi` 消费）；共享守护复用锚点在 `src/peer/ports.rs` 在场。
 
 use std::path::{Path, PathBuf};
 
@@ -63,7 +63,7 @@ const KEPT_BROWSE_NEEDLES: &[&str] = &[
     "mdns_get_discovered_services",
 ];
 
-/// 共享守护复用锚点（移动 MdnsPort 经 peer_net.rs 接 discovery-engine 三函数）
+/// 共享守护复用锚点（移动 MdnsPort 经 `src/peer/ports.rs` 接 discovery-engine 三函数）
 const SHARED_DAEMON_ANCHOR: &str = "bedcode_discovery_engine::engine";
 
 /// 逐行扫描（跳过纯注释行），返回命中记录
@@ -126,10 +126,10 @@ fn mobile_mdns_browse_shell_stays_and_daemon_is_shared() {
         );
     }
 
-    let peer_net = std::fs::read_to_string(root.join("src/peer_net.rs"))
-        .unwrap_or_else(|e| panic!("读取 peer_net.rs 失败：{e}"));
+    let peer_ports = std::fs::read_to_string(root.join("src/peer/ports.rs"))
+        .unwrap_or_else(|e| panic!("读取 src/peer/ports.rs 失败：{e}"));
     assert!(
-        peer_net.contains(SHARED_DAEMON_ANCHOR),
+        peer_ports.contains(SHARED_DAEMON_ANCHOR),
         "移动 MdnsPort 未复用共享守护（`{SHARED_DAEMON_ANCHOR}`）：广播/发现能力必须\
          经 discovery-engine 引擎三函数接线，宿主不得自持 daemon"
     );

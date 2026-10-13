@@ -39,8 +39,8 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
         ├── handler/ router/          # WS 消息处理器；消息路由
         ├── mdns/                     # mDNS 服务发现与广播
         ├── model/ enums/ system/ state.rs session.rs
-        ├── peer_net.rs peer_transfer.rs peer_receive.rs peer_remote.rs peer_migration.rs
-        │                             # 对等网络适配层（引擎在共享能力域；见 Core Modules）
+        ├── peer/                     # 对等网络适配模块（net 装配与委托 / ports 宿主端口 /
+        │                             #   seam 平台缝 / transfer·receive·remote 委托 / migration；见 Core Modules）
         ├── file_service/             # SAF 文件树读取
         ├── plugin/                   # 插件系统（宿主自报域 / 移动独有域 / 端口接线 / SAF 抽象 / Kotlin 桥）
         ├── lib.rs                    # 库入口（模块声明 + 命令注册；setup init 顺序敏感）
@@ -100,19 +100,20 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 
 **改前注意**：wasm-core 内零端名 / 零机制名（AGENTS §5.4）；新增宿主能力 → `plugin/host_domains/`（core 域）或 `plugin/<domain>.rs`（独有域）+ SDK `rust/src/host/` trait；新增 Android 能力 → Kotlin Plugin + `android_plugins/` 注册桥。
 
-### 对等网络 — 宿主适配层 `src-tauri/src/peer_*.rs` + 共享能力域
+### 对等网络 — 宿主适配模块 `src-tauri/src/peer/` + 共享能力域
 
 与桌面镜像的跨设备可信直连底座（与终端链路 `_bedcode._tcp` 独立）。
 
 | 落点 | 职责 |
 | --- | --- |
 | `packages/peer-net` + `packages/link-crypto` | 底座（identity / cert / transport / trust / discovery / transfer） |
-| `packages/bedcode-server-peer-net` | 引擎控制面 + `host-peer`（双端共享，移动只链引擎面） |
-| `src-tauri/src/peer_net.rs` | 适配层：端口实现 + 平台缝（SAF / MediaStore / 多播锁）+ 装配 + 委托 |
+| `packages/bedcode-server-peer-net` | 引擎控制面 + 引擎事件翻译 + `host-peer`（双端共享，移动只链引擎面） |
+| `src-tauri/src/peer/net.rs` | 装配（`peer_ctx`）+ 节点生命周期 + 引擎入口委托 |
+| `src-tauri/src/peer/ports.rs` | 宿主端口实现（总线 / 事件 / 路径 / 系统信息 / mDNS）+ 平台资源预热 |
+| `src-tauri/src/peer/seam.rs` | 平台缝（Android SAF 共享访问 / MediaStore 落点提升 / 内置共享条目） |
 | `src-tauri/src/plugin/host_domains/peer.rs` | `host-peer` WIT 薄转发（拨号 / 发送 / 应答 / 共享根 / 浏览 / 拉取） |
-| `peer_transfer.rs` / `peer_receive.rs` / `peer_remote.rs` | 发送侧句柄表 + 事件桥 / 接收询问回执 + 策略闸门 / 远端浏览拉取 |
-| `peer_events.rs` | 引擎事实 → 插件总线事件翻译单点 |
-| `peer_migration.rs` | 旧数据 → 插件存储键一次性幂等迁移 |
+| `peer/transfer.rs` / `receive.rs` / `remote.rs` | 发送委托 + 选源 / 接收委托 + 策略 / 远端浏览拉取委托 |
+| `peer/migration.rs` | 旧数据 → 插件存储键一次性幂等迁移 |
 
 **改前注意**：宿主不持传输任务 / 设置 / 历史真源（在 file-transfer 插件共享核）；命令面零 Tauri 注册（防回接锁）。
 
@@ -144,7 +145,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | mDNS 发现与广播 | `src-tauri/src/mdns/` |
 | Tauri 命令 | `src-tauri/src/commands/`、`src-tauri/src/system/` |
 | 文件传输（SAF） | `wasm-apps/file-transfer/` + `src-tauri/src/plugin/{saf_io,saf_path}.rs` + `file_service/` |
-| 对等网络（节点 / 传输 / 接收 / 浏览） | `src-tauri/src/peer_*.rs` + `packages/bedcode-server-peer-net` |
+| 对等网络（节点 / 传输 / 接收 / 浏览） | `src-tauri/src/peer/` + `packages/bedcode-server-peer-net` |
 | 链路加密（HTTP 信封） | `src/services/linkCrypto.ts` |
 | 多播锁（mDNS 前置） | `src-tauri/src/plugin/android_plugins/multicast_lock.rs` + Kotlin `MulticastLockPlugin` |
 | 插件系统（Rust / 前端） | `src-tauri/src/plugin/`、`src/plugin/` |
@@ -162,7 +163,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | 数据模型 / 枚举 / 常量 | `src-tauri/src/model/`、`enums/`、`system/constants/` |
 | 消息处理器 / 路由 | `src-tauri/src/handler/`、`src-tauri/src/router/` |
 | Pinia Stores / Composables | `src/stores/*.ts`、`src/composables/*.ts` |
-| 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
+| 对等网络 | `src-tauri/src/peer/`（零 Tauri 命令面，见防回接锁索引） |
 | 插件系统（Rust / 前端） | `src-tauri/src/plugin/*.rs`、`src/plugin/` |
 | 插件源码 | `wasm-apps/*/` |
 

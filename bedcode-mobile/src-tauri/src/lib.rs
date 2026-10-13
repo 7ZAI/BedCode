@@ -9,11 +9,7 @@ pub mod file_service;
 pub mod handler;
 pub mod mdns;
 pub mod model;
-pub mod peer_migration;
-pub mod peer_net;
-pub mod peer_receive;
-pub mod peer_remote;
-pub mod peer_transfer;
+pub mod peer;
 pub mod plugin;
 pub mod router;
 pub mod state;
@@ -114,16 +110,16 @@ pub fn run() {
             // 对等网络节点身份：复用上方 app_data_dir 解析点（决策 D3 宿主只注入
             // 目录），node_identity.json 与 auth 域 device_identity.json 并列存放；
             // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
-            crate::peer_net::init_node_identity(&app_data_dir)?;
+            crate::peer::net::init_node_identity(&app_data_dir)?;
 
             // 对等网络节点状态容器（Engine 集中化 2026-10-10：状态类型真源在共享
             // 能力域 crate，与桌面同形以 `Arc` 托管——适配层持 Arc 句柄跨 await 存活）
-            app.manage(Arc::new(crate::peer_net::PeerNetState::default()));
-            app.manage(Arc::new(crate::peer_transfer::PeerTransferState::default()));
-            app.manage(Arc::new(crate::peer_receive::PeerReceiveState::default()));
-            app.manage(Arc::new(crate::peer_remote::PeerRemoteState::default()));
+            app.manage(Arc::new(crate::peer::net::PeerNetState::default()));
+            app.manage(Arc::new(crate::peer::transfer::PeerTransferState::default()));
+            app.manage(Arc::new(crate::peer::receive::PeerReceiveState::default()));
+            app.manage(Arc::new(crate::peer::remote::PeerRemoteState::default()));
             // 节点自启已退役：peer-net 生命周期随文件传输插件启停
-            // （插件管理器 activate/deactivate 外壳接线，见 peer_net::ensure_node_started）
+            // （插件管理器 activate/deactivate 外壳接线，见 peer::net::ensure_node_started）
 
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
@@ -149,7 +145,7 @@ pub fn run() {
                 if let Err(e) = storage.migrate_file_store_to_db(&app_data_dir) {
                     tracing::warn!(error = %e, "legacy plugin storage file migration failed");
                 }
-                crate::peer_migration::migrate_legacy_peer_data(&storage, &app_data_dir);
+                crate::peer::migration::migrate_legacy_peer_data(&storage, &app_data_dir);
             }
 
             // 创建插件管理器（WASM 运行时延迟初始化）

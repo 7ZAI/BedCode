@@ -7,7 +7,7 @@
 //!
 //! **端口装配**：移动宿主 `bedcode-mobile/src-tauri/src/plugin/peer_ports.rs`
 //! 开机期调 `plugin_binding::install_ports` 装入（权限判定源 = 宿主 PluginManager /
-//! 引擎上下文 = `crate::peer_net::peer_ctx` / 同步桥 = 宿主 runtime_util）；
+//! 引擎上下文 = `crate::peer::net::peer_ctx` / 同步桥 = 宿主 runtime_util）；
 //! 取不到端口即 panic（fail-visible，见 crate `ports::ports` 文档）。
 //!
 //! **与桌面形态的关系**：桌面同款实现对住在 crate 的 `common-host` 绑定层

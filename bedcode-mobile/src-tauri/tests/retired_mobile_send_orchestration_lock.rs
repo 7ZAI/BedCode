@@ -1,13 +1,14 @@
 //! 发送编排退役面防回接锁（票 06 · 移动端）
 //!
 //! 票 06 把**发送方向**的任务编排整体下沉 `file-transfer` 插件（事件归约状态机，
-//! 真源在插件存储）：宿主 `peer_transfer.rs` 收敛为「会话句柄表 + 引擎事件桥」——
+//! 真源在插件存储）：宿主 `peer/transfer.rs` 收敛为「会话句柄表 + 引擎事件桥」——
 //! 旧版所持的任务 DTO 形状、发送并发闸门与队列泵、终态历史文件、serve 供流记账、
 //! 原因码映射、批量恢复编排与并发脉冲字段一并退役。谁把这些加回来，谁就要先
 //! 推翻票 06 裁决。
 //!
-//! **范围只限发送域**：`peer_receive.rs` 的接收侧任务表随票 07 收口，届时本锁
-//! 扩展到接收面（票 10 一并做命令面锁）。
+//! **范围只限发送域**：`peer/receive.rs` 的接收侧任务表随票 07 收口，届时本锁
+//! 扩展到接收面（票 10 一并做命令面锁）。2026-10-14 模块化后 `src/peer/` 下
+//! 原 `peer_net.rs` 拆为 net / ports / seam，扫描面按内容并集保持。
 //!
 //! 两条 fail-visible 保险互为补充：
 //! - 本锁（结构面）：源码里不得再出现编排构件的定义或调用；
@@ -48,11 +49,14 @@ fn mobile_src_root() -> PathBuf {
 fn retired_mobile_send_orchestration_is_not_reintroduced() {
     let mut violations: Vec<String> = Vec::new();
 
-    for rel in ["src/peer_transfer.rs", "src/peer_net.rs"] {
+    for rel in [
+        "src/peer/transfer.rs",
+        "src/peer/net.rs",
+        "src/peer/ports.rs",
+        "src/peer/seam.rs",
+    ] {
         let path = mobile_src_root().join(rel);
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {rel} 失败：{e}"));
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") {
@@ -77,8 +81,8 @@ fn retired_mobile_send_orchestration_is_not_reintroduced() {
 fn retired_send_snapshot_event_is_no_longer_bridged_to_plugin_bus() {
     // 旧快照 topic `peer:transfer` 的桥接映射必须摘除：任务状态机删除后无快照
     // 可推，留着映射等于给「空快照回流」留静默降级入口
-    let path = mobile_src_root().join("src/peer_net.rs");
-    let content = std::fs::read_to_string(&path).expect("read peer_net.rs");
+    let path = mobile_src_root().join("src/peer/net.rs");
+    let content = std::fs::read_to_string(&path).expect("read src/peer/net.rs");
     let mut violations: Vec<String> = Vec::new();
     for (idx, raw_line) in content.lines().enumerate() {
         let line = raw_line.trim_start();
@@ -86,7 +90,7 @@ fn retired_send_snapshot_event_is_no_longer_bridged_to_plugin_bus() {
             continue;
         }
         if line.contains("\"peer:transfer\"") {
-            violations.push(format!("src/peer_net.rs:{}: {}", idx + 1, line.trim()));
+            violations.push(format!("src/peer/net.rs:{}: {}", idx + 1, line.trim()));
         }
     }
     assert!(

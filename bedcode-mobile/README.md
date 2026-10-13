@@ -78,11 +78,8 @@ bedcode-mobile/
 │   │   ├── system/         # 共享命令、配置管理、常量分组、统一错误类型、JSON 设置持久化
 │   │   ├── session.rs      # 远程会话管理
 │   │   ├── state.rs        # 全局状态管理（单例管理器 + Token 存储）
-│   │   ├── peer_net.rs     # 对等网络接入（节点身份、信任闸门、节点生命周期）
-│   │   ├── peer_receive.rs # 入站连接处理与事件桥接
-│   │   ├── peer_remote.rs  # 远程节点访问（共享目录浏览等）
-│   │   ├── peer_transfer.rs# 共享目录批量断点续传
-│   │   └── peer_migration.rs# 旧文件服务 → 对等网络迁移
+│   │   ├── peer/           # 对等网络适配模块（net 装配与委托 / ports 宿主端口 /
+│   │   │                   #   seam 平台缝 / transfer·receive·remote 委托 / migration 旧数据迁移）
 │   └── gen/android/        # Android 工程（含自定义 Kotlin 插件：前台服务、SAF、生物识别、
 │                           #   下载目录、全部文件访问、组播锁、通知等）
 ├── packages/

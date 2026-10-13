@@ -78,11 +78,8 @@ bedcode-mobile/
 │   │   ├── system/         # Shared commands, config management, grouped constants, unified error types, JSON settings persistence
 │   │   ├── session.rs      # Remote session management
 │   │   ├── state.rs        # Global state management (singleton managers + token storage)
-│   │   ├── peer_net.rs     # Peer network integration (node identity, trust gate, node lifecycle)
-│   │   ├── peer_receive.rs # Inbound connection handling & event bridging
-│   │   ├── peer_remote.rs  # Remote node access (shared-directory browsing, etc.)
-│   │   ├── peer_transfer.rs# Batch resumable transfer over shared directories
-│   │   └── peer_migration.rs# Migration from the old file service to the peer network
+│   │   ├── peer/           # Peer network adapter module (net assembly & delegation / ports /
+│   │   │                   #   seam platform hooks / transfer·receive·remote delegation / migration)
 │   └── gen/android/        # Android project (custom Kotlin plugins: foreground service, SAF, biometrics,
 │                           #   downloads dir, all-files access, multicast lock, notifications, etc.)
 ├── packages/

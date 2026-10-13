@@ -463,7 +463,7 @@ impl PluginManager {
 
         // peer-net 节点状态对账：boot 装配后按最终插件状态对齐（幂等，与
         // activate/deactivate 外壳接线互为兜底——激活失败/半程失败也收敛）
-        if let Err(e) = crate::peer_net::sync_node_with_plugin_state(app_handle).await {
+        if let Err(e) = crate::peer::net::sync_node_with_plugin_state(app_handle).await {
             tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
         }
     }
@@ -618,9 +618,9 @@ impl PluginManager {
         // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
         // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
         let result = self.activate_inner(plugin_id, run_preauth).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+        if result.is_ok() && plugin_id == crate::peer::net::FILE_TRANSFER_PLUGIN_ID {
             if let Some(app) = self.app_handle.clone() {
-                if let Err(e) = crate::peer_net::ensure_node_started(&app).await {
+                if let Err(e) = crate::peer::net::ensure_node_started(&app).await {
                     tracing::error!(
                         plugin_id = %plugin_id,
                         error = %e,
@@ -845,9 +845,9 @@ impl PluginManager {
         // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
         // 服务下线，对端即时感知；幂等）
         let result = self.deactivate_inner(plugin_id).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+        if result.is_ok() && plugin_id == crate::peer::net::FILE_TRANSFER_PLUGIN_ID {
             if let Some(app) = self.app_handle.clone() {
-                if let Err(e) = crate::peer_net::stop_node_for_plugin(&app).await {
+                if let Err(e) = crate::peer::net::stop_node_for_plugin(&app).await {
                     tracing::error!(
                         plugin_id = %plugin_id,
                         error = %e,

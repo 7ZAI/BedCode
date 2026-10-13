@@ -15,12 +15,12 @@
 
 use std::path::{Path, PathBuf};
 
-/// 待扫描源文件（本锁只盯插件存储面：plugin/ + lib.rs 接线 + peer_migration 消费方）
+/// 待扫描源文件（本锁只盯插件存储面：plugin/ + lib.rs 接线 + peer 模块迁移消费方）
 fn scan_files() -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out = Vec::new();
     out.push(root.join("lib.rs"));
-    out.push(root.join("peer_migration.rs"));
+    out.push(root.join("peer/migration.rs"));
     collect(&root.join("plugin"), &mut out);
     out
 }

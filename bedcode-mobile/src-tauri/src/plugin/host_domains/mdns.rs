@@ -218,7 +218,7 @@ pub(crate) fn mdns_is_advertising(
 
 // 宿主身份广播登记转发（原 `register_host_service` / `stop_host_service` 两条
 // 薄包装）已随票 05 删除：它们的唯一消费者（peer-net 引擎经 `host_impl` 垫片反向
-// 消费）早已改为直连 `bedcode_discovery_engine::engine`（移动 `src/peer_net.rs`
+// 消费）早已改为直连 `bedcode_discovery_engine::engine`（移动 `src/peer/ports.rs`
 // 适配层），宿主侧零调用点——留薄包装只会让「能力面在场」被误读。
 
 // ==================== 双表回收 ====================

@@ -12,7 +12,7 @@
 //!   权限判定 `PluginManager::has_permission`（加载期 manifest 过滤后的
 //!   `granted_permissions` 集合）；manager 未初始化一律拒绝（fail-safe）。
 //!   拒绝时宿主侧落 `warn`（结构化字段，AGENTS §8），能力域不重复落日志。
-//! - [`PeerPorts::peer_ctx`]：引擎上下文装配（`crate::peer_net::peer_ctx` 是
+//! - [`PeerPorts::peer_ctx`]：引擎上下文装配（`crate::peer::net::peer_ctx` 是
 //!   唯一认识 `AppHandle` 的引擎装配点）；无头（未持 AppHandle）返回能力域
 //!   定义的 `HEADLESS_UNAVAILABLE` 文案，不做静默降级。
 //! - [`PeerPorts::block_on_any`]：同步↔异步桥——复用 wasm-core 唯一那份
@@ -74,7 +74,7 @@ impl PeerPorts for HostPeerPorts {
             .app
             .as_ref()
             .ok_or_else(|| HEADLESS_UNAVAILABLE.to_string())?;
-        Ok(crate::peer_net::peer_ctx(app))
+        Ok(crate::peer::net::peer_ctx(app))
     }
 
     fn block_on_any(&self, fut: BoxedBlocked) -> Box<dyn Any + Send> {

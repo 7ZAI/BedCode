@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 
 pub use bedcode_server_peer_net::peer_engine_transfer::PeerTransferState;
 
-use super::peer_net::peer_ctx;
+use super::net::peer_ctx;
 
 // ==================== 引擎入口委托 ====================
 

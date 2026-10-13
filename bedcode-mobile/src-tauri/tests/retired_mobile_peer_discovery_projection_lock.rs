@@ -26,7 +26,7 @@ const RETIRED_DISCOVERY_PROJECTION: [&str; 7] = [
     // 设备列表派生视图（DTO + 查询命令）
     "DiscoveredPeerDto",
     "list_discovered_peers",
-    "peer_net::dial_peer,",
+    "peer::net::dial_peer,",
     // 共享目录注册表宿主侧第二份真源（DTO + 三命令）
     "SharedDirDto",
     "list_shared_directories",
@@ -41,8 +41,8 @@ const RETIRED_DISCOVERY_PROJECTION: [&str; 7] = [
 const RETIRED_HOST_COMMAND_FACE: [&str; 4] = [
     "fn start_peer_node(",
     "fn stop_peer_node(",
-    "peer_net::start_peer_node",
-    "peer_net::stop_peer_node",
+    "peer::net::start_peer_node",
+    "peer::net::stop_peer_node",
 ];
 
 fn mobile_src_root() -> PathBuf {
@@ -53,11 +53,14 @@ fn mobile_src_root() -> PathBuf {
 /// 逐行扫描宿主源码（跳过纯注释行），返回命中的违规记录
 fn scan(retired: &[&str]) -> Vec<String> {
     let mut violations: Vec<String> = Vec::new();
-    for rel in ["src/peer_net.rs", "src/lib.rs"] {
+    for rel in [
+        "src/peer/net.rs",
+        "src/peer/ports.rs",
+        "src/peer/seam.rs",
+        "src/lib.rs",
+    ] {
         let path = mobile_src_root().join(rel);
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {rel} 失败：{e}"));
         for (idx, raw_line) in content.lines().enumerate() {
             let line = raw_line.trim_start();
             if line.starts_with("//") {
@@ -141,8 +144,8 @@ fn endpoint_dial_is_the_only_peer_dial_entry() {
     // 拨号寻址来源必须显式（ADR 0022 v2）：插件从自身设备缓存解析 endpoint 后
     // 传入，宿主只留 `dial_peer_endpoint`。锁「缓存解析版」函数定义不得复活
     // （`dial_peer_endpoint` 是唯一允许的拨号函数名，故 needle 带 `(` 收窄）。
-    let path = mobile_src_root().join("src/peer_net.rs");
-    let content = std::fs::read_to_string(&path).expect("read peer_net.rs");
+    let path = mobile_src_root().join("src/peer/net.rs");
+    let content = std::fs::read_to_string(&path).expect("read src/peer/net.rs");
     let mut violations: Vec<String> = Vec::new();
     for (idx, raw_line) in content.lines().enumerate() {
         let line = raw_line.trim_start();
@@ -150,7 +153,7 @@ fn endpoint_dial_is_the_only_peer_dial_entry() {
             continue;
         }
         if line.contains("fn dial_peer(") {
-            violations.push(format!("src/peer_net.rs:{}: {}", idx + 1, line.trim()));
+            violations.push(format!("src/peer/net.rs:{}: {}", idx + 1, line.trim()));
         }
     }
     assert!(

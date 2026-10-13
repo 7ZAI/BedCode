@@ -15,7 +15,7 @@ pub use bedcode_server_peer_net::peer_engine_remote::{
     PeerRemoteState, PeerSharedRootDto, RemoteBrowseDto, RemoteEntryDto, RemotePullFileDto,
 };
 
-use super::peer_net::peer_ctx;
+use super::net::peer_ctx;
 
 /// 对端共享目录根列表（host-peer `list-remote-roots` 入口）
 pub(crate) async fn list_peer_shared_roots(app: AppHandle, node_id: String) -> crate::Result<Vec<PeerSharedRootDto>> {
