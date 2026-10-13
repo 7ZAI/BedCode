@@ -11,8 +11,18 @@
     >
       {{ label }}
     </span>
-    <span class="block mt-1 text-xl font-semibold tabular-nums" :style="{ color: 'var(--mobile-text-primary)' }">
-      {{ count }}
+    <!-- 计数 + 一行状态说明：只有数字的卡片会被当成占位/坏数据（实测「0」孤零一张卡） -->
+    <span class="mt-1 flex items-baseline gap-2">
+      <span class="text-xl font-semibold tabular-nums" :style="{ color: 'var(--mobile-text-primary)' }">
+        {{ count }}
+      </span>
+      <span
+        v-if="count === 0 && emptyHint"
+        class="text-[var(--font-size-xs)] truncate"
+        :style="{ color: 'var(--mobile-text-secondary)' }"
+      >
+        {{ emptyHint }}
+      </span>
     </span>
   </button>
 </template>
@@ -48,6 +58,19 @@ const label = computed(() => {
     if (text && text !== key) return text
     const hostText: string = i18n.global.t(HOST_FALLBACK_KEY)
     return hostText && hostText !== HOST_FALLBACK_KEY ? hostText : ''
+  } catch {
+    return ''
+  }
+})
+
+/** 零值时的状态说明（无活跃会话）；取不到文案就留空，不硬编码中文 */
+const emptyHint = computed(() => {
+  const i18n: any = getI18n()
+  if (!i18n?.global?.t) return ''
+  try {
+    const key = `${PREFIX}hub.slotEmpty`
+    const text: string = i18n.global.t(key)
+    return text && text !== key ? text : ''
   } catch {
     return ''
   }

@@ -108,6 +108,7 @@ export default {
       revokeConfirmMessage: 'This clears every remembered external address grant, including "don\'t ask again" entries.',
       strategySection: 'Access Strategy',
       strategyHint: 'Controls whether you are asked when a plugin requests access to an unapproved address.',
+      strategyEmpty: 'No plugins to configure',
       alwaysAsk: 'Always Ask',
       alwaysAskDesc: 'Ask on every access (skips remembered grants)',
       defaultStrategy: 'Default',

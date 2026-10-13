@@ -106,6 +106,9 @@ export default {
       revokeConfirmMessage: '此操作将清除所有已记忆的外部地址授权（含「不再询问」记录）。',
       strategySection: '访问策略',
       strategyHint: '决定插件请求访问未经授权的地址时，是否询问你。',
+      // 策略区的空态与「授权记录」空态语义不同（前者是“没有插件需要配置”，
+      // 后者是“还没发生过授权”），共用一句会让策略区看起来像加载失败
+      strategyEmpty: '暂无可配置的插件',
       alwaysAsk: '总是询问',
       alwaysAskDesc: '每次访问都询问（跳过已记忆的授权）',
       defaultStrategy: '默认',

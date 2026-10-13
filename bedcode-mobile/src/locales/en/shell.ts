@@ -37,6 +37,7 @@ export default {
       providedBy: 'By {name}',
       emptyApps: 'No WASM app installed',
       emptyAppsHint: 'Install or enable an app in "Apps" and its entry shows up here',
+      slotsEmpty: 'Status cards show up here once an app is running',
       openApp: 'Open app',
     },
     apps: {
@@ -101,6 +102,7 @@ export default {
       title: 'Running apps',
       backHome: 'Back home',
       empty: 'No running apps',
+      emptyHint: 'Open an app from the home screen and it will show up here',
       foot: 'Tap a card to enter · swipe a card up to stop it',
       stop: 'Stop',
     },
@@ -154,6 +156,7 @@ export default {
       group: {
         terminal: 'Terminal & sessions',
         data: 'Files & network',
+        device: 'Device & link',
         interface: 'Interface & messaging',
         other: 'Other',
       },
