@@ -12,9 +12,11 @@
 //!
 //! ## 扫描面与排除面（排除必须显式、可审计）
 //!
-//! - **扫**：`bedcode-*` 能力域 / 传输面 crate 的 `src/`（10 个，均在**仓库根
+//! - **扫**：`bedcode-*` 能力域 / 传输面 crate 的 `src/`（15 个，均在**仓库根
 //!   `packages/`**，2026-10-07 从 `bedcode-desktop/packages/` 迁根；`bedcode-ws-client-engine`
-//!   随 ADR 0043 抽根入面）。**`bedcode-file-transfer-core` 是入面的第二类形态**——它是
+//!   随 ADR 0043 抽根入面；机制内核 `bedcode-host-kit`、host_api 共享核、无头探针与
+//!   通知契约房于 2026-10-14 入面/补登记）。
+//!   **`bedcode-file-transfer-core` 是入面的第二类形态**——它是
 //!   **某产品的业务核**（双端共享，ADR 0044），不是能力域 crate；它入面的意义正是本锁
 //!   C-4 的反向约束：业务核内不得硬编码自己所属的产品身份（插件 id 经运行期注入）。
 //! - **不扫注释**：`//`、`///`、`//!` 一律剥掉。注释里点名产品（解释「为什么」）是
@@ -73,6 +75,19 @@ const SCANNED_CRATES: &[&str] = &[
     // 通知域轻量契约房（2026-10-13 domain-owned-contracts 票 04）：只持 WIT 契约
     // （实现按端住宿主），零产品语义；抽根即入扫描面。
     "bedcode-notify-engine",
+    // 机制内核（ADR 0035 D1：组件状态 / 能力模块契约 / 自动注册表 / 自报面）
+    // ——2026-10-14 自 PENDING_SCAN_CRATES 转正：本锁过去因它“不是能力域 crate”
+    // 而暂缓，但机制面同样不得持产品身份：描述符词段锁（词段判据）管词汇归属，
+    // 本锁管产品 id / 退役宿主面字面量，两面互补。src/ 实测零命中（词段判据契约例
+    // 里的 `host-session` 在 `#[cfg(test)]` 段内，本锁按设计不扫）。
+    "bedcode-host-kit",
+    // host_api 共享实现核（票 18 · ADR 0040 选项 C 第二步：双端 wasm-core 的机制
+    // 实现层；与 host-kit 的分工见其 lib.rs 头注）——2026-10-14 补登记：C-3 反向断言
+    // 已报未归桶（早于本锁覆盖面扩展），漏桶即锁失效。
+    "bedcode-host-api-core",
+    // 无头宿主探针（能力域脱绑长期门禁：`cargo tree` 零 wasmtime / wit-bindgen /
+    // inventory / host-kit / plugin-api）——纯门禁 crate，零产品语义；同上补登记。
+    "bedcode-headless-host-probe",
 ];
 
 /// 已知的、暂未纳入扫描的 `bedcode-*` crate（各有明确在办票据）
@@ -81,19 +96,11 @@ const SCANNED_CRATES: &[&str] = &[
 /// 目录必须在两者之一里（C-3 反向断言）。没有这个桶，「把 crate 从登记表里删掉」
 /// 就是一条零成本后门——锁照样绿，覆盖面悄悄少一块。进本桶同样不是免费的：处置
 /// 完成后删掉本条目即自动进入扫描面。
-const PENDING_SCAN_CRATES: &[(&str, &str)] = &[
-    (
-        "bedcode-wasm-core",
-        "机制整核仍有的产品 id 泄漏（fs_auth.rs 的 FIRST_PARTY_TRUSTED_DIRS 第一方豁免表 / \
-         activation.rs 的 LEGACY_API_PLUGIN_ALIASES 退役别名表）由独立票据处置，处置完删本条目",
-    ),
-    (
-        "bedcode-host-kit",
-        "机制内核（ADR 0035 D1：组件状态 / 能力模块契约 / 自动注册表），不是能力域 crate；\
-         它自 2026-10-07 起与能力域 crate 同落仓库根 packages/，本锁过去因分处两端而天然不在\
-         扫描面。纳入语义扫描另立票据",
-    ),
-];
+const PENDING_SCAN_CRATES: &[(&str, &str)] = &[(
+    "bedcode-wasm-core",
+    "机制整核仍有的产品 id 泄漏（fs_auth.rs 的 FIRST_PARTY_TRUSTED_DIRS 第一方豁免表 / \
+     activation.rs 的 LEGACY_API_PLUGIN_ALIASES 退役别名表）由独立票据处置，处置完删本条目",
+)];
 
 /// 产品 id 形状：反向域名 + 插件 id 段
 ///
