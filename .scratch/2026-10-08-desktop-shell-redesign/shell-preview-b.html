@@ -455,7 +455,7 @@ svg { flex-shrink: 0; vertical-align: middle; }
   font-size: var(--font-size-base); animation: rise 0.2s ease-out; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-/* ==================== 管理中心（应用 · 服务器 · 设置） ==================== */
+/* ==================== 管理中心（应用 · 设置） ==================== */
 .mgmt { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
 .mgmt-tabs { display: flex; gap: 2px; padding: 3px; background: var(--bg-sidebar);
   border: 1px solid var(--border); border-radius: var(--radius-button); flex-shrink: 0; align-self: flex-start; }
@@ -467,15 +467,8 @@ svg { flex-shrink: 0; vertical-align: middle; }
 .mgmt-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
 .pane-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 
-/* 服务器：状态灯 + 三格指标 */
-.srv-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px; flex-shrink: 0; flex-wrap: wrap; }
-.lamp-big { display: flex; align-items: center; gap: 9px; }
-.lamp-big .t { font-size: var(--font-size-xl); font-weight: 600; }
-.lamp-big .up { font-size: var(--font-size-sm); color: var(--text-tertiary); font-family: var(--mono); }
-.stat3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-left: auto; }
-.stat3 > div { text-align: right; }
-.stat3 .n { font-size: var(--font-size-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
-.stat3 .l { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+/* 页头动作行（应用配置页头：返回 · 应用名 · 保存） */
+.cfg-bar { display: flex; align-items: center; gap: 12px; padding: 12px 14px; flex-shrink: 0; flex-wrap: wrap; }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
 .fld { display: flex; flex-direction: column; gap: 4px; }
 .fld .lb { font-size: var(--font-size-sm); color: var(--text-secondary); }
@@ -501,12 +494,6 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
 .sw input:checked ~ .knob { transform: translateX(13px); }
 .sw input:focus-visible ~ .track { outline: 2px solid var(--color-info); outline-offset: 1px; }
 .sw.risk input:checked ~ .track { background: var(--color-danger); }
-/* 监控折线图（颜色读 token，随主题反色） */
-.chart { width: 100%; height: 220px; display: block; }
-.chart .ax { stroke: var(--border); stroke-width: 1; }
-.chart .ln { fill: none; stroke-width: 1.6; }
-.chart .gl { font-size: 9px; fill: var(--text-tertiary); font-family: var(--mono); }
-
 /* 设置：色板卡 / 字号档位 */
 .pal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
 .pal-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--radius-button);
@@ -550,6 +537,43 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
 .palette .it:hover, .palette .it.cur { background: var(--color-primary-light); color: var(--text-primary); }
 .palette .grp { font-size: var(--font-size-xs); color: var(--text-tertiary); padding: 7px 9px 3px; letter-spacing: 0.08em; }
 .palette .empty { padding: 18px; text-align: center; color: var(--text-tertiary); font-size: var(--font-size-base); }
+
+/* ==================== 最近任务（安卓式后台卡片切换） ====================
+   遮罩上只放三段自足面板（标题条 / 卡片行 / 底栏），文字一律落在 token 表面上，
+   不直接压半透明遮罩 —— 暗遮罩 + 亮主题下 --text-* 的对比度会翻车。 */
+.recents { display: flex; flex-direction: column; gap: 12px; width: min(1080px, 94vw); outline: none; }
+.recents-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card-hover); flex-shrink: 0; }
+.recents-bar .t { font-size: var(--font-size-lg); font-weight: 600; }
+.recents-bar .grow { flex: 1; min-width: 0; }
+.recents-row { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 8px;
+  scroll-snap-type: x proximity; scrollbar-width: thin; }
+.rcard { position: relative; flex: 0 0 auto; width: 300px; scroll-snap-align: center;
+  display: flex; flex-direction: column; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  box-shadow: var(--shadow-card-hover); cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s; }
+.rcard:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.rcard.current { border-color: var(--color-primary); box-shadow: var(--shadow-input-focus); }
+.rcard-head { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px;
+  border-bottom: 1px solid var(--border); }
+.rcard-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+  padding: 4px; border-radius: 6px; text-align: left; color: var(--text-primary);
+  transition: background-color 0.15s; }
+.rcard-open:hover { background: var(--bg-hover); }
+.rcard-open .ic { width: 20px; height: 20px; display: flex; align-items: center;
+  justify-content: center; color: var(--text-secondary); flex-shrink: 0; }
+.rcard-open .nm { flex: 1; min-width: 0; font-size: var(--font-size-base); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 卡片正文 = 面板内容的静态缩略。inert + pointer-events:none 让缩略图彻底不可交互：
+   键盘 Tab 不落入、点击穿透到卡片容器 —— 交互只走头部切换按钮与右上 ×。 */
+.rcard-view { height: 210px; overflow: hidden; padding: 8px; background: var(--bg-page); pointer-events: none; }
+.rcard-view * { pointer-events: none; }
+.recents-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  align-self: center; gap: 9px; width: min(420px, 90vw); padding: 26px 18px; text-align: center;
+  background: var(--bg-card); border: 1px dashed var(--border-strong); border-radius: var(--radius-card);
+  color: var(--text-tertiary); }
 
 /* ==================== 全局弹窗层 ==================== */
 .dlg { width: min(480px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
@@ -619,7 +643,7 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
   <div class="ws-tools" id="wsTools">
     <span class="ws-label">布局</span>
     <div class="layout-group" role="group" aria-label="工作区布局预设">
-      <button class="layout-btn" data-preset="single" title="单窗 · 只显示当前应用" aria-label="单窗布局">
+      <button class="layout-btn" data-preset="single" title="全屏 · 只显示当前应用（默认）" aria-label="全屏布局">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/></svg>
       </button>
       <button class="layout-btn" data-preset="focus" title="主从 · 1 大 + 2 小" aria-label="主从布局">
@@ -643,6 +667,10 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
   <div class="tbtns">
     <button class="tbtn" id="btnInspector" title="显示 / 隐藏右侧检查器" aria-label="显示或隐藏右侧检查器" aria-pressed="true">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+    </button>
+    <!-- 最近任务：后台应用卡片切换（安卓 Recents 形态） -->
+    <button class="tbtn" id="btnRecents" title="最近任务（Ctrl+Shift+E）" aria-label="最近任务：后台应用卡片切换" aria-haspopup="dialog">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>
     </button>
     <button class="tbtn" id="btnBoot" title="启动屏（最低展示 900ms）" aria-label="启动屏">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3"/><path d="M12 15h4"/></svg>
@@ -674,7 +702,7 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
       <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
       <span class="rl">应用总览</span>
     </button>
-    <button class="ic-btn" id="navManagement" title="管理中心：应用 · 服务器 · 设置" aria-label="管理中心">
+    <button class="ic-btn" id="navManagement" title="管理中心：应用 · 设置" aria-label="管理中心">
       <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M7 9h14"/></svg></span>
       <span class="rl">管理中心</span>
     </button>
@@ -687,10 +715,8 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
       <span class="rl">安装应用</span>
     </button>
     <div class="rail-foot">
-      <button class="ic-btn" id="navServer" title="服务器管理（/server）" aria-label="服务器管理">
-        <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/><path d="M6 7.5h.01M6 16.5h.01"/></svg></span>
-        <span class="rl">服务器管理</span>
-      </button>
+      <!-- 服务器管理入口已按需求移除（2026-10-13）：管理中心的「服务器」页与 /server 面板一并退役，
+           状态灯与状态栏的服务指标（get_server_status / get_server_metrics）保留。 -->
       <button class="ic-btn" id="navSettings" title="设置（Ctrl+,）" aria-label="设置">
         <span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
         <span class="rl">设置</span>
@@ -741,7 +767,7 @@ input[type=range] { accent-color: var(--color-primary); width: 100%; cursor: poi
   <div class="grp">
     <span class="it" id="sbLayout"></span>
     <span class="it" id="sbHint" style="cursor:pointer;color:var(--text-tertiary)"
-      title="打开命令面板">Ctrl+Shift+P 命令面板 · Ctrl+, 设置</span>
+      title="打开命令面板">Ctrl+Shift+P 命令面板 · Ctrl+, 设置 · Ctrl+Shift+E 最近任务</span>
     <span class="it mono">wasmtime 48 · ABI 3</span>
   </div>
 </footer>
@@ -857,41 +883,14 @@ const byId = Object.fromEntries(APPS.map(a => [a.id, a]));
 
 
 /* ============================================================================
-   服务器面（真实命令：get_server_status / get_server_metrics /
-   get_server_network_config / update_server_* / server_{start,stop,restart}）
-   字段名逐字对齐 NetworkConfig（Rust 侧 deny_unknown_fields，snake_case）
+   服务器状态与指标（真实命令：get_server_status / get_server_metrics）
+   消费方：左轨状态灯 + 状态栏指标。服务器管理面板 / 高级配置 / 启停面已随
+   「服务器管理」入口一并按需求移除（2026-10-13），此处只留两个消费方要的字段。
    ============================================================================ */
 const SERVER = {
   status: 'running',                       // running | starting | stopped
-  uptimeSec: 7261,
-  port: 8765, portSaved: 8765, portDirty: false,
-  localIps: ['192.168.1.24:8765', '10.0.0.7:8765'],
-  autoStart: true,
   metrics: { connections: 3, cpu: 8, mem: 142, requests: 18432, rps: 27 },
-  // 2s 一点 × 60 = 2 分钟窗口（对齐 MAX_HISTORY）
-  history: { sent: [22,25,24,28,31,29,33,30,27,26,24,22,21,23,26,29,32,35,33,30],
-             recv: [18,19,17,20,22,21,24,23,21,20,19,18,17,19,21,23,26,24,22,20] },
-  net: {
-    workers: 0, keep_alive_secs: 65, client_request_timeout_secs: 30,
-    client_disconnect_timeout_secs: 30, max_connections: 1000, backlog: 1024,
-    tcp_nodelay: true, shutdown_timeout_secs: 10,
-    ws_max_frame_size_kb: 16, ws_max_message_size_mb: 16, metrics_enabled: true,
-  },
 };
-
-/** 服务器高级配置的字段元数据（控件类型 / 范围 / 单位 / hint 逐条对齐 ServerView） */
-const NET_FIELDS = [
-  { k: 'workers', label: 'Worker 线程数', type: 'int', min: 0, max: 64, hint: '0 = 自动（CPU 核心数）' },
-  { k: 'keep_alive_secs', label: 'Keep-Alive 超时', type: 'int', min: 0, max: 300, unit: '秒', hint: '0 = 禁用' },
-  { k: 'client_request_timeout_secs', label: '请求头超时', type: 'int', min: 1, max: 120, unit: 's' },
-  { k: 'client_disconnect_timeout_secs', label: '断开超时', type: 'int', min: 1, max: 120, unit: 's' },
-  { k: 'max_connections', label: '最大连接数', type: 'int', min: 1, max: 100000, hint: '每 worker' },
-  { k: 'backlog', label: 'TCP Backlog', type: 'int', min: 64, max: 8192 },
-  { k: 'tcp_nodelay', label: 'TCP_NODELAY', type: 'bool' },
-  { k: 'shutdown_timeout_secs', label: '停机超时', type: 'int', min: 1, max: 300, unit: 's' },
-  { k: 'ws_max_frame_size_kb', label: 'WS 帧大小', type: 'int', min: 1, max: 16384, unit: 'KB' },
-  { k: 'ws_max_message_size_mb', label: 'WS 消息大小', type: 'int', min: 1, max: 512, unit: 'MB' },
-];
 
 /* 链路加密（get/set_traffic_encryption_config + get_link_crypto_fingerprint） */
 const LINK_CRYPTO = {
@@ -924,11 +923,11 @@ const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
    命令面板数据源（真实来源：各 manifest contributes.commands 汇总 + 宿主动作）
    ============================================================================ */
 const HOST_COMMANDS = [
-  { id: 'host.server.restart', title: '服务器：重启', src: 'host' },
+  { id: 'host.recents.open', title: '最近任务：打开', src: 'host' },
   { id: 'host.app.update.check', title: '应用：检查更新', src: 'host' },
   { id: 'host.settings.open', title: '设置：打开', src: 'host' },
   { id: 'host.authorization.open', title: '应用授权总览', src: 'host' },
-  { id: 'host.workspace.single', title: '布局：单窗', src: 'host' },
+  { id: 'host.workspace.single', title: '布局：全屏', src: 'host' },
   { id: 'host.workspace.focus', title: '布局：主从', src: 'host' },
   { id: 'host.workspace.thirds', title: '布局：三栏', src: 'host' },
   { id: 'host.log.dir', title: '日志：打开日志目录', src: 'host' },
@@ -1017,8 +1016,8 @@ const ICONS = { shield: n => svg('shield', n), server: n => svg('server', n), ge
 
 /* ==================== 状态 ==================== */
 const state = {
-  mode: 'workspace',        // workspace | overview | governance
-  mgmtTab: 'apps',           // 管理中心二级页：apps | server | settings
+  mode: 'workspace',        // workspace | overview | management
+  mgmtTab: 'apps',           // 管理中心二级页：apps | settings（服务器页已移除）
   govSel: 'terminal-session', // 管理中心「应用」页当前选中的应用
   cfgSel: null,              // 应用配置页当前应用
   hidden: new Set(),         // 工作区里已关面板、但实例仍在运行的应用
@@ -1026,9 +1025,11 @@ const state = {
   paletteQ: '', paletteCur: null,
   dialog: null, dlgApp: null, dlgRes: null,   // 当前演示的全局弹窗
   boot: false,               // 启动屏
+  recents: false,            // 最近任务（后台卡片切换）遮罩
+  mru: [],                   // 应用最近使用顺序（recents 卡片排序：最近打开在前）
   railW: 56, railCollapsed: true,
   inspectorOpen: window.innerWidth >= 1180,   // 窄屏默认收起，标题栏按钮随时可开
-  preset: 'focus',
+  preset: 'single',          // 默认全屏单应用（安卓式前台 app）；分屏预设保留为可选形态
   active: 'terminal-session',
   maximized: null,
   inspTab: 'instance',
@@ -1258,112 +1259,6 @@ function renderOverview() {
   return wrap;
 }
 
-/* ==================== 管理中心：服务器面 ====================
-   对应现有 /server 页的四个分区（状态 / 网络 / 高级配置 / 性能监控）。
-   注意：现有实现刻意不给「服务器」一级导航入口（产品决策：服务器常驻不可开关），
-   本方案把它放进管理中心的二级页 + 导航底部图标，比 URL 直达可发现性更好。 */
-function renderServerPanel() {
-  document.getElementById('sbLayout').textContent = '服务器管理';
-  const running = SERVER.status === 'running';
-  const up = SERVER.uptimeSec;
-  const fmtUp = `${Math.floor(up / 3600)}:${String(Math.floor(up / 60) % 60).padStart(2, '0')}:${String(up % 60).padStart(2, '0')}`;
-  const m = SERVER.metrics;
-
-  // 折线图：颜色读 token，随主题反色；面积填充用 color-mix 派生
-  const W = 600, H = 180, maxY = Math.max(...SERVER.history.sent, ...SERVER.history.recv) * 1.15;
-  const pts = arr => arr.map((v, i) => `${(i / (arr.length - 1)) * W},${H - (v / maxY) * H}`).join(' ');
-  const grid = [0, 0.5, 1].map(f =>
-    `<line class="ax" x1="0" y1="${H - f * H}" x2="${W}" y2="${H - f * H}"/>`).join('');
-
-  // 内部滚动：性能监控的图例与口径说明在长内容末尾，没有滚动容器就永远够不到
-  return `<div class="mgmt-pane"><div class="pane-scroll">
-    <div class="blk"><div class="srv-head">
-      <span class="lamp-big">
-        <span class="sdot ${running ? 'running' : SERVER.status === 'starting' ? 'degraded' : 'dormant'}"></span>
-        <span class="t">${running ? '运行中' : SERVER.status === 'starting' ? '启动中' : '已停止'}</span>
-        ${running ? `<span class="up">${fmtUp}</span>` : ''}
-      </span>
-      <span class="stat3">
-        <div><div class="n">${m.connections}</div><div class="l">连接数</div></div>
-        <div><div class="n">${m.cpu}%</div><div class="l">CPU 占用</div></div>
-        <div><div class="n">${m.mem}<span style="font-size:var(--font-size-sm)"> MB</span></div><div class="l">内存占用</div></div>
-      </span>
-      <div class="op-row">
-        <button class="btn ghost" data-act="srvRestore">还原默认</button>
-        <button class="btn ghost" data-act="srvStop" ${running ? '' : 'disabled'}>${svgSolid('stop', 13)} 停止</button>
-        <button class="btn ghost" data-act="srvRestart" ${running ? '' : 'disabled'}>${svg('restart', 13)} 重启</button>
-        <button class="btn" data-act="srvStart" ${!running ? '' : 'disabled'}>${svg('play', 13)} 启动</button>
-      </div>
-    </div></div>
-
-    <div class="blk"><div class="blk-h"><span class="t">网络</span><span class="grow"></span>
-      ${SERVER.portDirty ? `<button class="mini" data-act="srvSavePort">保存端口</button>` : ''}</div>
-      <div class="blk-body">
-        <div class="grid3">
-          <div class="fld"><span class="lb">端口</span>
-            <input class="inp" type="number" min="1024" max="65535" value="${SERVER.port}"
-              data-act="srvPortInput" aria-label="服务器端口"/>
-            <span class="hint">修改端口后需重启服务器生效</span></div>
-          <div class="fld"><span class="lb">本地 IP</span>
-            <div class="inp" style="display:flex;align-items:center">${SERVER.localIps[0]}</div>
-            ${SERVER.localIps[1] ? `<span class="hint">${SERVER.localIps[1]}</span>` : ''}</div>
-          <div class="row-sw"><span class="lb">自启动</span>
-            <span class="sw"><input type="checkbox" ${SERVER.autoStart ? 'checked' : ''} data-act="srvAutoStart"
-              aria-label="服务器自启动"/><span class="track"></span><span class="knob"></span></span></div>
-        </div>
-      </div></div>
-
-    <div class="blk"><div class="blk-h"><span class="t">高级配置</span><span class="grow"></span>
-      <span class="chip">重启时生效</span></div>
-      <div class="blk-body">
-        <div class="grid3">
-          ${NET_FIELDS.map(f => f.type === 'bool'
-            ? `<div class="row-sw"><span class="lb">${f.label}</span>
-                <span class="sw"><input type="checkbox" ${SERVER.net[f.k] ? 'checked' : ''}
-                  data-act="srvNet" data-k="${f.k}" data-v="bool" aria-label="${f.label}"/>
-                  <span class="track"></span><span class="knob"></span></span></div>`
-            : `<div class="fld"><span class="lb">${f.label}${f.unit ? `（${f.unit}）` : ''}</span>
-                <input class="inp" type="number" min="${f.min}" max="${f.max}" value="${SERVER.net[f.k]}"
-                  data-act="srvNet" data-k="${f.k}" data-v="num" aria-label="${f.label}"/>
-                ${f.hint ? `<span class="hint">${f.hint}</span>` : ''}</div>`).join('')}
-        </div>
-        <div class="row-sw" style="margin-top:8px;background:transparent;border-style:dashed">
-          <span class="lb" style="color:var(--text-secondary)">性能监控采集
-            <span class="hint">（NetworkConfig 已有字段，现状 UI 无控件 —— 本方案补上）</span></span>
-          <span class="sw"><input type="checkbox" ${SERVER.net.metrics_enabled ? 'checked' : ''}
-            data-act="srvNet" data-k="metrics_enabled" data-v="bool" aria-label="性能监控采集"/>
-            <span class="track"></span><span class="knob"></span></span>
-        </div>
-      </div></div>
-
-    <div class="blk"><div class="blk-h"><span class="t">性能监控</span></div>
-      <div class="blk-body">
-        <div class="grid3" style="margin-bottom:10px">
-          <div class="fld"><span class="lb">运行时长</span><span class="mono" style="font-size:var(--font-size-lg)">${fmtUp}</span></div>
-          <div class="fld"><span class="lb">连接数</span><span class="mono" style="font-size:var(--font-size-lg)">${m.connections}</span></div>
-          <div class="fld"><span class="lb">总请求数</span><span class="mono" style="font-size:var(--font-size-lg)">${m.requests.toLocaleString()}</span></div>
-          <div class="fld"><span class="lb">CPU 占用</span><span class="mono" style="font-size:var(--font-size-lg)">${m.cpu}%</span></div>
-          <div class="fld"><span class="lb">内存占用</span><span class="mono" style="font-size:var(--font-size-lg)">${m.mem} MB</span></div>
-          <div class="fld"><span class="lb">请求速率</span><span class="mono" style="font-size:var(--font-size-lg)">${m.rps} req/s</span></div>
-        </div>
-        <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
-          aria-label="WebSocket 收发速率时序图，最近 2 分钟">
-          ${grid}
-          <polygon points="0,${H} ${pts(SERVER.history.sent)} ${W},${H}"
-            fill="color-mix(in srgb, var(--color-primary) 10%, transparent)"/>
-          <polygon points="0,${H} ${pts(SERVER.history.recv)} ${W},${H}"
-            fill="color-mix(in srgb, var(--color-success) 10%, transparent)"/>
-          <polyline class="ln" points="${pts(SERVER.history.sent)}" stroke="var(--color-primary)"/>
-          <polyline class="ln" points="${pts(SERVER.history.recv)}" stroke="var(--color-success)"/>
-        </svg>
-        <div style="display:flex;gap:14px;margin-top:6px">
-          <span class="chip">WS 发送速率</span><span class="chip ok">WS 接收速率</span>
-          <span style="flex:1"></span><span class="note">2s × 60 点 = 2 分钟窗口 · 单位 msg/s</span>
-        </div>
-      </div></div>
-  </div></div>`;
-}
-
 /* ==================== 管理中心：设置面 ====================
    对应现有 /settings 的分组体系：界面 100 / 链路加密 300 / 系统 500 /
    日志 600（仅 DEV）/ 授权 700（跳管理中心「应用」页）/ 关于 9999。
@@ -1467,15 +1362,14 @@ function renderSettingsPanel() {
 }
 
 /* ==================== 管理中心容器 ====================
-   三个二级页对应现有三条独立路由的合并：
-     应用   ← /plugins + /plugins/:id + /plugins/:id/config + /settings/authorization
-     服务器 ← /server（现状无导航入口，此处收进管理中心）
-     设置   ← /settings + /settings/authorization 的策略控件
-   合并理由：四页同属「管理」语义，分屏布局下不该占用多个面板。 */
+   两个二级页对应现有两条独立路由的合并：
+     应用 ← /plugins + /plugins/:id + /plugins/:id/config + /settings/authorization
+     设置 ← /settings + /settings/authorization 的策略控件
+   「服务器」页（← /server）已按需求移除（2026-10-13），入口与面板一并退役。
+   合并理由：同属「管理」语义，分屏布局下不该占用多个面板。 */
 function renderManagement() {
   const tabs = [
     ['apps', 'shield', '应用'],
-    ['server', 'server', '服务器'],
     ['settings', 'gear', '设置'],
   ];
   document.getElementById('sbLayout').textContent = '管理中心 · ' + tabs.find(t => t[0] === state.mgmtTab)[2];
@@ -1489,7 +1383,7 @@ function renderManagement() {
     <div class="mgmt-pane">${
       state.mgmtTab === 'apps'
         ? (state.cfgSel ? renderConfigView() : renderGovernance())
-        : state.mgmtTab === 'server' ? renderServerPanel() : renderSettingsPanel()
+        : renderSettingsPanel()
     }</div>`;
   return wrap;
 }
@@ -1504,7 +1398,7 @@ function renderConfigView() {
   const a = byId[state.cfgSel];
   const schema = CONFIG_DEMO[a.id];
   document.getElementById('sbLayout').textContent = '应用配置 · ' + a.name;
-  const bar = `<div class="srv-head" style="padding:10px 12px">
+  const bar = `<div class="cfg-bar" style="padding:10px 12px">
       <button class="btn ghost" data-act="cfgBack">${svg('x', 13)} 返回</button>
       <span class="t" style="font-weight:600">${a.full}</span>
       <span class="chip">${a.version}</span>
@@ -1682,12 +1576,6 @@ function renderDialog() {
       <div class="note">已累积的记录不受本次切档影响，需要收紧请逐条撤销。</div>`,
       f('dlgNo', '取消') + f('dlgYes', '确认切换', ''));
   }
-  if (d === 'port-restart') {
-    return dlgShell('保存端口', `
-      <div class="note">端口已保存到 <b>${SERVER.port}</b>，但运行中的服务仍在监听旧端口。</div>
-      <div class="note">立即重启即刻生效；稍后重启则本次启动沿用旧端口。</div>`,
-      f('dlgNo', '稍后重启') + f('dlgYes', '立即重启', ''), false, 'restart');
-  }
   if (d === 'install') {
     return dlgShell('加载应用', `
       <div class="note">从本地 zip 应用包安装（<code>dist/plugin-packages</code> 产物）。</div>
@@ -1699,7 +1587,7 @@ function renderDialog() {
     const dlg = [
       ['fs', '文件系统授权 · 单路径'], ['fs-picker', '文件系统授权 · 选择框来源'],
       ['fs-batch', '文件系统授权 · 批量列表'], ['network', '网络出站授权'],
-      ['approval', '权限审批'], ['exit', '退出确认'], ['port-restart', '端口重启确认'],
+      ['approval', '权限审批'], ['exit', '退出确认'],
     ];
     const el = document.createElement('div');
     el.className = 'ovl center-y';
@@ -1714,6 +1602,66 @@ function renderDialog() {
     return el;
   }
   return null;
+}
+
+/* ==================== 最近任务（安卓式后台卡片切换） ====================
+   卡片 = 该应用面板形态的静态缩略（pane-head + pane-body，按各自 kind 渲染）。
+   缩略区挂原生 inert（CSS 再兜一层 pointer-events:none）：键盘 Tab 不落入、
+   点击穿透到卡片容器 —— 交互只走头部切换按钮与右上 ×，不存在「缩略图里的幽灵按钮」。
+   卡片序 = 最近使用序（MRU）在前、其余按安装序补全；未启动（dormant）应用不上卡。 */
+function renderRecents() {
+  const ids = APPS.filter(a => a.state !== 'dormant' && !state.hidden.has(a.id)).map(a => a.id);
+  const ordered = [
+    ...state.mru.filter(id => ids.includes(id)),
+    ...ids.filter(id => !state.mru.includes(id)),
+  ];
+  const cards = ordered.map(id => {
+    const a = byId[id];
+    // 卡片本体不挂 role=button（没配键盘激活语义，挂了反而违反「role 必须可操作」）；
+    // 鼠标点卡片任意处切换，键盘走头部的 .rcard-open 真按钮。
+    return `<div class="rcard${id === state.active ? ' current' : ''}" data-act="switchApp" data-app="${id}">
+      <div class="rcard-head">
+        <button class="rcard-open" data-act="switchApp" data-app="${id}" title="切换到 ${a.full}">
+          <span class="ic">${svg(a.icon, 15)}</span><span class="nm">${a.name}</span>
+          ${id === state.active ? '<span class="chip info">前台</span>' : ''}
+        </button>
+        <button class="pact danger" data-act="recClose" data-app="${id}"
+          title="关闭面板（实例仍在后台运行）" aria-label="关闭 ${a.name} 面板">${svg('x', 13)}</button>
+      </div>
+      <div class="rcard-view" inert aria-hidden="true">
+        <div class="pane" style="height:100%">
+          <div class="pane-head">
+            <span class="sdot ${a.state}"></span><span class="nm">${a.name}</span>
+            <span class="grow"><span class="meta">${a.version} · ${STATE_TEXT[a.state]}</span></span>
+            <span class="chip ${a.state === 'running' ? 'ok' : a.state === 'approval' ? 'warn' : ''}">${a.badge}</span>
+          </div>
+          <div class="pane-body ${a.kind === 'term' ? 'flush' : ''}">${paneBody(a)}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const fg = state.active && byId[state.active] && !state.hidden.has(state.active)
+    ? `${byId[state.active].name} · 前台` : '无前台';
+  const el = document.createElement('div');
+  el.className = 'ovl center-y recents-ovl';   // 自有类名：点空白处关闭只对最近任务生效，不波及弹窗/命令面板遮层
+  el.innerHTML = `<div class="recents" role="dialog" aria-modal="true" aria-label="最近任务" tabindex="-1">
+    <div class="recents-bar">
+      ${svg('grid', 15)}
+      <span class="t">最近任务</span>
+      <span class="chip info">${fg}</span>
+      <span class="chip">${ordered.length} 个任务</span>
+      <span class="grow"></span>
+      <span class="note">点卡片切到该应用 · × 关闭面板 · Esc / 点空白处返回</span>
+      <button class="btn ghost" data-act="closeRecents">返回前台</button>
+    </div>
+    ${cards ? `<div class="recents-row">${cards}</div>` : `<div class="recents-empty">
+      ${svg('pop', 20, 1.6)}
+      <div style="font-size:var(--font-size-base);color:var(--text-secondary)">没有运行中的应用</div>
+      <div class="note">从左轨或应用总览启动一个 wasm-app。</div>
+    </div>`}
+  </div>`;
+  return el;
 }
 
 /* ==================== 启动屏 ====================
@@ -2063,24 +2011,27 @@ function renderStatus() {
   document.getElementById('sbReq').textContent = String(SERVER.metrics.rps);
 }
 
-const PRESET_NAME = { single: '单窗', focus: '主从', thirds: '三栏', columns: '双栏网格', rows: '横排网格' };
+const PRESET_NAME = { single: '全屏', focus: '主从', thirds: '三栏', columns: '双栏网格', rows: '横排网格' };
 
 function renderAll() {
+  // 同步执行顺序有讲究：openApp 在改完 state 后同步调用本函数，renderRail 首行
+  // 读 state.mru —— 异步 / 延后渲染会让左轨高亮与最近任务卡片顺序滞后一拍。
   renderRail(); renderStage(); renderInspector(); renderStatus(); renderOverlays();
   // 标题栏「当前位置」指示：让用户始终知道自己在哪（评审批注不进产品栏）
   const ctx = { workspace: '工作区', overview: '应用总览', management: '管理中心' }[state.mode];
   document.getElementById('brandCtx').textContent =
     state.mode === 'management' && state.mgmtTab !== 'apps'
-      ? `管理中心 · ${{ server: '服务器', settings: '设置' }[state.mgmtTab]}`
+      ? `管理中心 · ${{ settings: '设置' }[state.mgmtTab]}`
       : (state.cfgSel ? '应用配置' : ctx);
 }
 
-/** 覆盖层：启动屏 → 命令面板 → 全局弹窗（后者 z 最高，压住前者） */
+/** 覆盖层：启动屏 → 命令面板 → 最近任务 → 全局弹窗（后者 z 最高，压住前者） */
 function renderOverlays() {
   const box = document.getElementById('overlays');
   box.innerHTML = '';
   if (state.boot) box.appendChild(renderBoot());
   if (state.paletteOpen) box.appendChild(renderPalette());
+  if (state.recents) box.appendChild(renderRecents());
   const d = renderDialog();
   if (d) box.appendChild(d);
 }
@@ -2099,13 +2050,24 @@ function openApp(id) {
   state.active = id;
   if (a.state === 'dormant') { a.state = 'running'; toast(`${a.full} 已启动（演示态）`); }
   state.mode = 'workspace';
+  // MRU：刚打开的排最前，最近任务卡片按此排序（对齐安卓 Recents 的「最近在左」）
+  state.mru = [id, ...state.mru.filter(x => x !== id)];
   // 最大化的是别的 app 时必须先退出最大化：否则树仍是单叶 A，而 active 已指向 B，
   // 面板与检查器/状态栏展示的实例会各说各话（状态失同步）。
   if (state.maximized && state.maximized !== id) state.maximized = null;
   renderAll();
 }
 
+/* 最近任务开关：唯一写入口，保证 Recents 按钮 / 命令面板 / 快捷键三处行为一致 */
+function setRecents(v) {
+  state.recents = v;
+  renderOverlays();
+  if (v) document.querySelector('.recents')?.focus();   // 遮罩拿焦点，Esc 才吃得到
+}
+
 document.addEventListener('click', e => {
+  // 点最近任务遮罩空白处 = 返回前台（对齐安卓「点空白退出」；只认自有 recents-ovl，不波及弹窗遮层）
+  if (e.target.classList && e.target.classList.contains('recents-ovl')) return setRecents(false);
   const t = e.target.closest('[data-act],[data-preset],[data-itab],[data-app]');
   if (!t) return;
 
@@ -2136,6 +2098,23 @@ document.addEventListener('click', e => {
       toast(`${a.full} 面板已关闭（实例仍在运行）`);
       return renderAll();
     }
+    /* ---- 最近任务 ---- */
+    case 'switchApp': {          // 卡片切换 = 关遮层 + 取消面板隐藏 + 走 openApp（MRU 置顶）
+      state.recents = false;
+      state.hidden && state.hidden.delete(id);
+      return openApp(id);
+    }
+    case 'recClose': {           // 后台关卡片：只收面板槽位，遮层保持打开（安卓式划走后仍在列表）
+      const a = byId[id];
+      state.hidden = state.hidden || new Set();
+      state.hidden.add(id);
+      if (state.active === id) state.active = runningIds().find(x => x !== id) || id;
+      if (state.maximized === id) state.maximized = null;
+      toast(`${a.full} 面板已关闭（实例仍在运行）`);
+      return renderAll();
+    }
+    case 'closeRecents': return setRecents(false);
+
     case 'stop': {                       // 停用实例：回收运行资源
       const a = byId[id];
       a.state = 'dormant'; a.cpu = 0; a.mem = 0;
@@ -2215,22 +2194,6 @@ document.addEventListener('click', e => {
       return renderAll();
     }
 
-    /* ---- 服务器面 ---- */
-    case 'srvStart': SERVER.status = 'running'; SERVER.uptimeSec = 0;
-      toast('服务器已启动'); return renderAll();
-    case 'srvStop': SERVER.status = 'stopped'; SERVER.metrics.connections = 0;
-      toast('服务器已停止'); return renderAll();
-    case 'srvRestart':
-      SERVER.status = 'starting';
-      toast('服务器重启中…（高级配置的脏字段会先自动提交）');
-      SERVER.status = 'running'; SERVER.port = SERVER.portSaved; SERVER.portDirty = false;
-      return renderAll();
-    case 'srvRestore': toast('高级配置已还原默认（重启后生效）'); return;
-    case 'srvSavePort': SERVER.portSaved = SERVER.port; SERVER.portDirty = false;
-      state.dialog = 'port-restart'; return renderOverlays();
-    case 'srvAutoStart': SERVER.autoStart = !SERVER.autoStart;
-      toast(`自启动已${SERVER.autoStart ? '开启' : '关闭'}`); return renderAll();
-
     /* ---- 设置面 ---- */
     case 'setTheme': SETTINGS.ui.theme = t.dataset.v;
       document.documentElement.classList.toggle('dark', t.dataset.v === 'dark');
@@ -2254,6 +2217,7 @@ document.addEventListener('click', e => {
     case 'runCmd': {
       state.paletteOpen = false; state.paletteQ = '';
       const c = allCommands().find(x => x.id === t.dataset.id);
+      if (c && c.id === 'host.recents.open') return setRecents(true);
       toast(`执行 ${c ? c.title : t.dataset.id}`);
       return renderAll();
     }
@@ -2298,9 +2262,6 @@ document.addEventListener('change', e => {
   if (!t || t.tagName === 'BUTTON') return;
   const act = t.dataset.act, k = t.dataset.k, id = t.dataset.app;
   switch (act) {
-    case 'srvPortInput': SERVER.port = Number(t.value); SERVER.portDirty = SERVER.port !== SERVER.portSaved;
-      return renderAll();
-    case 'srvNet': SERVER.net[k] = t.dataset.v === 'bool' ? t.checked : Number(t.value); return;
     case 'lc': LINK_CRYPTO[k] = t.checked; return renderAll();
     case 'setDefPort': SETTINGS.network.port = Number(t.value); toast(`默认端口 ${t.value}`); return;
     case 'setFont': SETTINGS.ui.font_size = Number(t.value); return renderAll();
@@ -2319,17 +2280,19 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && k === 'p') { e.preventDefault(); state.paletteOpen = true; return renderOverlays(); }
   // Ctrl+, → 设置（唯一注册的全局快捷键）
   if (e.ctrlKey && k === ',') { e.preventDefault(); state.mode = 'management'; state.mgmtTab = 'settings'; state.cfgSel = null; return renderAll(); }
-  // Esc 逐层退出：弹窗 → 命令面板
+  // Esc 逐层退出：弹窗 → 命令面板 → 最近任务
   if (e.key === 'Escape') {
     if (state.dialog) { state.dialog = null; state.dlgApp = null; return renderOverlays(); }
     if (state.paletteOpen) { state.paletteOpen = false; state.paletteQ = ''; return renderOverlays(); }
+    if (state.recents) return setRecents(false);
   }
+  // Ctrl+Shift+E → 最近任务（安卓 Recents；与 Ctrl+Shift+P 同套修饰键习惯）
+  if (e.ctrlKey && e.shiftKey && k === 'e') { e.preventDefault(); return setRecents(!state.recents); }
 });
 
 document.getElementById('navWorkspace').onclick = () => { state.mode = 'workspace'; renderAll(); };
 document.getElementById('navOverview').onclick = () => { state.mode = 'overview'; renderAll(); };
 document.getElementById('navManagement').onclick = () => { state.mode = 'management'; renderAll(); };
-document.getElementById('navServer').onclick = () => { state.mode = 'management'; state.mgmtTab = 'server'; renderAll(); };
 document.getElementById('navSettings').onclick = () => { state.mode = 'management'; state.mgmtTab = 'settings'; renderAll(); };
 document.getElementById('railInstall').onclick = () => { state.dialog = 'install'; renderAll(); };
 document.getElementById('btnCollapse').onclick = () => {
@@ -2368,6 +2331,7 @@ document.getElementById('btnUnmax').onclick = () => { state.maximized = null; re
 document.getElementById('btnTheme').onclick = () => {
   document.documentElement.classList.toggle('dark');
 };
+document.getElementById('btnRecents').onclick = () => setRecents(!state.recents);
 document.getElementById('btnBoot').onclick = () => { state.boot = true; renderOverlays(); };
 document.getElementById('btnInspector').onclick = () => {
   state.inspectorOpen = !state.inspectorOpen;
