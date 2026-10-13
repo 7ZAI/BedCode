@@ -105,10 +105,8 @@ export interface ShellApp {
   version: string
   description?: string
   author?: string
-  /** 图标：emoji / SVG path d / 相对插件目录的图片路径（如 icon.svg）；都取不到时宿主生成首字母回退 */
+  /** 图标：emoji 或 SVG path d；两者都不是时宿主生成首字母回退 */
   icon?: string
-  /** 图片图标的已解析地址（asset protocol URL）：数据源能解析时必须给出，否则首字母回退 */
-  iconUrl?: string
   /** 官方应用标记（用于「官方」徽标） */
   official?: boolean
   state: ShellAppState

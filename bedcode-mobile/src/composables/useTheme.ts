@@ -100,15 +100,16 @@ export function useTheme() {
   })
 
   // 主题对应的容器类名
-  //
-  // 用设计 token 而非 Tailwind slate 色（2026-10-14 修正）：容器是整页的底色，而页面自身用
-  // --mobile-bg-primary（暖色墨纸体系）。两者不一致时，任何**没铺满视口高度**的页面（如
-  // SettingsSubPage 的 h-full 在 min-h-screen 父级下退化成内容高）都会在下方露出一条
-  // 不同色系的底（浅色主题是冷白 #F8FAFC 对比暖白 #F5F4F0，深色主题是冷 slate 对比暖黑）。
-  // token 本身已按 .dark 切换，因此这里不再需要 dark: 变体。
-  const themeClasses = computed(() => ({
-    container: 'min-h-screen bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-primary)]',
-  }))
+  const themeClasses = computed(() => {
+    const theme = settingsStore.settings.ui.theme
+    const isDark = theme === 'system' ? isSystemDark.value : theme === 'dark'
+
+    return {
+      container: isDark
+        ? 'min-h-screen bg-slate-50 dark:bg-dark-900 text-slate-900 dark:text-dark-100'
+        : 'min-h-screen bg-slate-50 text-slate-900'
+    }
+  })
 
   return {
     isSystemDark,

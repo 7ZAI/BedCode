@@ -39,7 +39,7 @@ export function makePluginInfo(
     configuration: null,
     lifecycle: null,
   }
-  const state: PluginState = { state: 'activated' }
+  const state: PluginState = { state: 'Activated' }
   return {
     id: partial.id,
     name: partial.name,
@@ -71,7 +71,7 @@ export function makeDegradedPluginInfo(o: {
   return makePluginInfo({
     id: o.id,
     name: o.name,
-    state: { state: 'degraded', error: o.error },
+    state: { state: 'Degraded', error: o.error },
   })
 }
 
@@ -83,6 +83,6 @@ export function makeActivatingPluginInfo(o: {
   return makePluginInfo({
     id: o.id,
     name: o.name,
-    state: { state: 'activating' },
+    state: { state: 'Activating' },
   })
 }

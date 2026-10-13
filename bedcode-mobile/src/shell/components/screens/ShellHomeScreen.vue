@@ -43,13 +43,11 @@
           :app="app"
           @open="open"
         />
-        <!-- 快捷卡片区为空是常态（应用没在跑就没卡片），所以文案说「运行后会出现」，
-             不能说「尚未安装应用」——上方宫格刚刚列出了已安装应用，两句会自相矛盾 -->
         <p
           v-if="slotCards.length === 0 && fallbackCards.length === 0"
           class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
         >
-          {{ t('shell.home.slotsEmpty') }}
+          {{ t('shell.home.emptyApps') }}
         </p>
       </div>
 

@@ -37,7 +37,6 @@ export default {
       providedBy: 'By {name}',
       emptyApps: 'No WASM app installed',
       emptyAppsHint: 'Install or enable an app in "Apps" and its entry shows up here',
-      slotsEmpty: 'Status cards show up here once an app is running',
       openApp: 'Open app',
     },
     apps: {
@@ -102,7 +101,6 @@ export default {
       title: 'Running apps',
       backHome: 'Back home',
       empty: 'No running apps',
-      emptyHint: 'Open an app from the home screen and it will show up here',
       foot: 'Tap a card to enter · swipe a card up to stop it',
       stop: 'Stop',
     },
@@ -113,24 +111,8 @@ export default {
       appearanceHint: 'Theme and palette',
       permissions: 'Permission overview',
       permissionsHint: 'Group apps by permission',
-      // Connection / authentication / egress: shell-side entries (reuse the legacy
-      // settings pages until the old host is retired — no functional regression)
-      connection: 'Connection',
-      connectionHint: 'Port and auto-reconnect',
-      authentication: 'Authentication',
-      authenticationHint: 'Pairing and credentials',
-      egress: 'Egress policy',
-      egressHint: 'Security egress tiers',
+      notifications: 'Notifications',
       about: 'About WasmApp',
-      // Ticket 2026-10-10: the notification entry retired with its business settings
-      // moving to terminal-session. "Clear all data" is a device-lifecycle action (its
-      // targets include entry credentials and host connection state), so it stays in the
-      // host per the credential-zero-transit rule. See src/composables/useClearAllData.ts.
-      dangerZone: 'Danger Zone',
-      clearAllData: 'Clear All Data',
-      clearAllDataHint:
-        'Disconnects and wipes preset tasks, connection history, paired devices, session configs and local cache. This cannot be undone.',
-      clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
       appSettings: 'App settings',
       runtime: 'WasmApp Mobile {version}',
     },
@@ -156,7 +138,6 @@ export default {
       group: {
         terminal: 'Terminal & sessions',
         data: 'Files & network',
-        device: 'Device & link',
         interface: 'Interface & messaging',
         other: 'Other',
       },

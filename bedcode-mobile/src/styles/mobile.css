@@ -155,15 +155,10 @@
   --scrollbar-thumb-hover-bg: #9C9482;
 }
 
-/* 浅色模式 - html 没有 .dark 类时**全树**生效
-   （与桌面端 warm 色板浅色同源：bg-page #F5F4F0 / bg-sidebar #EFEDE7 / bg-card #FDFCFA / bg-hover #E7E4DC）
-
-   作用域口径（2026-10-14 修正）：浅色 token 必须挂在 html 上，不能挂在 .mobile-ui / .mobile-app 上。
-   旧写法把浅色值限定在带类元素内，于是所有**不带类的渲染面**都掉回 :root 的深色默认值：
-   设置二级页（SettingsSubPage 自带根节点）、Teleport 到 body 的抽屉（ShellSheet 只带 .shell-ui）
-   在浅色主题下整片变深色（实测：设置子页 5 页 + 应用菜单抽屉）。深色默认值留在 :root，
-   浅色在 html:not(.dark) 上整体覆盖——这样「主题」不再依赖某个祖先类是否写对。 */
-html:not(.dark) {
+/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效
+   （与桌面端 warm 色板浅色同源：bg-page #F5F4F0 / bg-sidebar #EFEDE7 / bg-card #FDFCFA / bg-hover #E7E4DC） */
+html:not(.dark) .mobile-ui,
+html:not(.dark) .mobile-app {
   /* 背景色 - 与桌面端同名 token 对齐（tertiary 取 border-strong 色调，作强内嵌面） */
   --mobile-bg-primary: #F5F4F0;
   --mobile-bg-secondary: #EFEDE7;
@@ -323,10 +318,10 @@ html:not(.dark) {
    更窄窗口继续缩小，平板自动放大。style.css 中 .mobile-ui 下的
    h1/p/button/text-* 等规则均引用这些变量，因此全端文字一次生效。 */
 
-/* 挂 :root 而非 .mobile-ui/.mobile-app：流式字号只是视口宽度的函数（与主题无关），
-   而 Teleport 到 body 的抽屉（ShellSheet）与旧设置子页并不带那两个类——挂类上会让
-   它们的 text-[var(--font-size-*)] 取不到值（字体尺寸回退为继承值）。 */
-:root {
+.mobile-ui,
+.mobile-app {
+  /* --mobile-font-scale：外观设置字体大小档位驱动（normal=1 / large=1.125 / xlarge=1.25），
+     useMobileSettings 在 html 上写入 inline 值，未设置时回退 1 */
   --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
   --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
   --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
@@ -810,25 +805,25 @@ button.settings-row:active {
 }
 
 /* 浅色模式：同名 palette 的浅色主色（与桌面端 light 变体同源） */
-html:not(.dark)[data-palette='forest'] {
+html:not(.dark)[data-palette='forest'] .mobile-ui {
   --mobile-accent: #3e6b4f;
   --mobile-accent-muted: rgba(62, 107, 79, 0.12);
   --mobile-accent-secondary: rgba(62, 107, 79, 0.2);
   --mobile-text-on-accent: #fdfcf7;
 }
-html:not(.dark)[data-palette='ocean'] {
+html:not(.dark)[data-palette='ocean'] .mobile-ui {
   --mobile-accent: #0e7490;
   --mobile-accent-muted: rgba(14, 116, 144, 0.12);
   --mobile-accent-secondary: rgba(14, 116, 144, 0.2);
   --mobile-text-on-accent: #ffffff;
 }
-html:not(.dark)[data-palette='sunset'] {
+html:not(.dark)[data-palette='sunset'] .mobile-ui {
   --mobile-accent: #d9532a;
   --mobile-accent-muted: rgba(217, 83, 42, 0.12);
   --mobile-accent-secondary: rgba(217, 83, 42, 0.2);
   --mobile-text-on-accent: #fefaf5;
 }
-html:not(.dark)[data-palette='violet'] {
+html:not(.dark)[data-palette='violet'] .mobile-ui {
   --mobile-accent: #6d4fc6;
   --mobile-accent-muted: rgba(109, 79, 198, 0.12);
   --mobile-accent-secondary: rgba(109, 79, 198, 0.2);
@@ -846,7 +841,7 @@ html:not(.dark)[data-palette='violet'] {
   --mobile-palette-swatch-violet: #b9a6f7;
 }
 /* 浅色模式下色块使用浅色 palette 主色（与上方 light 变体同源） */
-html:not(.dark) {
+html:not(.dark) .mobile-ui {
   --mobile-palette-swatch-default: #1D1A14;
   --mobile-palette-swatch-forest: #3e6b4f;
   --mobile-palette-swatch-ocean: #0e7490;

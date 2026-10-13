@@ -35,7 +35,6 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import * as cmds from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import { getPluginRegistry } from '@/plugin/registry'
-import { getShellRegistry } from '@/shell/registry'
 import type { PluginInfo, PluginState } from '@/plugin/types'
 import { createPluginAppSource, PLUGIN_APP_SOURCE_ID, toShellApp } from '@/shell/adapters/pluginAppSource'
 
@@ -60,48 +59,46 @@ function info(state: PluginState, patch: Partial<PluginInfo> = {}): PluginInfo {
 }
 
 const registry = getPluginRegistry()
-const shellRegistry = getShellRegistry()
 
 beforeEach(() => {
   vi.clearAllMocks()
   registry.clearPlugin('com.test.app')
-  shellRegistry.clearApp('com.test.app')
 })
 
 describe('插件状态 → 壳运行态', () => {
   it('should_beRunning_when_pluginActivated', () => {
-    expect(toShellApp(info({ state: 'activated' })).state).toBe('running')
+    expect(toShellApp(info({ state: 'Activated' })).state).toBe('running')
   })
 
   it('should_beRunning_when_pluginDegraded', () => {
     // 降级但实例存活、命令可用；显示成「已停止」会让用户误以为没起来
-    expect(toShellApp(info({ state: 'degraded', error: 'slow' })).state).toBe('running')
+    expect(toShellApp(info({ state: 'Degraded', error: 'slow' })).state).toBe('running')
   })
 
   it('should_beDisabled_when_pluginNeedsApproval', () => {
-    expect(toShellApp(info({ state: 'needsApproval' })).state).toBe('disabled')
+    expect(toShellApp(info({ state: 'NeedsApproval' })).state).toBe('disabled')
   })
 
   it('should_beErrorWithReason_when_pluginErrored', () => {
-    const app = toShellApp(info({ state: 'error', error: 'boom' }))
+    const app = toShellApp(info({ state: 'Error', error: 'boom' }))
     expect(app.state).toBe('error')
     expect(app.error).toBe('boom')
   })
 
   it('should_beStopped_when_pluginLoadedOrActivating', () => {
-    expect(toShellApp(info({ state: 'loaded' })).state).toBe('stopped')
-    expect(toShellApp(info({ state: 'activating' })).state).toBe('stopped')
+    expect(toShellApp(info({ state: 'Loaded' })).state).toBe('stopped')
+    expect(toShellApp(info({ state: 'Activating' })).state).toBe('stopped')
   })
 
   it('should_beDisabled_when_pluginDeactivated', () => {
-    expect(toShellApp(info({ state: 'deactivated' })).state).toBe('disabled')
+    expect(toShellApp(info({ state: 'Deactivated' })).state).toBe('disabled')
   })
 })
 
 describe('权限映射', () => {
   it('should_markGrantedAndLockStorage_when_approved', () => {
     const app = toShellApp(
-      info({ state: 'activated' }, { permissions: ['storage', 'fs:write'] }),
+      info({ state: 'Activated' }, { permissions: ['storage', 'fs:write'] }),
     )
 
     expect(app.permissions.map((p) => p.granted)).toEqual([true, true])
@@ -110,50 +107,38 @@ describe('权限映射', () => {
   })
 
   it('should_markNotGranted_when_pluginNeedsApproval', () => {
-    const app = toShellApp(info({ state: 'needsApproval' }, { permissions: ['fs:read'] }))
+    const app = toShellApp(info({ state: 'NeedsApproval' }, { permissions: ['fs:read'] }))
     // 未人工批准 ⇒ 一律未授予（不编造逐项授予状态：后端没有暴露它）
     expect(app.permissions[0].granted).toBe(false)
   })
 
   it('should_beOfficial_when_packagedInApkAssets', () => {
-    expect(toShellApp(info({ state: 'loaded' })).official).toBe(true)
-    expect(toShellApp(info({ state: 'loaded' }, { source: 'user' })).official).toBe(false)
+    expect(toShellApp(info({ state: 'Loaded' })).official).toBe(true)
+    expect(toShellApp(info({ state: 'Loaded' }, { source: 'user' })).official).toBe(false)
   })
 })
 
-describe('运行面解析（票 2026-10-10 C1：只认 registerSurface）', () => {
-  it('should_returnUndefined_when_appRegisteredNoSurface', () => {
+describe('运行面解析', () => {
+  it('should_returnUndefined_when_pluginRegisteredNoUi', () => {
     const surface = createPluginAppSource()
     expect(surface.resolveSurface?.('com.test.app')).toBeUndefined()
   })
 
-  it('should_returnSurfaceComponent_when_appRegisteredSurface', () => {
-    const component = defineComponent({ name: 'AppSurface', setup: () => () => h('div') })
-    // 生产顺序：list() 先把应用写进壳注册表，激活后才 registerSurface
-    shellRegistry.upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info({ state: 'activated' }))])
-    shellRegistry.registerSurface('com.test.app', { component })
+  it('should_returnComponent_when_pluginRegisteredToolboxPage', () => {
+    registry.registerToolboxPage('com.test.app', {
+      id: 'page',
+      title: '页面',
+      component: defineComponent({ name: 'ToolboxPage', setup: () => () => h('div') }),
+    })
 
-    expect(createPluginAppSource().resolveSurface?.('com.test.app')).toBe(component)
-  })
-
-  it('should_returnUndefined_when_appNotInRegistryAtAll', () => {
-    // 反例面：应用从未被 list() 写入壳注册表（未安装 / 已卸载）时不得凭空解析出运行面
-    expect(createPluginAppSource().resolveSurface?.('com.not.installed')).toBeUndefined()
-  })
-
-  it('should_notRequireSurface_when_appRegisteredOnlyLegacyUi', () => {
-    // 反例面（退役锁）：旧嵌入扩展点（工具箱页 / 终端主视图）的注册面已整面退役，
-    // 应用即使注册了它们也不得被壳当成整个应用的运行面——这里只能有 surface 一条路。
-    // 退役扩展点本身的存在性由 context.ts 的显性抛错与 R4 退役锁钉住。
-    shellRegistry.upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info({ state: 'activated' }))])
-
-    expect(createPluginAppSource().resolveSurface?.('com.test.app')).toBeUndefined()
+    const surface = createPluginAppSource().resolveSurface?.('com.test.app')
+    expect(surface).toBeDefined()
   })
 })
 
 describe('启动与停止', () => {
   it('should_preauthorizeThenLoadFrontend_when_pluginHasFrontend', async () => {
-    vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(info({ state: 'loaded' }))
+    vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(info({ state: 'Loaded' }))
     const source = createPluginAppSource()
 
     await source.launch('com.test.app')
@@ -166,7 +151,7 @@ describe('启动与停止', () => {
 
   it('should_activateBackendOnly_when_pluginIsRustOnly', async () => {
     vi.mocked(cmds.pluginGetInfo).mockResolvedValueOnce(
-      info({ state: 'loaded' }, { pluginType: 'rust' }),
+      info({ state: 'Loaded' }, { pluginType: 'rust' }),
     )
     const source = createPluginAppSource()
 

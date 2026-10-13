@@ -1,16 +1,13 @@
 /**
  * 插件重新激活循环测试（loader 路径）
  *
- * 复现用户反馈：enable→disable→enable 后应用入口不重现。
+ * 复现用户反馈：enable→disable→enable 后工具箱入口不重现。
  * 协作：真实 pluginLoader（activate/deactivate/loadFrontend）+ 真实 registry
  * + 可成功动态导入的 mock 前端模块（fixtures/mockLifecyclePlugin）。
  *
  * 关键：loader 的 activate 把 pluginActivate（后端 WASM）与 loadFrontend
  * （前端注册入口）放同一 try — 验证再激活时 module.activate 是否被重新调用、
- * 运行面是否重新落到壳注册表。
- *
- * 票 2026-10-10 批次 C2：断言面由 `pluginRegistry.toolboxViews`（旧嵌入扩展点，
- * 已退役）改为 `shellRegistry` 的 `contributions.surface`——当前唯一运行面形态。
+ * 工具箱入口是否重新落到 registry。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { PluginInfo } from '@/plugin/types'
@@ -47,9 +44,9 @@ function makePluginInfo(overrides: Partial<PluginInfo> = {}): PluginInfo {
     author: 'test',
     main: 'index.js',
     pluginType: 'frontend',
-    // 覆盖 context.ui.registerRoute（运行面与壳设置入口免权限）
-    permissions: ['ui:route'],
-    state: 'loaded',
+    // 覆盖 context.ui.registerToolboxPage/registerRoute/registerSettingsSection 权限
+    permissions: ['ui:toolbox', 'ui:route', 'ui:settings'],
+    state: 'Loaded',
     contributes: {},
     source: 'builtin',
     extensionPath: '/plugins/mock-plugin',
@@ -77,7 +74,7 @@ afterEach(() => {
 })
 
 describe('插件重新激活循环（loader 路径）', () => {
-  it('disable→enable 后运行面重新注册到壳注册表', async () => {
+  it('disable→enable 后工具箱入口重新注册到 registry', async () => {
     const info = makePluginInfo()
     mockInvoke.mockImplementation((cmd: string) => {
       switch (cmd) {
@@ -99,11 +96,8 @@ describe('插件重新激活循环（loader 路径）', () => {
     // 单次 resetModules 后 loader 与 registry 共享同一模块缓存（同一单例）
     vi.resetModules()
     const { pluginLoader } = await import('@/plugin/loader')
-    const { getShellRegistry } = await import('@/shell/registry')
-    const { toShellApp, PLUGIN_APP_SOURCE_ID } = await import('@/shell/adapters/pluginAppSource')
-    const registry = getShellRegistry()
-    // 生产顺序：壳先 list() 把应用写进注册表，之后激活才有运行面可挂
-    registry.upsertApps(PLUGIN_APP_SOURCE_ID, [toShellApp(info)])
+    const { getPluginRegistry } = await import('@/plugin/registry')
+    const registry = getPluginRegistry()
     const mockModule = await import('@/__tests__/integration/fixtures/mockLifecyclePlugin')
     mockModule._resetCounts()
 
@@ -111,17 +105,17 @@ describe('插件重新激活循环（loader 路径）', () => {
     await pluginLoader.activate('mock-plugin')
     await flushAsync(3)
     expect(mockModule.activateCallCount).toBe(1)
-    expect(registry.getApp('mock-plugin')?.contributions.surface).toBeTruthy()
+    expect(registry.toolboxViews.value.length).toBe(1)
 
     // 2. 停用：clearPlugin 摘除入口
     await pluginLoader.deactivate('mock-plugin')
     await flushAsync(3)
-    expect(registry.getApp('mock-plugin')?.contributions.surface).toBeUndefined()
+    expect(registry.toolboxViews.value.length).toBe(0)
 
     // 3. 重新激活：module.activate 应再次被调用，入口应重新注册
     await pluginLoader.activate('mock-plugin')
     await flushAsync(3)
     expect(mockModule.activateCallCount).toBe(2)
-    expect(registry.getApp('mock-plugin')?.contributions.surface).toBeTruthy()
+    expect(registry.toolboxViews.value.length).toBe(1)
   })
 })

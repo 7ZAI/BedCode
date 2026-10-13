@@ -29,24 +29,14 @@ export function initialOf(name: string): string {
 }
 
 /**
- * 判断图标形态：emoji / SVG path d / 图片路径 / 无
+ * 判断图标形态：emoji / SVG path d / 无
  *
- * 三类来源的优先级与插件清单契约一致（PluginInfo.icon）：
- *   · 图片路径（icon.svg / icon.png …）→ 由调用方经 asset protocol 取图，相对插件目录解析
- *   · SVG path d → 直接画 path（判据：只含路径指令字符）
- *   · 其余字符串（emoji / 短文本）→ 当文本渲染
- *
- * 关键：图片路径必须排在 path 之前判定。`icon.svg` 这类值不含路径指令字符，
- * 旧实现把它当 emoji 文本渲染，界面上出现字面量 “icon.svg”（实测三个内置应用全部命中）。
+ * SVG path d 的判据是「只含路径指令字符」，避免把 emoji 或图片路径误判成 path。
  */
-export type IconKind = 'emoji' | 'path' | 'image' | 'none'
-
-/** 图片图标的扩展名判据（与桌面端 PluginIcon 同源） */
-const IMAGE_ICON_RE = /\.(png|jpe?g|webp|gif|svg)$/i
+export type IconKind = 'emoji' | 'path' | 'none'
 
 export function iconKindOf(icon: string | undefined): IconKind {
   if (!icon) return 'none'
-  if (IMAGE_ICON_RE.test(icon.trim())) return 'image'
   // path d 只由指令字母、数字、空白与 . , - + e 组成；emoji 与文件路径都不会满足
   if (/^[MmLlHhVvCcSsQqTtAaZz0-9\s.,+-]+$/.test(icon)) return 'path'
   return 'emoji'
