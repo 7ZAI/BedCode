@@ -86,8 +86,8 @@ fn test_component_roundtrip_and_host_impl() {
 
         // 燃料注入生效：先触发一次导出调用（`get_manifest` 经 `core_exports` 的
         // `refill_call_fuel` 在调用前重置预算并执行 guest 代码），**再**断言调用
-        // 确实消耗燃料。断言基准取 Store 的实际预算（`fuel_budget()`，debug 构建含
-        // 放大倍率）而非裸常量——注入点与桌面形态同源（`engine::inject_call_fuel`）。
+        // 确实消耗燃料。断言基准取 Store 的实际预算（`fuel_budget_for(config::plugin_debug_mode())`，
+        // debug 构建含放大倍率）而非裸常量——注入点与桌面形态同源（`engine::inject_call_fuel`）。
         // ⚠️ 断言必须紧跟调用之后：若在调用前读 store 燃料，会读到未消耗的整额
         // （票 04 把 abi.version 原生探测换成 get_manifest 时曾因此断言空转——
         // 无任何导出调用可测）。
@@ -97,7 +97,10 @@ fn test_component_roundtrip_and_host_impl() {
         .unwrap();
         {
             let (store, _) = plugin_raw_store(&mut plugin);
-            let budget = store.data().limits.fuel_budget();
+            let budget = store
+                .data()
+                .limits
+                .fuel_budget_for(bedcode_wasm_core::config::plugin_debug_mode());
             let remaining = store.get_fuel().expect("get fuel");
             assert!(
                 remaining < budget,

@@ -21,7 +21,7 @@ mod support;
 
 use std::sync::Arc;
 
-use bedcode_desktop_lib::wasm_core::config::CoreConfig;
+use bedcode_desktop_lib::wasm_core::config::{plugin_debug_mode, CoreConfig};
 use bedcode_desktop_lib::wasm_core::host_api::context::StorageScope;
 use bedcode_desktop_lib::wasm_core::manifest::ResourceOverrides;
 use bedcode_desktop_lib::wasm_core::manager::runtime::EngineSetup;
@@ -511,7 +511,7 @@ fn test_component_backtrace_enabled_normal_calls_unaffected() {
 #[test]
 
 fn test_debug_mode_trap_includes_line_info() {
-    if !bedcode_host_kit::limits::plugin_debug_mode() {
+    if !plugin_debug_mode() {
         eprintln!("SKIP: BEDCODE_PLUGIN_DEBUG 未设置，跳过行号冒烟（调试模式是手工开关）");
         return;
     }

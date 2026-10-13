@@ -50,11 +50,39 @@ use std::path::Path;
 /// 可见性由 kit 的 `pub mod` 收窄为 `pub(crate)`，使既有 `config::defaults::X`
 /// 引用路径逐字不变——本仓库无根 workspace，改路径需连带 fixture 与
 /// `EngineConfig` 推导处同步，收益不足以换取一次搬迁噪音。
+///
+/// **Engine 专属默认值不在此**（2026-10-14 上移）：`WASM_BACKTRACE_MAX_FRAMES`
+/// 的唯一消费者就是本模块（`EngineConfig::default`），共享锚点只承载 Store 数据
+/// 形态（`StoreLimits`）所需的值对象，不承载纯 Engine 参数。
 pub(crate) use bedcode_host_kit::limits::defaults;
 
-/// 插件调试模式是否开启（转发）：真源在 `bedcode-host-kit`
-/// （wasm-core-lib-split 票 03 搬迁）。见 kit 内 `plugin_debug_mode` 的语义注释。
-pub(crate) use bedcode_host_kit::limits::plugin_debug_mode;
+/// WASM 内部调用栈 backtrace 最大帧数（Engine 构建参数，非 Store 上限）
+///
+/// trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带插件内部函数调用链
+/// （names section 函数名，release 构建即有），随 `AppError::Plugin` 进
+/// error.log 与插件 Degraded 状态。wasmtime 48 的 backtrace 在 default features
+/// 内（零编译成本），显式钉死 32 帧防止上游默认（20 帧）漂移。
+///
+/// 2026-10-14 自 `bedcode-host-kit::limits::defaults` 上移：它的唯一消费者是
+/// [`EngineConfig::default`]，与跨 crate 共享的 Store 值对象无关。
+pub(crate) const WASM_BACKTRACE_MAX_FRAMES: u32 = 32;
+
+/// 插件调试模式是否开启（dev 构建下读 `BEDCODE_PLUGIN_DEBUG`，非空即开）
+///
+/// 仅 `cfg!(debug_assertions)` 生效：release 构建忽略该变量（调试产物不会
+/// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
+/// 调试模式是会话态开关，不新增持久化配置项。
+///
+/// **归属**（2026-10-14 自 `bedcode-host-kit::limits` 上移，`pub`）：这是
+/// **宿主 / 构建策略**（读进程环境 + 编译形态），不是 Store 值对象的一部分。
+/// 判断权留在本模块（宿主装配与两端集成测试可直接消费）；机制锚点的
+/// `StoreLimits` 只收显式传入的 `debug_mode`（`fuel_budget_for`），不再读环境。
+pub fn plugin_debug_mode() -> bool {
+    cfg!(debug_assertions)
+        && std::env::var("BEDCODE_PLUGIN_DEBUG")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+}
 
 // ==================== 配置结构 ====================
 
@@ -147,7 +175,7 @@ impl CallModel {
 pub struct EngineConfig {
     /// 燃料看门狗开关：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗）
     pub consume_fuel: bool,
-    /// WASM backtrace 最大帧数（见 [`defaults::WASM_BACKTRACE_MAX_FRAMES`]）
+    /// WASM backtrace 最大帧数（见 [`WASM_BACKTRACE_MAX_FRAMES`]）
     pub wasm_backtrace_max_frames: u32,
     /// 线性内存预留量（字节）——估算的最大线性内存，须 >= store.max_memory_bytes
     /// （见 [`defaults::MAX_PLUGIN_MEMORY_BYTES`] 双重身份说明）
@@ -376,7 +404,7 @@ impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             consume_fuel: true,
-            wasm_backtrace_max_frames: defaults::WASM_BACKTRACE_MAX_FRAMES,
+            wasm_backtrace_max_frames: WASM_BACKTRACE_MAX_FRAMES,
             memory_reservation_bytes: defaults::MAX_PLUGIN_MEMORY_BYTES as u64,
             compile_cache: true,
             tuning: EngineTuning::default(),

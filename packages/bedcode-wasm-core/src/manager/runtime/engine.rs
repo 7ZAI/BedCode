@@ -34,7 +34,9 @@ use bedcode_host_kit::state::WasmPluginState;
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, Store, WasmBacktraceDetails};
 
-use crate::config::{BacktraceDetails, CoreConfig, EngineTuning, OptLevel, Profiling};
+use crate::config::{
+    plugin_debug_mode, BacktraceDetails, CoreConfig, EngineTuning, OptLevel, Profiling,
+};
 use crate::runtime_util::block_on_async;
 
 // ==================== AOT 缓存 ====================
@@ -167,14 +169,14 @@ pub(crate) fn new_store(
 /// - 实例化后 ABI 协商（[ `new_store` ] 已注入一次，此处是协商前的第二次注入）
 /// - 运行时壳在需要重新建立预算时（如协商失败重试路径）直接复用
 ///
-/// 预算取 [`bedcode_host_kit::limits::StoreLimits::fuel_budget`]（debug 构建自动套
-/// 放大倍率），**不**取裸常量——双端必须同口径，否则移动宿主 debug 构建会按
-/// release 预算被过早trap。
+/// 预算取 [`bedcode_host_kit::limits::StoreLimits::fuel_budget_for`]（debug 构建下
+/// 按调用处传入的 [`plugin_debug_mode`] 套放大倍率），**不**取裸常量——双端必须
+/// 同口径，否则移动宿主 debug 构建会按 release 预算被过早 trap。
 pub(crate) fn inject_call_fuel(store: &mut Store<WasmPluginState>) -> crate::Result<()> {
     if !store.data().fuel_enabled {
         return Ok(());
     }
-    let budget = store.data().limits.fuel_budget();
+    let budget = store.data().limits.fuel_budget_for(plugin_debug_mode());
     store.set_fuel(budget).map_err(|e| {
         crate::AppError::Plugin(format!(
             "Failed to set fuel for plugin '{}': {}",
@@ -196,7 +198,7 @@ pub(crate) fn refill_call_fuel(store: &mut Store<WasmPluginState>) -> crate::Res
     if !state.fuel_enabled {
         return Ok(());
     }
-    let budget = state.limits.fuel_budget();
+    let budget = state.limits.fuel_budget_for(plugin_debug_mode());
     let metrics = state.metrics.clone();
     if let Ok(remaining) = store.get_fuel() {
         // `remaining <= budget` 排除「上一区间未消耗」的情形：那种情况下的差额

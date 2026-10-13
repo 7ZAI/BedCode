@@ -352,7 +352,12 @@ impl LoadedWasmPlugin {
     /// 燃料规格快照 `(enabled, budget)`（Store 内已固化，实例生命周期内不变）
     pub(crate) fn fuel_spec(&self) -> (bool, u64) {
         let state = self.store.data();
-        (state.fuel_enabled, state.limits.fuel_budget())
+        (
+            state.fuel_enabled,
+            state
+                .limits
+                .fuel_budget_for(crate::config::plugin_debug_mode()),
+        )
     }
 
     /// 可选导出句柄快照（v11 / v14 / v20 动态探测结果；未导出 → None）

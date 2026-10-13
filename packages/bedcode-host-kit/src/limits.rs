@@ -6,7 +6,13 @@
 //! 与燃料注入点），而消费方住在宿主 bin crate 内 ⇒ 值对象必须与消费方同 crate 才能
 //! 被字段类型直接引用。
 //!
-//! 「覆盖请求合并」（[`StoreLimits::apply_overrides`] 语义）**刻意留在宿主**：
+//! **本文件不读进程环境、不做构建形态判断**（2026-10-14 收口）：debug 模式燃料放大
+//! 的开关判断（`BEDCODE_PLUGIN_DEBUG` + `debug_assertions`）与纯 Engine 参数默认值
+//! （backtrace 帧数）已上移 wasm-core `config`——调用方把 [`StoreLimits::fuel_budget_for`]
+//! 的 `debug_mode` 显式传入。本模块只剩「state 字段类型需要的那部分」：值对象 +
+//! 编译期默认值 + 纯函数。
+//!
+//! 「覆盖请求合并」（[`StoreLimits::clamped_within`] 的收紧语义）**刻意留在宿主**：
 //! 它的输入是插件 SDK 的 manifest 类型，属宿主配置面而非机制面；宿主以
 //! `config::apply_store_overrides(&base, &request)` 自由函数承接。
 
@@ -34,7 +40,8 @@ pub mod defaults {
     /// debug profile 的 wasm 产物不做优化，指令数与体积相对 release 成倍膨胀
     /// （典型 10-30 倍），同一逻辑在 debug 产物下烧燃料更快；若不放大，正常
     /// 插件调用可能被燃料看门狗误判为失控 trap。取 32 倍覆盖 debug 膨胀上界
-    /// 并留余量；仅 [`plugin_debug_mode`] 为真时生效
+    /// 并留余量；仅调用方显式传入的 `debug_mode` 为真时生效（判断在 wasm-core
+    /// `config::plugin_debug_mode`）
     pub const FUEL_DEBUG_MULTIPLIER: u64 = 32;
     /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
     ///
@@ -65,25 +72,6 @@ pub mod defaults {
     pub const MAX_PLUGIN_MEMORIES_PER_STORE: usize = 4;
     /// 单 Store 表数量上限
     pub const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
-    /// WASM 内部调用栈 backtrace 最大帧数
-    ///
-    /// trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带插件内部函数调用链
-    /// （names section 函数名，release 构建即有），随 AppError::Plugin 进
-    /// error.log 与插件 Degraded 状态。wasmtime 47 的 backtrace 在 default
-    /// features 内（零编译成本），显式钉死 32 帧防止上游默认（20 帧）漂移
-    pub const WASM_BACKTRACE_MAX_FRAMES: u32 = 32;
-}
-
-/// 插件调试模式是否开启（dev 构建下读 `BEDCODE_PLUGIN_DEBUG`，非空即开）
-///
-/// 仅 `cfg!(debug_assertions)` 生效：release 构建忽略该变量（调试产物不会
-/// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
-/// 调试模式是会话态开关，不新增持久化配置项。
-pub fn plugin_debug_mode() -> bool {
-    cfg!(debug_assertions)
-        && std::env::var("BEDCODE_PLUGIN_DEBUG")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
 }
 
 /// Store 资源上限（单插件维度，实例化时快照注入）
@@ -109,18 +97,11 @@ pub struct StoreLimits {
 }
 
 impl StoreLimits {
-    /// 单次导出调用的燃料预算（debug 模式下按倍率放大）
-    ///
-    /// 所有燃料注入点（实例化 / ABI 协商 / 每次导出调用前）统一走此方法，
-    /// 避免调试模式与非调试模式语义分叉
-    pub fn fuel_budget(&self) -> u64 {
-        self.fuel_budget_for(plugin_debug_mode())
-    }
-
     /// 燃料预算的纯逻辑形态：按 `debug_mode` 决定是否应用放大倍率
     ///
-    /// 独立于 [`plugin_debug_mode`]（环境变量 + 构建形态）以便单测直接覆盖
-    /// 倍率分支，不依赖进程级环境变量（测试并行安全）。
+    /// debug 判断由调用方显式传入（wasm-core `config::plugin_debug_mode`，见
+    /// 模块头「本文件不读进程环境」）——使本层单测可直接覆盖倍率分支、不依赖
+    /// 进程级环境变量（测试并行安全）；机制锚点也无需再持有宿主策略。
     ///
     /// 乘法饱和防溢出（R-03）：放大倍率与燃料预算都是配置可控值，超大组合在
     /// debug 构建 panic / release 静默回卷会让看门狗预算失真；饱和到 u64::MAX
