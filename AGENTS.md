@@ -13,7 +13,7 @@
 5. **code-map / 领域文档**（含 `docs/adr/`）
 6. **通用工程经验**
 
-- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（wasm_core 整核抽出后，机制与引擎面真源在 `packages/bedcode-wasm-core/src/`——2026-10-08 由 `bedcode-desktop/packages/` 迁根至仓库根，宿主侧只剩 `pub use` 垫片——spec 2026-10-06-wasm-core-whole-crate / ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（2026-10-07 能力域迁根，2026-10-08 整核本体迁根，与机制内核 `bedcode-host-kit` 同族，ADR 0035 D6 部分撤销；**能力域默认形态 = 纯引擎 + 端口抽象，零 WIT / 零桌面 SDK 依赖，桌面 WIT 绑定层收进 `common-host` feature——ADR 0035 脱绑条目，长期门禁 `packages/bedcode-headless-host-probe`**），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、前端 `src/` 相对**所属端根目录**（双端业务应用源码目录均名 `wasm-apps/`）；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
+- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（机制与引擎面真源在 `packages/bedcode-wasm-core/src/`，宿主侧只剩 `pub use` 垫片——ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（与机制内核 `bedcode-host-kit` 同族；**能力域默认形态 = 纯引擎 + 端口抽象，零 WIT / 零桌面 SDK 依赖，桌面 WIT 绑定层收进 `common-host` feature，长期门禁 `packages/bedcode-headless-host-probe`**——ADR 0035），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、前端 `src/`、`src-tauri/gen/` 相对**所属端根目录**（双端业务应用源码目录均名 `wasm-apps/`）；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
 - **文档字面 ≠ 事实**：引用任何路径 / 命令 / 锁名 / 版本前先用 `ls` / `rg` 核对；与事实不符**先修文档**再继续（命令字眼以 `docs/commands.md` 为准）。
 - **最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖（升级先做双端影响评估，如 wasmtime / SDK）；设计取舍不猜，先问用户。
 - **项目阶段（研发起步期）**：无真实用户、无对外 ABI 接口，**不承担任何向后兼容旧版本的义务**——ABI / WIT 破坏性变更可直接进行，禁止为兼容旧产物保留冗余路径；落地仍走 §5.1.4 顺序（ABI bump + 双端 WIT 副本同步 + 移动端影响评估 + CHANGELOG 双语条目）与 fail-visible 三形态。§9 跨端协议「老端忽略未知字段」与 §5.4「移动不跟演」是双端同步部署 / 契约独立机制，**不是**用户兼容义务，照常适用。
@@ -36,7 +36,7 @@
 | Tauri | **2**——写 API 前确认是 v2 而非 v1 |
 | wasmtime | **双端 48**，升级必须双端同步（ADR 0019） |
 | 版本号 | 桌面/移动同步维护；变更记根 `CHANGELOG.md` + `CHANGELOG_zh.md` |
-| Android | JDK/Gradle/SDK/NDK 由 `gen/android` 分发包管理，不自行安装 |
+| Android | JDK/Gradle/SDK/NDK 由移动端 `src-tauri/gen/android` 分发包管理，不自行安装 |
 | sccache | **全仓 Rust 构建前置**（根 `.cargo/config.toml` 强制 `rustc-wrapper`），未装则一切 cargo 命令直接失败——这是显性失败设计，不要加降级绕过 |
 
 其余版本以 CI workflow 与 `Cargo.toml` 为准；构建资源治理见 `docs/knowledge/build-process.md`。
@@ -59,7 +59,7 @@
 | 改移动端前端（新功能 / 重构 / 样式，含宿主壳） | **§6「移动端前端：优先对接宿主壳」（强制）**——默认落点 `bedcode-mobile/src/shell/**`（新界面）；旧 `src/{components,views,composables,stores}` 只接受缺陷修复 |
 | 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（强制） |
 | 改 Rust 后端 | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR |
-| 改 wasm-core 机制 / 核心 WIT / 契约分片 | **ADR 0049（单形态 + 绑定归位，accepted）+ ADR 0045（单一 crate + WIT 分片组合）+ `.scratch/2026-10-11-wasm-core-single-form/spec.md`**——机制一份、绑定在宿主（§5.4）；WIT 改动只改真源（`packages/bedcode-wasm-core/wit/core.wit` 或能力域 `wit/<domain>.wit`），**禁止手改**端生成物 `rust/wit/`，改完重拼并跑 `pnpm run check:wit`（CI + husky 同判据）。**要往 wasm-core 加 `bindgen!` / `impl … Host` 先停下**——内核唯一合法绑定是 `manager/runtime/core_binding.rs`（core 交集），其余全在各端宿主；反接锁 `packages/bedcode-wasm-core/src/lib.rs::binding_surface_must_not_return_to_wasm_core` |
+| 改 wasm-core 机制 / 核心 WIT / 契约分片 | **ADR 0049（单形态 + 绑定归位，accepted）+ ADR 0045（单一 crate + WIT 分片组合）+ `.scratch/2026-10-11-wasm-core-single-form/spec.md`**——机制一份、绑定在宿主（§5.4）；WIT 改动只改真源（`packages/bedcode-wasm-core/wit/core.wit` 或能力域 `wit/<domain>.wit`），**禁止手改**端生成物 `rust/wit/`，改完重拼并跑 `pnpm run check:wit`（**仓库根**执行；CI + husky 同判据）。**要往 wasm-core 加 `bindgen!` / `impl … Host` 先停下**——内核唯一合法绑定是 `manager/runtime/core_binding.rs`（core 交集），其余全在各端宿主；反接锁 `packages/bedcode-wasm-core/src/lib.rs::binding_surface_must_not_return_to_wasm_core` |
 | 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
 | 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
@@ -133,44 +133,52 @@ wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身
 
 ### 5.4 双端差异（勿把桌面结论套到移动端）
 
-**wasm-core 是单一 crate + 单形态**（ADR 0045 / 0049；2026-10-13 runtime-single-form 收口，
+#### 5.4.1 单形态运行时（单一 crate · 一份壳）
+
+**wasm-core 是单一 crate + 单形态**（ADR 0045 / 0049；runtime-single-form 收口见
 `.scratch/2026-10-13-runtime-single-form/spec.md`）：`packages/bedcode-wasm-core` 双端共用
-**一份运行时壳**（无 common/bare 之分）——`common-host` / `bare-host` 形态 feature 已退役
-（桌面专属装配面收进 `desktop-assembly`，移动 `default-features = false` + `test-support`）。
-wasm-core 内**只有一份机制 + 一份壳**（Engine / Store / 生命周期 / 事件循环 / 安全 /
-存储 / 授权 / db 机制 / WASI 装配 + `manager/runtime.rs` 的 `WasmRuntime` 与
-`runtime/component.rs` 的导出调用骨架），**WIT 绑定、端事实与端 SDK 依赖全部在宿主**：
+**一份运行时壳**（无 common/bare 之分——形态 feature 已退役：桌面装配面在
+`desktop-assembly`，移动 `default-features = false`）。wasm-core 内**只有一份机制 + 一份壳**
+（Engine / 生命周期 / 事件循环 / 安全 / 存储 / 授权 / db / WASI 等机制 + `WasmRuntime`
+导出调用骨架），**WIT 绑定、端事实与端 SDK 依赖全部在宿主**：
 
 ```text
 宿主（bedcode-{desktop,mobile}/src-tauri/src/plugin/*）
   各端完整 world 的 bindgen + 各域 Host impl（HostModule 自报汇入同一 Linker）
-  + GuestEventDispatcher 注入（events 导出契约）+ AbiPolicy 注入（ABI 版本/形态）
+  + GuestEventDispatcher 注入（events 导出契约）+ AbiPolicy 注入（组件形态）
         ↓ 消费 wasm-core 的纯机制 + 统一运行时壳
 wasm-core（packages/bedcode-wasm-core）
-  机制核心 + core.wit 机制绑定层（manager/runtime/core_binding.rs，12 个机制 interface
-  = 8 import + 4 export，ADR 0052 D1；双端全等 8 域单份实现——移动 host_domains
-  只留 http/peer/mdns/ws 端差异 4 域）
-  + 组件引擎机制唯一一份（manager/runtime/engine.rs）
-  + WASI 装配面双端同源（manager/runtime/wasi.rs，开/关走 CoreConfig::wasi）
-  + 事件派发契约面上移（guest_events.rs，各端宿主实现本 trait 并注入）
-  + ABI 规格参数化（AbiPolicy：wasm-core 零端 ABI 知识，版本上限宿主注入）
-  + 端事实端口（HostFactsPort：平台标识 / 入站服务器端口，各端宿主实现 + 装配期注入）
+  机制核心 + core.wit 机制绑定层（唯一合法绑定 = core 交集，ADR 0052 D1；
+  双端全等域单份实现，端差异域落宿主）
+  + 组件引擎机制 + WASI 装配（开/关走 CoreConfig::wasi）
+  + 事件派发契约（guest_events，各端宿主实现并注入）
+  + ABI 规格参数化（AbiPolicy 只管 abi-form）+ 端事实端口（HostFactsPort）
         ↑ cap 与端差异由各端 HostModule 自报汇入同一个 Linker
 SDK（plugin-sdk-{desktop,mobile}）
-  compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（38 / 21）
+  compose.json 各自组合 core + 各自 cap 分片；包版本双端对齐（真源 = 仓根 contracts，ADR 0051）
 ```
 
-**ABI 与 wasm-core 无关**（用户裁决 2026-10-13）：wasm-core 提供统一基础 ABI
-（core.wit），真正 ABI = 宿主组装各自 SDK WIT 后的产物——`verify_abi` 的版本上限 /
-`abi-form` 要求经 `AbiPolicy` 由宿主装配时注入（桌面 `bedcode_plugin_api` 38 + form=1；
-移动 `bedcode_plugin_api_mobile` 21 + form=None）；两端 SDK crate 均不在 wasm-core
-依赖（`mobile_wasm_core_purity_lock` 判据 7c 钉移动 SDK 词汇零命中）。
+#### 5.4.2 ABI 与组件形态（wasm-core 零端知识）
 
-**WASI 面是双端共享机制不是形态差异轴**（用户裁决 2026-10-12）：p2/p3 装配住内核、双端默认全开，开 / 关走运行期配置 `CoreConfig::wasi`（为将来 worker 类别插件双端都要跑 wasm 预备，ADR 0034 L3.b）。
+**ABI 与 wasm-core 无关**：wasm-core 提供统一基础 ABI（core.wit），真正 ABI = 宿主组装
+各自 SDK WIT 后的产物——整数 ABI 已整体退役（ADR 0051 D2），**版本真源 = 仓根
+`contracts/bedcode-plugin-package.rs` 的 `PACKAGE_VERSION`**（semver；compose.json 只
+声明包名，源文件 package 行由 compose-wit.mjs 注入、`wit_package_version_lock.rs` 钉
+一致），**组件形态经 `AbiPolicy`**（只管 `abi-form`，桌面要求 form=1 / 移动 None）由宿主
+装配时注入；两端 SDK crate 均不在 wasm-core 依赖（`mobile_wasm_core_purity_lock`
+判据 7c 钉移动 SDK 词汇零命中）。
 
-**双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（**机制必需面：8 import + 4 export，ADR 0052 D1**），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http-endpoint / cap-ws-server / cap-http / cap-ws / cap-mdns / cap-peer / cap-notify，移动 cap-mobile / cap-mdns / cap-peer / cap-http / cap-ws / cap-notify）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`，双端功能级交集），可被任意端组合；端独有功能的声明与实现都住端宿主（ADR 0052 D4）。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
+#### 5.4.3 WASI 装配（共享机制）
 
-**命名与落点纪律**（ADR 0047 + 单形态收口，2026-10-13）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（peer → `server-peer-net`、http → `server-http`、ws → `server-websocket` / `ws-client-engine`、fs/storage/bus/db → `host-api-core` 或内核 `core_binding`）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events / 移动通知扩展（`host-notify-mobile`）——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已在票 04/05 一并删除**，别再照旧文加回来；双端全等 8 域由内核 `core_binding` 单份实现，移动 host_domains 只留 http/peer/mdns/ws）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
+**WASI 面是双端共享机制不是形态差异轴**：p2/p3 装配住内核、双端默认全开，开 / 关走运行期配置 `CoreConfig::wasi`（为将来 worker 类别插件双端都要跑 wasm 预备，ADR 0034 L3.b）。
+
+#### 5.4.4 双端契约各自演进（compose 组合，不做 union）
+
+**双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（core 只收机制必需面，白名单见 ADR 0052 D1），端差异在各端 `compose.json` 驱动的 cap 分片（**cap 清单与 ABI 版本以 `compose.json` 为准**）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`，双端功能级交集），可被任意端组合；端独有功能的声明与实现都住端宿主（ADR 0052 D4）。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
+
+#### 5.4.5 命名与落点纪律（ADR 0047）
+
+**命名与落点纪律**（ADR 0047）：wasm-core 内**自持标识符零端名**、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（域 crate 落点以各端 `compose.json` 的 caps 真源为准）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events / 移动通知扩展（`host-notify-mobile`）——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已删，别再照旧文加回来**；双端全等域由内核 `core_binding` 单份实现，移动 host_domains 只留端差异域）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
 
 ---
 
@@ -254,11 +262,11 @@ SDK（plugin-sdk-{desktop,mobile}）
 
 ## 9. 数据、协议与产物
 
-**数据库**：主库 schema 单一事实源在 `packages/bedcode-wasm-core/src/db/`（`db.rs` + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-database` / `host-plugin-database` / `host-storage` 共 13 原语：权限门、表名前缀纵深、护栏、属主分区）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
+**数据库**：主库 schema 单一事实源在 `packages/bedcode-wasm-core/src/`（`db.rs` 入口 + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-plugin-database` / `host-storage`：权限门、表名前缀纵深、护栏、属主分区；原 `host-database` 主库面已随 ABI v19 退役，主库由 wasm-core 管理、不给插件直接调用）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
 
 **跨端协议**：HTTP / WS / QR / 认证改动**必须两端同步部署**，遵循「老端忽略未知字段」的增量原则，禁止破坏性替换；协议现状与端点清单见 `docs/knowledge/mobile-desktop-auth.md`。wasmtime 升级必须两端同步（ADR 0019）。
 
-**产物**：禁止提交 `**/target/`、`node_modules/`、`.dev-logs/`、Android 构建产物；`Cargo.lock` / `pnpm-lock.yaml` 只经包管理器变更，**禁止手工编辑**。`gen/android` 下手写 Kotlin 源码是版本跟踪的一部分，`tauri android init` 重建后需手工恢复，改 Kotlin 后必须跑 gradlew 验证（`docs/commands.md`）。
+**产物**：禁止提交 `**/target/`、`node_modules/`、`.dev-logs/`、Android 构建产物；`Cargo.lock` / `pnpm-lock.yaml` 只经包管理器变更，**禁止手工编辑**。移动端 `src-tauri/gen/android` 下手写 Kotlin 源码是版本跟踪的一部分，`tauri android init` 重建后需手工恢复，改 Kotlin 后必须跑 gradlew 验证（`docs/commands.md`）。
 
 **发布**：包名 Desktop `com.bedcode.app` / Mobile `com.bedcode.mobile`；**签名唯一真源是仓库根 `bedcode.keystore`**，勿用其他 keystore 签发布版；版本号两端同步（§2），流程见 `docs/knowledge/release-workflow.md`。
 
@@ -272,11 +280,11 @@ SDK（plugin-sdk-{desktop,mobile}）
 - 改了 Rust → 对应 crate 根 `cargo test` 全量通过（宿主两端各自 `src-tauri`；插件在各自 crate 根）
 - 改了跨端协议 / 任一端客户端或插件的认证·会话·终端面 → `cross-end-tests` 全量通过（两端各自的 mock 各自自洽，真实互连才是契约的真正门禁）
 - 改了前端 → 对应端 `pnpm run test:run` 全量 + 根 `pnpm exec eslint .` 0 error（warning 不计入）；`cargo fmt` / `cargo clippy` 提交前自查（非 CI 门禁）
-- **未纳入自动化门禁的手工验证项**（逐项写「跑了 / 没跑 + 原因」）：未接入 vitest 的目录测试 · wasm 应用完整构建（含 wasmHash 注入）· `gen/android` gradlew 编译（改了 Kotlin 时必跑）· 真机 / 浏览器核验
+- **未纳入自动化门禁的手工验证项**（逐项写「跑了 / 没跑 + 原因」）：未接入 vitest 的目录测试 · wasm 应用完整构建（含 wasmHash 注入）· 移动端 `src-tauri/gen/android` gradlew 编译（改了 Kotlin 时必跑）· 真机 / 浏览器核验
 - 改动落在宿主侧时通过 §5.1 裁决与自检（B1-B6 零命中、未在宿主新增业务类型 / 状态 / 存储 / 路由 / 业务默认值、退役面回接被防回接锁覆盖）；真源搬迁附 fail-visible 三形态证据
 - i18n key 双语同步；公开项有文档注释；错误处理用 `AppError`；单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
 
-CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.yml`（两端 cargo test + vitest）。
+CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.yml`（两端 cargo test + vitest）+ `wit-drift-lock.yml`（WIT 拼装漂移锁，与 husky 同判据）。
 
 ---
 
@@ -320,4 +328,4 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 分支隔离 / CI | `docs/knowledge/feature-branch-isolation.md`、`github-actions-setup.md` |
 | 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |
 | 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`businessless-kernel-vision.md` |
-| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出 / 0038 wasm-core 引擎面与薄壳纯净性 / 0039 host-pty 能力域整面迁出（含 WIT 接线）） |
+| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出 / 0038 wasm-core 引擎面与薄壳纯净性 / 0039 host-pty 能力域整面迁出（含 WIT 接线） / 0049 wasm-core 单形态 + 绑定归位 / 0052 core.wit 收录判据与契约归属边界） |
