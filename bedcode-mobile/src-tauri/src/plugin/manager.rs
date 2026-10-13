@@ -285,6 +285,11 @@ impl PluginManager {
             Arc::new(crate::plugin::host_ports::HostPorts), // 批次 2b：宿主引擎端口装配
         ));
 
+        // 宿主端事实（平台标识 = "mobile" / 无入站服务器）：单形态收口后从 wasm-core
+        // 迁出的端差异实现，在插件实例化 / 激活之前注入（file-transfer 激活期探测
+        // `host-platform.platform()`；晚注入 = 激活失败）
+        host_ctx.set_host_facts(Arc::new(crate::plugin::host_ports::HostPorts));
+
         // host-peer 端口（wasm-core-mobile-purity 票 03）：wasm-core bare 面 19 条
         // 原语的薄转发经 crate `ports::ports()` 取本端口——权限判定 / 引擎上下文 /
         // 同步桥三面在此与宿主衔接（幂等，重复 init 首装胜出）

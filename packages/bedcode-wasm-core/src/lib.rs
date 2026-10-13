@@ -115,10 +115,10 @@ pub mod security;
 pub mod storage;
 /// 引擎级配置 / 文件定位（lib 的 `system.rs` 组合根经垫片零改动引用；进程创建垫片已随无消费者退役）
 pub mod system;
-/// 测试基建（常编译公开，lib 集成测试消费；来源见模块头注释）。
-/// 桌面主体（setup_wasm_runtime / build_host_ctx_at / TestInstanceDispatcher…）
-/// 随 `desktop-assembly`；移动面（test_support/bare.rs = fork test_support.rs 迁入）
-/// 已随单形态（2026-10-13）并入统一实现。
+/// 测试基建（常编译公开，lib / 宿主测试消费）。
+/// 两个宿主消费面：桌面（`desktop-assembly`）与移动（`test-support`；模块名 `bare`
+/// 是 fork 期历史名）——运行时单形态（2026-10-13）后二者共用统一运行时壳，
+/// 仅夹具与转发面按消费方分侧，详见 `test_support.rs` 模块头。
 #[cfg(any(feature = "desktop-assembly", feature = "test-support"))]
 pub mod test_support;
 

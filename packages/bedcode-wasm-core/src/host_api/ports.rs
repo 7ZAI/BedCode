@@ -119,6 +119,49 @@ pub trait FsAuthGate: Send + Sync {
     async fn check_batch(&self, plugin_id: &str, paths: &[String], op: FsAuthOp) -> bool;
 }
 
+// ==================== 端事实端口（单形态收口：端差异经宿主实现注入） ====================
+
+/// 宿主端事实端口（内核零端分支，端值由各端宿主实现并注入）
+///
+/// 两个方法都是 **WIT 可见的端事实**：
+/// - `platform_id` → `host-platform.platform`（跨端共享产物按它分支，如
+///   file-transfer 单产物在**激活期**探测端值，未知值即激活失败）；
+/// - `inbound_server_port` → `host-config.network.port`（桌面入站服务器运行态端口）。
+///
+/// 单形态（2026-10-13 裁决）之前这两处是内核里的
+/// `#[cfg(feature = "desktop-assembly")]` 二选一：`"desktop"` / `"mobile"` 字面量
+/// 与 `ServerSupervisor` 直读写死在内核——按 ADR 0049 D1 的判定口径（「桌面这样写、
+/// 移动那样写」就不是机制）应属端宿主。现在内核只经本端口取端值，实现分别住
+/// `bedcode-desktop/src-tauri/src/plugin/host_facts.rs` 与
+/// `bedcode-mobile/src-tauri/src/plugin/host_ports.rs`。
+///
+/// **注入点与时机**：`WasmHostContext::set_host_facts`，必须在任何插件
+/// `activate()` 之前（桌面经 `PluginHost::new` 参数、移动在其上下文装配处）。
+/// 漏注入不 panic，但两条取值路径都 fail-visible：`platform_id` 返回契约外取值
+/// （guest 显性拒绝），`inbound_server_port` 返回 Err（不回落配置默认端口）。
+pub trait HostFactsPort: Send + Sync {
+    /// 宿主平台标识（契约取值：`"desktop"` / `"mobile"`；其余取值 guest 显性拒绝）
+    fn platform_id(&self) -> String;
+
+    /// 入站服务器实际端口（十进制字符串）；无入站服务器的宿主返回 Err
+    fn inbound_server_port(&self) -> std::result::Result<String, String>;
+}
+
+/// 未注入端事实的占位（无头 / 测试上下文缺省；fail-visible，不猜端值）
+pub struct UnimplementedHostFacts;
+
+impl HostFactsPort for UnimplementedHostFacts {
+    fn platform_id(&self) -> String {
+        // 契约外取值：消费方（file-transfer 等共享产物）对未知端值显性失败——
+        // "unknown" 是可见的断链信号，不猜默认平台
+        "unknown".to_string()
+    }
+
+    fn inbound_server_port(&self) -> std::result::Result<String, String> {
+        Err("network.port unavailable: this host has no inbound server".to_string())
+    }
+}
+
 // ==================== 宿主引擎端口主 trait ====================
 
 /// 宿主引擎端口（`WasmHostContext.ports` 注入；域函数唯一宿主调用面）

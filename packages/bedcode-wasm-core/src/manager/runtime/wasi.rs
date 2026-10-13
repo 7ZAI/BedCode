@@ -5,8 +5,9 @@
 //! （ADR 0034 L3.b）双端都要跑 wasm 时，不必各端再自建一份接线。
 //!
 //! 因此形态（桌面 / 移动）不再是「有 WASI / 无 WASI」的差异轴：
-//! - 装配面（p2/p3 linker 注册 + 预打开上下文构建）在本模块，两形态壳共用同一份。
-//!   移动形态当前产物是 wasm32-unknown-unknown（不 import WASI），注册惰性无效；
+//! - 装配面（p2/p3 linker 注册 + 预打开上下文构建）在本模块，双端共用的**唯一**
+//!   运行时壳消费同一份（单形态 2026-10-13 起无 common/bare 两壳）。
+//!   移动宿主当前产物是 wasm32-unknown-unknown（不 import WASI），注册惰性无效；
 //!   将来 worker 产物改为 wasip2/p3 即直接可用，无需再改装配代码。
 //! - 开关是**运行期配置**（不是编译期形态 feature）。注册发生在运行时构建期
 //!   （linker 一次装配就固化），故 [`crate::config::WasiConfig`] 的运行期覆盖对

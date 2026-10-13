@@ -41,21 +41,16 @@ fn require_pick_permission(perm: &dyn PermissionScope, plugin_id: &str, api: &st
 
 /// 宿主平台标识（v38 `host-platform.platform`；无权限门——平台事实不是能力）
 ///
-/// 端值按**装配 feature** 编译期判定而非运行期探测：`desktop-assembly` = 桌面宿主
-/// 装配（默认开；移动宿主 `default-features = false` 不开）。判据同 `config` 域
-/// `network.port` 的形态门控先例——「在哪端装配」是编译事实，不需要猜。
-/// 消费方是双端共享 wasm 产物（file-transfer 单产物，规格
-/// `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：它经此在同一 trait
-/// 的双实现间分支；guest 侧对空/未知取值 fail-visible（显性报错不猜默认平台）。
-pub(crate) fn platform_id() -> String {
-    #[cfg(feature = "desktop-assembly")]
-    {
-        "desktop".to_string()
-    }
-    #[cfg(not(feature = "desktop-assembly"))]
-    {
-        "mobile".to_string()
-    }
+/// 端值**不由内核判定**：各端宿主实现 [`crate::host_api::ports::HostFactsPort`] 并
+/// 装配期注入（桌面 `plugin/host_facts.rs` → `"desktop"`，移动
+/// `plugin/host_ports.rs` → `"mobile"`），内核只透传端口取值——单形态收口
+/// （2026-10-13，ADR 0049 D1「桌面这样写、移动那样写就不是机制」）前这里是
+/// `#[cfg(feature = "desktop-assembly")]` 编译期二选一。
+/// 消费方是双端共享 wasm 产物（file-transfer 单产物）：它在**激活期**经此探测端值
+/// 并在同一 trait 的双实现间分支；guest 侧对空/未知取值 fail-visible（显性报错
+/// 不猜默认平台，未注入端事实时取到 `"unknown"`）。
+pub(crate) fn platform_id(facts: &dyn crate::host_api::ports::HostFactsPort) -> String {
+    facts.platform_id()
 }
 
 /// 系统多文件选择器 → string[] JSON（用户取消为空数组）

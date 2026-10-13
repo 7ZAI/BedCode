@@ -14,8 +14,11 @@ use support::*;
 
 use bedcode_desktop_lib::wasm_core::test_support::{
     lock_auth_center_desk, plugin_db_root, session_apis, session_plugin_db_guard,
-    setup_wasm_runtime, TestInstanceDispatcher,
+    TestInstanceDispatcher,
 };
+// `setup_wasm_runtime` 由 `support::*` 提供（宿主包装：注入 DesktopGuestEvents +
+// DesktopHostFacts）；内核 test_support 的同名入口不注入派发器，误用会让
+// `events` 投递走 UnwiredGuestEvents 而失败——勿把内核同名项加回上面的显式列表。
 use bedcode_plugin_api::host::{ws_event_topic, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_OPEN};
 
 /// 读下一条**非事件广播**帧（2026-09-26：session-control 端点现承载 WS 事件广播

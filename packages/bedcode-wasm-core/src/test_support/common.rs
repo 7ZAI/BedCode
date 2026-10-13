@@ -1,11 +1,13 @@
-//! 测试基建（常编译公开）
+//! 桌面宿主测试面（共享符号定义见父模块 `test_support.rs`）
 //!
-//! 承载 lib 侧集成测试（`src-tauri/tests/*`，如 session_e2e）需要的全部脚手架：
-//! 无头运行时装配、插件私有库根、会话中心私有库串行锁、认证中心注册表测试闸门。
+//! 承载桌面宿主侧集成测试（`src-tauri/tests/*`，如 session_e2e）与本 crate
+//! `#[cfg(test)]` 用例需要的全部脚手架：无头运行时装配、插件私有库根、会话中心
+//! 私有库串行锁、认证中心注册表测试闸门。
 //!
-//! **常编译 pub（非 `#[cfg(test)]`）**：lib 集成测试是独立测试二进制，经
-//! `bedcode_wasm_core::test_support` 消费；按 `test_tokens` 常编译先例（ADR 0037
-//! D7 同款裁决），不引入 feature 机制——项目至今无 feature 门控，保持简单。
+//! **常编译 pub（非 `#[cfg(test)]`）**：宿主集成测试链的是不带 `cfg(test)` 的 lib，
+//! 必须经常编译面才能消费（按 `test_tokens` 常编译先例，ADR 0037 D7 同款裁决）。
+//! 门控在父模块：本面随 `desktop-assembly`（桌面宿主开默认 features 时可见）；
+//! 移动消费面见兄弟模块 `bare`（`test-support` feature）。
 //!
 //! 上提来源（wasm-core 纯净性收口票 05b，2026-10-06）：
 //! - `manager/runtime.rs` mod tests：`setup_wasm_runtime(_with_config)` /
@@ -20,6 +22,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use tokio::sync::{Mutex, RwLock, SemaphorePermit};
 
+// 共享符号单点定义在父模块（`test_support.rs`），本消费面不另存副本
+use super::TEST_PLUGIN_ID;
 use crate::bus::MessageBus;
 use crate::config::{CallModel, CoreConfig};
 use crate::db::Database;
@@ -32,10 +36,6 @@ use crate::permission::PermissionManager;
 use crate::security::fs_auth::FsAuthChecker;
 use crate::storage::PluginStorage;
 use crate::system::config::AppConfig;
-
-/// 测试用插件 ID（装配时授予权限的属主；与 runtime.rs mod tests 同名常量同值，
-/// 本模块自持，互不引用）
-const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
 // ==================== 无头运行时装配 ====================
 
@@ -406,20 +406,13 @@ pub fn system_test_artifact_bytes() -> Vec<u8> {
 
 // ==================== 内核私有机制的测试转发面（宿主集成测试用） ====================
 //
-// 为什么经这里转：`LoadedWasmPlugin::raw_store` 与 `engine::aot_cache_key` 是内核私有
-// （pub(crate)）——宿主集成测试需要它们驱动燃料 / limiter 记账断言与定位 AOT 缓存
-// 产物，但生产面没有跨 crate 消费者。本模块是宿主测试的**唯一转发点**（与
-// `sdk_fixture_artifact_bytes` 同章程：常编译 pub 测试基建），不为此放宽内核生产 API。
-
-/// 取插件实例的裸 Store / Instance（燃料注入、limiter 记账、导出直调断言用）
-pub fn plugin_raw_store(
-    plugin: &mut LoadedWasmPlugin,
-) -> (
-    &mut wasmtime::Store<crate::manager::runtime::WasmPluginState>,
-    &wasmtime::component::Instance,
-) {
-    plugin.raw_store()
-}
+// 为什么经这里转：`engine::aot_cache_key` 是内核私有（pub(crate)）——宿主集成测试
+// 需要它定位 AOT 缓存产物，但生产面没有跨 crate 消费者。本模块是宿主测试的**唯一转
+// 发点**（与 `sdk_fixture_artifact_bytes` 同章程：常编译 pub 测试基建），不为此放宽
+// 内核生产 API。
+//
+// `plugin_raw_store` / `TEST_PLUGIN_ID` 是两个消费面共享符号，单点定义在父模块
+// `test_support.rs`（本面不再各持副本）。
 
 /// AOT 缓存文件名 hash（宿主集成测试定位 `<cache_dir>/c<hash>.cwasm` 用）
 ///

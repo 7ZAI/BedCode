@@ -127,3 +127,17 @@ wasm-core 内**只有一份机制**，双端零机制分叉代码：Engine 构�
 4. **一份契约可多次 bindgen**：同模块内两次才冲突，不同模块各生成各的 `bedcode` 模块不冲突。
 5. **`wasm_core` 内核测试二进制与宿主集成测试链的是不同的 lib**（后者不带 `cfg(test)`）⇒ 内核 `#[cfg(test)]` 项对宿主不可达，需常编译转发面（`test_support`）。
 6. **形态专属 crate 内单测易腐**：`bare-host` 下 `cargo test --lib` HEAD 即不可编译（见「代价与风险」）。
+
+## 收口补录（2026-10-14）
+
+- **端事实零内核分支**：`host-platform.platform` 与 `host-config.network.port` 的
+  `desktop-assembly` 编译期二选一（含 `"desktop"`/`"mobile"` 字面量与
+  `ServerSupervisor` 直读）收口为 `HostFactsPort` 端口（`WasmHostContext::set_host_facts`
+  注入）：桌面实现 `bedcode-desktop/src-tauri/src/plugin/host_facts.rs`（`PluginHost::new`
+  末参，先于任何 `activate()`），移动实现 `bedcode-mobile/src-tauri/src/plugin/host_ports.rs`。
+  wasm-core 生产段不再依赖 `bedcode-server-core`（降 dev-dependency）；桌面
+  `crate_boundary_lock` 对应生产必填边摘除。D1「机制零分叉」至此覆盖到
+  WIT 可见端值面。
+- **测试面口径**：`src/test_support` **保留**桌面 / 移动两个消费面（运行时壳与
+  core 绑定早为单份；合并两侧夹具会造超集）；`TEST_PLUGIN_ID` / `plugin_raw_store`
+  上提父模块单点定义。`.scratch/2026-10-13-runtime-single-form/spec.md` 第 8 条已按实修正。

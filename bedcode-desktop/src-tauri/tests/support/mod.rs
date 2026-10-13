@@ -31,17 +31,25 @@ pub use bedcode_desktop_lib::wasm_core::test_support::{
     OwnerStatsSnapshot, ShutdownReport, TestInstanceDispatcher, TestOwnerHandle,
 };
 
-/// 构造无头运行时并注入**桌面** guest 事件派发器（宿主测试的统一入口）
+/// 构造无头运行时并注入**桌面** guest 事件派发器 + 桌面端事实
+///（宿主测试的统一入口）
 ///
 /// 内核 `test_support::setup_wasm_runtime` 不再注入派发器（缺省 `UnwiredGuestEvents`
 /// 派发即 fail-visible——票 04 随全 world 绑定删除内核替身、契约面只由宿主实现），
 /// 而宿主测试的 `events` 导出投递（`plugin.on_message` 与总线 dispatcher 投递）
 /// 必须走生产同款实现：宿主 `plugin/guest_events.rs` 的 `DesktopGuestEvents`
 /// （宿主自有绑定；与 `PluginHost::new` 注入的同一实现）。
+///
+/// 端事实同理由：`plugin/host_facts.rs::DesktopHostFacts`（平台 = 桌面 /
+/// `network.port` 读 ServerSupervisor）——与 `PluginHost::new` 生产注入同一实现，
+/// 供共享产物激活期 `platform()` 探测与 `config_get` 用例使用。
 pub fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
     let (runtime, ctx) = bedcode_desktop_lib::wasm_core::test_support::setup_wasm_runtime();
     runtime.set_guest_events(Arc::new(
         bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
+    ));
+    ctx.set_host_facts(Arc::new(
+        bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts,
     ));
     (runtime, ctx)
 }
@@ -100,7 +108,7 @@ pub async fn setup_host() -> Arc<PluginHost> {
     let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-hosttest-userplugins-{}", std::process::id()));
     std::fs::create_dir_all(&user_plugins_dir).expect("user plugins dir");
 
-    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }).await;
+    let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts)).await;
 
     // 无头私有库根注入（认证中心配对/历史真源在插件私有库，无私有库则无法驱动）
     host.wasm_host_ctx().set_plugin_db_root(Some(

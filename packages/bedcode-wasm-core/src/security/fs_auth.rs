@@ -3214,7 +3214,9 @@ mod tests {
 //
 // crate 内机制面（approval / 域测试夹具）经端口 trait 消费授权判定；宿主
 // 切换后宿主 FsAuthChecker（白名单 / 弹窗真源）另行实现同一 trait 注入。
-// **票 02 B5 解除 bare-host 门控**：统一 `WasmHostContext` 的 `fs_auth` 槽收敛为
+// **票 02 B5 起常编译**（`bare-host` / `common-host` 两个形态 feature 已于
+// 2026-10-13 单形态收口退休，本 impl 的常编译语义不变）：统一 `WasmHostContext`
+// 的 `fs_auth` 槽收敛为
 // `Arc<dyn FsAuthGate>`（超集，见 `host_api/context.rs` 字段注释），桌面形态把
 // 具体 `FsAuthChecker` 注入为 trait 对象——本 impl 不常编译则桌面 lib 编译红。
 // 移动宿主在 `bedcode-mobile` 侧实现同一 trait（其 SAF URI / 白名单管理语义

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bedcode_wasm_core::host_api::ports::{
-    AuthEnginePort, ConnectionEnginePort, HostEnginePorts, PrimaryTarget, SafIoPort,
+    AuthEnginePort, ConnectionEnginePort, HostEnginePorts, HostFactsPort, PrimaryTarget, SafIoPort,
     WsReconnectPolicyPort,
 };
 use tauri::Manager;
@@ -111,6 +111,25 @@ impl WsReconnectPolicyPort for ReconnectPolicyBridge {
 
 /// 宿主引擎端口（装配于 `PluginManager::init_wasm_runtime_with`）
 pub struct HostPorts;
+
+/// 宿主端事实（平台标识 / 入站服务器端口）——wasm-core 单形态收口后从内核迁出的
+/// 端差异实现（内核只持 `HostFactsPort` 端口词汇，零端 `#[cfg]` 分支）。
+///
+/// 装配点：`PluginManager::init_wasm_runtime_with` 构造上下文后立即
+/// `set_host_facts`——共享产物 file-transfer 在**激活期**经
+/// `host-platform.platform()` 探测端值，晚注入即激活失败（fail-visible）。
+impl HostFactsPort for HostPorts {
+    fn platform_id(&self) -> String {
+        // 双端契约取值之一（内核不再按 feature 二选一）
+        "mobile".to_string()
+    }
+
+    fn inbound_server_port(&self) -> Result<String, String> {
+        // 移动端无入站 HTTP/WS 服务器（协议面走客户端出站）：显性报错，
+        // 不静默返回空值（插件读到空端口会表现出「连不上」类难定位故障）
+        Err("network.port unavailable: this host has no inbound server".to_string())
+    }
+}
 
 #[async_trait]
 impl HostEnginePorts for HostPorts {

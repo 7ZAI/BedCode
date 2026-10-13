@@ -155,11 +155,14 @@ impl bedcode::plugin::host_log::Host for WasmPluginState {
 
 impl bedcode::plugin::host_config::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        // 端专属键（网络端口 / 下载目录）经宿主注入的端口取，本端无对应物时域内
-        // fail-visible（白名单词汇是双端并集，见 `host_api::config`）
+        // 端专属键经宿主注入的端口取（network.port → 端事实端口；下载目录 →
+        // 引擎端口），本端无对应物 / 未注入时域内 fail-visible（白名单词汇是
+        // 双端并集，见 `host_api::config`）
+        let facts = self.host_ctx().host_facts();
         config::config_get(
             self.host_ctx(),
             self.host_ctx().ports().as_ref(),
+            facts.as_ref(),
             &self.plugin_id,
             &key,
         )
@@ -261,10 +264,12 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     /// 宿主平台标识（v38；无权限门——平台事实不是能力）
     ///
     /// 双端共享产物（file-transfer 单产物）经此在同一 trait 的双实现间分支；
-    /// 端值由装配 feature 编译期判定（`host_api::platform::platform_id`）。
-    /// WIT 签名无 result 包装 ⇒ 不可失败（端值是编译期常量）。
+    /// 端值由各端宿主实现 [`crate::host_api::ports::HostFactsPort`] 并在装配期注入
+    /// （内核零端名、零端分支；未注入取到契约外取值 `"unknown"`，guest 显性拒绝）。
+    /// WIT 签名无 result 包装 ⇒ 不可失败（端值是宿主注入的常量事实）。
     fn platform(&mut self) -> String {
-        platform::platform_id()
+        let facts = self.host_ctx().host_facts();
+        platform::platform_id(facts.as_ref())
     }
 }
 

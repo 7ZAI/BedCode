@@ -238,8 +238,9 @@ pub fn ambient_handle() -> tokio::runtime::Handle {
 // fork_boundary_lock 的机制核在场断言钉住；票 19 抽共享核时随机制一并上提。
 //
 // 常编译（单形态票 02 M5）：错误边界是双端共用的公共设施——桌面包容 WS
-// 连接任务、移动壳的 WS 读写 / 重连任务都在 crate 侧 spawn 后台任务，不再
-// 按 bare-host 门控。block_on_ambient / ambient_handle（root 常编译段）供
+// 连接任务、移动壳的 WS 读写 / 重连任务都在 crate 侧 spawn 后台任务——形态
+// feature（`common-host` / `bare-host`）已随单形态收口（2026-10-13）退役，
+// 本段不再有任何门控。block_on_ambient / ambient_handle（root 常编译段）供
 // 同步上下文驱动借用式 future，此处三个符号供 spawn 后盾。
 
 /// 使用错误边界包装 tokio::spawn（当前线程必须有 runtime 上下文）

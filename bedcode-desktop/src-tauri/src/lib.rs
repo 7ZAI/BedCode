@@ -548,6 +548,9 @@ pub fn run() {
                 wasm_core::manager::runtime::AbiPolicy {
                     form: Some(bedcode_plugin_api::form::FORM_COMPONENT),
                 },
+                // 桌面端事实（平台标识 / 入站服务器端口；单形态收口后从 wasm-core
+                // 迁出的端差异实现——file-transfer 在激活期经 platform() 探测端值）
+                std::sync::Arc::new(crate::plugin::host_facts::DesktopHostFacts),
             ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());

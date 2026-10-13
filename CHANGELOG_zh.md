@@ -9,6 +9,16 @@
 
 ## [未发布]
 
+#### 宿主端事实搬出内核：平台标识 / 入站服务器端口由各端宿主注入
+
+收口 2026-10-13 单形态裁决的最后余量（ADR 0049 D1：「桌面这样写、移动那样写就不是机制」）——`packages/bedcode-wasm-core` 内最后两处编译期端分支消失。
+
+- **新端口词汇**：`host_api::ports::HostFactsPort`（`platform_id` / `inbound_server_port`）+ `WasmHostContext::set_host_facts`，须在任何插件 `activate()` 之前注入（共享 file-transfer 产物在激活期探测 `host-platform.platform()`）。缺省 `UnimplementedHostFacts` 为 fail-visible：平台取契约外 `"unknown"`（guest 显性拒绝）、端口返回 `Err` 而非回退配置默认值。
+- **宿主实现**：桌面 `bedcode-desktop/src-tauri/src/plugin/host_facts.rs`（平台 = `desktop`；`network.port` 读 `ServerSupervisor` 运行态），经 `PluginHost::new` 注入；移动 `bedcode-mobile/src-tauri/src/plugin/host_ports.rs`（`HostPorts` 实现该端口；平台 = `mobile`，无入站服务器 → `Err`）。`host_api::platform` / `host_api::config` 里两处 `#[cfg(feature = "desktop-assembly")]` 分支（含 `"desktop"` / `"mobile"` 字面量）删除——内核不再认识任一端名。
+- **依赖边清理**：wasm-core 对 `bedcode-server-core` 的生产依赖降为 dev-dependency（仅 `host_harness` 测试起服）；桌面 `crate_boundary_lock` 对应生产必填边摘除（dev 边仍登记）。
+- **测试基建保持双消费面、共享符号单点化**：`test_support` 保留桌面（`common`）与移动（`bare`，fork 期历史名）两个消费面——运行时壳与 core 绑定早已单份；共享符号（`TEST_PLUGIN_ID` / `plugin_raw_store`）上提父模块单点定义。`.scratch/2026-10-13-runtime-single-form/spec.md` 第 8 条按实修正，ADR 0049 附收口补录。
+- 行为等价（取值与报错文案不变）。验证：wasm-core `cargo test --lib` 576/576；移动 `cargo test` 全绿（含共享产物探针实际跑移动 `HostPorts`）；桌面 `cargo test --lib` 155/155 + `crate_boundary_lock` 9/9 + `system_component_test` 10/10；移动 purity / fork 锁 7/7 + 6/6。
+
 #### WIT 契约搬上包 semver，整数 ABI 退役（ADR 0051）
 
 契约版本管理从「全局单一整数」搬上 wire：WIT 改为 `package bedcode:plugin@0.Y.Z;`，
@@ -113,7 +123,7 @@ import / export 名自带版本；整数 `ABI_VERSION` 与 `interface abi` **同
 
 #### wasm-core 运行时单形态：common/bare 壳合并，ABI 策略宿主注入
 
-`packages/bedcode-wasm-core` 此前在 `common-host` / `bare-host` 两 feature 下挂两套运行时装配树。按 2026-10-13 用户裁决（`.scratch/2026-10-13-runtime-single-form/spec.md`）两壳合并为**一份运行时**（桌面形态）：`manager/runtime.rs` + `runtime/component.rs`；形态 feature 退役（桌面专属装配面收进 `desktop-assembly`：PluginHost / intercall / 认证中心 / ServerSupervisor）。
+`packages/bedcode-wasm-core` 此前在 `common-host` / `bare-host` 两 feature 下挂两套运行时装配树。按 2026-10-13 用户裁决（`.scratch/2026-10-13-runtime-single-form/spec.md`）两壳合并为**一份运行时**（桌面形态）：`manager/runtime.rs` + `runtime/component.rs`；形态 feature 退役（桌面专属装配面收进 `desktop-assembly`：PluginHost / intercall / 认证中心）。
 
 - **ABI 不再是 wasm-core 的事实**：`verify_abi` 的版本上限与 `abi-form` 要求经 `AbiPolicy` 由宿主装配时注入（桌面 37/38 + form=1；移动 20/21 + None）。两个 SDK crate（`bedcode-plugin-api` / `bedcode-plugin-api-mobile`）退出 wasm-core 无条件依赖；`mobile_wasm_core_purity_lock` 判据 7c 钉移动 SDK 词汇在内核零命中。
 - **移动宿主收敛到统一壳**（D7 收口）：双端全等 8 域（storage / log / config / plugin-database / events / fs / bus / platform）删除移动 host_domains 副本，由内核 `core_binding` 单份实现——权限门收敛统一 `PermissionManager`（激活时授予进统一词表）、插件私有库布局统一内核布局；移动 host_domains 只留 http / peer / mdns / ws。`on_bus_message` 调用点改走统一 `on_message`；`LoadedComponentPlugin` 更名 `LoadedWasmPlugin`。
@@ -127,7 +137,7 @@ import / export 名自带版本；整数 `ABI_VERSION` 与 `interface abi` **同
 
 契约面（双端同步，ADR 0019 流程）：
 
-- **core.wit v38/v21**：`host-platform` 新增 `platform: func() -> string`（宿主平台标识探测，无权限门；端值由各端装配 feature 编译期判定——桌面 `desktop` / 移动 `mobile`）。桌面 ABI 37→38、移动 20→21。
+- **core.wit v38/v21**：`host-platform` 新增 `platform: func() -> string`（宿主平台标识探测，无权限门；端值由宿主回答——初版为各端装配 feature 编译期判定，后收口为注入式 `HostFactsPort`，见上方条目）。桌面 ABI 37→38、移动 20→21。
 - **桌面 `events` 接口扩为七函数并集**：并入移动词汇（`on-bus-message` / `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped`）——共享产物必须同时导出两端宿主要按名调用的回调；对桌面原生插件是加法（默认空实现，旧宿主按名调用不受影响）。
 - **新增 binding-only `world desktop-compat`**（import `host-api-call` + `host-platform-desktop`）：移动宿主 bindgen 它为共享产物提供 fail-visible 桩（`src-tauri/src/plugin/desktop_compat.rs`，全函数显性 `Err`）——桌面分支在移动端不可达，桩只为 import 闭合。
 - **协商 ABI**：共享产物经桌面 SDK 新宏 `wasm_entry_with_abi!` 自报 `SHARED_ABI_VERSION = 21`（≤ 双端宿主 AbiPolicy 下界；桌面 38 / 移动 21 均放行），锁断言受双端 `ABI_VERSION` 约束。

@@ -45,7 +45,7 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
     ));
     db.lock().expect("db lock").init_schema().unwrap();
-    let host = PluginHost::new(db, &builtin_dir, &user_dir, None, None, Vec::new(), crate::manager::runtime::AbiPolicy::UNCONSTRAINED).await;
+    let host = PluginHost::new(db, &builtin_dir, &user_dir, None, None, Vec::new(), crate::manager::runtime::AbiPolicy::UNCONSTRAINED, std::sync::Arc::new(crate::host_api::ports::UnimplementedHostFacts)).await;
 
     let info = host.get_plugin(shadowed_id).await.expect("plugin present");
     assert_eq!(

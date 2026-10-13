@@ -411,6 +411,10 @@ impl PluginHost {
     ///   桌面 `bedcode_plugin_api::form::FORM_COMPONENT`；宿主装配时显式注入，
     ///   wasm-core 零端 ABI 知识。**只管 `abi-form`**，整数 ABI 版本协商已随
     ///   wit 包版本化退役——ADR 0051 D2）
+    /// * `host_facts` - 宿主端事实（平台标识 / 入站服务器端口；
+    ///   [`crate::host_api::ports::HostFactsPort`]）——端差异实现住各端宿主
+    ///   （桌面 `plugin/host_facts.rs`），内核零端名；在实例化 / 激活**之前**
+    ///   写入上下文，漏注入不 panic 但取值路径 fail-visible
     /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）
@@ -430,6 +434,9 @@ impl PluginHost {
         first_party_dirs: Vec<(&'static str, Vec<crate::security::fs_auth::TrustedDir>)>,
         // ABI 规格（端事实，宿主注入；见 [`crate::manager::runtime::AbiPolicy`]）
         abi: crate::manager::runtime::AbiPolicy,
+        // 宿主端事实（平台标识 / 入站服务器端口；端实现住各端宿主，见
+        // [`crate::host_api::ports::HostFactsPort`]——内核不得按端 `#[cfg]` 二选一）
+        host_facts: Arc<dyn crate::host_api::ports::HostFactsPort>,
     ) -> Arc<Self> {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
@@ -461,6 +468,9 @@ impl PluginHost {
 
         // core-security × core-monitor：决策计数埋点两阶段注入
         // （monitor 生于 WasmRuntime，晚于宿主上下文构建）
+        // 端事实在实例化 / 激活之前写入（file-transfer 等共享产物在激活期探测
+        // `host-platform.platform()`；晚注入 = 激活失败）
+        wasm_host_ctx.set_host_facts(host_facts);
         wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
         // 授权记录容量丢弃计数（spec §8.2）：同一处两阶段注入（计数在落账点）
         wasm_runtime.fs_auth().set_monitor(wasm_runtime.monitor());

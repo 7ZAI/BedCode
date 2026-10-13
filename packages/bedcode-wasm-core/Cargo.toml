@@ -6,12 +6,12 @@
 # 从 bin crate 整体迁出。任何 Tauri 宿主可直接 path 依赖本 crate 获得插件机制。
 #
 # 位置（仓库根 packages/，2026-10-08 由 bedcode-desktop/packages/ 迁根）：
-# **双端单一 wasm-core**（ADR 0045 D1）：桌面形态（default / common-host）依赖桌面
-# 基础层（bedcode-server-base / bedcode-plugin-api 桌面 WIT / 桌面能力 crate）；
-# 移动形态（default-features = false + bare-host）依赖移动 SDK / discovery-engine /
-# ws-client-engine——移动 fork crate 已随票 06 批次 04 整面退役，双端机制面与真源同侧
-# （ADR 0018 移动契约独立不变；`bedcode-wasm-core-mobile` 仅存 package rename 别名）。
-# 双端共享锚点是仓库根 packages/bedcode-host-kit。
+# **双端单一 wasm-core、单一形态**（ADR 0045 D1 + ADR 0049 D1，2026-10-13 收口）：
+# 运行时壳 / 机制 / core 绑定层一份，双端共用；端差异（cap 域实现 / 权限门 /
+# 事件词汇 / ABI 规格 / 端事实）全部住各端宿主，经 `HostModule` 自报、
+# `GuestEventDispatcher` 与 `AbiPolicy` / `HostFactsPort` 注入组装。
+# 桌面专属装配面（PluginHost 等）在 `desktop-assembly` feature；移动宿主
+# `default-features = false` 不开。双端共享锚点是仓库根 packages/bedcode-host-kit。
 #
 # 依赖图脱桌面进行中（wasm-core 纯净性收口票 02，.scratch/2026-10-09-wasm-core-single-crate/）：
 # 批次 02 已移出 pty——`bedcode-pty-engine` 依赖与 `portable-pty` 不再出现在本 crate，
@@ -35,17 +35,16 @@ edition = "2021"
 # 域实现 / 权限门 / 事件词汇）全部由各端宿主 `HostModule` 自报组装。
 #
 # `desktop-assembly` = **桌面专属装配面**（非形态维度，移动不开）：PluginHost /
-# api_bridge / watcher / intercall / auth_center / 能力域端口装配 / WS 帧回灌窄端口 /
-# ServerSupervisor（host_config 用）。移动宿主不开它，用自有 PluginManager /
-# host_domains 组装（互调走宿主侧面）。
+# api_bridge / watcher / intercall / auth_center / 能力域端口装配 / WS 帧回灌窄端口。
+# 移动宿主不开它，用自有 PluginManager / host_domains 组装（互调走宿主侧面）。
+# 端事实（平台标识 / 入站服务器端口）不在 feature 里：经 `HostFactsPort` 由各端
+# 宿主实现并装配期注入（内核零端名、零端 `#[cfg]` 分支）。
 #
 # WASI 装配面不在任何 feature 里：`wasmtime-wasi` 无条件依赖 + `manager::runtime::wasi`
 # 常编译，双端同源、默认全开，开/关由运行期配置 `CoreConfig::wasi` 定（用户裁决
 # 2026-10-12；为将来 worker 类别插件预备，ADR 0034 L3.b）。
 default = ["desktop-assembly"]
 desktop-assembly = [
-    # ServerSupervisor（host_config 域引擎面；host_harness 测试起服同样消费）
-    "dep:bedcode-server-core",
     # 桌面 SDK（bedcode-plugin-api）：桌面 Rust 插件体系（PluginCommand /
     # BedcodePluginEntry / TerminalHandler，manager::host）+ intercall 词汇
     #（API_TOPIC_PREFIX）+ 桌面夹具测试的 wire 形状——桌面专属装配面，移动不开。
@@ -103,9 +102,6 @@ bedcode-server-http = { path = "../bedcode-server-http" }
 # `PeerCtxProvider` 类型别名引 `bedcode_server_peer_net::PeerCtx` ⇒ 无条件（与
 # server-websocket / server-http 同批，双端编译）。
 bedcode-server-peer-net = { path = "../bedcode-server-peer-net" }
-# server 传输无关内核（ServerSupervisor，host_config 域引擎面）——桌面专属装配面
-#（`desktop-assembly` feature，移动不开）
-bedcode-server-core = { path = "../bedcode-server-core", optional = true }
 # 桌面 SDK（bedcode-plugin-api，desktop-assembly feature；桌面 Rust 插件体系与
 # intercall 词汇的唯一来源——wasm-core 无条件面对其零引用，见 lib.rs facade）
 bedcode-plugin-api = { path = "../../bedcode-desktop/packages/plugin-sdk-desktop/rust", optional = true }
@@ -172,8 +168,12 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 [dev-dependencies]
 tempfile = "3"
-# 测试 harness（§4.5）起 HTTP+WS 服务器（actix-web dev::ServerHandle 返回类型）
+# 测试 harness（§4.5）起 HTTP+WS 服务器（`host_harness`，`cfg(all(test,
+# desktop-assembly))`）——`network.port` 的 ServerSupervisor 读取已随端事实收口
+# 迁桌面宿主（`src-tauri/src/plugin/host_facts.rs`），本 crate 生产段不再需要
+# server-core（`crate_boundary_lock` 的必填边已同步摘除）。
 # dev-deps 无 optional 机制；依赖图门禁跑 `--edges no-dev` 口径（生产图不含）
+bedcode-server-core = { path = "../bedcode-server-core" }
 actix-web = "4"
 # 测试夹具构建器（manager/runtime/fixture_build.rs）
 flume = "0.12"

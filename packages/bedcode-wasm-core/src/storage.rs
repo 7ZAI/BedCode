@@ -44,7 +44,8 @@ impl PluginStorage {
     /// 测试构造（内存库 + 生产 schema 初始化）——跨模块测试共用夹具
     /// （迁移自宿主 plugin/storage.rs 同名函数；底库 = crate Database）。
     /// 可见性 = crate 测试 + 宿主 test-support feature（下游 dev-dependencies）。
-    /// 常编译（单形态票 02）：共享测试夹具，不再按 bare-host 门控。
+    /// 常编译（单形态票 02）：共享测试夹具——`bare-host` / `common-host` 形态
+    /// feature 已于 2026-10-13 收口退休，本夹具双端共用，不再有任何门控。
     pub fn test_storage() -> Arc<PluginStorage> {
         let db = Arc::new(Mutex::new({
             let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");

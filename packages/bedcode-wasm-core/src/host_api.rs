@@ -59,8 +59,9 @@
 // 移动适配面：`ports`（端口词汇，双端常编译）。`http_engine` / `sql_guard` /
 // `bare_context` 三个 fork 垫片均已退役（执行本体上移能力域 crate / 零消费者 / 上下文合一）。**票 02 B5**：`context`（双端唯一宿主上下文，原
 // `bare_context` 已并入超集删除）与 `ports`（统一上下文 `ports`/`fs_auth` 槽的
-// trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余域维持形态门控
-// （执行本体经桌面形态的单元执行器 / 回复道编排消费；移动侧对应面在宿主自报）。
+// trait 载体）**常编译**——桌面 / 移动 / 无 feature 三态都编译。其余域维持桌面
+// 装配面门控（`desktop-assembly`；执行本体经桌面装配面的单元执行器 / 回复道编排
+// 消费，移动侧对应面在宿主自报）。
 #[cfg(feature = "desktop-assembly")]
 pub mod api;
 #[cfg(feature = "desktop-assembly")]
@@ -92,7 +93,7 @@ pub mod unit_executor;
 pub use crate::host_api::fs::{fs_canonicalize, fs_read_dir, fs_stat};
 mod wsl_fs;
 
-// ==================== 移动 adapter（bare-host，fork 迁入） ====================
+// ==================== 共享端口与上下文导出（双端常编译） ====================
 //
 // `http_engine` 已于 2026-10-10 票 05 退役（出站执行并入能力域 crate
 // `bedcode-server-http::plugin_binding::egress`；移动形态经
@@ -115,16 +116,17 @@ pub use context::WasmHostContext;
 // ports 端口符号集过 host_api 顶层（fork host_api.rs:24 同款清单）：
 // test_support/bare.rs 的 MockPorts impl / 移动 host_domains 域经此路径引用
 pub use ports::{
-    AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, PrimaryTarget,
-    SafIoPort, UnimplementedPorts, WsReconnectPolicyPort, PORT_NOT_WIRED,
+    AuthEnginePort, ConnectionEnginePort, FsAuthGate, FsAuthOp, HostEnginePorts, HostFactsPort,
+    PrimaryTarget, SafIoPort, UnimplementedHostFacts, UnimplementedPorts, WsReconnectPolicyPort,
+    PORT_NOT_WIRED,
 };
 
 // ==================== 测试夹具出口 ====================
 
 /// 三域共用假端口（`sqlite_scaffold` 内的项是 `pub(super)`，即
 /// `pub(in wasm_core::host_api)`，故 `database::tests` / `storage::tests` 都够得着）
-/// 桌面装配面专属（common-host）：假端口实现 SqlitePorts（sqlite_ports 为
-/// common-host 模块，票 02 M12 语义边界——移动形态 db 域走宿主侧 host_domains/db）。
+/// 桌面装配面专属（`desktop-assembly`）：假端口实现 SqlitePorts（sqlite_ports 是
+/// 桌面装配面模块，票 02 M12 语义边界——移动侧 db 域走内核 `core_binding` 单份实现）。
 #[cfg(all(test, feature = "desktop-assembly"))]
 pub(crate) mod sqlite_scaffold;
 

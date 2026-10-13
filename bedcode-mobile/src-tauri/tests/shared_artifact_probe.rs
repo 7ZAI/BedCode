@@ -34,8 +34,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bedcode_wasm_core::manager::runtime::{AbiPolicy, WasmRuntime};
-use bedcode_wasm_core::test_support::{build_host_ctx, runtime_engine};
+use bedcode_wasm_core::test_support::{runtime_engine, build_host_ctx as build_bare_host_ctx};
 use wasmtime::component::Component;
+
+/// 移动宿主端事实（平台 = `"mobile"`）注入版上下文——与生产
+/// `plugin/manager.rs` 装配的是**同一个** `HostPorts` 实现。
+///
+/// 探针必须带端事实：`host-platform.platform()` 是端值探测入口，缺省未注入的
+/// `UnimplementedHostFacts` 返回契约外 `"unknown"`，guest 侧显性拒绝（激活失败）。
+fn build_host_ctx() -> Arc<bedcode_wasm_core::host_api::WasmHostContext> {
+    let ctx = build_bare_host_ctx();
+    ctx.set_host_facts(Arc::new(bedcode_mobile_lib::plugin::host_ports::HostPorts));
+    ctx
+}
 
 const PLUGIN_ID: &str = "com.bedcode.file-transfer";
 

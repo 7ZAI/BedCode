@@ -3021,6 +3021,12 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
         return;
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    // 端事实（平台 = desktop）：file-transfer 共享产物在**激活期**经
+    // `host-platform.platform()` 探测端值——未注入则返回契约外 "unknown"（激活失败）。
+    // 生产同款实现在 `PluginHost::new` 装配时注入（本用例自建运行时，需自行注入）。
+    host_ctx.set_host_facts(Arc::new(
+        bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts,
+    ));
     let ft_component = wasm_runtime
         .compile_component(&std::fs::read(&ft_path).expect("read file-transfer artifact"))
         .expect("compile file-transfer artifact");

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Host end-facts leave the kernel: platform id / inbound server port are injected by each host
+
+Closing the remainder of the 2026-10-13 single-form ruling (ADR 0049 D1: "if desktop writes it one way and mobile another, it is not mechanics"), the last two compile-time end branches inside `packages/bedcode-wasm-core` are gone.
+
+- **New port vocabulary**: `host_api::ports::HostFactsPort` (`platform_id` / `inbound_server_port`) + `WasmHostContext::set_host_facts`, injected before any plugin `activate()` (the shared file-transfer artifact probes `host-platform.platform()` at activation). The default `UnimplementedHostFacts` is fail-visible: platform `"unknown"` (the guest refuses it) and an `Err` instead of the configured default port.
+- **Host implementations**: desktop `bedcode-desktop/src-tauri/src/plugin/host_facts.rs` (platform `desktop`; `network.port` reads the `ServerSupervisor` live port) passed into `PluginHost::new`; mobile `bedcode-mobile/src-tauri/src/plugin/host_ports.rs` (`HostPorts` implements the port; platform `mobile`, no inbound server → `Err`). The two `#[cfg(feature = "desktop-assembly")]` branches (and the `"desktop"` / `"mobile"` literals) are deleted from `host_api::platform` / `host_api::config` — the kernel no longer knows either end name.
+- **Dependency-edge cleanup**: wasm-core's production dependency on `bedcode-server-core` drops to a dev-dependency (`host_harness` only); the desktop `crate_boundary_lock` required production edge is removed (the dev edge stays registered).
+- **Test infrastructure stays two-faced but single-sourced**: `test_support` keeps the desktop (`common`) and mobile (`bare`, a fork-era module name) consumer faces — the runtime shell and core binding were already single; shared symbols (`TEST_PLUGIN_ID` / `plugin_raw_store`) are now defined once in the parent module. Spec item 8 of `.scratch/2026-10-13-runtime-single-form/spec.md` is corrected accordingly and ADR 0049 gets an addendum.
+- Behavior is unchanged (same values and error texts). Verification: wasm-core `cargo test --lib` 576/576; mobile `cargo test` all green (incl. the shared-artifact probe exercising the real mobile `HostPorts`); desktop `cargo test --lib` 155/155 + `crate_boundary_lock` 9/9 + `system_component_test` 10/10; mobile purity / fork locks 7/7 + 6/6.
+
 #### WIT contracts move to package semver, and the integer ABI is retired (ADR 0051)
 
 Contract versioning moves from one global integer onto the wire: WIT becomes `package bedcode:plugin@0.Y.Z;`, so import/export names carry the version, and the integer `ABI_VERSION` + `interface abi` are **retired in the same change** (user ruling 2026-10-13: the WIT package version starts from `0` on its own — no 1:1 derivation, and no old-artifact compatibility, because the project is pre-release with no users). Spec and per-ticket record: `.scratch/2026-10-13-wit-package-semver/spec.md` + `issues/01…06`.
@@ -93,7 +103,7 @@ Mobile:
 
 #### wasm-core runtime is now single-form: no more common/bare shells, ABI policy injected by hosts
 
-`packages/bedcode-wasm-core` previously mounted two runtime assembly trees under the `common-host` / `bare-host` features. Per the 2026-10-13 rulings (`.scratch/2026-10-13-runtime-single-form/spec.md`) both form shells were merged into **one runtime** (desktop shape): `manager/runtime.rs` + `runtime/component.rs`; the features retired (`desktop-assembly` now gates the desktop-only assembly surface: PluginHost / intercall / auth-center / ServerSupervisor).
+`packages/bedcode-wasm-core` previously mounted two runtime assembly trees under the `common-host` / `bare-host` features. Per the 2026-10-13 rulings (`.scratch/2026-10-13-runtime-single-form/spec.md`) both form shells were merged into **one runtime** (desktop shape): `manager/runtime.rs` + `runtime/component.rs`; the features retired (`desktop-assembly` now gates the desktop-only assembly surface: PluginHost / intercall / auth-center).
 
 - **ABI is no longer a wasm-core fact**: `verify_abi`'s version ceiling and `abi-form` requirement are injected per host via `AbiPolicy` (desktop 37/38 + form=1; mobile 20/21 + None). Both SDK crates (`bedcode-plugin-api` / `bedcode-plugin-api-mobile`) left wasm-core's unconditional deps; `mobile_wasm_core_purity_lock` criterion 7c now pins mobile SDK vocabulary to zero hits in wasm-core.
 - **Mobile host converges on the unified shell** (D7 closed): the 8 dual-end-identical domains (storage / log / config / plugin-database / events / fs / bus / platform) dropped their mobile host_domains copies and are served by the kernel `core_binding` single implementation — permission gate unified on `PermissionManager` (activation grants into the shared vocabulary), private plugin DB layout unified on the kernel one; mobile host_domains keeps only http / peer / mdns / ws. `on_bus_message` call sites use the unified `on_message`; `LoadedComponentPlugin` renamed `LoadedWasmPlugin`.
@@ -107,7 +117,7 @@ Mobile:
 
 Contract surface (both ends, ADR 0019 flow):
 
-- **core.wit v38/v21**: `host-platform` gains `platform: func() -> string` (host platform identity probe, no permission gate; the value is decided at compile time by each end's assembly feature — desktop `desktop` / mobile `mobile`). Desktop ABI 37→38, mobile 20→21.
+- **core.wit v38/v21**: `host-platform` gains `platform: func() -> string` (host platform identity probe, no permission gate; the value is answered by the host — first shipped as the end's assembly feature deciding at compile time, since moved to the injected `HostFactsPort`, see the entry above). Desktop ABI 37→38, mobile 20→21.
 - **Desktop `events` interface widened to a seven-function union**: mobile vocabulary merged in (`on-bus-message` / `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped`) — the shared artifact must export the callbacks both hosts dispatch by name; purely additive for desktop-native plugins (default no-op impls, old hosts unaffected).
 - **New binding-only `world desktop-compat`** (imports `host-api-call` + `host-platform-desktop`): the mobile host bindgens it to provide fail-visible stubs for the shared artifact (`src-tauri/src/plugin/desktop_compat.rs`, every function an explicit `Err`) — desktop branches are unreachable on mobile; the stubs exist only for import closure.
 - **Negotiated ABI**: the shared artifact self-reports `SHARED_ABI_VERSION = 21` via the new desktop SDK macro `wasm_entry_with_abi!` (≤ the lower bound of both hosts' AbiPolicy — desktop 38 / mobile 21 both accept); a lock asserts the bound against both ends' `ABI_VERSION`.

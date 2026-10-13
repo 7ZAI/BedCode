@@ -26,8 +26,9 @@
 //! 按 ADR 0022 §5.1.3「机制留内核、契约面上移」：本 trait 是内核向宿主开的**窄缝**，
 //! 由各端宿主用自己的 `bindgen!` 实现并注入（与 `HostModule` 自报同一范式）。
 
-// `WasmPluginState` 从 host-kit 直取而非经 `runtime::common`——后者是形态门控模块，
-// 本 trait 两侧形态都要能用（移动侧将来同样实现它）
+// `WasmPluginState` 从 host-kit 直取（机制内核的中性类型的唯一真源）——本文件
+// 双端共用，不经过任何形态模块（原 `runtime::common` / `runtime::bare` 两壳已随
+// 单形态 2026-10-13 合并为一份，本 trait 双端宿主各自实现并注入）
 use bedcode_host_kit::WasmPluginState;
 use wasmtime::Store;
 

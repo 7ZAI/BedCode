@@ -153,6 +153,7 @@ wasm-core（packages/bedcode-wasm-core）
   + WASI 装配面双端同源（manager/runtime/wasi.rs，开/关走 CoreConfig::wasi）
   + 事件派发契约面上移（guest_events.rs，各端宿主实现本 trait 并注入）
   + ABI 规格参数化（AbiPolicy：wasm-core 零端 ABI 知识，版本上限宿主注入）
+  + 端事实端口（HostFactsPort：平台标识 / 入站服务器端口，各端宿主实现 + 装配期注入）
         ↑ cap 与端差异由各端 HostModule 自报汇入同一个 Linker
 SDK（plugin-sdk-{desktop,mobile}）
   compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（38 / 21）

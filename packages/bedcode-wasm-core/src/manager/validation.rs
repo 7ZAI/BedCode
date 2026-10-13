@@ -15,7 +15,7 @@
 
 // 中性词汇（票 02 M4）：清单统一取自 crate::manifest；`InstanceLifecycle` /
 // lifecycle 校验是桌面 manifest 专属面（移动 manifest 无 lifecycle 声明），
-// 该校验函数随 common-host（语义边界不变）
+// 该校验函数随桌面装配面门控（`desktop-assembly`，语义边界不变）
 use crate::manifest::PluginManifest;
 use crate::manifest::InstanceLifecycle;
 
@@ -45,7 +45,7 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     // 越界即拒绝装载（`Err` ⇒ 不装载）——内核不再解释该字段（AGENTS §5.1 B6）。
     // 本函数只保住两处入口（目录扫描 / zip 安装）共用的结构性必填字段。
     // 生命周期 / preopen 校验为桌面 manifest 专属面（移动 manifest 无这两个字段，
-    // fork 票 17 §3.2）——随 common-host
+    // fork 票 17 §3.2）——随桌面装配面门控（`desktop-assembly`）
     #[cfg(feature = "desktop-assembly")]
     {
         validate_lifecycle(manifest)?;

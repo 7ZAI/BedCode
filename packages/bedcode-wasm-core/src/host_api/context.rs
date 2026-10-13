@@ -39,7 +39,7 @@ use bedcode_host_kit::state::WasmPluginState;
 pub type PeerCtxProvider = dyn Fn(&tauri::AppHandle) -> Arc<bedcode_server_peer_net::PeerCtx> + Send + Sync;
 
 use crate::db::Database;
-use crate::host_api::ports::{HostEnginePorts, UnimplementedPorts};
+use crate::host_api::ports::{HostEnginePorts, HostFactsPort, UnimplementedHostFacts, UnimplementedPorts};
 use crate::permission::PermissionManager;
 use crate::security::fs_auth::FsAuthChecker;
 use crate::security::network_auth::NetworkAuthChecker;
@@ -313,6 +313,13 @@ pub struct WasmHostContext {
     /// `pub`：移动宿主（外部 crate）的域 adapter（`plugin/{auth,connection,fs_mobile}.rs`
     /// 等）直接读字段。
     pub ports: Arc<dyn HostEnginePorts>,
+    /// 宿主端事实（平台标识 / 入站服务器端口；见 [`HostFactsPort`]）
+    ///
+    /// 单形态收口（2026-10-13）后内核不再按 `desktop-assembly` 编译期二选一端值；
+    /// 端差异实现住各端宿主，装配期经 [`Self::set_host_facts`] 注入。缺省
+    /// [`UnimplementedHostFacts`] 是 fail-visible 占位（无头 / 测试上下文命中即显性
+    /// 失败，不猜端值）。
+    host_facts: Arc<std::sync::RwLock<Arc<dyn HostFactsPort>>>,
     /// 本插件的已授予权限集（移动装配面，票 02 B5 并入超集）：移动权限门在
     /// 域函数内经此集合仲裁（**不经** [`PermissionManager`]——桌面 grant 过滤
     /// 桌面词汇集，移动专属词会被滤 → 权限门恒拒），实例化时按插件注入。
@@ -503,6 +510,8 @@ impl WasmHostContext {
             // 移动装配面三字段缺省（ports 命中即 fail-visible / granted 恒空 /
             // status_reporter noop）
             ports: Arc::new(UnimplementedPorts),
+            // 端事实缺省：未注入即 fail-visible（`set_host_facts` 装配期覆盖）
+            host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
             granted_permissions: HashSet::new(),
             status_reporter: Arc::new(|_, _| {}),
         }
@@ -546,6 +555,8 @@ impl WasmHostContext {
             domain_ports: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             peer_ctx_provider: Arc::new(std::sync::RwLock::new(None)),
             ports,
+            // 端事实缺省：移动/桌面宿主装配后经 `set_host_facts` 注入本端实现
+            host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
             granted_permissions: HashSet::new(),
             status_reporter,
         }
@@ -592,6 +603,7 @@ impl WasmHostContext {
             domain_ports: self.domain_ports.clone(),
             peer_ctx_provider: self.peer_ctx_provider.clone(),
             ports: self.ports.clone(),
+            host_facts: self.host_facts.clone(),
             granted_permissions,
             status_reporter: self.status_reporter.clone(),
         }
@@ -672,6 +684,25 @@ impl WasmHostContext {
     ///
     pub fn ports(&self) -> &Arc<dyn crate::host_api::ports::HostEnginePorts> {
         &self.ports
+    }
+
+    /// 装配期注入宿主端事实（平台标识 / 入站服务器端口）
+    ///
+    /// **必须在任何插件 `activate()` 之前调用**（与 [`Self::set_peer_ctx_provider`]
+    /// 同款两阶段注入）：共享产物（file-transfer 单产物）在激活期经
+    /// `host-platform.platform()` 探测端值，漏注入 = 激活失败（fail-visible，
+    /// 不静默降级成某一端）。端实现住各端宿主（桌面
+    /// `plugin/host_facts.rs` / 移动 `plugin/host_ports.rs`），内核零端名。
+    pub fn set_host_facts(&self, facts: Arc<dyn HostFactsPort>) {
+        *self.host_facts.write().unwrap_or_else(|e| e.into_inner()) = facts;
+    }
+
+    /// 取宿主端事实（缺省 [`UnimplementedHostFacts`]；热路径只 clone 一个 Arc）
+    pub fn host_facts(&self) -> Arc<dyn HostFactsPort> {
+        self.host_facts
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn process_registry(&self) -> &Arc<ProcessRegistry> {

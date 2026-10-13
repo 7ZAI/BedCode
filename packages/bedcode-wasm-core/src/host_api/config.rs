@@ -11,14 +11,15 @@
 //! `app.downloads-dir` / `system.time_ms`），不是同一形状的两个副本。
 //!
 //! 故本模块持**并集词汇**：跨端项（时间 / 平台 / TTL）内核直算；端专属项
-//! （`network.port` 需服务器 supervisor、`app.downloads-dir` 需移动 SAF 路径）
-//! 经 [`HostEnginePorts`] 取宿主注入值，**未注入即 fail-visible 报错**而不是静默
-//! 返回空值——断链必须可见。
+//! （`network.port` 需入站服务器运行态、`app.downloads-dir` 需移动 SAF 路径）
+//! 经宿主注入的端口取（`network.port` → [`HostFactsPort`]；`app.downloads-dir` →
+//! [`HostEnginePorts`]），**未注入即 fail-visible 报错**而不是静默返回空值——
+//! 断链必须可见。
 //!
 //! 注意：并集意味着「某端插件可读到另一端的键」，这是词汇可用性的放宽而非
 //! 数据泄露面（各端键取的都是本端事实，缺失键按端口缺省 fail-visible）。
 
-use crate::host_api::ports::HostEnginePorts;
+use crate::host_api::ports::{HostEnginePorts, HostFactsPort};
 use crate::runtime_util::block_on_async;
 #[cfg(test)]
 use crate::host_api::context::WasmHostContext;
@@ -71,8 +72,8 @@ const DEFAULT_QR_TOKEN_TTL_SECS: u64 = 300;
 /// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移。
 pub(crate) fn config_get(
     db: &dyn crate::host_api::context::DbScope,
-    #[cfg_attr(not(feature = "desktop-assembly"), allow(unused_variables))]
     ports: &dyn HostEnginePorts,
+    facts: &dyn HostFactsPort,
     plugin_id: &str,
     key: &str,
 ) -> Result<Option<String>, String> {
@@ -84,32 +85,13 @@ pub(crate) fn config_get(
 
     // 穷尽 match：新增 ConfigKey 变体必须在此补实现（编译错误兜底）
     let value = match config_key {
-        // `network.port` 是**桌面入站服务器**的运行态事实。取不到实际端口（服务器
-        // 未启动）时报错而非回退配置默认值——回退会让插件拿到一个看似合法实则连不上
-        // 的端口，排查成本远高于一次显式失败。
-        //
-        // 桌面装配面门控（`desktop-assembly`）：随桌面绑定层整体迁出后本臂归
-        // 桌面专属装配面，非桌面侧恒走下方 fail-visible 分支。
-        #[cfg(feature = "desktop-assembly")]
-        ConfigKey::NetworkPort => {
-            let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
-            let actual_port = crate::runtime_util::block_on_async(supervisor.get_status_info()).port;
-            if actual_port > 0 {
-                actual_port.to_string()
-            } else {
-                return Err(format!(
-                    "network.port unavailable: host server not started (plugin {})",
-                    plugin_id
-                ));
-            }
-        }
-        #[cfg(not(feature = "desktop-assembly"))]
-        ConfigKey::NetworkPort => {
-            return Err(format!(
-                "network.port unavailable: this host has no inbound server (plugin {})",
-                plugin_id
-            ));
-        }
+        // `network.port` 是**入站服务器宿主**的运行态事实。取不到实际端口（服务器
+        // 未启动 / 本端无入站服务器 / 宿主未注入端事实）时报错而非回退配置默认值
+        // ——回退会让插件拿到一个看似合法实则连不上的端口，排查成本远高于一次显
+        // 式失败。端读取实现住各端宿主（桌面 ServerSupervisor / 移动无此物）。
+        ConfigKey::NetworkPort => facts
+            .inbound_server_port()
+            .map_err(|e| format!("{e} (plugin {plugin_id})"))?,
         ConfigKey::HomeDir => match dirs::home_dir() {
             Some(dir) => dir.to_string_lossy().to_string(),
             None => {
@@ -183,10 +165,28 @@ mod tests {
         super::super::tests::build_host_ctx()
     }
 
+    /// 端事实桩：config 读取链路验证用（端口固定 8765，不依赖真实宿主服务器）
+    struct StubFacts;
+
+    impl HostFactsPort for StubFacts {
+        fn platform_id(&self) -> String {
+            "desktop".to_string()
+        }
+
+        fn inbound_server_port(&self) -> std::result::Result<String, String> {
+            Ok("8765".to_string())
+        }
+    }
+
+    /// 以 `test-plugin` 读配置（端事实取上下文当前注值；用例按需先 `set_host_facts`）
+    fn read(ctx: &WasmHostContext, key: &str) -> Result<Option<String>, String> {
+        config_get(ctx, ctx.ports().as_ref(), ctx.host_facts().as_ref(), "test-plugin", key)
+    }
+
     /// 白名单外 key：在触达任何全局单例前被拒绝（纯校验路径）
     #[test]
     fn config_get_key_not_in_whitelist_rejected() {
-        let err = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "network.password").unwrap_err();
+        let err = read(host_ctx().as_ref(), "network.password").unwrap_err();
         assert!(err.contains("not in whitelist"), "got: {}", err);
         assert!(err.contains("network.password"));
     }
@@ -194,7 +194,7 @@ mod tests {
     /// 空 key 同样拒绝
     #[test]
     fn config_get_empty_key_rejected() {
-        let err = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "").unwrap_err();
+        let err = read(host_ctx().as_ref(), "").unwrap_err();
         assert!(err.contains("not in whitelist"), "got: {}", err);
     }
 
@@ -207,7 +207,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let value = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "system.time_ms")
+        let value = read(host_ctx().as_ref(), "system.time_ms")
             .expect("time key ok")
             .expect("some value");
         let parsed: u128 = value.parse().expect("parse ms");
@@ -217,7 +217,7 @@ mod tests {
     /// home_dir：返回非空主目录路径
     #[test]
     fn config_get_home_dir_ok() {
-        let value = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "home_dir")
+        let value = read(host_ctx().as_ref(), "home_dir")
             .expect("home dir ok")
             .expect("some value");
         assert!(!value.is_empty());
@@ -229,7 +229,7 @@ mod tests {
     /// 平台相关逻辑依赖此值（scheduler 插件 inline 命令 sh -c vs cmd /C）
     #[test]
     fn config_get_os_platform_ok() {
-        let value = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "os.platform")
+        let value = read(host_ctx().as_ref(), "os.platform")
             .expect("platform key ok")
             .expect("some value");
         // 必须与 std 编译目标一致（当前进程的平台），插件据此分支
@@ -237,18 +237,24 @@ mod tests {
         assert!(!value.is_empty());
     }
 
-    /// network.port：读取宿主入站服务器**运行态**实际端口（非配置默认值）
+    /// network.port：读宿主注入的入站服务器运行态端口（[`HostFactsPort`] 投影）
     ///
-    /// ServerSupervisor 为 LazyLock 全局单例（测试进程内默认端口 8765），
-    /// 不断言具体值（其它测试可能已改变端口），只验证语义：端口 > 0
-    /// （服务器未启动时是本域显性报错路径——fail-visible，不回退默认端口）
-    #[tokio::test]
-    async fn config_get_network_port_ok() {
-        let value = config_get(host_ctx().as_ref(), host_ctx().ports().as_ref(), "test-plugin", "network.port")
-            .expect("port key ok")
-            .expect("some value");
-        let port: u16 = value.parse().expect("port is u16");
-        assert!(port > 0, "port must be > 0, got {}", port);
+    /// ① 注入端事实（桩端口 8765）→ 原值返回；② 未注入（缺省
+    /// `UnimplementedHostFacts`）→ 显性报错且点名 plugin，不回退配置默认端口。
+    /// 端读取实现本体（桌面 ServerSupervisor）在宿主，见
+    /// `bedcode-desktop/src-tauri/src/plugin/host_facts.rs`。
+    #[test]
+    fn config_get_network_port_ok_and_fail_visible() {
+        let ctx = host_ctx();
+        ctx.set_host_facts(Arc::new(StubFacts));
+        let value = read(ctx.as_ref(), "network.port").expect("port key ok").expect("some value");
+        assert_eq!(value, "8765");
+
+        // 未注入端事实：fail-visible（不回落默认端口；错误点名 plugin 便于定位）
+        let bare = host_ctx();
+        let err = read(bare.as_ref(), "network.port").unwrap_err();
+        assert!(err.contains("no inbound server"), "got: {err}");
+        assert!(err.contains("test-plugin"), "错误必须点名 plugin，got: {err}");
     }
 
     /// 票 14：认证域两项有效期的读侧契约——
@@ -260,11 +266,11 @@ mod tests {
 
         // ① 缺省（表内无键）
         assert_eq!(
-            config_get(ctx.as_ref(), ctx.ports().as_ref(), "test-plugin", "pairing_code_ttl").expect("read"),
+            read(ctx.as_ref(), "pairing_code_ttl").expect("read"),
             Some("60".to_string())
         );
         assert_eq!(
-            config_get(ctx.as_ref(), ctx.ports().as_ref(), "test-plugin", "qr_token_ttl").expect("read"),
+            read(ctx.as_ref(), "qr_token_ttl").expect("read"),
             Some("300".to_string())
         );
 
@@ -275,11 +281,11 @@ mod tests {
             db.set_setting("qr_token_ttl", "1200").expect("write");
         }
         assert_eq!(
-            config_get(ctx.as_ref(), ctx.ports().as_ref(), "test-plugin", "pairing_code_ttl").expect("read"),
+            read(ctx.as_ref(), "pairing_code_ttl").expect("read"),
             Some("600".to_string())
         );
         assert_eq!(
-            config_get(ctx.as_ref(), ctx.ports().as_ref(), "test-plugin", "qr_token_ttl").expect("read"),
+            read(ctx.as_ref(), "qr_token_ttl").expect("read"),
             Some("1200".to_string())
         );
 
@@ -289,7 +295,7 @@ mod tests {
             db.set_setting("qr_token_ttl", "abc").expect("write");
         }
         assert_eq!(
-            config_get(ctx.as_ref(), ctx.ports().as_ref(), "test-plugin", "qr_token_ttl").expect("read"),
+            read(ctx.as_ref(), "qr_token_ttl").expect("read"),
             Some("300".to_string())
         );
     }

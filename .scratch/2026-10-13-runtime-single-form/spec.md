@@ -26,7 +26,7 @@
 5. `runtime/common/component.rs` → `runtime/component.rs`（唯一组件壳；verify_abi 参数化；`call_lifecycle_event` 无条件保留）
 6. `runtime/common/tests/` → `runtime/tests/`；删 `bare.rs` + `bare/` + `common.rs` + `common/` 目录
 7. `src/manager/host.rs`：`PluginHost::new` 增加 `abi: AbiPolicy` 参数（桌面宿主注入；wasm-core 内部测试用 unconstrained）
-8. `src/test_support`：common/bare 合并（统一 setup_wasm_runtime 带 AbiPolicy）
+8. `src/test_support`：**实施口径（2026-10-14 修正）**——common/bare **不合并**：两子模块 = 两个宿主消费面（桌面夹具 / 移动夹具），合并会造出一个谁都不用的超集；共享符号（`TEST_PLUGIN_ID` / `plugin_raw_store`）单点定义在父模块 `test_support.rs`，`setup_headless_runtime(_with_abi)` 改走统一壳 + `AbiPolicy` 注入（见下方实施记录）
 9. 各处 `#[cfg(feature = "common-host")]` 门控清理
 
 ### 桌面宿主（bedcode-desktop）
@@ -53,3 +53,33 @@
 - 桌面 `cargo test`
 - 移动 `cargo check` + `cargo test`
 - 锁组全绿
+
+## 实施记录（2026-10-14 补录）
+
+### 端事实收口（内核零端分支）
+
+第 3 节「其余按桌面形态、移动改造」的余量：`host-platform.platform` 与
+`host-config.network.port` 两项端事实仍在内核按 `desktop-assembly` 编译期二选一
+（`"desktop"`/`"mobile"` 字面量 + `ServerSupervisor` 直读），违反 ADR 0049 D1 的
+「桌面这样写、移动那样写就不是机制」。本批收口为**端口注入**：
+
+- wasm-core：新增 `host_api::ports::HostFactsPort`（`platform_id` /
+  `inbound_server_port`，缺省 `UnimplementedHostFacts` fail-visible）+ 上下文
+  `set_host_facts` 注入槽；`platform.rs` / `config.rs` 删全部端 `#[cfg]` 分支。
+- 桌面宿主：`bedcode-desktop/src-tauri/src/plugin/host_facts.rs`（平台 = 桌面；
+  `network.port` 读 `ServerSupervisor` 运行态），作为 `PluginHost::new` 末参注入
+  （任何 `activate()` 之前——file-transfer 激活期探测端值）。
+- 移动宿主：`plugin/host_ports.rs` 的 `HostPorts` 实现 `HostFactsPort`
+  （平台 = 移动；无入站服务器 → Err），在上下文装配后立即注入。
+- 随之：wasm-core 生产段不再依赖 `bedcode-server-core`（降为 dev-dependency，
+  `host_harness` 测试起服用），桌面 `crate_boundary_lock` 的 wasm-core →
+  server-core 生产必填边摘除（ALLOWED 保留 dev 边）。
+
+**行为等价**：两端取值 / 报错文案与收口前逐字相同（wasm-core `cargo test --lib`
+与双端锁组验证）。
+
+### 测试面口径修正
+
+文件级清单第 8 条原计划「common/bare 合并」按实修正：两子模块是**宿主消费面**
+分叉（桌面夹具 vs 移动夹具，两侧消费物不同），运行时壳与 core 绑定早已统一；
+共享符号上提父模块单点定义，`bare` 为 fork 期历史名（模块头注明）。

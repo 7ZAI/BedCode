@@ -135,15 +135,19 @@ const ALLOWED_DOWNWARD_EDGES: &[(&str, &[&str])] = &[
     // 的前提，与 http / ws / peer-net / discovery 完全一致）。
     ("bedcode-pty-engine", &["bedcode-server-base", "bedcode-host-kit"]),
     // 整核本体（wasm-core-whole-crate 票 05）：bedcode-wasm-core 是全部拆分产物
-    // 的组装点——站在基础层（base / crypto / host-kit / server-core）与全部能力域
-    // crate（mdns / ws / peer / http）之上，把四通道与四闸门装配成一个可复用的
-    // 插件机制内核。它依赖 `bedcode-plugin-api`（SDK WIT 绑定）与根 `packages/`
-    // 的 `bedcode-peer-net` / `bedcode-link-crypto`，但后两者不在拆分产物登记表内
-    // （第三方 / 独立 crate，不归本锁管辖面）。
+    // 的组装点——站在基础层（base / host-kit）与全部能力域 crate（ws / peer / http）
+    // 之上，把四通道与四闸门装配成一个可复用的插件机制内核。它依赖
+    // `bedcode-plugin-api`（SDK WIT 绑定）与根 `packages/` 的 `bedcode-peer-net` /
+    // `bedcode-link-crypto`，但后两者不在拆分产物登记表内（第三方 / 独立 crate，
+    // 不归本锁管辖面）。
     (
         "bedcode-wasm-core",
         &[
             "bedcode-server-base",
+            // server-core 仅 dev-dependencies（host_harness 测试起服）；生产段已随
+            // 端事实收口（2026-10-13）摘除：network.port 的 ServerSupervisor 读取迁
+            // 桌面宿主 `src-tauri/src/plugin/host_facts.rs`，内核经 HostFactsPort 取
+            // 值（ADR 0049 D1「端差异不进机制」）。
             "bedcode-server-core",
             "bedcode-host-kit",
             "bedcode-server-websocket",
@@ -197,7 +201,12 @@ const REQUIRED_DOWNWARD_EDGES: &[(&str, &str)] = &[
     ("bedcode-wasm-core", "bedcode-host-kit"),
     // 单形态（2026-10-13）：wasm-core → crypto-engine 必须边已摘除（认证中心 /
     // 密码学由桌面宿主直连 bedcode-crypto-engine，内核零引用）
-    ("bedcode-wasm-core", "bedcode-server-core"),
+    //
+    // 端事实收口（2026-10-13，同批）：wasm-core → server-core 的**生产必填边已摘除**
+    // ——`network.port` 不再由内核直读 ServerSupervisor，改由桌面宿主实现
+    // `HostFactsPort`（`src-tauri/src/plugin/host_facts.rs`）并经
+    // `PluginHost::new` 注入；server-core 降为 wasm-core 的 dev-dependency
+    // （`host_harness` 测试起服），故本表不再要求生产边（ALLOWED 仍登记 dev 边）。
     ("bedcode-wasm-core", "bedcode-server-websocket"),
     ("bedcode-wasm-core", "bedcode-server-peer-net"),
     ("bedcode-wasm-core", "bedcode-server-http"),

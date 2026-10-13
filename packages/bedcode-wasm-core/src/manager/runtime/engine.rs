@@ -165,10 +165,10 @@ pub(crate) fn new_store(
 ///
 /// 两个调用点形态不同、语义相同：
 /// - 实例化后 ABI 协商（[ `new_store` ] 已注入一次，此处是协商前的第二次注入）
-/// - 形态壳在需要重新建立预算时（如协商失败重试路径）直接复用
+/// - 运行时壳在需要重新建立预算时（如协商失败重试路径）直接复用
 ///
 /// 预算取 [`bedcode_host_kit::limits::StoreLimits::fuel_budget`]（debug 构建自动套
-/// 放大倍率），**不**取裸常量——两形态必须同口径，否则移动形态 debug 构建会按
+/// 放大倍率），**不**取裸常量——双端必须同口径，否则移动宿主 debug 构建会按
 /// release 预算被过早trap。
 pub(crate) fn inject_call_fuel(store: &mut Store<WasmPluginState>) -> crate::Result<()> {
     if !store.data().fuel_enabled {
@@ -279,18 +279,19 @@ pub(crate) fn log_instance_dropped(plugin_id: &str, lifetime: Duration) {
 
 // ==================== Engine 构建（配置面 → wasmtime 原语） ====================
 //
-// 「配置面到 wasmtime 原语的唯一映射点」在两个形态里逐字相同，且**桌面形态的
-// `CoreConfig` 是唯一真源**（ADR 0045 D5：能力域不得自带配置面）。故本段属
-// 形态中立机制：移动形态用 `CoreConfig::default()` 消费同一份构建函数，与桌面
-// 逐值对齐（consume_fuel / 内存预留 / 栈深度 / 内存不搬移 / 编译缓存 / backtrace
-// 帧数皆取同一份配置，不再在形态壳里各钉一份字面量——移动侧此前硬编码，且漏掉
-// 了 backtrace 帧数与「Engine 生效参数」结构化日志）。
+// 「配置面到 wasmtime 原语的唯一映射点」双端只有这一份，**`CoreConfig` 是唯一
+// 真源**（ADR 0045 D5：能力域不得自带配置面）。故本段属机制（不是端差异）：
+// 移动宿主消费同一份构建函数，与桌面逐值对齐（consume_fuel / 内存预留 / 栈深度 /
+// 内存不搬移 / 编译缓存 / backtrace 帧数皆取同一份配置——单形态收口前两壳各钉
+// 一份字面量的历史已消除：移动侧此前硬编码，且漏掉了 backtrace 帧数与
+// 「Engine 生效参数」结构化日志）。
 
 /// 由内核配置构建 wasmtime Engine 参数（**配置面 → wasmtime 原语的唯一映射点**）
 ///
 /// 纯函数（除 `plugin_debug_mode` 下设置 `WASMTIME_BACKTRACE_DETAILS` 环境变量外不触
-/// 盘、不依赖宿主状态）——单测可直接消费。形态壳的逃生舱钩子在
-/// 桌面形态的 `WasmRuntime::with_setup` 里于本函数**之后**执行。
+/// 盘、不依赖宿主状态）——单测可直接消费。运行时壳的逃生舱钩子在
+/// `WasmRuntime::with_setup` 里于本函数**之后**执行（桌面装配传入 customizer；
+/// 移动装配无此钩子，其余步骤同一入口）。
 pub(crate) fn build_engine_config(core_config: &CoreConfig, debug_mode: bool) -> Config {
     let engine = &core_config.engine;
     let tuning = engine.tuning.resolve(debug_mode);
@@ -410,8 +411,8 @@ pub(crate) fn build_engine_config(core_config: &CoreConfig, debug_mode: bool) ->
 /// ——不锁定则「配置面已校验」的承诺在最后一步静默失效（如关掉燃料 = 唯一死循环闸门
 /// 被摘除且无任何报错）。宿主要改这 4 项走 `CoreConfig`（经 `with_setup` 传入），
 /// 配置面的 `tuning.memory_may_move` 同样可改——只是钩子改不动。
-// 仅桌面逃生舱路径消费（形态壳的 `with_setup` 在 customizer 之后重申锁定项）；
-// 移动形态无 customizer 钩子，故该形态内不可达。
+// 仅桌面逃生舱路径消费（运行时壳的 `with_setup` 在 customizer 之后重申锁定项）；
+// 移动装配无 customizer 钩子，故在移动侧不可达。
 #[allow(dead_code)]
 pub(crate) fn reassert_locked_knobs(config: &mut Config, core_config: &CoreConfig) {
     config.consume_fuel(core_config.engine.consume_fuel);
@@ -501,8 +502,8 @@ pub(crate) fn wasmtime_backtrace_details(details: BacktraceDetails) -> WasmBackt
 // 燃料耗尽 / 内存越界 / 导出缺失），内层 = guest 自报的业务失败
 //（WIT `result<T, string>`）。两层语义不同、处理不同（外层必记账 trap 并落
 // error 日志，内层按调用点是「命令」还是「观察」分流），因此判定不能压成
-// 一层，也不该在两个形态里各写一遍——形态壳的绑定类型不同，但**判定与记账
-// 与绑定无关**。
+// 一层，也不该在运行时壳里重写一遍——**判定与记账与宿主绑定类型无关**
+//（单形态收口前两壳各写一遍的历史已消除）。
 
 /// trap 的统一记账 + 日志（双端唯一一份）
 ///
@@ -670,22 +671,22 @@ mod tests {
         ] {
             assert!(
                 engine_src.contains(needle),
-                "引擎模块必须持有机制实现 `{needle}`（否则形态壳里那份就成第二真源）"
+                "引擎模块必须持有机制实现 `{needle}`（否则运行时壳里那份就成第二真源）"
             );
         }
     }
 
-    /// 防回接锁：形态壳不得重新自持组件引擎机制
+    /// 防回接锁：运行时壳不得重新自持组件引擎机制
     ///
-    /// 本批次的全部收益就是「同一份机制」——只要任何形态壳里重新长出Engine 构建
+    /// 本批次的全部收益就是「同一份机制」——只要运行时壳里重新长出 Engine 构建
     /// 参数、AOT 缓存键、limiter 接线、燃料注入、实例生死日志、导出调用的 trap
-    /// 判定，或直接的 instantiate 调用，双形态就退回两份实现且行为会各自漂移
-    /// （历史上移动形态的燃料预算就因此漏掉了 debug 放大倍率、Engine 参数漏掉了
-    /// backtrace 帧数）。锁用文本针脚而非类型系统：形态壳与引擎之间没有可借用的
-    /// 类型边界，机制以自由函数 + 参数传递（`InstantiateMode`）表达，只有源码
+    /// 判定，或直接的 instantiate 调用，机制就退回两份实现且行为会各自漂移
+    /// （历史上移动侧就因此漏掉了 debug 燃料放大倍率、Engine 参数漏掉了
+    /// backtrace 帧数）。锁用文本针脚而非类型系统：运行时壳与引擎之间没有可借用
+    /// 的类型边界，机制以自由函数 + 参数传递（`InstantiateMode`）表达，只有源码
     /// 形态可判。
     #[test]
-    fn form_shells_do_not_reimplement_component_engine() {
+    fn runtime_shell_does_not_reimplement_component_engine() {
         const NEEDLES: &[&str] = &[
             // 加载与实例化
             "fn aot_cache_key",
@@ -716,8 +717,8 @@ mod tests {
             for needle in NEEDLES {
                 assert!(
                     !src.contains(needle),
-                    "形态壳 `{file}` 重新自持机制 `{needle}`——机制真源在 \
-                     `manager/runtime/engine.rs`，形态壳只做接线（ADR 0045 D6）"
+                    "运行时壳 `{file}` 重新自持机制 `{needle}`——机制真源在 \
+                     `manager/runtime/engine.rs`，运行时壳只做接线（ADR 0045 D6）"
                 );
             }
         }

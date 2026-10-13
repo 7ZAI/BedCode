@@ -1,12 +1,17 @@
-//! 测试支持面（票 17 批次 2）
+//! 移动宿主测试面（历史模块名 `bare`：fork 期的形态词；运行时单形态 2026-10-13
+//! 收口后本模块只指「移动 `src-tauri` 测试消费的测试基建」，不持有第二份运行时壳）
 //!
-//! 编译门控：`#[cfg(any(test, feature = "test-support"))]`
-//! - crate 内部 `#[cfg(test)]`（组件闭环测试）与本 crate 测试夹具共用；
-//! - 宿主 src-tauri 在 `[dev-dependencies]` 开启 `test-support` feature
-//!   （manager / loader 集成测试消费 `build_host_ctx` / `build_test_component` /
-//!   `build_terminal_session_component`）。
+//! 编译门控：父模块 `test_support.rs` 的 `#[cfg(feature = "test-support")]`
+//! （移动宿主 `[dev-dependencies]` 开启；wasm-core 自身默认 features 测试不编译）。
+//! - 内部 `MockPorts` / 夹具组件构建器 / mock_plugin_ws / build_component_state…
+//!   供移动宿主 `src-tauri/tests/` 与宿主内 `#[cfg(test)]` 用例消费；
+//! - 内部引用已改指统一运行时壳（`LoadedWasmPlugin` / 统一 `add_to_linker`）；
+//!   共享符号（`TEST_PLUGIN_ID` / `plugin_raw_store`）单点定义在父模块。
 //!
-//! 生产构建零影响（两个 cfg 都不生效时本模块整体编译为空）。
+//! 生产构建零影响（feature 不开时本模块整体不编译）。
+
+// 共享符号单点定义在父模块（`test_support.rs`），本消费面不另存副本
+use super::TEST_PLUGIN_ID;
 
 pub mod mock_plugin_ws;
 
@@ -17,13 +22,10 @@ pub mod mock_plugin_ws;
 /// （2026-09-26 实测各 ~170M）。共享后只编译一遍。
 /// 路径基准：本 crate 根 = 仓库根 `packages/bedcode-wasm-core`（票 06 批次 03 迁根），
 /// 上跳两级到仓库根再进 `bedcode-mobile/target/fixtures`。
-pub fn fixture_target_dir() -> std::path::PathBuf {
+fn fixture_target_dir() -> std::path::PathBuf {
     // 票 06 批次 03：crate 迁根后路径改写（移动夹具落点跟随移动端 target）
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bedcode-mobile/target/fixtures")
 }
-
-/// 测试用插件 ID（宿主主库表前缀校验依赖它）
-pub const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
 /// 构建测试引擎：燃料看门狗必须与生产配置一致（WasmRuntime::new）
 pub fn test_engine() -> wasmtime::Engine {
@@ -309,17 +311,9 @@ pub fn probe_wasi_p2_reregistration(
         .map(|e| e.to_string())
 }
 
-/// 实例 Store / Instance 裸面（燃料、limiter、原生导出调用等机制断言用）
-///
-/// 形状与壳内 `raw_store` 逐字一致，只是把可达性从 `pub(crate)` 提到本转发面。
-pub fn plugin_raw_store(
-    plugin: &mut crate::manager::runtime::LoadedWasmPlugin,
-) -> (
-    &mut wasmtime::Store<crate::manager::runtime::WasmPluginState>,
-    &wasmtime::component::Instance,
-) {
-    plugin.raw_store()
-}
+// 实例 Store / Instance 裸面（燃料、limiter、原生导出调用等机制断言用）——
+// `plugin_raw_store` 本体已上提父模块 `test_support.rs`（两消费面共享符号），
+// 本面不再转存副本；移动宿主测试经 `test_support::plugin_raw_store` 引用。
 
 // ==================== MockPorts：端口测试替身（builder 式 override） ====================
 
@@ -627,7 +621,7 @@ impl ConnectionEnginePort for NoTargetConn {
 }
 
 /// 固定退避策略（重连测试用：单轮固定延迟）
-pub struct StaticBackoff {
+struct StaticBackoff {
     delay_ms: u64,
 }
 
@@ -655,8 +649,9 @@ pub fn build_host_ctx_with(
     build_host_ctx_with_arc(Arc::new(ports))
 }
 
-/// [`build_host_ctx_with`] 的 Arc 形态（跨域测试共享同一端口替身实例）
-pub fn build_host_ctx_with_arc(
+/// [`build_host_ctx_with`] 的 Arc 形态（跨域测试共享同一端口替身实例；本文件内私有——
+/// 外部消费面只经 `build_host_ctx_with`，多一层 Arc 入口是多余面）
+fn build_host_ctx_with_arc(
     ports: Arc<dyn crate::host_api::HostEnginePorts>,
 ) -> Arc<crate::host_api::WasmHostContext> {
     use std::sync::Mutex;

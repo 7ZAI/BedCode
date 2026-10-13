@@ -319,7 +319,7 @@ mod tests {
         db.lock().expect("db lock").init_schema().expect("init schema");
         let dir = std::env::temp_dir().join(format!("bedcode-cmd-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let host = PluginHost::new(db, &dir, &dir, None, None, Vec::new(), crate::manager::runtime::AbiPolicy::UNCONSTRAINED).await;
+        let host = PluginHost::new(db, &dir, &dir, None, None, Vec::new(), crate::manager::runtime::AbiPolicy::UNCONSTRAINED, std::sync::Arc::new(crate::host_api::ports::UnimplementedHostFacts)).await;
         host.init_message_bus().await;
         host
     }

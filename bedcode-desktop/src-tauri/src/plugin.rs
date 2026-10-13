@@ -35,6 +35,9 @@ pub mod connection;
 pub mod crypto;
 pub mod events;
 pub mod fs;
+/// 宿主端事实（平台标识 / 入站服务器端口）——wasm-core 单形态收口后从内核迁出的
+/// 端差异实现（内核只持 `HostFactsPort` 端口词汇）
+pub mod host_facts;
 pub mod http;
 pub mod mdns;
 pub mod peer;
