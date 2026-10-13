@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### wasm-core runtime is now single-form: no more common/bare shells, ABI policy injected by hosts
+
+`packages/bedcode-wasm-core` previously mounted two runtime assembly trees under the `common-host` / `bare-host` features. Per the 2026-10-13 rulings (`.scratch/2026-10-13-runtime-single-form/spec.md`) both form shells were merged into **one runtime** (desktop shape): `manager/runtime.rs` + `runtime/component.rs`; the features retired (`desktop-assembly` now gates the desktop-only assembly surface: PluginHost / intercall / auth-center / ServerSupervisor).
+
+- **ABI is no longer a wasm-core fact**: `verify_abi`'s version ceiling and `abi-form` requirement are injected per host via `AbiPolicy` (desktop 37/38 + form=1; mobile 20/21 + None). Both SDK crates (`bedcode-plugin-api` / `bedcode-plugin-api-mobile`) left wasm-core's unconditional deps; `mobile_wasm_core_purity_lock` criterion 7c now pins mobile SDK vocabulary to zero hits in wasm-core.
+- **Mobile host converges on the unified shell** (D7 closed): the 8 dual-end-identical domains (storage / log / config / plugin-database / events / fs / bus / platform) dropped their mobile host_domains copies and are served by the kernel `core_binding` single implementation — permission gate unified on `PermissionManager` (activation grants into the shared vocabulary), private plugin DB layout unified on the kernel one; mobile host_domains keeps only http / peer / mdns / ws. `on_bus_message` call sites use the unified `on_message`; `LoadedComponentPlugin` renamed `LoadedWasmPlugin`.
+- **Linker assembly single**: `component::add_to_linker` (core_binding + host-reported `HostModule`s + WASI) is unconditional; the in-crate whitelist table was removed — the whitelist is pure host-reported `expected_host_modules` (end differences assembled by hosts; server capability crates' binding layer enabled by the desktop host, mobile links engine-only).
+- Locks/docs updated: `mobile_wasm_core_purity_lock` (single-form criteria), `crate_boundary_lock` (wasm-core edges for crypto-engine / discovery-engine removed), AGENTS §5.4, ADR 0049 leftover-1 status.
+
+
+#### file-transfer is now a single cross-end artifact: one wasm, platform differences as two impls of the same traits plus a runtime branch
+
+`com.bedcode.file-transfer` used to be "one shared business core + one wasm adapter artifact per end" (ADR 0044). Both ends now build **one** wasm: the artifact source lives in the desktop app `bedcode-desktop/wasm-apps/file-transfer/rust/` (built against the desktop `world plugin`), and the desktop and mobile hosts load **the same component**. The mobile app keeps only its frontend and manifest (`rust/` retired); its build declares the shared crate via `bedcode.sharedRustManifest` in `package.json`. Product differences are not erased — they are the two impls of the same port traits (`adapters.rs` / `adapters_mobile.rs`) plus a runtime branch on `host-platform.platform()` probed at activation (`platform.rs`; unknown value = fail-visible activation refusal).
+
+Contract surface (both ends, ADR 0019 flow):
+
+- **core.wit v38/v21**: `host-platform` gains `platform: func() -> string` (host platform identity probe, no permission gate; the value is decided at compile time by each end's assembly feature — desktop `desktop` / mobile `mobile`). Desktop ABI 37→38, mobile 20→21.
+- **Desktop `events` interface widened to a seven-function union**: mobile vocabulary merged in (`on-bus-message` / `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped`) — the shared artifact must export the callbacks both hosts dispatch by name; purely additive for desktop-native plugins (default no-op impls, old hosts unaffected).
+- **New binding-only `world desktop-compat`** (imports `host-api-call` + `host-platform-desktop`): the mobile host bindgens it to provide fail-visible stubs for the shared artifact (`src-tauri/src/plugin/desktop_compat.rs`, every function an explicit `Err`) — desktop branches are unreachable on mobile; the stubs exist only for import closure.
+- **Negotiated ABI**: the shared artifact self-reports `SHARED_ABI_VERSION = 21` via the new desktop SDK macro `wasm_entry_with_abi!` (≤ the lower bound of both hosts' AbiPolicy — desktop 38 / mobile 21 both accept); a lock asserts the bound against both ends' `ABI_VERSION`.
+- **Toolchain**: file-transfer moves to `wasm32-unknown-unknown` + a repo-level componentize tool (`packages/bedcode-componentize`, promoted out of the mobile SDK) — the same encoding path as the mobile build, stable-toolchain friendly; the other desktop wasm apps stay on wasm32-wasip3.
+- **Behavior unification (same spirit as T7=B)**: the desktop gains `node-stopped` interruption marking + stale session handle draining with the shared artifact (a correction aligned with the engine contract); the command surface takes the desktop shapes (`pause`/`resume` return the `true` literal, `list-remote` returns `{entries, notice}` — verified identical against both frontends' contracts).
+- Spec and per-ticket record: `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`; ADR 0044 status updated (shared-core phase complete; the single artifact is its continuation).
+
 #### wasm-core is now single-form: one set of mechanics, bindings live in the hosts (ADR 0049)
 
 `packages/bedcode-wasm-core` was already a single crate, but it still carried two *assembly trees* —

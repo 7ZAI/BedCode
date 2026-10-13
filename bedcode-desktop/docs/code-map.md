@@ -66,16 +66,21 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   供应商统一配置、使用统计与会话日志解析
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端，
 │   │                                 #   聊天 UI、供应商配置、提示词优化
-│   ├── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
-│                                     #   切换、共享目录浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID
-│                                     #   重发即断点续传）、接收策略与历史归档、本地目录挂载供对端访问
-│                                     #   **rust/ 已是薄层**：业务实现（台账归约 / 判据 / 注册表 /
-│                                     #   设置 / 会话表）在共享核 `packages/bedcode-file-transfer-core`
-│                                     #   （ADR 0044），端内只剩 `adapters.rs`（端口实现：plugin-db
-│                                     #   注册表 / `path` 载荷 / 节点电源 / 多选与 reveal / 落点可自定义）
-│                                     #   + 模块包装 + `peer.rs` 编排；编排已对齐移动端票 08（重试判据
-│                                     #   前置 / 发送闸门 / 排队批派发失败落终态行 / 拉取意图先入队 +
-│                                     #   事件通路挂载 / 停用清空进程内意图）；接线防漂移锁见文末索引
+│   ├── file-transfer/                # 文件传输插件（**双端单产物源**，2026-10-13，规格
+│                                     #   `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）：
+│                                     #   基于对等网络（peer_* 宿主模块）的在线对端发现与切换、共享目录
+│                                     #   浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID 重发即断点
+│                                     #   续传）、接收策略与历史归档、本地目录挂载供对端访问
+│                                     #   **rust/ 是双端唯一产物源**：桌面与移动宿主加载同一份组件
+│                                     #   （按桌面 world plugin 构建，自报协商 ABI 21）。业务实现
+│                                     #   （台账归约 / 判据 / 注册表 / 设置 / 会话表）在共享核
+│                                     #   `packages/bedcode-file-transfer-core`（ADR 0044）；端内差异
+│                                     #   不消除——同一端口 trait 的桌面/移动两套实现
+│                                     #   （`adapters.rs` / `adapters_mobile.rs`）+ 激活时
+│                                     #   `host-platform.platform()` 探测分支（`platform.rs`）
+│                                     #   **编排已对齐移动端票 08**（重试判据前置 / 发送闸门 /
+│                                     #   排队批派发失败落终态行 / 拉取意图先入队 + 事件通路挂载 /
+│                                     #   停用清空进程内意图 + node-stopped 中断标注）；接线防漂移锁见文末索引
 │   ├── terminal-session/             # 终端会话中心插件：**会话真源**（登记 / 状态机 / 生命周期分发 /
 │   │                                 #   输入输出编排 / wire 形状）+ 配对与认证（编排 / 签发 / 验签 / 密钥环 /
 │   │                                 #   设备信任）+ sessions REST 与其它 HTTP 端点注册 + 自动化任务域 +
@@ -223,8 +228,8 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 
 | 模块 | 职责 / 导航要点 |
 | --- | --- |
-| `manager/` | 加载注册（`loader` `registry` `validation` `downloader`）、生命周期与实例调用模型（`host/` + `host.rs`）、wasmtime 运行时与能力模块白名单（`runtime/common/component.rs`）、任务引擎（`task.rs`）、能力路由闭表（`capability.rs`）、dev 热重载（`watcher.rs`） |
-| `manager/runtime/` 的三份机制面 | **票 04 / 05 后运行时只剩机制，绑定全在宿主**：`engine.rs`（组件引擎机制，双端唯一一份：Engine 构建纯函数 / AOT / Store 装配 / 燃料 / 实例化 / trap 判定）· `core_binding.rs`（**内核唯一合法的 WIT 绑定**：绑 `wit/core.wit` 的 `world core`，17 个双端全等 interface）· `wasi.rs`（WASI p2/p3 装配 + preopen/fs_auth 过滤链，**双端同源一份**，开/关走 `CoreConfig::wasi`，用户裁决 2026-10-12）· `guest_events.rs`（事件循环机制留内核、调用契约由各端宿主实现本 trait 并注入，缺省 `UnwiredGuestEvents` 派发即 fail-visible）；形态壳 `common.rs` / `bare.rs` 各自只剩 Engine/Linker/Store 生命周期 + 导出调用骨架，**零 `bindgen!`**（反接锁见文末「端绑定面禁回接锁」） |
+| `manager/` | 加载注册（`loader` `registry` `validation` `downloader`）、生命周期与实例调用模型（`host/` + `host.rs`）、wasmtime 运行时与能力模块白名单（`runtime/component.rs`）、任务引擎（`task.rs`）、能力路由闭表（`capability.rs`）、dev 热重载（`watcher.rs`） |
+| `manager/runtime/` 的机制面 + 统一壳 | **单形态（2026-10-13，无 common/bare 之分）运行时只剩机制 + 一份壳，绑定全在宿主**：`engine.rs`（组件引擎机制，双端唯一一份：Engine 构建纯函数 / AOT / Store 装配 / 燃料 / 实例化 / trap 判定）· `core_binding.rs`（**内核唯一合法的 WIT 绑定**：绑 `wit/core.wit` 的 `world core`，17 个双端全等 interface——双端全等 8 域单份实现，移动 host_domains 只留 http/peer/mdns/ws）· `wasi.rs`（WASI p2/p3 装配 + preopen/fs_auth 过滤链，**双端同源一份**，开/关走 `CoreConfig::wasi`，用户裁决 2026-10-12）· `guest_events.rs`（事件循环机制留内核、调用契约由各端宿主实现本 trait 并注入，缺省 `UnwiredGuestEvents` 派发即 fail-visible）· **统一壳** `runtime.rs` + `runtime/component.rs`（桌面形态为准：WasmRuntime / EngineSetup / **AbiPolicy**（ABI 版本上限与 abi-form 要求宿主注入，wasm-core 零端 ABI） / linker 装配 / `LoadedWasmPlugin` 导出调用骨架），**零 `bindgen!`**（反接锁见文末「端绑定面禁回接锁」）；能力模块白名单 = **纯宿主自报** `expected_host_modules`（原 `IN_CRATE_HOST_MODULES` 内建表已随单形态删除——server 能力域 crate 绑定层由桌面宿主开启，移动只链接引擎面） |
 | `host_api/` | 宿主能力域实现，**一个文件 = 一个 `host-*` 域**（**已迁宿主的域不在此**：端口 adapter 落宿主 `src/plugin/<domain>.rs`，见 §5 与 §3 末段）；`context.rs` 是装配面（`WasmHostContext` + 角色窄接口 + 两阶段注入）；本目录 `host_api.rs` 的 `install_capability_domain_ports` 是能力域端口装配**唯一入口**（内建在册域 + 宿主自报装配器两条来源） |
 | `security/` | 授权：框架（`framework.rs`）、fs 三层校验（`fs_auth.rs`）、出站授权（`network_auth.rs`）、策略与记录真源（`auth_policy.rs` + `strategy.rs`）、安装审批（`approval.rs`）、通道身份（`frontend_channel.rs`）、互调门（`api_registry.rs`） |
 | `bus.rs` | topic 总线：命名空间仲裁 `<plugin-id>::<name>`、JSON + 二进制载荷、有界队列背压 |
@@ -259,7 +264,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 | `host-api-call`（互调） | 回复道编排**留内核** `host_api/api.rs`（`api_call` + `ReplyHandler`：`intercall` / `auth_center` / `call_plugin_api_host` 消费——与 peer/ws/http「内核仍消费引擎面」同判据）；门禁在总线 + `api_registry.rs` | **WIT impl 已迁宿主** `src-tauri/src/plugin/api_call.rs`（路径 B **薄转发**：无权限门、零逻辑，票 02 批次 05）；内核测试二进制有 cfg(test) 替身 impl（`component.rs`，SDK 夹具静态 import 该 interface 所需，转发同一编排） |
 | 切片域桌面扩展：`host-fs-desktop`（read-dir / canonicalize / stat）/ `host-platform-desktop`（pick-folders / wsl-distros / local-ipv4-addresses / reveal-in-dir）/ `host-events-desktop`（notify）/ `abi-form`（form）/ `host-websocket-server`（服务端 10）/ `host-http-endpoint`（端点 2） | WIT 切片：交集接口（host-fs 6 / host-platform 2 / host-events 1 / abi 1 / host-websocket 5 / host-http 1）留内核 `host_api/{fs,platform,events}.rs` + 共享核心 `core.wit`（票 04 收拢 ws/fs/http 后核心 = 17 全等）；`fs` 三扩展函数**实现本体留内核提 pub**（`host_api/fs.rs`——内核 `FsUnitExecutor` 的 `fs.read-dir` / `fs.stat` 单元与宿主 WIT impl 双消费者，`host_api.rs` 顶层 `pub use`）；`system/wsl.rs` 迁宿主 `src-tauri/src/system/wsl.rs`；`host_api/wsl_fs.rs`（WSL UNC 桥，交集 fs helper 消费）留内核 | **WIT impl 已迁宿主** `src-tauri/src/plugin/{fs,platform,events}.rs`（路径 B 四件套，票 02 批次 06 / ABI v36 交集接口切片；abi-form 是 guest 导出，SDK `wasm_entry!` 宏 + 宿主 `verify_abi` 消费，宿主无实现）；**ws/http 服务端域在能力域 crate**（票 04 / ABI v37：`server-websocket` / `server-http` 的 `plugin_binding.rs` 实现 `host_websocket_server` / `host_http_endpoint`，common-host feature 下自报装配）；内核测试二进制有 cfg(test) 替身（`component.rs`，headless 显性拒绝；host-fs-desktop / platform-desktop / events-desktop 三个） |
 
-**新增 / 移除一个能力域模块时三处必须同改**（漏一处的能力会静默退回宿主原语）：① 能力 crate 内 `HostModule` 自报 ② 白名单条目 + 强制引用行 `use <crate> as _;`（**两者必须同处**——仍住内核的域在 `manager/runtime/common/component.rs` 的 `IN_CRATE_HOST_MODULES`；已迁宿主的域在 `src/plugin/<domain>.rs` 用 `bedcode_host_kit::expect_host_module!` 自报。生效白名单 = 两侧合并，见 `host_module_whitelist`）③ 若可路由则 `manager/capability.rs` 的闭表 + 三层同名转发方法。**迁宿主的能力域另加一件**：`src/plugin/<domain>.rs` 用 `submit_domain_ports_installer!` 自报端口装配器（内核装配链遍历调用，漏报 ⇒ guest 首调 panic）。**分片化后另加两处**（票 05/07）：④ 能力域 crate 自持 `wit/<domain>.wit` 分片（`package bedcode:plugin` + 本域 interface + `world cap-<domain>`，bindgen `path`/`world` 指向它）；⑤ 端清单 `compose.json` 的 `caps` 登记 + 重拼生成物（漏拼由漂移锁拦截）。
+**新增 / 移除一个能力域模块时三处必须同改**（漏一处的能力会静默退回宿主原语）：① 能力 crate 内 `HostModule` 自报 ② 白名单条目 + 强制引用行 `use <crate> as _;`（**两者必须同处**——单形态（2026-10-13）起白名单 = **纯宿主自报** `bedcode_host_kit::expect_host_module!`（原 `manager/runtime/common/component.rs` 的 `IN_CRATE_HOST_MODULES` 内建表已删除；统一壳只留 server 三 crate 的强制引用行——引擎面 + DomainHooks 静态进二进制所需，见 `host_module_whitelist`）③ 若可路由则 `manager/capability.rs` 的闭表 + 三层同名转发方法。**迁宿主的能力域另加一件**：`src/plugin/<domain>.rs` 用 `submit_domain_ports_installer!` 自报端口装配器（内核装配链遍历调用，漏报 ⇒ guest 首调 panic）。**分片化后另加两处**（票 05/07）：④ 能力域 crate 自持 `wit/<domain>.wit` 分片（`package bedcode:plugin` + 本域 interface + `world cap-<domain>`，bindgen `path`/`world` 指向它）；⑤ 端清单 `compose.json` 的 `caps` 登记 + 重拼生成物（漏拼由漂移锁拦截）。
 **改前注意**：能力 crate 只放机制，描述符只允许「接口路径 / 权限位 / ABI 下界」三类属性，禁产品名词（AGENTS §5.1 B1/B5）。
 
 **核心 WIT 与分片拼装（票 03/04/05/06，ADR 0045 accepted）**：核心契约真源 = `packages/bedcode-wasm-core/wit/core.wit`（17 个双端全等 interface + `world core`；机制与真源同侧，ADR 0036）；能力域 crate 各自持 `wit/<domain>.wit`（pty / http / ws / peer / mdns，bindgen 只指自家分片，world `cap-<domain>`）；端 SDK `rust/wit/` 是**生成物**（`core.wit` + `cap-*.wit` + `bedcode.wit = package + world plugin { include core; include cap-…; }`），由端清单 `packages/plugin-sdk-desktop/compose.json`（caps / worlds / abi.version）驱动 `scripts/compose-wit.mjs` 拼装。漂移锁：仓库根 `pnpm run check:wit`（= `node scripts/compose-wit.mjs --all --check`；CI `.github/workflows/wit-drift-lock.yml` + husky pre-commit）——手改生成物、或真源改了没重拼，即红并点名漂移文件。组合面 ↔ 装配面对照锁见 `src/plugin/bindings.rs` cfg(test)（caps 世界 import 集 ↔ 白名单模块 interface 集双向覆盖；能力域自持分片 bindgen 反回接）。
@@ -311,7 +316,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 ### 7 · 对等网络（peer-net）
 
 **落点**：`packages/peer-net`（身份 / 证书 / TLS / 信任存储 / 专用 mDNS 发现 / 传输引擎）+ `packages/link-crypto`（链路密码学，双端共享）；引擎控制面与能力域在 `packages/bedcode-server-peer-net`；宿主命令壳 `src-tauri/src/server/peer_net_cmds.rs`。
-**业务真源在插件**：`wasm-apps/file-transfer/rust/src/{transfer_store,settings_store,roots_registry}.rs`（**实现已迁双端共享核** `packages/bedcode-file-transfer-core/src/{transfer,settings,roots,sessions}.rs`，ADR 0044；端内文件现为薄包装 + `adapters.rs`，`transfer_store.rs` 是纯转出）。
+**业务真源在插件**：`wasm-apps/file-transfer/rust/src/{transfer_store,settings_store,roots_registry}.rs`（**实现已迁双端共享核** `packages/bedcode-file-transfer-core/src/{transfer,settings,roots,sessions}.rs`，ADR 0044；端内文件现为薄包装 + `adapters.rs` / `adapters_mobile.rs` 双端口包，`transfer_store.rs` 是纯转出）。**2026-10-13 单产物**：该 crate 是双端唯一产物源（移动端 `rust/` 已退役，构建经 `bedcode.sharedRustManifest` 指向本 crate）；平台差异经 `platform.rs` 探测 + 双端口包表达，桌面专属 import（`host-api-call` / `host-platform-desktop`）在移动宿主由 fail-visible 桩提供（`bedcode-mobile/src-tauri/src/plugin/desktop_compat.rs`）。
 
 **改前注意**：宿主不持传输任务 / 设置 / 历史真源（防回接锁 `retired_peer_transfer_orchestration_is_not_reintroduced`）。
 
@@ -354,7 +359,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 | 配对 / 认证 / 密钥环 / 设备信任 | `terminal-session/rust/src/{pairing/,auth_http/,auth_records/,keys.rs,trust/,devices.rs}` |
 | sessions REST 与其它 HTTP 端点（激活期注册） | `terminal-session/rust/src/{sessions_http.rs,http_routes.rs}` |
 | 自动化任务域 | `terminal-session/rust/src/task/` |
-| 传输任务 / 接收策略 / 共享根 / 历史 | 共享核 `packages/bedcode-file-transfer-core/src/`（端内 `file-transfer/rust/src/` 为包装 + `adapters.rs`） |
+| 传输任务 / 接收策略 / 共享根 / 历史 | 共享核 `packages/bedcode-file-transfer-core/src/`（`file-transfer/rust/src/` 为包装 + `adapters.rs` / `adapters_mobile.rs` 双端口包；**该 crate 是双端唯一产物源**，移动端 `rust/` 已退役） |
 | Agent CLI / Skills / 供应商 / 用量 | `agent-hub/rust/src/` |
 | 多供应商对话 | `ai-chatbox/rust/src/` |
 
@@ -422,7 +427,7 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 - 宿主无入场密码学 → `packages/bedcode-wasm-core/src/manager/host/tests/l2_gating_test.rs`
 - 已退役业务表不在宿主主库重建 → `packages/bedcode-wasm-core/src/db/database.rs`
 - 可路由能力表 ↔ 转发方法同步 → `packages/bedcode-wasm-core/src/manager/capability.rs`
-- 能力模块白名单双向一致 → `packages/bedcode-wasm-core/src/manager/runtime/common/component.rs`（同处 `stale_artifact_rebuild_hint`）
+- 能力模块白名单双向一致 → `packages/bedcode-wasm-core/src/manager/runtime/component.rs`（同处 `stale_artifact_rebuild_hint`）
 - 拆分 crate 零横向 / 向下边存在 / 双面认识点唯一 / 端口装配点唯一 → `src-tauri/src/server/crate_boundary_lock.rs`（登记表单一事源上提 `packages/bedcode-wasm-core/src/crate_boundary_lock.rs`，lib → crate 单向引用；含 `bedcode-pty-engine` 登记；**wasm-core → pty-engine 边已随票 02 批次 02 摘除；`→ discovery-engine` 为票 06 批次 03 bare-host 面登记边**——此后 wasm-core → 能力域的其他边出现即红）+ 各面 `dependency_direction_lock.rs`
 - **契约分片组合面**（票 03–07，ADR 0045）→ 宿主 `src/plugin/bindings.rs` cfg(test) 两把：`capability_domains_bind_their_own_wit_slices`（五能力域 bindgen 必须指自家 `wit/<domain>.wit` + `world: "cap-<domain>"`；端 SDK WIT 引用即红——票 01 POC 第一性问题）+ `compose_caps_and_host_module_interfaces_cover_each_other`（端清单 caps 世界 import 集 ↔ 白名单模块 interface 集双向覆盖，票 03 §4.4 静态版的动态加深）；生成物逐字漂移 → 仓库根 `scripts/compose-wit.mjs --all --check`（CI `wit-drift-lock.yml` + husky pre-commit，变异自检双向）
 - **能力域迁宿主后的接线（pty 样板，票 02 批次 02；批次 03 起 mdns / peer / ws / http 四域同款）** → 宿主 `tests/pty_wiring.rs`（白名单双向 == 收集集 · 宿主自报装配器覆盖已声明域 · 停用/关停/加载漏斗三处接线 · 权限五同步点）+ 各域 adapter 文件内的单测（`src-tauri/src/plugin/{mdns,peer,ws,http}.rs`：白名单/接口/权限三件一致 + 装配器进开机链 + 域自持路由词汇）+ 内核反向锁（wasm-core `lib.rs::pty_module_must_not_return_to_wasm_core` 的 adapter 回接断言、宿主 `tests/wasm_core_whole_crate_lock.rs`）；域侧自报与集合语义的机制锁在 `packages/bedcode-host-kit/src/assembly.rs`（单测）与 `packages/bedcode-host-kit/tests/registry.rs`（白名单差异文案两方向）
@@ -436,7 +441,8 @@ path 依赖复用（D1/D2），宿主只剩组合根 + 薄壳垫片（D3），�
 - 机制内核 fail-visible 三形态 → `packages/bedcode-host-kit/tests/registry.rs`；跨 crate 强制引用须两个测试二进制 `forced_link.rs` / `forced_link_absent.rs`
 - 跨端 wire 形状 → `packages/bedcode-server-http/src/gateway/tests/`
 - **能力 crate 的产品插件 id / 退役面词汇**（结构锁管不到的那一面：合法边位置上装的是不是业务代码）→ `src-tauri/tests/capability_crates_no_product_ids.rs`（扫 `packages/` 下能力 crate 的生产文本；登记表 `SCANNED_CRATES` + `PENDING_SCAN_CRATES` 两桶构成完整覆盖，新增能力 crate 必须归桶；`bedcode-pty-engine` / `bedcode-ws-client-engine`〔ADR 0043 抽根即入〕已入桶）
-- **file-transfer 双端共享核的边界与接线防漂移**（ADR 0044）→ `packages/bedcode-file-transfer-core/src/boundary_lock.rs`（核内零 SDK / 零平台 needle + 零产品身份字面量 + `[dependencies]` 白名单 + 锁定面文件在场）+ 同目录 `src/wiring_lock.rs`（**接线防漂移** 5 例：端内不得复活核内 23 个判据函数 · 双端 `transfer_store.rs` 必须纯转出 · 双端 `adapters.rs` 必须实现已消费端口 · 核 `ports.rs` 的 `pub trait` 集合与登记清单精确相等；变异自检 5/5）
+- **file-transfer 双端共享核的边界与单产物接线防漂移**（ADR 0044 + 2026-10-13 单产物，规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）→ `packages/bedcode-file-transfer-core/src/boundary_lock.rs`（核内零 SDK / 零平台 needle + 零产品身份字面量 + `[dependencies]` 白名单 + 锁定面文件在场）+ 同目录 `src/wiring_lock.rs`（**接线防漂移** 6 例：共享产物 crate 不得复活核内 23 个判据函数 · `transfer_store.rs` 必须纯转出 · 桌面/移动双适配器（`adapters.rs` / `adapters_mobile.rs`）必须实现已消费端口 · 核 `ports.rs` 的 `pub trait` 集合与登记清单精确相等 · 移动端产物源（`rust/`）不得重建 + 共享 crate 只链桌面 SDK · `SHARED_ABI_VERSION` 须经 `wasm_entry_with_abi!` 显式传且 ≤ 双端 `ABI_VERSION`；变异自检 5/5）
+- **file-transfer 单产物的平台分支与移动宿主桩**：共享 crate 经 `host-platform.platform()`（core.wit v38 新增，双端全等、无权限门）探测端值，桌面/移动两套端口实现由 `platform.rs` 选择；桌面专属 import（`host-api-call` / `host-platform-desktop`）在移动宿主由 fail-visible 桩闭合——`bedcode-mobile/src-tauri/src/plugin/desktop_compat.rs`（bindgen 桌面 wit 的 `world desktop-compat`，全函数显性 `Err`）+ `bedcode-desktop/src-tauri/src/plugin/bindings.rs` 的 compose 断言（worlds/abi.version 漂移）
 - **拆分 crate 不得长 `tests/` 目录 / `[dev-dependencies]` 不得拉入 bedcode crate**（crate 根 tests/ 是独立测试二进制 = 额外对外行为面 + 图上的真实 dev 边）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`（**注意：该锁的治理面按 `packages/bedcode-*` 目录约定自动推导** ⇒ 新 crate 必须把锁写在 `src/` 并由 `#[cfg(test)] mod` 引入；`bedcode-file-transfer-core` 即如此，`bedcode-host-api-core` 的 crate 根 `tests/` 属在途红）
 - **拆分产物 crate 的单测纯净性**（crate 根不得有 `tests/` / `benches/` / `examples/` 与 `[[test]]` 段；`[dev-dependencies]` 不得含任何内部 crate）→ `src-tauri/tests/capability_crates_unit_tests_only.rs`（治理面按 `packages/bedcode-*` 目录约定推导，新增 crate 自动纳入；`PENDING_GOVERNANCE` 现只登记 `bedcode-host-kit`——其链接期集成测试按设计保留，处置完删条目即自动纳入；含 C-5 正面钉住宿主侧迁移落点防“直接删掉”）。已迁走的两个集成测试落宿主：`src-tauri/tests/link_crypto_http.rs`（原 `bedcode-server-http/tests/`）、`src-tauri/tests/error_envelope_ipc.rs`（原 `bedcode-server-base/tests/`）
 - 权限词汇三副本漂移 → `packages/bedcode-wasm-core/src/permission.rs`（真源 SDK `permission.rs`）

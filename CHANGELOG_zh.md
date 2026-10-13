@@ -9,6 +9,30 @@
 
 ## [未发布]
 
+#### wasm-core 运行时单形态：common/bare 壳合并，ABI 策略宿主注入
+
+`packages/bedcode-wasm-core` 此前在 `common-host` / `bare-host` 两 feature 下挂两套运行时装配树。按 2026-10-13 用户裁决（`.scratch/2026-10-13-runtime-single-form/spec.md`）两壳合并为**一份运行时**（桌面形态）：`manager/runtime.rs` + `runtime/component.rs`；形态 feature 退役（桌面专属装配面收进 `desktop-assembly`：PluginHost / intercall / 认证中心 / ServerSupervisor）。
+
+- **ABI 不再是 wasm-core 的事实**：`verify_abi` 的版本上限与 `abi-form` 要求经 `AbiPolicy` 由宿主装配时注入（桌面 37/38 + form=1；移动 20/21 + None）。两个 SDK crate（`bedcode-plugin-api` / `bedcode-plugin-api-mobile`）退出 wasm-core 无条件依赖；`mobile_wasm_core_purity_lock` 判据 7c 钉移动 SDK 词汇在内核零命中。
+- **移动宿主收敛到统一壳**（D7 收口）：双端全等 8 域（storage / log / config / plugin-database / events / fs / bus / platform）删除移动 host_domains 副本，由内核 `core_binding` 单份实现——权限门收敛统一 `PermissionManager`（激活时授予进统一词表）、插件私有库布局统一内核布局；移动 host_domains 只留 http / peer / mdns / ws。`on_bus_message` 调用点改走统一 `on_message`；`LoadedComponentPlugin` 更名 `LoadedWasmPlugin`。
+- **Linker 装配一份**：`component::add_to_linker`（core_binding + 宿主自报 `HostModule` + WASI）无条件编译；内核白名单表删除——白名单 = 纯宿主自报 `expected_host_modules`（端差异宿主组装；server 能力域 crate 绑定层由桌面宿主开启，移动只链接引擎面）。
+- 锁与文档更新：`mobile_wasm_core_purity_lock`（单形态判据）、`crate_boundary_lock`（wasm-core 对 crypto-engine / discovery-engine 的边摘除）、AGENTS §5.4、ADR 0049 遗留项 1 状态。
+
+
+#### file-transfer 双端单产物：一份 wasm，平台差异收敛为同 trait 双实现 + 运行期分支
+
+`com.bedcode.file-transfer` 此前是「一个共享业务核 + 双端各一份 wasm 适配器产物」（ADR 0044）。现在双端**只构建一份 wasm**：产物源收敛到桌面端 `bedcode-desktop/wasm-apps/file-transfer/rust/`（按桌面 `world plugin` 构建），桌面与移动宿主加载**同一份组件**；移动端 `wasm-apps/file-transfer/` 只剩前端与 manifest（`rust/` 退役），构建经 `package.json` 的 `bedcode.sharedRustManifest` 声明指向共享 crate。产品差异不消除——同一端口 trait 的桌面/移动两套实现（`adapters.rs` / `adapters_mobile.rs`）+ 激活时 `host-platform.platform()` 探测端值后分支（`platform.rs`，未知取值 = 激活 fail-visible）。
+
+契约面（双端同步，ADR 0019 流程）：
+
+- **core.wit v38/v21**：`host-platform` 新增 `platform: func() -> string`（宿主平台标识探测，无权限门；端值由各端装配 feature 编译期判定——桌面 `desktop` / 移动 `mobile`）。桌面 ABI 37→38、移动 20→21。
+- **桌面 `events` 接口扩为七函数并集**：并入移动词汇（`on-bus-message` / `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped`）——共享产物必须同时导出两端宿主要按名调用的回调；对桌面原生插件是加法（默认空实现，旧宿主按名调用不受影响）。
+- **新增 binding-only `world desktop-compat`**（import `host-api-call` + `host-platform-desktop`）：移动宿主 bindgen 它为共享产物提供 fail-visible 桩（`src-tauri/src/plugin/desktop_compat.rs`，全函数显性 `Err`）——桌面分支在移动端不可达，桩只为 import 闭合。
+- **协商 ABI**：共享产物经桌面 SDK 新宏 `wasm_entry_with_abi!` 自报 `SHARED_ABI_VERSION = 21`（≤ 双端宿主 AbiPolicy 下界；桌面 38 / 移动 21 均放行），锁断言受双端 `ABI_VERSION` 约束。
+- **工具链**：file-transfer 改用 `wasm32-unknown-unknown` + 仓库级组件化工具（`packages/bedcode-componentize`，自移动 SDK 提升）——与移动端同一编码路径，stable 可编；桌面其余 wasm 应用维持 wasm32-wasip3。
+- **行为统一（T7=B 同款）**：桌面随共享获得 `node-stopped` 中断标注 + 陈旧句柄摘除（与引擎契约一致的修正）；命令面取桌面形状（pause/resume 返回 `true` 字面量、`list-remote` 返回 `{entries, notice}`——双端前端契约实测一致）。
+- 规格与逐票记录：`.scratch/2026-10-13-file-transfer-single-wasm/spec.md`；ADR 0044 状态更新（共享核阶段完成，单产物为其延续）。
+
 #### wasm-core 单形态：机制一份、绑定归位宿主（ADR 0049）
 
 `packages/bedcode-wasm-core` 本已是一份 crate，但内里仍挂着两套**装配树**——`common-host`（桌面）与
