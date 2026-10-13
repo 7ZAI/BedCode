@@ -3,7 +3,7 @@
 //! 与 `wasm_binary.rs` / `wasm_ws.rs` 同构：宿主对 `plugin` world 的导出全部
 //! 按必选实例化，非认证中心插件不导出 `auth-policy`，因此该接口**不能**声明进
 //! `plugin` world（否则旧插件无法加载）；宿主改为实例化后动态探测
-//! `bedcode:plugin/auth-policy.verify-device-token`（core-plugin-manager 装配
+//! `bedcode:plugin@0.1.0/auth-policy.verify-device-token`（core-plugin-manager 装配
 //! 框架：`exported_capabilities` 探测 / `call_capability_export`，票 12 C3）。
 //! 本模块以 WIT 的 `plugin-auth-policy` world 生成 guest 侧绑定
 //! （`exports::...::Guest` + `export!`），使 `wasm_entry!` 能无条件导出默认

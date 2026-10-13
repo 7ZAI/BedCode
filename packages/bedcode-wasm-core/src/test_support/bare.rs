@@ -208,7 +208,7 @@ pub fn build_host_ctx() -> std::sync::Arc<crate::host_api::WasmHostContext> {
 
 /// 统一运行时壳的无头构造（单形态 2026-10-13）
 ///
-/// 无 storage / app_handle / first_party_dirs，ABI 规格 [`AbiPolicy::UNCONSTRAINED`]
+/// 无 storage / app_handle / first_party_dirs，形态规格 [`AbiPolicy::UNCONSTRAINED`]
 /// （无头装配不设上限——夹具是桌面 SDK 产物）。供移动宿主集成测试构造
 /// `WasmRuntime`（loader / manager / 终端会话夹具均需真实 Engine）。
 pub fn setup_headless_runtime(
@@ -217,11 +217,13 @@ pub fn setup_headless_runtime(
     setup_headless_runtime_with_abi(aot_cache_dir, crate::manager::runtime::AbiPolicy::UNCONSTRAINED)
 }
 
-/// 同 [`setup_headless_runtime`]，但显式注入 ABI 规格（端事实）
+/// 同 [`setup_headless_runtime`]，但显式注入形态规格（端事实）
 ///
-/// 单形态（2026-10-13）：ABI 版本上限检查是宿主注入的策略（wasm-core 零端 ABI
-/// 知识）——端宿主测试要断言「高版本组件被拒绝」（如移动 `high-abi` 用例），
-/// 必须注入端真实规格（移动 21 / None），不能全用 UNCONSTRAINED。
+/// 单形态（2026-10-13）：`abi-form` 要求是宿主注入的策略（wasm-core 零端 ABI
+/// 知识）——端宿主测试要断言「形态不符的组件被拒绝」，必须注入端真实规格而非
+/// 一律 `UNCONSTRAINED`。整数 ABI 版本上限检查已随 wit 包版本化退役
+/// （ADR 0051 D2）：产物新旧由 linker 的 import 名逐字匹配裁决，无"高版本自报"
+/// 形态可注入。
 pub fn setup_headless_runtime_with_abi(
     aot_cache_dir: Option<std::path::PathBuf>,
     abi: crate::manager::runtime::AbiPolicy,
@@ -280,17 +282,6 @@ pub fn build_component_state_with_ctx(
 /// 内核 `storage::SYSTEM_PLUGIN_ID` 是 `pub(crate)`（属主分区细节不对外）；
 /// 宿主域测试断言「系统空间纵深守卫对移动端同样生效」需要这个常量，经本转发面给出。
 pub const SYSTEM_PLUGIN_ID: &str = crate::storage::SYSTEM_PLUGIN_ID;
-
-/// 实例 ABI 版本探测（原生 `TypedFunc` 探测 + 调用，与生产协商同一实现）
-///
-/// 宿主 e2e 用它断言「产物 `abi.version()` == SDK `ABI_VERSION`」——不另拼探测逻辑，
-/// 避免测试与生产各钉一份（漂移时测试反而会掩盖问题）。
-pub fn plugin_abi_version(
-    plugin: &mut crate::manager::runtime::LoadedWasmPlugin,
-) -> crate::Result<Option<u32>> {
-    let (store, instance) = plugin.raw_store();
-    crate::manager::runtime::core_binding::abi_version(store, instance)
-}
 
 /// linker 装配面（与生产同一函数：core 交集 + 宿主自报能力模块 + WASI 段）
 ///

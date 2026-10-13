@@ -67,6 +67,9 @@
 
 pub mod bus;
 pub mod config;
+/// 契约包名单点派生（ADR 0051 D3/D4）：导出名 / 接口全名的版本后缀由仓根真源
+/// `contracts/bedcode-plugin-package.rs` 经本模块集中注入，消费点只传接口名 + 函数名
+pub mod contract;
 /// 引擎面：宿主主库（schema.sql 单一事实源，ADR 0036「机制与真源同侧」）
 pub mod db;
 /// 测试 harness（§4.5）：crate 内测试起 HTTP+WS 服务器的薄壳（lib 组合根不可引用）。

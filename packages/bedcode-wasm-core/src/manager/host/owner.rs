@@ -46,10 +46,6 @@ use tokio::sync::{mpsc, oneshot};
 use wasmtime::component::{Accessor, ComponentNamedList, Instance, Lift, Lower};
 
 use super::LoadedWasmPlugin;
-use crate::manager::capability::{
-    EXPORT_AUTH_VERIFY_DEVICE_TOKEN, EXPORT_MDNS_ADVERTISE, EXPORT_MDNS_BROWSE, EXPORT_MDNS_IS_ADVERTISING,
-    EXPORT_MDNS_STOP_ADVERTISE, EXPORT_MDNS_STOP_BROWSE, EXPORT_STORAGE_DELETE, EXPORT_STORAGE_GET, EXPORT_STORAGE_SET,
-};
 use crate::manager::runtime::{OptionalExports, WasmPluginState};
 use crate::monitor::{CallTimer, LifecycleEvent, PluginMetrics};
 use crate::AppError;
@@ -59,13 +55,6 @@ use crate::AppError;
 // 组件的接口导出是嵌套实例形态，平名字符串（`iface#func`）无法被
 // `Instance::get_typed_func` 命中（wasmtime 47 实证），必须用 `pkg:ns/iface.func` 路径。
 
-const EXPORT_COMMAND_INVOKE: &str = "bedcode:plugin/command.invoke";
-const EXPORT_LIFECYCLE_ACTIVATE: &str = "bedcode:plugin/lifecycle.activate";
-const EXPORT_LIFECYCLE_DEACTIVATE: &str = "bedcode:plugin/lifecycle.deactivate";
-const EXPORT_LIFECYCLE_ON_STARTUP: &str = "bedcode:plugin/lifecycle.on-startup";
-const EXPORT_LIFECYCLE_ON_SHUTDOWN: &str = "bedcode:plugin/lifecycle.on-shutdown";
-const EXPORT_EVENTS_ON_MESSAGE: &str = "bedcode:plugin/events.on-message";
-const EXPORT_EVENTS_ON_PROCESS_DONE: &str = "bedcode:plugin/events.on-process-done";
 
 /// 属主请求队列容量（入队满 = 显性错误，禁止无限缓冲与静默丢弃）
 pub(crate) const OWNER_QUEUE_CAP: usize = 64;
@@ -201,26 +190,26 @@ impl OpKind {
     /// WIT 导出路径（副作用：`log_trap` 的 `export=` 字段）
     pub(crate) fn export(self) -> &'static str {
         match self {
-            Self::InvokeCommand => EXPORT_COMMAND_INVOKE,
-            Self::Activate => EXPORT_LIFECYCLE_ACTIVATE,
-            Self::Deactivate => EXPORT_LIFECYCLE_DEACTIVATE,
-            Self::OnStartup => EXPORT_LIFECYCLE_ON_STARTUP,
-            Self::OnShutdown => EXPORT_LIFECYCLE_ON_SHUTDOWN,
-            Self::OnMessage => EXPORT_EVENTS_ON_MESSAGE,
-            Self::OnMessageBinary => "bedcode:plugin/events-binary.on-message-binary",
-            Self::OnProcessDone => EXPORT_EVENTS_ON_PROCESS_DONE,
-            Self::WsClientMessage => "bedcode:plugin/events-ws.on-message",
-            Self::WsEndpointMessage => "bedcode:plugin/events-ws.on-client-message",
-            Self::OnTaskEvent => "bedcode:plugin/events-task.on-task-event",
-            Self::CapStorageGet => EXPORT_STORAGE_GET,
-            Self::CapStorageSet => EXPORT_STORAGE_SET,
-            Self::CapStorageDelete => EXPORT_STORAGE_DELETE,
-            Self::CapMdnsBrowse => EXPORT_MDNS_BROWSE,
-            Self::CapMdnsStopBrowse => EXPORT_MDNS_STOP_BROWSE,
-            Self::CapMdnsAdvertise => EXPORT_MDNS_ADVERTISE,
-            Self::CapMdnsStopAdvertise => EXPORT_MDNS_STOP_ADVERTISE,
-            Self::CapMdnsIsAdvertising => EXPORT_MDNS_IS_ADVERTISING,
-            Self::CapAuthVerifyDeviceToken => EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
+            Self::InvokeCommand => crate::contract::export_item("command", "invoke"),
+            Self::Activate => crate::contract::export_item("lifecycle", "activate"),
+            Self::Deactivate => crate::contract::export_item("lifecycle", "deactivate"),
+            Self::OnStartup => crate::contract::export_item("lifecycle", "on-startup"),
+            Self::OnShutdown => crate::contract::export_item("lifecycle", "on-shutdown"),
+            Self::OnMessage => crate::contract::export_item("events", "on-message"),
+            Self::OnMessageBinary => crate::contract::export_item("events-binary", "on-message-binary"),
+            Self::OnProcessDone => crate::contract::export_item("events", "on-process-done"),
+            Self::WsClientMessage => crate::contract::export_item("events-ws", "on-message"),
+            Self::WsEndpointMessage => crate::contract::export_item("events-ws", "on-client-message"),
+            Self::OnTaskEvent => crate::contract::export_item("events-task", "on-task-event"),
+            Self::CapStorageGet => crate::contract::export_item("host-storage", "get"),
+            Self::CapStorageSet => crate::contract::export_item("host-storage", "set"),
+            Self::CapStorageDelete => crate::contract::export_item("host-storage", "delete"),
+            Self::CapMdnsBrowse => crate::contract::export_item("host-mdns", "browse"),
+            Self::CapMdnsStopBrowse => crate::contract::export_item("host-mdns", "stop-browse"),
+            Self::CapMdnsAdvertise => crate::contract::export_item("host-mdns", "advertise"),
+            Self::CapMdnsStopAdvertise => crate::contract::export_item("host-mdns", "stop-advertise"),
+            Self::CapMdnsIsAdvertising => crate::contract::export_item("host-mdns", "is-advertising"),
+            Self::CapAuthVerifyDeviceToken => crate::contract::export_item("auth-policy", "verify-device-token"),
         }
     }
 
@@ -347,31 +336,31 @@ pub(crate) fn dispatch_mutex_op(plugin: &mut LoadedWasmPlugin, op: GuestOp) -> c
             .map(GuestReply::Bool),
         GuestOp::OnTaskEvent { event_json } => plugin.on_task_event(&event_json).map(GuestReply::Bool),
         GuestOp::CapStorageGet { key } => plugin
-            .call_capability_export::<(String,), (Result<Option<String>, String>,)>(EXPORT_STORAGE_GET, (key,))
+            .call_capability_export::<(String,), (Result<Option<String>, String>,)>(crate::contract::export_item("host-storage", "get"), (key,))
             .map(|(r,)| GuestReply::GuestOptional(r)),
         GuestOp::CapStorageSet { key, value } => plugin
-            .call_capability_export::<(String, String), (Result<(), String>,)>(EXPORT_STORAGE_SET, (key, value))
+            .call_capability_export::<(String, String), (Result<(), String>,)>(crate::contract::export_item("host-storage", "set"), (key, value))
             .map(|(r,)| GuestReply::GuestUnit(r)),
         GuestOp::CapStorageDelete { key } => plugin
-            .call_capability_export::<(String,), (Result<(), String>,)>(EXPORT_STORAGE_DELETE, (key,))
+            .call_capability_export::<(String,), (Result<(), String>,)>(crate::contract::export_item("host-storage", "delete"), (key,))
             .map(|(r,)| GuestReply::GuestUnit(r)),
         GuestOp::CapMdnsBrowse { service_type } => plugin
-            .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_MDNS_BROWSE, (service_type,))
+            .call_capability_export::<(String,), (Result<String, String>,)>(crate::contract::export_item("host-mdns", "browse"), (service_type,))
             .map(|(r,)| GuestReply::GuestStr(r)),
         GuestOp::CapMdnsStopBrowse { browser_id } => plugin
-            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_STOP_BROWSE, (browser_id,))
+            .call_capability_export::<(String,), (Result<bool, String>,)>(crate::contract::export_item("host-mdns", "stop-browse"), (browser_id,))
             .map(|(r,)| GuestReply::GuestBool(r)),
         GuestOp::CapMdnsAdvertise { config_json } => plugin
-            .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_MDNS_ADVERTISE, (config_json,))
+            .call_capability_export::<(String,), (Result<String, String>,)>(crate::contract::export_item("host-mdns", "advertise"), (config_json,))
             .map(|(r,)| GuestReply::GuestStr(r)),
         GuestOp::CapMdnsStopAdvertise { advertise_id } => plugin
-            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_STOP_ADVERTISE, (advertise_id,))
+            .call_capability_export::<(String,), (Result<bool, String>,)>(crate::contract::export_item("host-mdns", "stop-advertise"), (advertise_id,))
             .map(|(r,)| GuestReply::GuestBool(r)),
         GuestOp::CapMdnsIsAdvertising { advertise_id } => plugin
-            .call_capability_export::<(String,), (Result<bool, String>,)>(EXPORT_MDNS_IS_ADVERTISING, (advertise_id,))
+            .call_capability_export::<(String,), (Result<bool, String>,)>(crate::contract::export_item("host-mdns", "is-advertising"), (advertise_id,))
             .map(|(r,)| GuestReply::GuestBool(r)),
         GuestOp::CapAuthVerifyDeviceToken { token } => plugin
-            .call_capability_export::<(String,), (Result<String, String>,)>(EXPORT_AUTH_VERIFY_DEVICE_TOKEN, (token,))
+            .call_capability_export::<(String,), (Result<String, String>,)>(crate::contract::export_item("auth-policy", "verify-device-token"), (token,))
             .map(|(r,)| GuestReply::GuestStr(r)),
     }
 }
@@ -982,7 +971,7 @@ fn start_op<'a>(
             GuestOp::InvokeCommand { name, args_json } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_COMMAND_INVOKE,
+                crate::contract::export_item("command", "invoke"),
                 (name, args_json),
                 owned,
                 timer,
@@ -994,7 +983,7 @@ fn start_op<'a>(
             GuestOp::Activate => start_typed(
                 &mut access,
                 instance,
-                EXPORT_LIFECYCLE_ACTIVATE,
+                crate::contract::export_item("lifecycle", "activate"),
                 (),
                 owned,
                 timer,
@@ -1007,7 +996,7 @@ fn start_op<'a>(
             GuestOp::Deactivate => start_typed(
                 &mut access,
                 instance,
-                EXPORT_LIFECYCLE_DEACTIVATE,
+                crate::contract::export_item("lifecycle", "deactivate"),
                 (),
                 owned,
                 timer,
@@ -1020,7 +1009,7 @@ fn start_op<'a>(
             GuestOp::OnStartup => start_typed(
                 &mut access,
                 instance,
-                EXPORT_LIFECYCLE_ON_STARTUP,
+                crate::contract::export_item("lifecycle", "on-startup"),
                 (),
                 owned,
                 timer,
@@ -1032,7 +1021,7 @@ fn start_op<'a>(
             GuestOp::OnShutdown => start_typed(
                 &mut access,
                 instance,
-                EXPORT_LIFECYCLE_ON_SHUTDOWN,
+                crate::contract::export_item("lifecycle", "on-shutdown"),
                 (),
                 owned,
                 timer,
@@ -1048,7 +1037,7 @@ fn start_op<'a>(
             } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_EVENTS_ON_MESSAGE,
+                crate::contract::export_item("events", "on-message"),
                 (topic, sender, payload_json),
                 owned,
                 timer,
@@ -1083,7 +1072,7 @@ fn start_op<'a>(
             GuestOp::OnProcessDone { payload_json } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_EVENTS_ON_PROCESS_DONE,
+                crate::contract::export_item("events", "on-process-done"),
                 (payload_json,),
                 owned,
                 timer,
@@ -1147,7 +1136,7 @@ fn start_op<'a>(
             GuestOp::CapStorageGet { key } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_STORAGE_GET,
+                crate::contract::export_item("host-storage", "get"),
                 (key,),
                 owned,
                 timer,
@@ -1159,7 +1148,7 @@ fn start_op<'a>(
             GuestOp::CapStorageSet { key, value } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_STORAGE_SET,
+                crate::contract::export_item("host-storage", "set"),
                 (key, value),
                 owned,
                 timer,
@@ -1171,7 +1160,7 @@ fn start_op<'a>(
             GuestOp::CapStorageDelete { key } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_STORAGE_DELETE,
+                crate::contract::export_item("host-storage", "delete"),
                 (key,),
                 owned,
                 timer,
@@ -1183,7 +1172,7 @@ fn start_op<'a>(
             GuestOp::CapMdnsBrowse { service_type } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_MDNS_BROWSE,
+                crate::contract::export_item("host-mdns", "browse"),
                 (service_type,),
                 owned,
                 timer,
@@ -1195,7 +1184,7 @@ fn start_op<'a>(
             GuestOp::CapMdnsStopBrowse { browser_id } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_MDNS_STOP_BROWSE,
+                crate::contract::export_item("host-mdns", "stop-browse"),
                 (browser_id,),
                 owned,
                 timer,
@@ -1207,7 +1196,7 @@ fn start_op<'a>(
             GuestOp::CapMdnsAdvertise { config_json } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_MDNS_ADVERTISE,
+                crate::contract::export_item("host-mdns", "advertise"),
                 (config_json,),
                 owned,
                 timer,
@@ -1219,7 +1208,7 @@ fn start_op<'a>(
             GuestOp::CapMdnsStopAdvertise { advertise_id } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_MDNS_STOP_ADVERTISE,
+                crate::contract::export_item("host-mdns", "stop-advertise"),
                 (advertise_id,),
                 owned,
                 timer,
@@ -1231,7 +1220,7 @@ fn start_op<'a>(
             GuestOp::CapMdnsIsAdvertising { advertise_id } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_MDNS_IS_ADVERTISING,
+                crate::contract::export_item("host-mdns", "is-advertising"),
                 (advertise_id,),
                 owned,
                 timer,
@@ -1243,7 +1232,7 @@ fn start_op<'a>(
             GuestOp::CapAuthVerifyDeviceToken { token } => start_typed(
                 &mut access,
                 instance,
-                EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
+                crate::contract::export_item("auth-policy", "verify-device-token"),
                 (token,),
                 owned,
                 timer,

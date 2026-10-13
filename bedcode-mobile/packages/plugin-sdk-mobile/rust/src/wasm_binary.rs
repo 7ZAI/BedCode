@@ -2,7 +2,7 @@
 //!
 //! 宿主对 `plugin` world 的导出全部按必选实例化，旧插件（v8 及更早）不导出
 //! `events-binary`，因此该接口**不能**声明进 `plugin` world（否则旧插件无法
-//! 加载）；宿主改为实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`。
+//! 加载）；宿主改为实例化后动态探测 `bedcode:plugin@0.1.0/events-binary.on-message-binary`。
 //! 本模块以 WIT 的 `plugin-binary` world 生成 guest 侧绑定
 //! （`exports::...::Guest` + `export!`），使 `wasm_entry!` 能无条件导出默认
 //! 实现（空实现亦可被宿主动态探测命中）。

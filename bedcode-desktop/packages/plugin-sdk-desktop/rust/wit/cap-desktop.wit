@@ -1,4 +1,4 @@
-package bedcode:plugin;
+package bedcode:plugin@0.1.0;
 
 /// BedCode 插件 Component Model 契约
 ///
@@ -535,7 +535,7 @@ interface abi-form {
 }
 /// v14：WS 消息帧接收（可选导出，**不进 `plugin` world 必选导出列表**——同 events-binary）
 ///
-/// 宿主实例化后动态探测 `bedcode:plugin/events-ws`；未导出则：状态事件照收（bus），
+/// 宿主实例化后动态探测 `events-ws`；未导出则：状态事件照收（bus），
 /// 消息帧丢弃并首次 `warn!` + 计数（宿主不缓存）。
 /// kind = "text" | "binary"，payload 统一列表（text 为 UTF-8 字节——零 JSON 转义、
 /// 非 UTF-8 直通）。分片 / 压缩 / opcode 已在宿主侧归一，**同一连接内的帧按到达序
@@ -552,7 +552,7 @@ interface events-ws {
 /// v20：宿主并发任务的进度/终态回调（可选导出，**不进 `plugin` world 必选导出列表**——
 /// 同 events-binary / events-ws）。
 ///
-/// 宿主实例化后动态探测 `bedcode:plugin/events-task#on-task-event`：
+/// 宿主实例化后动态探测 `events-task#on-task-event`：
 /// - SDK 产物（`wasm_entry!` 无条件导出默认空实现）→ 探测命中，`submit` 的
 ///   进度/终态回调可达；
 /// - 旧 SDK 产物（未导出本接口）→ 探测为 None：事件丢弃 + 首次 `warn!` + 计数
@@ -584,7 +584,7 @@ interface events-task {
 /// **拒绝**（fail-closed，ADR 0031；旧口径的「宿主策略回退」已随 v31 删除）。
 ///
 /// 可选导出（**不进 `plugin` world 必选导出列表**——同 events-binary/events-ws）：
-/// 宿主实例化后动态探测 `bedcode:plugin/auth-policy#verify-device-token`；未导出
+/// 宿主实例化后动态探测 `auth-policy#verify-device-token`；未导出
 /// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对**在册认证中心**
 /// （`com.bedcode.terminal-session`，经 `auth-center-register` 显式登记）调用本导出——
 /// 独立认证中心插件已整体退役，不存在第二个候选。
@@ -615,7 +615,6 @@ world cap-desktop {
     import host-crypto;
 
     export events;
-    export abi;
     export abi-form;
 }
 
@@ -636,7 +635,7 @@ world desktop-compat {
 ///
 /// 宿主对 `plugin` world 的导出全部按必选实例化，旧插件（v10 及更早）不导出
 /// `events-binary`，因此它不能声明进 `plugin` world（否则旧插件无法加载）；
-/// 宿主改为实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`。
+/// 宿主改为实例化后动态探测 `events-binary#on-message-binary`。
 /// 本 world 让 SDK 的 `wasm_binary` 模块生成 events-binary 的 guest 绑定
 /// （Guest trait + export!），使 `wasm_entry!` 能无条件导出默认实现
 /// （空实现亦可被宿主动态探测命中）。
@@ -684,7 +683,6 @@ world plugin-system {
     export lifecycle;
     export events;
     export manifest;
-    export abi;
     export abi-form;
 
     /// 能力导出：宿主 KV 存储同形接口（装配框架首条路由能力）

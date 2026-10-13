@@ -1,4 +1,4 @@
-//! host-auth 宿主 adapter（移动独有认证引擎面；wasm-core-mobile-purity 票 04 自 wasm-core 迁入）
+//! host-auth-client 宿主 adapter（移动独有认证引擎面；wasm-core-mobile-purity 票 04 自 wasm-core 迁入）
 //!
 //! **编排在消费插件，密码学与凭据在宿主**（C4 红线）：设备身份文件 / JWT 持有 /
 //! AuthHttpClient / 生物凭证绑定与 Keystore 签名全部留在 auth 引擎
@@ -20,7 +20,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "mobile-auth";
 
 /// 本域提供的 WIT 接口（必须与 `cap-mobile.wit` 逐字一致）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-auth"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-auth-client"];
 
 /// 本域的权限位（与 WIT / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["auth"];
@@ -33,7 +33,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 16,
 };
 
-/// host-auth 能力模块
+/// host-auth-client 能力模块
 pub struct AuthModule;
 
 impl HostModule for AuthModule {

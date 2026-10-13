@@ -75,10 +75,10 @@ pub const MODULE_NAME: &str = "mobile-host-core";
 
 /// 本模块提供的 WIT 接口（移动独有 / 端差异 core 域；与 `core.wit` 逐字一致）
 pub const MODULE_INTERFACES: &[&str] = &[
-    "bedcode:plugin/host-http",
-    "bedcode:plugin/host-peer",
-    "bedcode:plugin/host-mdns",
-    "bedcode:plugin/host-websocket",
+    "bedcode:plugin@0.1.0/host-http",
+    "bedcode:plugin@0.1.0/host-peer",
+    "bedcode:plugin@0.1.0/host-mdns",
+    "bedcode:plugin@0.1.0/host-websocket",
 ];
 
 /// 本模块读写的权限位（各域权限门的并集；装载期一致性核对用）

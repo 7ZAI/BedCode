@@ -1075,7 +1075,7 @@ pub const MODULE_NAME: &str = "websocket";
 ///
 /// 票 04：`host-websocket` 拆为双端交集客户端域（core.wit）+ 桌面扩展服务端域
 /// （`host-websocket-server`，本分片）——一个能力域模块持两个 interface。
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-websocket", "bedcode:plugin/host-websocket-server"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-websocket", "bedcode:plugin@0.1.0/host-websocket-server"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["ws:client", "ws:server"];

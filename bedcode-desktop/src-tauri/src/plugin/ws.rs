@@ -221,8 +221,8 @@ mod tests {
         assert_eq!(
             bedcode_server_websocket::plugin_binding::MODULE_INTERFACES,
             &[
-                "bedcode:plugin/host-websocket",
-                "bedcode:plugin/host-websocket-server"
+                "bedcode:plugin@0.1.0/host-websocket",
+                "bedcode:plugin@0.1.0/host-websocket-server"
             ],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配；票 04 拆出服务端域）"
         );

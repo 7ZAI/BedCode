@@ -30,7 +30,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "platform-desktop";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-platform-desktop"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-platform-desktop"];
 
 /// 本域的权限位（仅 `pick-folders` 用机制位 `fs:pick`；wsl-distros /
 /// local-ipv4-addresses / reveal-in-dir 无权限门——真源在 wasm-core `permission.rs`）
@@ -369,7 +369,7 @@ mod tests {
         );
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin/host-platform-desktop"],
+            &["bedcode:plugin@0.1.0/host-platform-desktop"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(MODULE_PERMISSIONS, &["fs:pick"], "仅 pick-folders 用机制位 fs:pick");

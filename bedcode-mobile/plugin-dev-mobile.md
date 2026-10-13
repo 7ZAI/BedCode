@@ -230,7 +230,7 @@ app.mount(container)
 `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 16 接口 / 插件导出 5 接口，
 另有可选导出 events-binary；单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
 `wasm_entry!` 宏生成组件导出（manifest / activate / deactivate / invoke_command / 生命周期
-钩子 / 事件 / 上传与传输钩子 / abi.version）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
+钩子 / 事件 / 上传与传输钩子）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
 （组件产物）编译实例化。自研 ABI（`__bedcode_*` 导出、`(ptr,len)` 内存搬运、签名表）
 已在 2025-08 迁移清理删除。
 

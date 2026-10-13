@@ -42,7 +42,8 @@
 //!
 //! 集成目标（`tests/*.rs`）需要本 crate 以**可链接形式**（rlib）产出，而加上
 //! rlib 会连带为宿主目标构建 x86_64 cdylib，其 wit-bindgen 导出名
-//! （`bedcode:plugin/abi#form`）在 ELF version script 里非法 ⇒ 链接期失败。
+//! （组件 export 的符号形态，含 `:` / `.` / `@`）在 ELF version script 里非法
+//! ⇒ 链接期失败。
 //! 单测 harness 不需要 crate-type 可链接，所以放 `src/` 下按 AGENTS §6 命名为
 //! `*_test.rs`。dev-deps 不参与 wasm 构建，`pnpm run build` 的产物链零影响。
 //!

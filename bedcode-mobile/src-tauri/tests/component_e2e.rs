@@ -20,7 +20,7 @@ use bedcode_wasm_core::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
 use bedcode_mobile_lib::plugin::bindings::bedcode;
 use bedcode_wasm_core::test_support::{
     build_component_linker, build_host_ctx, build_terminal_session_component, build_test_component,
-    plugin_abi_version, plugin_raw_store, probe_wasi_p2_reregistration, test_engine,
+    plugin_raw_store, probe_wasi_p2_reregistration, test_engine,
     TEST_PLUGIN_ID,
 };
 use wasmtime::component::Component;
@@ -28,21 +28,19 @@ use wasmtime::ResourceLimiter;
 
 use bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE;
 
-/// 组件完整加载往返：实例化 + ABI 协商（version=ABI_VERSION）+ 导出完整性 +
-/// 燃料注入生效 + manifest 读取 + Host trait（storage/log）接线直测
+/// 组件完整加载往返：实例化 + 形态校验（移动 WIT 无 abi-form 导出⇒ 宿主不要求）
+/// + 导出完整性 + 燃料注入生效 + manifest 读取 + Host trait（storage/log）接线直测
 
 /// 移动运行时装配（与生产 `PluginManager::init_wasm_runtime_with` 同款）：
 /// 创建 runtime 后**注入 guest 事件派发器**——`events` 导出是宿主契约面，内核缺省
 /// `UnwiredGuestEvents` 派发即 fail-visible（不注入时 `on_bus_message` 必 Err）。
 fn mobile_runtime(aot_cache_dir: Option<std::path::PathBuf>) -> WasmRuntime {
-    // 统一壳 ABI 规格注入（单形态）：移动端事实 = SDK ABI_VERSION + 无 abi-form
-    // 导出（移动 WIT 无 form）——high-abi 拒绝用例依赖真实上限，不能用 UNCONSTRAINED
+    // 统一壳形态规格注入（单形态）：移动 WIT 无 `abi-form` 导出 ⇒ 形态要求为
+    // `None`（不要求）。整数 ABI 版本协商已随 wit 包版本化退役（ADR 0051 D2）——
+    // 产物版本由 linker 的 import 名逐字匹配裁决，不再有"上限"可注入。
     let runtime = bedcode_wasm_core::test_support::setup_headless_runtime_with_abi(
         aot_cache_dir,
-        bedcode_wasm_core::manager::runtime::AbiPolicy {
-            version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
-            form: None,
-        },
+        bedcode_wasm_core::manager::runtime::AbiPolicy { form: None },
     )
     .expect("create wasm runtime");
     runtime.set_guest_events(std::sync::Arc::new(
@@ -86,19 +84,21 @@ fn test_component_roundtrip_and_host_impl() {
         // 预写 storage 仍在上面保留：实例化成功即验证 core_binding 的
         // host_storage 注册进统一 linker（guest 闭环经 invoke 用例覆盖）。
 
-        // abi.version() 协商：测试组件版本与 SDK ABI_VERSION 同步
-        assert_eq!(
-            bedcode_wasm_core::test_support::plugin_abi_version(&mut plugin).unwrap(),
-            Some(bedcode_plugin_api_mobile::abi::ABI_VERSION)
-        );
-
-        // 燃料注入生效：abi.version() 调用必然消耗燃料。断言基准取Store 的
-        // 实际预算（`fuel_budget()`，debug 构建含放大倍率）而非裸常量——
-        // 注入点与桌面形态同源（engine::inject_call_fuel）
+        // 燃料注入生效：先触发一次导出调用（`get_manifest` 经 `core_exports` 的
+        // `refill_call_fuel` 在调用前重置预算并执行 guest 代码），**再**断言调用
+        // 确实消耗燃料。断言基准取 Store 的实际预算（`fuel_budget()`，debug 构建含
+        // 放大倍率）而非裸常量——注入点与桌面形态同源（`engine::inject_call_fuel`）。
+        // ⚠️ 断言必须紧跟调用之后：若在调用前读 store 燃料，会读到未消耗的整额
+        // （票 04 把 abi.version 原生探测换成 get_manifest 时曾因此断言空转——
+        // 无任何导出调用可测）。
+        let manifest: serde_json::Value = serde_json::from_str(
+            &plugin.get_manifest().expect("manifest"),
+        )
+        .unwrap();
         {
             let (store, _) = plugin_raw_store(&mut plugin);
-                let budget = store.data().limits.fuel_budget();
-                let remaining = store.get_fuel().expect("get fuel");
+            let budget = store.data().limits.fuel_budget();
+            let remaining = store.get_fuel().expect("get fuel");
             assert!(
                 remaining < budget,
                 "export call must consume fuel, remaining={remaining} budget={budget}"
@@ -106,10 +106,6 @@ fn test_component_roundtrip_and_host_impl() {
         }
 
         // manifest（world 导出完整性的顺带验证）
-        let manifest: serde_json::Value = serde_json::from_str(
-            &plugin.get_manifest().expect("manifest"),
-        )
-        .unwrap();
         assert_eq!(manifest["id"], "com.bedcode.component-test");
     });
 }
@@ -204,37 +200,6 @@ fn test_component_business_methods_roundtrip() {
     });
 }
 
-/// abi.version() 高于宿主支持的组件被拒绝加载
-#[test]
-fn test_component_high_abi_rejected() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async move {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let host_ctx = build_host_ctx();
-        let runtime = mobile_runtime(Some(tmp.path().join("aot")));
-        let component =
-            Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["high-abi"]))
-                .expect("compile test component");
-        let err = match runtime.instantiate_component(
-            &component,
-            TEST_PLUGIN_ID,
-            Arc::new(host_ctx.for_plugin(HashSet::new())),
-            &[],
-            None,
-        ) {
-            Err(e) => e,
-            Ok(_) => panic!("高版本 ABI 组件必须被拒绝"),
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("ABI v999"),
-            "应报告组件要求的版本，实际: {}",
-            msg
-        );
-        assert!(msg.contains("upgrade"), "应提示升级 BedCode，实际: {}", msg);
-    });
-}
-
 /// 燃料看门狗生效：死循环组件在单次调用预算内被 trap
 #[test]
 fn test_component_fuel_trap() {
@@ -260,11 +225,14 @@ fn test_component_fuel_trap() {
             .invoke_command("spin", "{}")
             .expect_err("死循环必须被燃料看门狗 trap");
         // fuel 耗尽 trap 的 Display 含 wasm backtrace；trap 即通过，
-        // 关键是 backtrace 顶部是 command#invoke（trap 发生在 guest 死循环内）
+        // 关键是 backtrace 顶部是 invoke 导出（trap 发生在 guest 死循环内）。
+        // ⚠️ 断言**版本免疫**：版本化后 backtrace 符号带包版本（
+        // `bedcode_plugin_component_test.wasm!bedcode:plugin/command@0.1.0#invoke`），
+        // 不能用 `command#invoke` 整串匹配（版本在中间）；匹配 `#invoke` 栈顶即可
         let msg = err.to_string();
         assert!(
-            msg.contains("command#invoke"),
-            "trap 应发生在调用栈内并带 wasm backtrace，实际: {}",
+            msg.contains("#invoke"),
+            "trap 应发生在调用栈内并带 wasm backtrace（栈顶为 invoke 导出），实际: {}",
             msg
         );
     });
@@ -367,12 +335,6 @@ fn test_sdk_macro_component_loads_and_activates() {
                 None,
             )
             .expect("instantiate terminal-session component");
-
-        // ABI 协商：与 SDK abi::ABI_VERSION 同步（宏内 `abi.version()` 输出）
-        assert_eq!(
-            bedcode_wasm_core::test_support::plugin_abi_version(&mut plugin).unwrap(),
-            Some(bedcode_plugin_api_mobile::abi::ABI_VERSION)
-        );
 
         // 激活/停用（terminal-session：activate 期订阅 ws 属主 topic + 认证状态探测）
         assert_eq!(plugin.activate().expect("activate"), 0);

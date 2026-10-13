@@ -2,19 +2,24 @@
 ///
 /// 本文件是 wasm-core 单一 crate 的核心 WIT 真源（ADR 0037）：
 /// 只承载**双端函数集完全一致**的 interface（交集切片），
-/// 端独有 / 端扩展接口一律在各端 `cap-*.wit`（`package bedcode:plugin;` 同 package 拼装）。
+/// 端独有 / 端扩展接口一律在各端 `cap-*.wit`（同 package **同版本**拼装，
+/// 版本不一致即拼装失败——wasmtime 的 `include` 要求 package 同名同版本）。
 ///
 /// 迁移约定（与桌面端原 bedcode.wit 头注释一致）：
 /// - `serde_json` 载荷保留：结构化参数/结果一律用 `string` 承载 JSON
 /// - 错误一律 `result<T, string>`，错误内容为宿主侧可读的 UTF-8 消息
 /// - 宿主能力 import 接口前缀 `host-`，插件导出接口为普通名字
-/// - 端内版本演进历史不在此复制（复制即漂移源）：各端 SDK `abi.rs` 的
-///   ABI_VERSION 序列是逐条权威记账，各端 `cap-*.wit` 头注释保全迁移说明
+/// - 端内版本演进历史不在此复制（复制即漂移源）：逐版语义台账在
+///   `CHANGELOG.md` / `CHANGELOG_zh.md`「契约演进台账（整数 ABI）」节
+///   （记账去处 = ADR 0051 D5；整数 ABI 已随 wit 包版本化退役，
+///   台账自此为**只读历史**，不再随契约变更追加），各端 `cap-*.wit` 头注释保全迁移说明
 ///
 /// 组合方式（端生成物 `wit/` 目录，由 `scripts/compose-wit.mjs` 拼装）：
-/// `world plugin { include core; include cap-…; }` —— import 名保持
-/// `bedcode:plugin/<interface>` 形态。
-package bedcode:plugin;
+/// `world plugin { include core; include cap-…; }` —— **import** 名带版本
+/// （`bedcode:plugin@<version>/<interface>`，版本取自仓根
+/// `contracts/bedcode-plugin-package.rs`）；
+/// **导出**名不带包版本（实例级 `interface#function`），故运行期按名探测导出不受版本影响。
+package bedcode:plugin@0.1.0;
 /// 插件 KV 存储（原 storage.rs：storage_get/set/delete）
 interface host-storage {
     get: func(key: string) -> result<option<string>, string>;
@@ -319,7 +324,7 @@ interface lifecycle {
 }
 /// 二进制消息接收（可选导出，**不进 `plugin` world 的必选导出列表**）
 ///
-/// 宿主在实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`：
+/// 宿主在实例化后动态探测 `events-binary#on-message-binary`：
 /// - 未导出本接口的插件 → 探测为 None，只接收 JSON 消息；二进制消息对其
 ///   按「格式不匹配」拒绝，不影响加载；
 /// - 导出者由 `wasm_entry!` 宏无条件导出（默认空实现），订阅方以
@@ -333,15 +338,6 @@ interface events-binary {
 /// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
 interface manifest {
     get: func() -> string;
-}
-/// ABI 版本协商（原 __bedcode_abi_version）
-///
-/// 双端共享核心只承载交集 `version()`；桌面独有 `form` 形态声明拆入
-/// `cap-desktop` 的 `abi-form`（移动端无 form：项目未发布、一次性切割）。
-/// 版本演进逐条权威记账在各端 SDK `abi.rs` 的 ABI_VERSION 序列，WIT 内
-/// 不复制历史（复制即漂移源）；各端 `cap-*.wit` 头注释保全迁移说明。
-interface abi {
-    version: func() -> u32;
 }
 
 

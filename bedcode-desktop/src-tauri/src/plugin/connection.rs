@@ -1,4 +1,4 @@
-//! host-connection 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数 + 自报，四件同处）
+//! host-connection-registry 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数 + 自报，四件同处）
 //!
 //! wasm-core 纯净性收口票 02 批次 05 自内核迁出（`host_api/connection.rs` 整文件
 //! 删除，内核反向锁 `path_b_domains_must_not_return_to_wasm_core` 防回接）。与
@@ -29,14 +29,14 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "connection";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-connection"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-connection-registry"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["connection:read"];
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
-/// `abi_min = 12`：host-connection 在 ABI v12 引入（ADR 0022 v12 裁决 5「迁独立
+/// `abi_min = 12`：host-connection-registry 在 ABI v12 引入（ADR 0022 v12 裁决 5「迁独立
 /// 原语」，票 04 自 `host_api/session.rs` 拆出）。
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
@@ -45,7 +45,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 12,
 };
 
-/// host-connection 能力模块
+/// host-connection-registry 能力模块
 pub struct ConnectionModule;
 
 impl HostModule for ConnectionModule {
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(MODULE_NAME, "connection", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin/host-connection"],
+            &["bedcode:plugin@0.1.0/host-connection-registry"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(

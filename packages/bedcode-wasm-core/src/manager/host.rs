@@ -407,9 +407,10 @@ impl PluginHost {
     ///   宿主能力在调用处降级）
     /// * `peer_ctx_provider` - 对等网络上下文装配端口（无头/测试传 None）
     /// * `first_party_dirs` - 第一方免弹窗归属清单（宿主装配时注入）
-    /// * `abi` - ABI 规格（[`crate::manager::runtime::AbiPolicy`]，端事实：
-    ///   桌面 `bedcode_plugin_api::abi::{ABI_VERSION, FORM_COMPONENT}`；宿主装配时
-    ///   显式注入，wasm-core 零端 ABI 知识）
+    /// * `abi` - 组件形态规格（[`crate::manager::runtime::AbiPolicy`]，端事实：
+    ///   桌面 `bedcode_plugin_api::form::FORM_COMPONENT`；宿主装配时显式注入，
+    ///   wasm-core 零端 ABI 知识。**只管 `abi-form`**，整数 ABI 版本协商已随
+    ///   wit 包版本化退役——ADR 0051 D2）
     /// 返回 `Arc<Self>`：宿主需要自身的弱引用注入属主失败回报端口
     /// （`event-loop` 模型的实例级失败收敛，见 [`HostOwnerFailureSink`]），
     /// 也便于调用方共享（原先由调用方各自 `Arc::new`）

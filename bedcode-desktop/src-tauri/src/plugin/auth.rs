@@ -1,8 +1,8 @@
-//! host-auth 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数 + 自报，四件同处）
+//! host-auth-center 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数 + 自报，四件同处）
 //!
 //! wasm-core 纯净性收口票 02 批次 04 自内核迁出（`host_api/auth.rs` 整文件删除，
 //! 内核反向锁 `auth_domain_must_not_return_to_wasm_core` 防回接）。与 pty / mdns /
-//! ws / http 等「窄端口」域不同，host-auth **没有独立能力 crate**——装配方就是宿主
+//! ws / http 等「窄端口」域不同，host-auth-center **没有独立能力 crate**——装配方就是宿主
 //! 本 crate（孤儿规则见 [`super::bindings`] 模块文档），域函数与 WIT impl 同处。
 //!
 //! ## 域面形状（v15 起逐步收敛后的现状）
@@ -56,14 +56,14 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "auth";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-auth"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-auth-center"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致；全域单权限位 `auth`）
 pub const MODULE_PERMISSIONS: &[&str] = &["auth"];
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
-/// `abi_min = 15`：host-auth（secret-store）在 ABI v15 引入。
+/// `abi_min = 15`：host-auth-center（secret-store）在 ABI v15 引入。
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
     interfaces: MODULE_INTERFACES,
@@ -71,7 +71,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 15,
 };
 
-/// host-auth 能力模块
+/// host-auth-center 能力模块
 pub struct AuthModule;
 
 impl HostModule for AuthModule {
@@ -130,7 +130,7 @@ impl bedcode::plugin::host_auth_center::Host for WasmPluginState {
     }
 
     // ==================== v33 / v34：认证中心自持凭据面接线退役（ADR 0033 + B-downsink） ====================
-    // 原 `device_token_issue` / `device_token_verify` 接线随 WIT `host-auth` 两函数
+    // 原 `device_token_issue` / `device_token_verify` 接线随 WIT `host-auth-center` 两函数
     // 删除：入场密钥的生成 / 签发 / 验签归认证中心自持，宿主不持有任何设备 JWT 密码
     // 学。中心只经 `auth_secret_get/set` 存取密钥材料（属主隔离照旧）。旧产物（v32
     // SDK 构建）仍 import 这两个函数 → 实例化期被拒（`stale_artifact_rebuild_hint`
@@ -863,7 +863,7 @@ mod tests {
         assert_eq!(MODULE_NAME, "auth", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin/host-auth"],
+            &["bedcode:plugin@0.1.0/host-auth-center"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(

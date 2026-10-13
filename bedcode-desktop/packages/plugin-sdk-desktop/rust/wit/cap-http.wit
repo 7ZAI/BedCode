@@ -1,4 +1,4 @@
-package bedcode:plugin;
+package bedcode:plugin@0.1.0;
 // ======================================================================
 // HTTP 服务端域（桌面扩展分片，自 `host-http` 拆出）
 //

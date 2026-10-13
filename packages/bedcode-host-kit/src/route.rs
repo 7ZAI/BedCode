@@ -98,7 +98,7 @@ mod tests {
     static PROBE: RoutableCapability = RoutableCapability {
         capability: "host-kit-route-probe",
         forward_prefix: "kit_probe",
-        exports: &["bedcode:plugin/host-kit-route-probe.ping"],
+        exports: &["bedcode:plugin/host-kit-route-probe.ping@0.1.0"],
     };
 
     crate::submit_routable_capability!(PROBE);
@@ -112,7 +112,7 @@ mod tests {
             .find(|route| route.capability == "host-kit-route-probe")
             .expect("自报的路由词汇应被收集到");
         assert_eq!(probe.forward_prefix, "kit_probe");
-        assert_eq!(probe.exports, &["bedcode:plugin/host-kit-route-probe.ping"]);
+        assert_eq!(probe.exports, &["bedcode:plugin/host-kit-route-probe.ping@0.1.0"]);
     }
 
     /// 收集顺序按能力名字典序（日志 / 报错可复现）

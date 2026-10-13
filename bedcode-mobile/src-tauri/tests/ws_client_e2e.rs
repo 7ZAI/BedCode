@@ -46,14 +46,12 @@ impl bedcode_wasm_core::bus::MessageDispatcher for CapturingDispatcher {
 /// 创建 runtime 后**注入 guest 事件派发器**——`events` 导出是宿主契约面，内核缺省
 /// `UnwiredGuestEvents` 派发即 fail-visible（不注入时 `on_bus_message` 必 Err）。
 fn mobile_runtime(aot_cache_dir: Option<std::path::PathBuf>) -> WasmRuntime {
-    // 统一壳 ABI 规格注入（单形态）：移动端事实 = SDK ABI_VERSION + 无 abi-form
-    // 导出（移动 WIT 无 form）——high-abi 拒绝用例依赖真实上限，不能用 UNCONSTRAINED
+    // 统一壳形态规格注入（单形态）：移动 WIT 无 `abi-form` 导出 ⇒ 形态要求为
+    // `None`。整数 ABI 版本协商已随 wit 包版本化退役（ADR 0051 D2）——产物版本
+    // 由 linker 的 import 名逐字匹配裁决，不再有"上限"可注入。
     let runtime = bedcode_wasm_core::test_support::setup_headless_runtime_with_abi(
         aot_cache_dir,
-        bedcode_wasm_core::manager::runtime::AbiPolicy {
-            version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
-            form: None,
-        },
+        bedcode_wasm_core::manager::runtime::AbiPolicy { form: None },
     )
     .expect("create wasm runtime");
     runtime.set_guest_events(std::sync::Arc::new(

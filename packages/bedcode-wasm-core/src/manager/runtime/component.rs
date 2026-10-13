@@ -410,9 +410,11 @@ impl LoadedWasmPlugin {
         }
         "（该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）".to_string()
     }
-    /// - `abi.version()` 语义与宿主注入的 [`AbiPolicy::version`] 完全一致
-    /// - `abi.form()` 必须等于 [`AbiPolicy::form`] 要求值（桌面 = 1（component 形态）；
-    ///   移动 WIT 无 `abi-form` 导出 ⇒ 宿主注入 `form: None` = 不要求）
+    /// **只检查形态**（ADR 0051 D2：整数 ABI 协商随 wit 包版本化退役）：
+    /// - `abi-form.form()` 必须等于 [`AbiPolicy::form`] 要求值（桌面 = 1（component
+    ///   形态）；移动 WIT 无 `abi-form` 导出 ⇒ 宿主注入 `form: None` = 不要求）
+    /// - 版本不在此检查：宿主与 guest 的 `package bedcode:plugin@<version>` 不等时，
+    ///   linker 在实例化期即拒绝（import 名逐字匹配），失败文案自带包名与版本
     fn verify_abi(
         store: &mut Store<WasmPluginState>,
         instance: &Instance,
@@ -421,36 +423,11 @@ impl LoadedWasmPlugin {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
         engine::inject_call_fuel(store)?;
 
-        // `abi.version` 走 core 绑定的原生探测（票 03）：`abi` 虽在 core.wit 却是
-        // cap 追加的导出，不在 `world core` 表内 —— 绑进内核等于让内核对「谁的
-        // abi」表态。原生 `TypedFunc` 探测零绑定零端差异，缺失返回 None 由本处
-        // 按「旧 SDK 产物」判据处理。
-        let version = crate::manager::runtime::core_binding::abi_version(store, instance)?
-            .ok_or_else(|| {
-                AppError::Plugin(
-                    "WASM component missing required export `abi.version` \
-                     （该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）"
-                        .to_string(),
-                )
-            })?;
-
-        // v36（票 02 批次 06）：`form` 自 `abi` 拆入独立接口 `abi-form`（桌面 cap
-        // 导出），SDK 按新契约导出；移动 WIT 无此导出（宿主注入 `form: None` 跳过，
-        // 见上方 [`Self::verify_abi`] 的形态检查段）。`abi-form.form()` 无 `result`
-        // 返回（`() -> u32`），**可以**原生探测——与 `events.*` 那类带 `result` 的
-        // 导出不同（`Result` 不实现 `ComponentNamedList`，原生 TypedFunc 表达不了，
-        // 见 ticket-03 §9.6）。
-        let _form_probe = ();
-
-        if version > abi.version {
-            return Err(AppError::Plugin(format!(
-                "Plugin requires ABI v{} but host supports v{} — please upgrade BedCode",
-                version,
-                abi.version
-            )));
-        }
-
-        // 形态检查（`abi-form` 是桌面 cap 导出；移动 WIT 无此导出，宿主注入
+        // 形态检查（版本协商已随 wit 包版本化退役，ADR 0051 D2）：`abi-form.form()`
+        // 无 `result` 返回（`() -> u32`），**可以**原生探测——与 `events.*` 那类带
+        // `result` 的导出不同（`Result` 不实现 `ComponentNamedList`，原生 TypedFunc
+        // 表达不了，见 ticket-03 §9.6）。版本一致性由 wasmtime linker 的含版本
+        // import 名匹配保证：不等即实例化期被拒，诊断自带包名 + 版本。（`abi-form` 是桌面 cap 导出；移动 WIT 无此导出，宿主注入
         // `form: None` 即跳过——统一壳按注入规格检查，wasm-core 零端形态知识）
         if let Some(expected_form) = abi.form {
             let form = crate::manager::runtime::core_binding::abi_form(store, instance)?
@@ -475,7 +452,7 @@ impl LoadedWasmPlugin {
         // 必须用 ItemName 路径语法（`iface.func` 点号）：组件的接口导出是嵌套
         // 实例形态，`iface#func` 平名字符串的 str 查找恒不命中（wasmtime 47 实证，
         // 票据 06 修复——此前平名探测恒返回 None，二进制导出从未真正被发现）
-        let on_message_binary = "bedcode:plugin/events-binary.on-message-binary"
+        let on_message_binary = crate::contract::export_item("events-binary", "on-message-binary")
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .ok()
             .and_then(|item| {
@@ -489,7 +466,7 @@ impl LoadedWasmPlugin {
         // 语义与 events-binary 同构：未导出 → 状态事件照收（bus），消息帧丢弃 +
         // 首次 warn + 计数（宿主不缓存，spec §2.2 D2）；旧插件加载零回归。
         // 同样必须用 ItemName 路径语法（`iface.func` 点号），理由同上
-        let on_ws_message = "bedcode:plugin/events-ws.on-message"
+        let on_ws_message = crate::contract::export_item("events-ws", "on-message")
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .ok()
             .and_then(|item| {
@@ -497,7 +474,7 @@ impl LoadedWasmPlugin {
                     .get_typed_func::<(String, String, Vec<u8>), ()>(&mut *store, &item)
                     .ok()
             });
-        let on_ws_client_message = "bedcode:plugin/events-ws.on-client-message"
+        let on_ws_client_message = crate::contract::export_item("events-ws", "on-client-message")
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .ok()
             .and_then(|item| {
@@ -514,7 +491,7 @@ impl LoadedWasmPlugin {
         // 消费任务内降级（事件丢弃 + 首次 warn + 计数，宿主不缓存）；新 SDK
         // 产物由 wasm_entry! 无条件导出默认空实现 → 探测命中。
         // 同样必须用 ItemName 路径语法（`iface.func` 点号），理由同 events-ws
-        let on_task_event = "bedcode:plugin/events-task.on-task-event"
+        let on_task_event = crate::contract::export_item("events-task", "on-task-event")
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .ok()
             .and_then(|item| instance.get_typed_func::<(String,), ()>(&mut *store, &item).ok());

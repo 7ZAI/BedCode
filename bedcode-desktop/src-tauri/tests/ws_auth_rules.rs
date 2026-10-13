@@ -110,7 +110,7 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { version: bedcode_plugin_api::abi::ABI_VERSION, form: Some(bedcode_plugin_api::abi::FORM_COMPONENT) }).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }).await;
         plugin_host.init_message_bus().await;
         // v24 认证记录下沉：配对/历史真源 = 认证中心私有库。无头上下文无
         // AppHandle，必须在 activation 前注入私有库根（activate 建表走

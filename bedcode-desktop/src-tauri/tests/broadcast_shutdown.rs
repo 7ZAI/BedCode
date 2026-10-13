@@ -121,8 +121,16 @@ async fn init_test_app_context() {
         let user_plugins_dir = std::env::temp_dir().join(format!("bedcode-itest-userplugins-{}", std::process::id()));
         std::fs::create_dir_all(&user_plugins_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { version: bedcode_plugin_api::abi::ABI_VERSION, form: Some(bedcode_plugin_api::abi::FORM_COMPONENT) }).await;
+        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }).await;
         plugin_host.init_message_bus().await;
+        // guest 事件派发器（生产同款，GUI bootstrap 在 `lib.rs` 注入同一实现）：
+        // 本harness 自建 PluginHost，须自行注入——缺省 `UnwiredGuestEvents` 派发即
+        // fail-visible，会话中心在 ws 断连事件上报时直接报错并被停用，随后
+        // `/api/auth/pairing` 因认证中心不在册而 401（认证裁决 fail-closed）。
+        // **必须在 activate_plugin 之前**：已加载实例持有创建时的派发器快照。
+        plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+            bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
+        ));
         plugin_host
             .wasm_host_ctx()
             .set_plugin_db_root(Some(session_plugin_db_root().clone()));

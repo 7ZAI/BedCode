@@ -74,6 +74,11 @@ file-transfer 是对等网络传输——**双端是同一产品在两种宿主�
 共享产物。锁断言 `SHARED_ABI_VERSION ≤ 双端 ABI_VERSION`——任一端 bump 后必须
 重估（fail-visible）。
 
+> **已退役（ADR 0051 D2，2026-10-13）**：整数 ABI 与协商机制整体退役，`wasm_entry_with_abi!`
+> 宏与 `SHARED_ABI_VERSION` 常量均已删除；共享产物的双端约束改由「双端 wit 包版本对齐」
+> 承担（锁在 `packages/bedcode-file-transfer-core/src/wiring_lock.rs`）。本节保留为决策
+> 当时的记录。
+
 ### D6 · 工具链统一为 unknown-unknown + 组件化（file-transfer 例外）
 
 file-transfer 是双端共享产物源，若桌面用 wasm32-wasip3 直出而移动用

@@ -19,7 +19,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "mobile-fs";
 
 /// 本域提供的 WIT 接口（必须与 `cap-mobile.wit` 逐字一致）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-fs-mobile"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-fs-mobile"];
 
 /// 本域的权限位（与 WIT / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["fs:write"];

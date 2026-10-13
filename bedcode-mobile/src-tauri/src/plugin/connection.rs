@@ -1,4 +1,4 @@
-//! host-connection 宿主 adapter（移动独有 `primary-target`；wasm-core-mobile-purity 票 04 自 wasm-core 迁入）
+//! host-connection-target 宿主 adapter（移动独有 `primary-target`；wasm-core-mobile-purity 票 04 自 wasm-core 迁入）
 //!
 //! 只暴露**引擎事实**（最后配置的目标地址 / 端口 + 连接状态），零业务投影：
 //! 不返回设备展示名（name 归插件自持）、不解释连接语义（B1–B6 零命中）。
@@ -20,7 +20,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "mobile-connection";
 
 /// 本域提供的 WIT 接口（必须与 `cap-mobile.wit` 逐字一致）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-connection"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-connection-target"];
 
 /// 本域无权限门（ADR 0022 已登记的例外，见模块头注）
 pub const MODULE_PERMISSIONS: &[&str] = &[];
@@ -33,7 +33,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 15,
 };
 
-/// host-connection 能力模块
+/// host-connection-target 能力模块
 pub struct ConnectionModule;
 
 impl HostModule for ConnectionModule {

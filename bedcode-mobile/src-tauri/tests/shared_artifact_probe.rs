@@ -34,13 +34,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bedcode_wasm_core::manager::runtime::{AbiPolicy, WasmRuntime};
-use bedcode_wasm_core::test_support::{build_host_ctx, plugin_abi_version, runtime_engine};
+use bedcode_wasm_core::test_support::{build_host_ctx, runtime_engine};
 use wasmtime::component::Component;
 
 const PLUGIN_ID: &str = "com.bedcode.file-transfer";
 
-/// 共享产物自报版本（= 协商 ABI 下界，规格 §1）；必须 ≤ 双端 SDK 的 ABI_VERSION
-const SHARED_ABI_VERSION: u32 = 21;
 
 /// 移动端产物文件名（build 脚本产物名，两端同名）
 const ARTIFACT_FILE: &str = "bedcode_plugin_file_transfer.wasm";
@@ -100,10 +98,7 @@ fn mobile_runtime(aot_cache_dir: Option<PathBuf>) -> WasmRuntime {
 
     let runtime = bedcode_wasm_core::test_support::setup_headless_runtime_with_abi(
         aot_cache_dir,
-        AbiPolicy {
-            version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
-            form: None,
-        },
+        AbiPolicy { form: None },
     )
     .expect("create wasm runtime");
     runtime.set_guest_events(Arc::new(
@@ -147,20 +142,11 @@ fn desktop_artifact_instantiates_on_mobile_host_closing_desktop_only_imports() {
             // 失败即 import 不闭合：错误文本会点名缺失的 interface
             .expect("instantiate desktop-built artifact on mobile host (imports must close)");
 
-        // 协商 ABI：共享产物自报 SHARED_ABI_VERSION，移动宿主上限须放行
-        let reported = plugin_abi_version(&mut plugin)
-            .expect("guest exports abi.version()")
-            .expect("abi.version() returned no value");
-        assert_eq!(
-            reported,
-            SHARED_ABI_VERSION,
-            "共享产物自报版本须等于协商常量 SHARED_ABI_VERSION"
-        );
-        assert!(
-            reported <= bedcode_plugin_api_mobile::abi::ABI_VERSION,
-            "共享产物版本 {reported} 高于移动宿主上限 {} —— 宿主会拒载",
-            bedcode_plugin_api_mobile::abi::ABI_VERSION
-        );
+        // 版本一致性不再由产物自报整数（该机制随 wit 包版本化退役，ADR 0051 D2）：
+        // 上面「实例化成功」本身就是最强断言——共享产物按桌面 world 构建，import 名
+        // 带 `package bedcode:plugin@<version>`，移动宿主版本不等即实例化期被拒。
+        // 版本真源与双端对齐由 `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs`
+        // （10 源 + 9 生成物）与 `bedcode-file-transfer-core/src/wiring_lock.rs` 断言。
 
         // 产物 id 与宿主加载的 manifest 同源（防张冠李戴加载到别的插件产物）
         let manifest: serde_json::Value =

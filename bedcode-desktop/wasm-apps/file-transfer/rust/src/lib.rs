@@ -56,13 +56,6 @@ use std::sync::OnceLock;
 
 pub(crate) use peer::PLUGIN_ID;
 
-/// 双端协商 ABI 版本（共享产物自报值）
-///
-/// 必须 ≤ 双端宿主 `AbiPolicy` 的下界（当前 = 移动端 ABI）：桌面 SDK 的
-/// `ABI_VERSION` 高于该下界，故经 `wasm_entry_with_abi!` 显式传本常量。
-/// 任一端 bump ABI 后需重估（契约锁断言 ≤ 双端 `ABI_VERSION`，见 T7）。
-pub(crate) const SHARED_ABI_VERSION: u32 = 21;
-
 /// 按平台取「信任决策面」端口（差异面⑦的唯一选择点）。
 ///
 /// 桌面 = 经互调认证中心（`DesktopConsentGate`），移动 = 直答宿主原语
@@ -525,4 +518,4 @@ fn require_str(args: &serde_json::Value, key: &str) -> anyhow::Result<String> {
 }
 
 // 协商 ABI（双端下界）：桌面宿主持 38 ≥ 21、移动宿主 21 ≥ 21 均放行
-bedcode_plugin_api::wasm_entry_with_abi!(FileTransferPlugin, SHARED_ABI_VERSION);
+bedcode_plugin_api::wasm_entry!(FileTransferPlugin);

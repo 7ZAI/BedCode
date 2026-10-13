@@ -26,6 +26,7 @@
 //! 系统组件不消费自己提供的能力）。自调用（提供者 == 调用方）直接回落
 //! 宿主原语，避免死锁。
 
+use std::sync::OnceLock;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -37,9 +38,9 @@ use crate::host_api::context::CapabilityTarget;
 
 // ==================== 能力名与导出探测表 ====================
 
-/// host-storage 能力（WIT `bedcode:plugin/host-storage`，装配框架首条路由能力）
+/// host-storage 能力（WIT `bedcode:plugin@0.1.0/host-storage`，装配框架首条路由能力）
 ///
-/// 内建可路由行（[`BUILTIN_ROUTABLE`]）：它的端口与真源都在内核/宿主内
+/// 内建可路由行（见 [`routable_capabilities`] 与 [`storage_exports`]）：它的端口与真源都在内核/宿主内
 /// （`host_api/sqlite_ports.rs`），故词汇由内核自持。**能力域侧的能力一律自报**
 /// （`host-mdns` 见 `bedcode-discovery-engine::routing`，票 02 批次 03）——内核不得
 /// 再出现任何能力域的字面量。
@@ -52,32 +53,41 @@ pub(crate) const CAP_HOST_STORAGE: &str = "host-storage";
 /// `PluginHost::call_auth_policy`（票 06：并入统一 guest 门面，不再直锁实例）。
 pub(crate) const CAP_AUTH_POLICY: &str = "auth-policy";
 
-/// 能力接口导出函数名（`ItemName` 路径语法 `pkg:ns/iface.func`——组件的接口
+/// 能力接口导出函数名（`ItemName` 路径语法 `ns:pkg/iface.func@version`——组件的接口
 /// 导出是「接口实例」嵌套形态，平名字符串 `iface#func` 无法被
 /// `Instance::get_func` 的 str 查找命中，wasmtime 47 实证）
-pub(crate) const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
-pub(crate) const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
-pub(crate) const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
+///
+/// **不设本地常量**：表项一律经 [`crate::contract::export_item`] 派生（版本后缀是
+/// 构造参数，真源在仓根 `contracts/bedcode-plugin-package.rs`）。写成 `const` 会把
+/// 版本复制到第二处——那正是票 03 要消灭的散落字面量。
 
 /// `host-storage` 内建行的导出表（端口住宿主 `host_api/sqlite_ports.rs`）
-const STORAGE_EXPORTS: &[&str] = &[EXPORT_STORAGE_GET, EXPORT_STORAGE_SET, EXPORT_STORAGE_DELETE];
+///
+/// **为什么是函数而不是 `const`**：表项含派生版本，`const` 上下文不可用；`OnceLock`
+/// 缓存保证与 `routable_capabilities()` 的 `&'static [&'static str]` 形态兼容
+/// （闭表锁按 `&[&str]` 逐字比对，返回 `String` 会把整条链改成 `Vec<String>`）。
+fn storage_exports() -> &'static [&'static str] {
+    static TABLE: OnceLock<&'static [&'static str]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        Box::leak(Box::new([
+            crate::contract::export_item("host-storage", "get"),
+            crate::contract::export_item("host-storage", "set"),
+            crate::contract::export_item("host-storage", "delete"),
+        ]))
+    })
+}
 
-/// `host-mdns` 五条原语的导出函数名（同上 ItemName 语法）
+/// `host-mdns` 五条原语的导出函数名（经 [`crate::contract::export_item`] 派生）
 ///
 /// **这是调用面的一半，不是词汇真源**：提供者**探测**用的导出表由该域自报
-/// （`bedcode-discovery-engine::routing::EXPORTS`，票 02 批次 03 起）；而这组常量是
+/// （`bedcode-discovery-engine::routing::EXPORTS`，票 02 批次 03 起）；而这组派生值是
 /// **wasm 编译期具名调用面**的输入（`manager/host/owner.rs` 的 `OpKind::export`——
 /// 闭集 op 的依据见该文件「闭集而非泛型的依据」，泛型 erase 会退化成动态 `Val`
 /// 编解码）。两处是同一组字符串，由
 /// [`tests::mdns_call_surface_names_match_the_domain_self_report`] 逐字钉住。
-pub(crate) const EXPORT_MDNS_BROWSE: &str = "bedcode:plugin/host-mdns.browse";
-pub(crate) const EXPORT_MDNS_STOP_BROWSE: &str = "bedcode:plugin/host-mdns.stop-browse";
-pub(crate) const EXPORT_MDNS_ADVERTISE: &str = "bedcode:plugin/host-mdns.advertise";
-pub(crate) const EXPORT_MDNS_STOP_ADVERTISE: &str = "bedcode:plugin/host-mdns.stop-advertise";
-pub(crate) const EXPORT_MDNS_IS_ADVERTISING: &str = "bedcode:plugin/host-mdns.is-advertising";
-
-/// 认证策略导出函数名（`auth-policy` 接口实例形态）
-pub(crate) const EXPORT_AUTH_VERIFY_DEVICE_TOKEN: &str = "bedcode:plugin/auth-policy.verify-device-token";
+///
+/// 认证策略导出函数名（`auth-policy` 接口实例形态）同样经
+/// [`crate::contract::export_item`] 派生，见 [`probe_only_capabilities`]。
 
 /// 路由方法前缀（可路由表第二项；内建行自持，能力域行的前缀随词汇自报）
 ///
@@ -139,7 +149,6 @@ const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
 /// 住宿主 `host_api/sqlite_ports.rs`）。**能力域行一律自报**（`bedcode-host-kit` 的
 /// 路由词汇自报面；`host-mdns` 见 `bedcode-discovery-engine::routing`），故内核源码里
 /// 不再出现任何能力域的字面量（票 02 批次 03）。
-const BUILTIN_ROUTABLE: &[(&str, &str, &[&str])] = &[(CAP_HOST_STORAGE, FORWARD_STORAGE, STORAGE_EXPORTS)];
 
 /// 可路由能力表（**闭表**）：内建行 ∪ 能力域自报行（按能力名字典序）
 ///
@@ -163,7 +172,10 @@ const BUILTIN_ROUTABLE: &[(&str, &str, &[&str])] = &[(CAP_HOST_STORAGE, FORWARD_
 /// 白名单、域端口装配器同范式），只能运行期求值。内核自身的测试二进制不链能力域
 /// ⇒ 只剩内建行（合法形态；宿主侧锁负责断言自报行到场）。
 pub(crate) fn routable_capabilities() -> Vec<(&'static str, &'static str, &'static [&'static str])> {
-    let mut table: Vec<(&'static str, &'static str, &'static [&'static str])> = BUILTIN_ROUTABLE.to_vec();
+    // 内建行就地构造：表项是 `contract::export_item` 的派生值（含版本后缀），
+    // `const` 上下文不可用；自报行同为例（inventory 装配期汇集），两者形态一致。
+    let mut table: Vec<(&'static str, &'static str, &'static [&'static str])> =
+        vec![(CAP_HOST_STORAGE, FORWARD_STORAGE, storage_exports())];
     table.extend(
         bedcode_host_kit::collected_routable_capabilities()
             .into_iter()
@@ -180,7 +192,17 @@ pub(crate) fn routable_capabilities() -> Vec<(&'static str, &'static str, &'stat
 ///
 /// 本表的能力**不进注册表路由**：`auth-policy` 的消费方是宿主中间件而非插件
 /// import，注册为路由提供者会让任意插件接管认证策略，语义错误。
-const PROBE_ONLY_CAPABILITIES: &[(&str, &[&str])] = &[(CAP_AUTH_POLICY, &[EXPORT_AUTH_VERIFY_DEVICE_TOKEN])];
+/// 仅探测能力表（`(能力名, 导出函数表)`）——表项经 [`crate::contract::export_item`] 派生
+fn probe_only_capabilities() -> &'static [(&'static str, &'static [&'static str])] {
+    static TABLE: OnceLock<Vec<(&'static str, &'static [&'static str])>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let exports: &'static [&'static str] = Box::leak(Box::new([
+            crate::contract::export_item("auth-policy", "verify-device-token"),
+        ]));
+        vec![(CAP_AUTH_POLICY, exports)]
+    })
+    .as_slice()
+}
 
 // ==================== 能力注册表 ====================
 
@@ -390,7 +412,7 @@ pub(crate) fn probe_exported_capabilities(instance: &Instance, store: &mut Store
     routable_capabilities()
         .into_iter()
         .map(|(cap, _, exports)| (cap, exports))
-        .chain(PROBE_ONLY_CAPABILITIES.iter().copied())
+        .chain(probe_only_capabilities().iter().copied())
         .filter(|(_, exports)| {
             exports.iter().all(|name| {
                 // ItemName 路径语法（见 EXPORT_* 注释）；解析失败即探测未命中
@@ -743,33 +765,73 @@ mod tests {
         );
     }
 
-    /// 调用面词汇（内核 `EXPORT_MDNS_*`，wasm 编译期具名，机制）与域自报词汇
-    /// （`bedcode-discovery-engine::routing::EXPORTS`）必须**逐字一致**
+    /// 调用面词汇（内核经 `contract::export_item("host-mdns", …)` 派生，wasm 编译期
+    /// 具名，机制）与域自报词汇（`bedcode-discovery-engine::routing::EXPORTS` 的字面量）
+    /// 必须**逐字一致**
     ///
-    /// 两处并存的原因见 [`EXPORT_MDNS_BROWSE`] 的文档：探测表归域（词汇真源），
+    /// 两处并存的原因见本文件 `host-mdns` 导出表的文档：探测表归域（词汇真源），
     /// 调用面留内核（`OpKind::export` 必须编译期具名）。值是同一组字符串 ⇒ 必须有锁，
     /// 否则域侧改接口（如 `is-advertising` 改名）后探测永远不命中，WASM 提供者被静默忽略。
+    ///
+    /// **两侧抽取形态不同**（版本化后必然如此）：域侧是 const 字面量（`inventory` 静态
+    /// 自报要求编译期常量），内核侧是运行期派生调用。故本锁抽「函数名」两侧对齐后再
+    /// **值层逐字比对**——只比函数名会漏掉版本漂移（域侧 `@0.1.0` vs 内核 `@0.2.0`
+    /// 函数名相同、值不等，而值不等正是运行期探测恒 None 的原因）。
     #[test]
     fn mdns_call_surface_names_match_the_domain_self_report() {
-        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let domain_src = std::fs::read_to_string(workspace.join("bedcode-discovery-engine/src/routing.rs"))
-            .expect("读域侧路由词汇 routing.rs");
         let kernel_src = std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/manager/capability.rs"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/manager/host/owner.rs"),
         )
-        .expect("读本文件（调用面常量）");
-
-        let domain = export_literals(&domain_src);
-        let kernel = export_literals(&kernel_src);
-        assert_eq!(
-            domain.len(),
-            5,
-            "域自报的 host-mdns 导出表应为 5 条，实际 {domain:?}（锁自身失效即红）"
+        .expect("读调用面所在文件（owner.rs 的 OpKind::export 分支）");
+        let kernel_src = format!(
+            "{kernel_src}\n{}",
+            std::fs::read_to_string(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/manager/capability.rs"),
+            )
+            .expect("读本文件（探测表派生点）")
         );
-        assert_eq!(kernel, domain, "内核调用面的 host-mdns 导出名与域自报词汇不一致");
+        let domain_src = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../bedcode-discovery-engine/src/routing.rs"),
+        )
+        .expect("读域侧路由词汇 routing.rs");
+
+        let kernel_funcs = derived_export_funcs(&kernel_src);
+        let domain_funcs = domain_export_funcs(&domain_src);
+        assert_eq!(
+            domain_funcs.len(),
+            5,
+            "域自报的 host-mdns 导出表应为 5 条，实际 {domain_funcs:?}（锁自身失效即红）"
+        );
+        assert_eq!(
+            kernel_funcs, domain_funcs,
+            "内核调用面的 host-mdns 函数名与域自报词汇不一致"
+        );
+
+        // 值层逐字：内核派生值必须与域侧字面量完全相等（含版本后缀）
+        let domain_values = export_literals(&domain_src);
+        let kernel_values: Vec<String> = kernel_funcs
+            .iter()
+            .map(|func| {
+                crate::contract::export_item("host-mdns", func).to_string()
+            })
+            .collect();
+        let mut domain_sorted = domain_values.clone();
+        domain_sorted.sort();
+        let mut kernel_sorted = kernel_values.clone();
+        kernel_sorted.sort();
+        assert_eq!(
+            kernel_sorted, domain_sorted,
+            "内核派生的 host-mdns 导出名与域自报字面量不一致（版本后缀漂移？）"
+        );
     }
 
     /// 抽出源码里**未转义**的 host-mdns 导出名字面量（去重排序）
+    ///
+    /// 匹配前缀 `bedcode:plugin/host-mdns.` 对**有版本 / 无版本**两种形态都成立
+    /// （版本在末尾），故本抽取对版本位置变化免疫；版本一致性由值层比对与
+    /// `wit_package_version_lock.rs` 负责。
     ///
     /// 两条排除规则：转义形态（下面的模式串 `\"…`）与文档里带引号的模式串（`"…`）
     /// 都不算——否则锁会把自己的模式串当成一条词汇（两条都踩过）。
@@ -783,6 +845,52 @@ mod tests {
             })
             .collect();
         out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// 抽源码里 `export_item("host-mdns", "<func>")` 形态的函数名（去重排序）
+    ///
+    /// **逐行跳过注释**（`//` / `///` / `//!` 开头）：文档里的示例形态（如
+    /// `"<func>"` 占位）不是词汇，不排掉锁会把自己的文档当成一条导出名。
+    fn derived_export_funcs(src: &str) -> Vec<String> {
+        let code: String = src
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut out: Vec<String> = Vec::new();
+        let needle = "export_item(\"host-mdns\", \"";
+        let mut rest = code.as_str();
+        while let Some(idx) = rest.find(needle) {
+            let after = &rest[idx + needle.len()..];
+            let end = after
+                .find('"')
+                .unwrap_or_else(|| panic!("export_item 调用缺右引号：{after}"));
+            out.push(after[..end].to_string());
+            rest = &after[end..];
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// 抽源码里 host-mdns 导出名字面量里的**函数名**段（`.` 之后、`@` 之前）
+    fn domain_export_funcs(src: &str) -> Vec<String> {
+        let mut out: Vec<String> = export_literals(src)
+            .into_iter()
+            .map(|lit| {
+                // 先剥版本段（`…browse@0.1.0` → `…browse`），再取点号后的函数名；
+                // 顺序反了会被版本的点号（`0.1.0`）切成 `0`
+                let without_version = lit.split('@').next().expect("字面量非空");
+                without_version
+                    .rsplit('.')
+                    .next()
+                    .expect("字面量含函数名")
+                    .to_string()
+            })
+            .collect();
+        out.sort();
         out.dedup();
         out
     }
@@ -811,7 +919,7 @@ mod tests {
         );
 
         // 仅探测能力不得与可路由能力同名（否则「仅探测」的语义说明失真）
-        for (cap, _) in PROBE_ONLY_CAPABILITIES {
+        for (cap, _) in probe_only_capabilities() {
             assert!(
                 !is_routable(cap),
                 "'{cap}' is listed as probe-only but is also routable"

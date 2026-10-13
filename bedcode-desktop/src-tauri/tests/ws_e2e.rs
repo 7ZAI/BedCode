@@ -1035,7 +1035,7 @@ fn test_session_control_endpoint_direct_roundtrip() {
     if positive_auth_needs_dedicated_binary("test_session_control_endpoint_direct_roundtrip") {
         return;
     }
-    use bedcode_plugin_api::EndpointAuth;
+    use bedcode_server_websocket::endpoint::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
 
@@ -1398,7 +1398,7 @@ fn test_terminal_stream_endpoint_closed_loop() {
     if positive_auth_needs_dedicated_binary("test_terminal_stream_endpoint_closed_loop") {
         return;
     }
-    use bedcode_plugin_api::EndpointAuth;
+    use bedcode_server_websocket::endpoint::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
 
@@ -1717,7 +1717,7 @@ fn test_ws_device_events_and_auth_records_closed_loop() {
         return;
     }
     use bedcode_desktop_lib::wasm_core::intercall::call_api;
-    use bedcode_plugin_api::EndpointAuth;
+    use bedcode_server_websocket::endpoint::EndpointAuth;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
 

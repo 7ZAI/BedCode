@@ -46,7 +46,39 @@ import { generateManifest } from './manifest-gen.js'
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATE_DIR = join(SDK_ROOT, 'template')
 
+/** 组件化工具 manifest 的仓库内相对路径（工具为仓库级 crate，非 SDK 自带） */
+const COMPONENTIZE_REL = join('packages', 'bedcode-componentize', 'Cargo.toml')
+
 // ==================== 工具函数 ====================
+
+/**
+ * 定位仓库级组件化工具 `packages/bedcode-componentize/Cargo.toml`。
+ *
+ * 不能按固定深度从 SDK 根拼绝对路径：SDK 作为依赖安装时（pnpm 把 `file:` 依赖**复制**进
+ * `node_modules/.pnpm/…`，node 解析入口脚本不会回落到源码目录），那个深度指向包仓库内部
+ * ⇒ manifest 找不到，`cargo run --manifest-path` 直接失败。故自 SDK 根与插件工作目录
+ * 各向上逐级查找 `packages/bedcode-componentize/Cargo.toml`，命中第一个即用；
+ * 两处都找不到时报错并给出获取方式（此时通常意味着插件工程不在本仓库内）。
+ *
+ * @param {string} cwd 插件工程目录（构建时的工作目录）
+ * @returns {string} 组件化工具 manifest 的绝对路径
+ */
+function resolveComponentizeManifest(cwd) {
+  for (const start of [SDK_ROOT, resolve(cwd)]) {
+    let dir = start
+    for (;;) {
+      const candidate = join(dir, COMPONENTIZE_REL)
+      if (existsSync(candidate)) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  throw new Error(
+    `找不到组件化工具 ${COMPONENTIZE_REL}（已自 SDK 目录与插件目录 ${cwd} 向上查找）。` +
+      '该工具是仓库级 crate：插件工程需位于本仓库内，或先把 packages/bedcode-componentize 放到可达路径。',
+  )
+}
 
 /** 解析命令行参数：positional 数组 + flags 映射（--flag value / --flag=value / 布尔 --flag） */
 function parseArgs(argv) {
@@ -594,7 +626,7 @@ function cmdBuild(flags) {
     // 工具住仓库级 `packages/bedcode-componentize`（file-transfer 单产物后双端
     // 共用同一编码路径，2026-10-13 自 SDK rust/tools/ 提升）
     console.log('\n[bedcode-plugin] ====== 组件化 WASM (Component Model) ======')
-    const componentizeManifest = resolve(SDK_ROOT, '../../..', 'packages/bedcode-componentize/Cargo.toml')
+    const componentizeManifest = resolveComponentizeManifest(cwd)
     run(
       'cargo',
       ['run', '--release', '--manifest-path', componentizeManifest, '--', wasmPath, '-o', wasmPath],

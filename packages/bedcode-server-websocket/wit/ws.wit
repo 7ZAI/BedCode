@@ -1,4 +1,4 @@
-package bedcode:plugin;
+package bedcode:plugin@0.1.0;
 // ======================================================================
 // WebSocket 能力域自持 bindgen 分片
 //

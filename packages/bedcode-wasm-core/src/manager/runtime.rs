@@ -11,9 +11,10 @@
 //! - Engine/Linker/Store 生命周期 + WASI 装配（[`wasi`]，p2/p3，默认全开）+
 //!   [`component`]（导出调用骨架 + 宿主自报模块的装配入口；WIT impl 面在各端宿主
 //!   `src-tauri/src/plugin/*.rs`）
-//! - **ABI 版本 / 形态检查参数化**（[`AbiPolicy`]）：wasm-core 零端 ABI 知识，
-//!   版本上限与 abi-form 要求由宿主装配时注入（桌面 `bedcode_plugin_api` 37 +
-//!   form=1；移动 `bedcode_plugin_api_mobile` 20 + form=None）
+//! - **组件形态检查参数化**（[`AbiPolicy`]，只管 `abi-form`）：wasm-core 零端知识，
+//!   形态要求（桌面 `form = Some(1)` / 移动 `None`）由宿主装配时注入；整数 ABI 与
+//!   版本协商已随 wit 包版本化退役（ADR 0051 D2）——版本一致性由 linker 按含版本
+//!   import 名精确匹配保证
 //! - 端差异宿主侧表达：cap 域 `Host` impl 经 `HostModule` 自报汇入同一个 Linker；
 //!   `events` 导出契约由宿主注入 [`guest_events::GuestEventDispatcher`]；
 //!   权限门 / 插件私有库布局是宿主实现差异（移动 host_domains，D7 语义不变）。
@@ -125,32 +126,34 @@ use wasmtime::Engine;
 
 // 统一错误类型/结果（引擎级真源 bedcode-server-base，lib 再导出）
 
-/// 宿主支持的 ABI 规格（**端事实**，宿主装配时注入；wasm-core 零端 ABI 知识）
+/// 宿主要求的组件**形态**规格（**端事实**，宿主装配时注入；wasm-core 零端知识）
 ///
-/// 用户裁决（2026-10-13）：wasm-core 提供统一基础 ABI（core.wit），真正 ABI =
-/// 宿主组装各自 SDK WIT（cap 组合）后的产物——版本上限与 abi-form 要求因此不在
-/// 内核。wasm-core 只保留检查**机制**（探测 + 超限拒绝），版本值由宿主给：
-/// - 桌面：`bedcode_plugin_api::abi::ABI_VERSION`（38）+ `form = Some(FORM_COMPONENT)`
-/// - 移动：`bedcode_plugin_api_mobile::abi::ABI_VERSION`（21）+ `form = None`
-///   （移动 WIT 无 `abi-form` 导出，不要求）
+/// **只管形态，不再管版本**（ADR 0051 D2）：整数 `ABI_VERSION` 与 WIT `interface abi`
+/// 已退役——契约版本搬上 wire（`package bedcode:plugin@<version>`，见
+/// [`crate::contract`]），宿主与 guest 版本不等由 wasmtime linker 按含版本的完整
+/// import 名**精确匹配**直接拒绝，失败诊断自带包名 + 版本（并命中
+/// `stale_artifact_rebuild_hint` 的重建指引）。内核不再有任何版本协商代码。
+///
+/// 形态与版本**正交**：`abi-form.form` 走独立接口（桌面 cap 导出），语义是
+/// 「component 形态 vs core 形态」的加载路径判别，故原样保留：
+/// - 桌面：`form = Some(FORM_COMPONENT)`（`bedcode_plugin_api::form::FORM_COMPONENT`）
+/// - 移动：`form = None`（移动 WIT 无 `abi-form` 导出，不要求）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AbiPolicy {
-    /// 宿主支持的 ABI 版本上限（插件 `abi.version()` 高于此值 → 拒绝加载）
-    pub version: u32,
+pub struct FormPolicy {
     /// 要求组件声明的 `abi-form` 值（桌面 cap 导出 `abi-form.form` = 1；
     /// `None` = 不要求，探测到也不比较）
     pub form: Option<u32>,
 }
 
-impl AbiPolicy {
-    /// 无上限 / 无 form 要求（仅探测不拒绝）：第三方 / 无头宿主显式选择。
+/// 形态检查策略别名：保留 `AbiPolicy` 名以免调用面大改（语义已窄化为形态，见上）
+pub type AbiPolicy = FormPolicy;
+
+impl FormPolicy {
+    /// 无 form 要求（不探测不拒绝）：第三方 / 无头宿主显式选择。
     ///
-    /// **生产宿主必须显式注入真实规格**——默认 UNCONSTRAINED 是给无端事实的
-    /// 测试 / 无头装配用的，别当生产默认（忘了注入 = ABI 超限插件放行）。
-    pub const UNCONSTRAINED: AbiPolicy = AbiPolicy {
-        version: u32::MAX,
-        form: None,
-    };
+    /// **生产桌面宿主必须显式注入真实规格**——默认 UNCONSTRAINED 是给无端事实的
+    /// 测试 / 无头装配用的（移动端 WIT 无 form 导出，生产值同样是 `form: None`）。
+    pub const UNCONSTRAINED: FormPolicy = FormPolicy { form: None };
 }
 
 impl Default for AbiPolicy {
@@ -279,7 +282,7 @@ impl EngineSetup {
         self
     }
 
-    /// 注入 ABI 规格（端事实；见 [`AbiPolicy`]——桌面 38 + form=1，移动 21 + None）
+    /// 注入形态规格（端事实；见 [`AbiPolicy`]——桌面 `form = Some(1)`，移动 `None`）
     pub fn with_abi(mut self, abi: AbiPolicy) -> Self {
         self.abi = abi;
         self
@@ -297,7 +300,7 @@ impl WasmRuntime {
     /// `first_party_dirs`：第一方免弹窗归属清单（票 08/P0-2，宿主装配时注入；空表
     /// = 无免弹窗项）——经本构造函数直通 `FsAuthChecker`。
     ///
-    /// **ABI 规格**（[`AbiPolicy`]）：生产宿主必须显式注入真实规格；测试/无头
+    /// **形态规格**（[`AbiPolicy`]）：生产桌面宿主必须显式注入；测试/无头
     /// 传 [`AbiPolicy::UNCONSTRAINED`]。
     pub fn new(
         storage: Arc<PluginStorage>,

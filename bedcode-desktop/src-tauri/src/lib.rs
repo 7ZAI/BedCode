@@ -546,8 +546,7 @@ pub fn run() {
                 // 桌面 ABI 规格（端事实由宿主注入：wasm-core 零端 ABI 知识，
                 // 版本上限 + abi-form 要求来自桌面 SDK 组装后的契约）
                 wasm_core::manager::runtime::AbiPolicy {
-                    version: bedcode_plugin_api::abi::ABI_VERSION,
-                    form: Some(bedcode_plugin_api::abi::FORM_COMPONENT),
+                    form: Some(bedcode_plugin_api::form::FORM_COMPONENT),
                 },
             ));
             // 注入消息总线 dispatcher（两阶段初始化）

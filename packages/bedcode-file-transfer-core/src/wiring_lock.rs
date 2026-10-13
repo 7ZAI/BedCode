@@ -20,9 +20,11 @@
 //!    （重建 = 双产物复活），且共享 crate **只链桌面 SDK**（`Cargo.toml` 不得出现
 //!    `bedcode-plugin-api-mobile`——「移动实现」是桌面 SDK 上的第二套端口行为，
 //!    不是第二套 SDK）；
-//! 6. **协商 ABI 受控**：共享 crate 必须经 `wasm_entry_with_abi!` 显式传
-//!    `SHARED_ABI_VERSION`，且其值 ≤ 双端 SDK 的 `ABI_VERSION`（桌面宿主 38 /
-//!    移动宿主 21 均放行；任一端 bump 后重估）。
+//! 6. **双端包版本对齐受控**：共享产物被双端加载，import 名带
+//!    `package bedcode:plugin@<version>` ⇒ 双端版本必须相等，否则一端实例化失败。
+//!    原「协商 ABI 受控」判据（`wasm_entry_with_abi!` + `SHARED_ABI_VERSION ≤ 双端
+//!    ABI_VERSION`）随整数 ABI 退役（ADR 0051 D2）整体退役，改由本判据断言**双端
+//!    端清单 package 版本与仓根真源逐字一致**（共享产物场景的唯一跨端约束）。
 //! 7. **events 并集签名受控**：桌面 wit 的 `interface events` 必须恰好等于
 //!    「桌面词汇 2 + 移动词汇 5」，且移动 5 函数签名与移动 wit **逐字一致**
 //!    ——两端宿主都按函数名派发，缺函数或签名漂移都不会编译报错，只在该端运行时
@@ -369,41 +371,60 @@ fn shared_app_depends_on_desktop_sdk_only() {
     );
 }
 
-/// 判据 6：协商 ABI 受控——显式传值且 ≤ 双端 SDK 的 ABI_VERSION
+/// 判据 6：双端包版本对齐受控——共享产物跨双端加载，两端版本必须相等
+///
+/// **为什么这是共享产物场景的唯一跨端约束**：契约版本进入 import 名后，wasmtime 按
+/// 含版本的完整名精确匹配 ⇒ 双端版本不等即有一端实例化期被拒。非共享产物场景双端各自
+/// bump 即可（各自 host↔guest 自洽），不受本判据约束（ADR 0051 D3）。
 #[test]
-fn shared_abi_version_is_negotiated_and_bounded() {
-    let lib_rs = app_src_dir().join("lib.rs");
-    let prod = prod_lines(&lib_rs);
-
-    // 显式传值：不得走默认 ABI 的 wasm_entry!（桌面 ABI 38 > 移动宿主 21 会被拒）
-    assert!(
-        contains(&prod, "wasm_entry_with_abi!"),
-        "共享产物必须经 wasm_entry_with_abi! 显式传协商 ABI（默认路径会自报桌面 38，\
-         移动宿主 verify_abi 拒绝）"
+fn shared_artifact_ends_align_on_one_package_version() {
+    // 仓根真源（Rust 常量文件，票 03 单点化）
+    let source = fs::read_to_string(repo_root().join("contracts/bedcode-plugin-package.rs"))
+        .expect("读仓根契约包真源 contracts/bedcode-plugin-package.rs");
+    let const_of = |name: &str| -> String {
+        let needle = format!("pub const {name}: &str = \"");
+        let start = source
+            .find(&needle)
+            .unwrap_or_else(|| panic!("真源缺常量 {name}"))
+            + needle.len();
+        let rest = &source[start..];
+        let end = rest.find('"').expect("常量未闭合");
+        rest[..end].to_string()
+    };
+    let (name, version) = (const_of("PACKAGE_NAME"), const_of("PACKAGE_VERSION"));
+    assert_eq!(
+        const_of("PACKAGE"),
+        format!("{name}@{version}"),
+        "真源自相矛盾：PACKAGE != PACKAGE_NAME@PACKAGE_VERSION"
     );
-    let shared = parse_u32_const(&prod, "SHARED_ABI_VERSION")
-        .expect("lib.rs 缺 SHARED_ABI_VERSION 常量");
-    let desktop = sdk_abi_version("bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs");
-    let mobile = sdk_abi_version("bedcode-mobile/packages/plugin-sdk-mobile/rust/src/abi.rs");
-    assert!(
-        shared <= desktop && shared <= mobile,
-        "SHARED_ABI_VERSION({shared}) 超出双端下界（desktop {desktop} / mobile {mobile}）——\
-         移动宿主会拒绝加载；重估协商值并同步本锁"
-    );
-}
 
-/// 从 SDK `abi.rs` 解析 `ABI_VERSION` 常量值
-fn sdk_abi_version(rel: &str) -> u32 {
-    let path = repo_root().join(rel);
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("读 {} 失败: {e}", path.display()));
-    let needle = "pub const ABI_VERSION: u32 =";
-    for line in text.lines() {
-        if let Some(rest) = line.split_once(needle) {
-            let value = rest.1.split(';').next().unwrap_or("").trim();
-            return value.parse().unwrap_or_else(|_| panic!("{} ABI_VERSION 解析失败", rel));
-        }
+    // 双端端清单只声明包名，版本由拼装脚本注入 ⇒ 两端清单必须同指一个包名
+    for end in [
+        "bedcode-desktop/packages/plugin-sdk-desktop/compose.json",
+        "bedcode-mobile/packages/plugin-sdk-mobile/compose.json",
+    ] {
+        let text = fs::read_to_string(repo_root().join(end)).expect("读端清单");
+        let declared = text
+            .split_once("\"package\": \"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(value, _)| value)
+            .unwrap_or_else(|| panic!("{end} 缺 package 字段"));
+        assert_eq!(
+            declared, name,
+            "{end} 的 package 名与仓根真源不一致——共享产物按一端 world 构建，\
+             双端包名/版本必须同源"
+        );
     }
-    panic!("{} 缺 ABI_VERSION 常量", rel);
+
+    // 退役面不得复活：协商 ABI 机制（宏 + 常量）已随整数 ABI 退役
+    let prod = prod_lines(&app_src_dir().join("lib.rs"));
+    for banned in ["wasm_entry_with_abi!", "SHARED_ABI_VERSION"] {
+        assert!(
+            !contains(&prod, banned),
+            "`{banned}` 已随整数 ABI 退役（ADR 0051 D2）——版本一致性由双端包版本\
+             对齐承担，不得复活产物自报协商值机制"
+        );
+    }
 }
 
 /// 从生产代码行解析 `const NAME: u32 = <value>;`

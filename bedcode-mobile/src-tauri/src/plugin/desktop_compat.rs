@@ -90,8 +90,8 @@ pub const MODULE_NAME: &str = "mobile-desktop-compat";
 
 /// 本模块提供的 WIT 接口（桌面兼容面；移动宿主 world 本身不 import 它们）
 pub const MODULE_INTERFACES: &[&str] = &[
-    "bedcode:plugin/host-api-call",
-    "bedcode:plugin/host-platform-desktop",
+    "bedcode:plugin@0.1.0/host-api-call",
+    "bedcode:plugin@0.1.0/host-platform-desktop",
 ];
 
 /// 本模块读写的权限位：**空**——桩不放行任何能力，调用即拒

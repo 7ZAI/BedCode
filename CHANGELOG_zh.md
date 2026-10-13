@@ -9,6 +9,108 @@
 
 ## [未发布]
 
+#### WIT 契约搬上包 semver，整数 ABI 退役（ADR 0051）
+
+契约版本管理从「全局单一整数」搬上 wire：WIT 改为 `package bedcode:plugin@0.Y.Z;`，
+import / export 名自带版本；整数 `ABI_VERSION` 与 `interface abi` **同票退役**（用户裁决
+2026-10-13：wit 包版本独立从 `0` 起算、不做 1:1 派生、不考虑旧产物兼容——项目处研发起步
+期、无用户）。规格与逐票记录：`.scratch/2026-10-13-wit-package-semver/spec.md` +
+`issues/01…06`。
+
+- **版本上 wire 是破坏性改名，不是多一份兼容余地**：组件 linker 对 import 名做**含版本**
+  精确匹配——版本相等照常加载，不等即实例化期被拒，且失败文案自带包名 + 版本（诊断改由
+  wasmtime 直接报出，撤掉自造解释层）。
+- **整数 ABI 退役（R6）**：现有 5 项职能分别归位——「产物新于宿主」拒绝与 upgrade 提示
+  由 linker 的包名匹配接管（本已冗余）；向后兼容加载**不接管**，且在现行 bump 政策下
+  **已是空壳**（任何契约变更都 bump ⇒ 不存在「纯加法且不 bump」的产物）；
+  `abi-form.form = 1` 与 version 正交、**原样保留**；逐版语义台账迁 CHANGELOG（见下）；
+  `SHARED_ABI_VERSION` 随之整体退役。
+- **版本真源单点化（R7）**：版本值 = 仓根唯一常量，双端 `compose.json` 各自引用；
+  `compose-wit.mjs` 整行透传、cap 分片逐字拷贝，**脚本零改动**。**双端版本对齐仅在「同一份
+  产物跨双端加载」时成立**（file-transfer 双端单产物，ADR 0050）；其余场景双端各自 bump
+  ——**不是**「双端必须同版本」的全局约束。
+- **新 bump 政策与起算值**（票 01 实施时确认）：任何 WIT 变更**含函数级追加** → patch
+  （`0.1.0` → `0.1.1`）；interface 增删 / 签名变 → minor（`0.1.x` → `0.2.0`）；双端起算同为
+  `0.1.0`。理由：组件模型下任一契约变更都要求 guest 重建，「加法免 bump」不存在——
+  patch / minor 的区分只是让**破坏面大小**在版本号上可见。
+- **记账去处**：双端 `abi.rs` 的逐版语义迁入下方双语台账（WIT 源有意不复制历史）；文件
+  随后随退役面一并删除。
+- **双端偏离**：ADR 0018 维持不撤销——移动序列不跟演桌面独有破坏性变更。
+
+**票 02（契约层）已落地**：版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`（Rust 常量 `PACKAGE_NAME` / `PACKAGE_VERSION` / `PACKAGE`）——全仓唯一手写版本处。双端 `compose.json` 的 `package` 退化为**只声明包名**（版本由 `compose-wit.mjs` 注入生成的 `bedcode.wit`；清单包名与真源 `name` 漂移即抛）；10 个 WIT 源文件全部带 `package bedcode:plugin@0.1.0;`（cap 分片逐字拷贝，版本随之进生成物），双端已重拼（`pnpm run check:wit` 9/9 绿）。新锁 `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs` 断言 sha256 漂移锁抓不到的那条不变量——源文件版本与真源不一致时，重拼后整棵树仍自洽（漂移锁全绿），只在实例化期才炸。变异自检 3/3。编译面不变且全绿（wasm-core / 双端 SDK / 双端宿主）：版本化改的是 linker 的 import 名匹配，不是代码生成。**运行期按名匹配点（票 03）与整数 ABI 退役（票 04）尚未落地，故端到端实例化路径当前为红——属票序在途范围，非回归。**
+
+**票 03（运行期按名匹配点）已落地**：先做了一次 wasmtime 48 + wit-parser 0.256 实测（临时探针跑完即删），把「按名匹配点」的形态定死——组件**导出实例**的键 = `ns:pkg/iface@version`（**版本在末尾**，无版本写法对版本化产物恒 None）；实例内函数名按**平名**查找，`iface#func` 连 `ItemName` 语法都不合法；`ItemName` 字面量把版本写中间会解析失败。于是正解是**末尾追加 `@<version>` + 单一派生入口**：新增 `packages/bedcode-wasm-core/src/contract.rs`（`export_item(iface, func)` / `interface_path(iface)`，`OnceLock` 池保证 `&'static [&'static str]` 形态不变），内核 30 余个探测点（`core_binding` 2 · `component` 4 · `owner` 16 · `capability` 8）全部改为只传接口名 + 函数名，**零散落版本字面量**。真源由 JSON 改 Rust 常量文件 `contracts/bedcode-plugin-package.rs`——能力域 crate 的 `inventory` 静态自报要求编译期常量，JSON 只能运行期解析；能力域 `routing.rs` 的 const 清单由 `wit_package_version_lock.rs` 新增判据钉住，内核对偶锁改为「双形态抽取 + 值层逐字比对」。验证：wasm-core `cargo test --lib` **575/575**、`discovery-engine --features common-host` **35/35**、版本锁 **5/5**、双端宿主 `cargo check` 绿；变异自检 **2/2**（能力域字面量去版本 → 版本锁 + 对偶锁双红；内核派生退回旧名 → contract 三测 + 对偶锁红；还原后 sha256 一致）。
+
+##### 契约演进台账（整数 ABI）—— SDK `abi.rs` 删除前的迁移去处
+
+两条独立序列（ADR 0018）：桌面 v1…v38 / 移动 v1…v21。「增量」= 既有 interface 加函数 /
+加字段；「破坏」= interface 或函数删除、签名变、或行为刻意变更。
+
+桌面：
+
+| 版本 | 语义 | 性质 |
+| --- | --- | --- |
+| v1 | 初始版本（27 个 host functions + 11 个插件导出） | — |
+| v2 | 4 个 `*_params` SQL host functions（消灭插件侧手写转义） | 增量 |
+| v3 | 提交输入行观察扩展点（`session-input-register` + 可选导出 `on-input-submitted`，ADR 0001） | 增量 |
+| v4 | 插件状态上报扩展点（`mark-plugin-error`） | 增量 |
+| v5 | 通用文件服务能力（`filesrv-*` / `transfer-*` + 可选导出 `on-upload-request`） | 增量 |
+| v6 | 会话创建与宿主定时器（`session-create` / `timer-register`，ADR 0003） | 增量 |
+| v7 | 会话关闭（`session-close`） | 增量 |
+| v8 | 生命周期契约补全：`on-startup` / `on-shutdown` 携带 `result<_, string>`，启动 / 清理失败可如实上抛（Degraded 而非静默 Activated） | 增量 |
+| v9 | host-peer 原语化收缩第一阶段（ADR 0022 v2）：`dial-peer-endpoint` / `close` / `set-shared-roots` 与旧函数并存；新增 `host-mdns`（browse-only）与 `host-platform` | 增量 |
+| v10 | host-peer WIT 收缩终态（桌面 13 函数定稿，ADR 0022 v3，commit `56ee094cb`） | 破坏 |
+| v11 | host-peer 传输控制三原语 `pause-transfer` / `resume-transfer` / `resume-all-transfers` | 增量 |
+| v12 | 总线二进制载荷（`publish-binary` / `subscribe-binary`）+ 可选导出 `events-binary` | 增量 |
+| v13 | host-mdns v2：`advertise` / `stop-advertise` / `is-advertising` + 属主定向浏览事件（后为 `<owner>::mdns:found\|lost`；payload 增 `serviceType` / `browserId`） | 增量 |
+| v14 | host-websocket 基础传输（客户端域 5 函数 + 服务端域 + 可选导出 `events-ws`） | 增量 |
+| v15 | 密钥托管原语（`host-auth`：`get`/`set`/`delete`/`keys`，权限门 + `plugin_secrets` 持久化 + 明文不落日志） | 增量 |
+| v16 | 插件私有伪终端 `host-pty`（6 函数 + `pty:exit.<owner>`，后为 `<owner>::pty:exit`；单生产者环形缓冲游标 pull；权限 `pty:spawn` / `pty:io`） | 增量 |
+| v17 | 认证策略导出 `auth-policy.verify-device-token`（desktop 独有） | 增量 |
+| v18 | host-auth 认证记录面（4 函数：可信设备清单 / 吊销、连接历史清单、认证设置写入；desktop 独有） | 增量 |
+| v19 | host-session 配置面 + 创建动作面（`config-upsert`/`-get`/`-delete`；后 `create-with-spec`、`restart`、`remove`、`rename`、`resize`；再后 `annotate`、`connections-list`；`host-platform.wsl-distros`——均为函数级追加不 bump） | 增量 |
+| v20 | host-task：宿主调度并发任务域（desktop 独有） | 增量 |
+| v21 | host-session 收敛退役：删 `create`（legacy 按 configId）与 `restart`——创建编排统一走 `create-with-spec` | 破坏 |
+| v22 | `host-platform.reveal-in-dir`（desktop 独有，无权限门；`system:open` 权限退役） | 增量 |
+| v23 | host-session 配置写原语退役（删 `config-upsert` / `config-delete`；权限 `session:config` 退役，`config-get` 改挂 `session:read`） | 破坏 |
+| v24 | 认证记录下沉（2026-09-22 用户裁定）：host-auth 记录面七函数退役，host-session 配置读取面（`config-list` / `config-get`）随主库表退役删除；保留 secret-store / biometric-* / device-token-* / link-identity-parts / auth-setting-set | 破坏 |
+| v25 | host-peer 节点生命周期原语 `start-node` / `stop-node`（peer-net 属主化，内核按 id 分支退役；desktop 独有） | 增量 |
+| v26 | host-crypto 宿主加密引擎原语面（AEAD aes-256-gcm / chacha20-poly1305、KDF hkdf-sha256、X25519；权限 `crypto:aead` / `crypto:asym` / `crypto:kdf`；desktop 独有，新 interface） | 增量 |
+| v27 | 会话原语域整 interface 退役：`host-session` 12 函数 + 导出 `terminal-hooks` + `events.on-session-lifecycle` / `on-input-submitted`；权限 `session:write` 退役 | 破坏 |
+| v28 | WebSocket 业务下沉：新增 `host-websocket.connection-context`；退役 `host-events.broadcast-sync` 与 `host-pty.spawn` 的 `hostBroadcastSessionId` 字段 | 破坏 |
+| v29 | HTTP 路由代码注册下沉：新增 `host-http` 服务端域（`register-endpoint` / `unregister-endpoint`），路由以插件名为命名空间 | 增量 |
+| v30 | 传输编排下沉票 1：host-peer 追加 `active-transfers` / `collect-outgoing`；`peer:transfer-event` / `peer:receive-event` 双写 | 增量 |
+| v31 | 传输编排下沉票 3：退役 `resume-all-transfers`；`send-files` 收窄为一次调用 = 一会话立即发起、`concurrency` 字段退役；旧快照 topic `peer:transfer` / `peer:receive` 退役；`pull-files` 逐文件立即发起 | 破坏 |
+| v32 | 认证中心显式注册 + 组合式认证原语（ADR 0031）：host-auth 追加 `auth-center-register` / `-unregister` / `auth-methods-list` / `auth-method-invoke`，fail-closed（desktop 独有） | 增量（行为破坏：旧认证中心产物不注册即全拒） |
+| v33 | 认证中心持有入场签发密钥与验签（ADR 0033）：删 `device-token-issue` / `device-token-verify`，宿主 `utils/auth/jwt.rs` 退役（desktop 独有） | 破坏 |
+| v34 | 生物凭证面下沉：删 `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind`，宿主 `utils/auth/biometric.rs` 退役（desktop 独有） | 破坏 |
+| v35 | 沿用序号（无独立 bump note）：host-websocket 服务端域 10 函数随 ADR 0039 域整面迁出期间保持形状 | — |
+| v36 | 交集接口切片：`host-fs` → `host-fs-desktop`、`host-platform` → `host-platform-desktop`、`host-events` → `host-events-desktop`、`abi` → `abi-form`（desktop 独有） | 破坏 |
+| v37 | 交集切片收拢：`host-websocket` → `host-websocket-server`（10 函数）、`host-http` → `host-http-endpoint`（2 函数；desktop 独有） | 破坏 |
+| v38 | file-transfer 双端单产物（2026-10-13）：core `host-platform` 加 `platform`（双端同步）；桌面 `events` 扩为七函数并集；新增 binding-only `world desktop-compat` | 增量 |
+
+移动：
+
+| 版本 | 语义 | 性质 |
+| --- | --- | --- |
+| v1–v5 | 自研 ABI 演进史（组件迁移后仅作版本号序列保留） | — |
+| v6 | 组件形态首个版本（语义与旧 v6 一致） | — |
+| v7 | host-peer 原语化收缩第一阶段（ADR 0022 v2）：`dial-peer-endpoint` / `close` / `set-shared-roots`；新增 `host-mdns`（browse-only）与 `host-platform` | 增量 |
+| v8 | host-peer WIT 收缩终态（移动 12 函数定稿，commit `56ee094cb`） | 破坏 |
+| v9 | host-peer 传输控制三原语 | 增量 |
+| v10 | 总线二进制载荷 + 可选导出 `events-binary`（与 dev 分支 v9 合并） | 增量 |
+| v11 | host-mdns v2：三原语 + 属主定向 `<owner>::mdns:found\|lost`，payload 增 `serviceType` / `browserId` | 增量 |
+| v12 | 发送编排下沉（票 06）：删 `resume-all-transfers`，`send-files` 收窄，`concurrency` 字段显性拒绝，新 topic `peer:transfer-event` | 破坏 |
+| v13 | 接收编排下沉（票 07）：接口函数集不变（host-peer 仍 19 函数），变的是**事件回流契约**（新 topic `peer:receive-event`，旧 `peer:receive` 退役）。**须重编译**：协商单向，v12 产物不在加载期被拒 | 破坏 |
+| v14 | WebSocket 出站连接（host-websocket 客户端域 5 函数 + `ws:client` 权限 + 两条属主私有投递通道）。**不跟演**桌面服务端域与 `connection-context` | 增量 |
+| v15 | 终端订阅协议客户端迁插件（票 12）：`host-terminal-stream.forward-output` + `host-connection.primary-target`；websocket config 增 `jwt-auth` / `heartbeat-secs` / `auto-reconnect` | 增量 |
+| v16 | 认证 / 配对编排下沉（票 14 阶段 B）：host-auth 新增 5 函数 + `auth` 权限（fail-closed，凭据零过境） | 增量 |
+| v17 | host-terminal / terminal-hooks 整面退役（票 15 阶段 B）：删 `host-terminal`（send）与导出 `terminal-hooks`，权限 `terminal:input` 退役；`terminal:output` 保留 | 破坏 |
+| v18 | 通知 / 震动 / 声音整族封装（新增移动特有域 `host-notify` 5 函数 + `notify` 权限；`host-events.notify` 收编迁入） | 破坏（引用 `host-events.notify` 的产物） |
+| v19 | `host-database`（主库）整面退役（2026-10-09 双端统一机制决策）：接口与 `database:main` 权限位自双端 WIT / SDK 面移除（桌面 34→35 / 移动 18→19）；插件数据库能力 = 插件私有库（`host-plugin-database`，声明 `storage` 位） | 破坏 |
+| v20 | 交集切片收拢：共享 core 收拢 `host-websocket` 客户端 5 / `host-http`（`fetch`）/ `host-fs` 交集 6；移动独有 `save-to-document` / `write-media-downloads` 拆入 `host-fs-mobile` | 破坏 |
+| v21 | 共享核心 `host-platform.platform: func() -> string` 探测原语（2026-10-13，单产物，加法）；移动宿主返回 `mobile`，本端 WIT 其余面零变更（桌面 ABI 另走 v38） | 增量 |
+
 #### wasm-core 运行时单形态：common/bare 壳合并，ABI 策略宿主注入
 
 `packages/bedcode-wasm-core` 此前在 `common-host` / `bare-host` 两 feature 下挂两套运行时装配树。按 2026-10-13 用户裁决（`.scratch/2026-10-13-runtime-single-form/spec.md`）两壳合并为**一份运行时**（桌面形态）：`manager/runtime.rs` + `runtime/component.rs`；形态 feature 退役（桌面专属装配面收进 `desktop-assembly`：PluginHost / intercall / 认证中心 / ServerSupervisor）。
@@ -584,3 +686,5 @@
   `plugin-dev-mobile.md`、`commands.md`、`wasip3-toolchain.md`）；审计记录
   `.scratch/2026-10-08-mobile-wasm-app-rename/audit.md`（含审查补漏触点 #18-#23、release.yml
   #292-297、code-map #299 修正）
+
+**票 04（整数 ABI 退役）已落地**：契约面 `core.wit` 删 `interface abi`、双端 cap world 各删 `export abi`（`abi-form` 原样保留）、双端 `compose.json` 删 `abi.version`；运行期 `AbiPolicy` 退化为「只管形态」（`FormPolicy` + `AbiPolicy` 别名，桌面 `form = Some(1)` / 移动 `None`），删 `verify_abi` 的 version 比较分支与 `core_binding::abi_version` 探测，`test_support` 的 `plugin_abi_version` 转发面随之退役；SDK 面双端 `abi.rs` **文件删除**（台账已在票 01 迁入 CHANGELOG；桌面 `FORM_COMPONENT` 迁入新模块 `form.rs`），`wasm_entry!` 不再导出 `abi.version`、`wasm_entry_with_abi!` 宏退役，夹具 `plugin-system-test` 的 `impl abi::Guest` 改为 `abi_form`；共享产物侧 `SHARED_ABI_VERSION` 与其协商机制整体退役，`wiring_lock.rs` 判据 6 改写为「双端包版本对齐」+ 退役面不得复活。**四方必测不变量收敛为两方**（compose 版本 == 源文件 package 行，由版本锁承担），端到端实例化再无运行期版本协商——版本不等由 linker 的含版本 import 名匹配直接拒绝。验证：wasm-core `cargo test --lib` 574/575、file-transfer-core 76/76、版本锁 5/5、双端 SDK 与双端宿主 `cargo check` 绿、`pnpm run check:wit` 9/9；变异自检 1/1（注入已退役的 `SHARED_ABI_VERSION` → 新判据红并点名退役机制）。**遗留**：`a03_p2_fuel_async_semantics` 红——该探针依赖 wasip3 fixture 重建后的产物字节与 fuel 计量敏感，实验证明**与本次退役无因果**（临时恢复 `interface abi` 后数值完全不变），列入票 06 全量重建回归。

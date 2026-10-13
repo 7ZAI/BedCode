@@ -44,13 +44,52 @@ mod tests {
     //!   `desktop` 对应宿主 `src/plugin/` 路径 B 域（MODULE_INTERFACES 并集）；
     //! - cap-desktop.wit 的 world cap-desktop import 名集合 == 宿主路径 B 域
     //!   MODULE_INTERFACES 的 host-* 名并集（12 个）。
-    //! - abi.version 同时是票 04 的 ABI 计数输入（SDK abi.rs 的 ABI_VERSION）。
+    //! - 版本一致性（票 05 替代原 abi.version 双查）：端清单 package 名 == 仓根
+    //!   `contracts/bedcode-plugin-package.rs` 的 `PACKAGE_NAME`，桌面 WIT 源文件
+    //!   package 行 == `package <name>@<version>;`（ADR 0051 D3/D4；`abi.version`
+    //!   随票 04 退役，本判据不读它）。
 
     use std::path::PathBuf;
 
     fn manifest_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../packages/plugin-sdk-desktop/compose.json")
+    }
+
+    /// 仓根（`bedcode-desktop/src-tauri` → `../..`）
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// 仓根 WIT 包版本真源（ADR 0051 D3；票 05 版本一致性检查的真源）
+    ///
+    /// 真源是 Rust 常量文件 `contracts/bedcode-plugin-package.rs`（票 03 单点化：能力域
+    /// `inventory` 静态自报要求编译期常量，JSON 真源结构性冲突）；抽取只认
+    /// `pub const <NAME>: &str = "<值>";` 形态，并断言 `PACKAGE` 与前后两者自洽。
+    fn package_source() -> (String, String) {
+        let path = repo_root().join("contracts/bedcode-plugin-package.rs");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("仓根 contracts/bedcode-plugin-package.rs 缺失: {e}"));
+        let const_of = |name: &str| -> String {
+            let needle = format!("pub const {name}: &str = \"");
+            let start = raw.find(&needle).unwrap_or_else(|| {
+                panic!("{} 缺常量 {name}", path.display())
+            }) + needle.len();
+            let rest = &raw[start..];
+            let end = rest.find('"').unwrap_or_else(|| {
+                panic!("{} 常量 {name} 未闭合", path.display())
+            });
+            rest[..end].to_string()
+        };
+        let name = const_of("PACKAGE_NAME");
+        let version = const_of("PACKAGE_VERSION");
+        assert_eq!(
+            const_of("PACKAGE"),
+            format!("{name}@{version}"),
+            "{} 的 PACKAGE 与 NAME@VERSION 自洽（ADR 0051 D3）",
+            path.display()
+        );
+        (name, version)
     }
 
     /// 从 WIT 文本提取顶层 import 声明名（`import <name>;`）
@@ -70,7 +109,11 @@ mod tests {
             .expect("端清单 JSON 可解析（compose-wit.mjs 的消费前提）");
 
         assert_eq!(m["world"], "plugin", "主 world 名是组合装配面");
-        assert_eq!(m["package"], "package bedcode:plugin;", "同 package 拼装（裁决 A）");
+        assert_eq!(
+            m["package"], "bedcode:plugin",
+            "端清单 package 只声明包名——版本由 scripts/compose-wit.mjs 按仓根 \
+             contracts/bedcode-plugin-package.rs 注入（ADR 0051 D3 单点化），清单回写版本=第二真源"
+        );
 
         let mut caps: Vec<&str> = m["caps"].as_object().unwrap().keys().map(|s| s.as_str()).collect();
         caps.sort();
@@ -90,7 +133,37 @@ mod tests {
             "plugin-system", "plugin-task", "plugin-ws"],
             "worlds 漂移：桌面 7 个 world 是合成 package 的完整面（desktop-compat = file-transfer 单产物的移动宿主桩绑定面，binding-only）");
 
-        assert_eq!(m["abi"]["version"], 38, "abi.version 漂移：与 SDK abi.rs ABI_VERSION 对齐（v38 = 双端单产物共享 wasm：platform 探测 + events 并集 + desktop-compat）");
+        // 版本一致性检查（票 05 替代原 abi.version 双查；票 02 新锁口径）：compose
+        // package 版本 == 桌面 WIT 源文件 package 行。版本真源 = 仓根
+        // contracts/bedcode-plugin-package.rs（票 03 单点化）；`abi.version` 是票 04
+        // 的退役面，本判据不读它。
+        let (pkg_name, pkg_version) = package_source();
+        assert_eq!(
+            m["package"], pkg_name,
+            "端清单 package 与仓根版本真源 name 漂移（ADR 0051 D3 单点化）"
+        );
+        let expected_pkg = format!("package {pkg_name}@{pkg_version};");
+        for rel in [
+            "packages/bedcode-wasm-core/wit/core.wit",
+            "packages/bedcode-pty-engine/wit/pty.wit",
+            "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-http.wit",
+            "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-ws.wit",
+            "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit",
+        ] {
+            let path = repo_root().join(rel);
+            let line = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{path:?} 不可读: {e}"))
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with("package "))
+                .unwrap_or_else(|| panic!("{} 缺 package 声明行", path.display()))
+                .to_string();
+            assert_eq!(
+                line, expected_pkg,
+                "{rel} 的 package 行与仓根 contracts/bedcode-plugin-package.rs 漂移——\
+                 版本化后 import 名逐字匹配，源文件版本漂移＝运行期实例化失败（编译面不红）"
+            );
+        }
     }
 
     #[test]
@@ -110,9 +183,11 @@ mod tests {
         // 宿主路径 B 域 MODULE_INTERFACES 并集（11 个 host-* 名）；能力域
         // （pty/http/websocket/peer/mdns）interface 在各自 cap-*.wit，不在本文件。
         // 票 04：`host-fs` 交集 6 收拢进共享核心 core.wit，cap-desktop 不再 import 它。
+        // 票 05 随元数据对齐修正：`host-auth` → `host-auth-center`（ADR 0031 认证中心）、
+        // `host-connection` → `host-connection-registry`（连接清单机制化）。
         let expected = [
-            "host-api-call", "host-app", "host-auth", "host-connection", "host-crypto",
-            "host-events-desktop", "host-fs-desktop", "host-platform-desktop",
+            "host-api-call", "host-app", "host-auth-center", "host-connection-registry",
+            "host-crypto", "host-events-desktop", "host-fs-desktop", "host-platform-desktop",
             "host-process", "host-task", "host-timer",
         ];
         assert_eq!(imports, expected,
@@ -233,7 +308,9 @@ mod tests {
     #[test]
     fn compose_caps_and_host_module_interfaces_cover_each_other() {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        // ① 装配面：白名单模块 → interface 名（`bedcode:plugin/host-x` → `host-x`）
+        // ① 装配面：白名单模块 → interface 名（`bedcode:plugin@0.1.0/host-x` → `host-x`，
+        //    rsplit('/') 剥版本后缀——版本化契约下天然免疫，与 WIT world import 的
+        //    纯接口名两侧对得上）
         let registry = bedcode_host_kit::ModuleRegistry::collected();
         let descs = registry.descs();
         assert!(

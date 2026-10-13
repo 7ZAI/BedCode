@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### WIT contracts move to package semver, and the integer ABI is retired (ADR 0051)
+
+Contract versioning moves from one global integer onto the wire: WIT becomes `package bedcode:plugin@0.Y.Z;`, so import/export names carry the version, and the integer `ABI_VERSION` + `interface abi` are **retired in the same change** (user ruling 2026-10-13: the WIT package version starts from `0` on its own — no 1:1 derivation, and no old-artifact compatibility, because the project is pre-release with no users). Spec and per-ticket record: `.scratch/2026-10-13-wit-package-semver/spec.md` + `issues/01…06`.
+
+- **Version on the wire is a breaking rename, not extra compatibility headroom**: the component linker matches import names *including* the version, so equal versions load and unequal versions are refused at instantiation (the failure text names the package and version — it now comes from wasmtime instead of a hand-written explanation layer).
+- **Integer ABI retired (R6)**: its five duties are resolved as — reject-newer-artifact and the upgrade hint are taken over by the linker's package-name matching (already redundant); loading older artifacts is **not** taken over and was already a hollow shell under today's bump policy (every contract change bumps, so no "additive-without-bump" artifact exists); the `abi-form.form = 1` check is orthogonal and **stays untouched**; the per-version ledger migrates to the changelog (below); `SHARED_ABI_VERSION` retires with it.
+- **Single version source of truth (R7)**: the version is one repo-root constant that both ends' `compose.json` reference; `compose-wit.mjs` writes that line through unchanged and copies cap slices verbatim. **Both ends must align only when one artifact is loaded by both ends** (file-transfer's single cross-end artifact, ADR 0050); otherwise each end bumps independently — this is *not* a global "same version on both ends" rule.
+- **New bump policy and starting value** (confirmed while implementing ticket 01): any WIT change **including function-level additions** → patch (`0.1.0` → `0.1.1`); interface add/remove or signature change → minor (`0.1.x` → `0.2.0`); both ends start at `0.1.0`. Reason: under the component model any contract change requires a guest rebuild, so "additions need no bump" does not exist — patch/minor only makes the size of the breaking surface visible in the version number.
+- **Ledger destination**: the per-version semantics of both `abi.rs` files move into the bilingual ledger below (WIT sources deliberately do not copy history); the files are deleted afterwards together with the retirement surface.
+- **Dual-end deviation**: ADR 0018 stays in force — the mobile sequence does not follow desktop-only breaking changes.
+
+**Ticket 02 (contract layer) landed**: the version's single source of truth is the repo-root `contracts/bedcode-plugin-package.rs` (Rust constants `PACKAGE_NAME` / `PACKAGE_VERSION` / `PACKAGE`) — the only place a version is hand-written. Both ends' `compose.json` now declare the **package name only** (version injected into the generated `bedcode.wit` by `compose-wit.mjs`, which also fails loudly if a manifest's name drifts from the source of truth); all 10 WIT sources carry `package bedcode:plugin@0.1.0;` (cap slices are copied verbatim, so the version follows) and both ends were recomposed (`pnpm run check:wit` 9/9 green). New lock `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs` asserts the single-point invariant the sha256 drift lock cannot catch — a source file whose version differs from the source of truth still recomposes into a fully self-consistent tree (drift lock green) and only fails at instantiation. Mutation self-check 3/3. Compile surface unchanged and green (wasm-core / both SDKs / both hosts): versioning changes the linker's import-name matching, not codegen. **Runtime name-matching points (ticket 03) and the integer-ABI retirement (ticket 04) are still pending, so end-to-end instantiation is red until those land — by ticket order, not a regression.**
+
+**Ticket 03 (runtime name-matching points) landed**: a throwaway probe against wasmtime 48 + wit-parser 0.256 pinned the exact matching form first — a component's **exported instance** key is `ns:pkg/iface@version` (version **last**; an unversioned name never matches a versioned artifact), function names inside an instance are looked up by their **flat** name (`iface#func` is not even valid `ItemName` syntax), and a version in the middle of an `ItemName` fails to parse. The fix is therefore "append `@<version>` at the end + one single derivation entry point": `packages/bedcode-wasm-core/src/contract.rs` (`export_item(iface, func)` / `interface_path(iface)`, with an `OnceLock` pool so the `&'static [&'static str]` shapes the tables rely on stay intact); the kernel's 30+ probe points (`core_binding` 2 · `component` 4 · `owner` 16 · `capability` 8) now pass only interface and function names — no scattered version literals. The source of truth changed from JSON to a Rust constants file `contracts/bedcode-plugin-package.rs`: capability crates self-report through `inventory` statics (which require compile-time constants) while JSON can only be parsed at runtime; the capability side's const literal list is pinned by a new criterion in `wit_package_version_lock.rs`, and the kernel's dual lock now compares dual forms plus the derived values verbatim. Verification: wasm-core `cargo test --lib` **575/575**, `discovery-engine --features common-host` **35/35**, version lock **5/5**, both hosts `cargo check` green; mutation self-check **2/2**.
+
+##### Contract evolution ledger (integer ABI) — migrated from the SDK `abi.rs` files before their deletion
+
+Two independent sequences (ADR 0018): desktop v1…v38, mobile v1…v21. "Additive" = existing interfaces gained functions/fields; "breaking" = interfaces or functions removed, signatures changed, or behavior deliberately changed.
+
+Desktop:
+
+| v | Semantics | Nature |
+| --- | --- | --- |
+| v1 | Initial version (27 host functions + 11 plugin exports) | — |
+| v2 | Four `*_params` SQL host functions (kills hand-written escaping in plugins) | additive |
+| v3 | Submitted-input observation extension point (`session-input-register` + optional export `on-input-submitted`, ADR 0001) | additive |
+| v4 | Plugin status reporting extension point (`mark-plugin-error`) | additive |
+| v5 | Generic file-service capability (`filesrv-*` / `transfer-*` + optional export `on-upload-request`) | additive |
+| v6 | Session creation + host timers (`session-create` / `timer-register`, ADR 0003) | additive |
+| v7 | Session close (`session-close`) | additive |
+| v8 | Lifecycle contract completed: `on-startup` / `on-shutdown` carry `result<_, string>`, so init/teardown failures reach the host (Degraded instead of silent Activated) | additive |
+| v9 | host-peer primitive-ization phase 1 (ADR 0022 v2): `dial-peer-endpoint` / `close` / `set-shared-roots` alongside the old set; new `host-mdns` (browse-only) and `host-platform` | additive |
+| v10 | host-peer WIT contraction, final 13-function desktop shape (ADR 0022 v3, commit `56ee094cb`) | breaking |
+| v11 | host-peer transfer control primitives `pause-transfer` / `resume-transfer` / `resume-all-transfers` | additive |
+| v12 | Bus binary payloads (`publish-binary` / `subscribe-binary`) + optional export `events-binary` | additive |
+| v13 | host-mdns v2: `advertise` / `stop-advertise` / `is-advertising` + owner-scoped browse events (later `<owner>::mdns:found\|lost`; payload gains `serviceType` / `browserId`) | additive |
+| v14 | host-websocket base transport (client domain 5 functions + server domain + optional export `events-ws`) | additive |
+| v15 | Secret-store primitives (`host-auth`: `get`/`set`/`delete`/`keys`, permission-gated, persisted in `plugin_secrets`, plaintext never logged) | additive |
+| v16 | Plugin-owned pseudo-terminal `host-pty` (6 functions + `pty:exit.<owner>`, later `<owner>::pty:exit`; single-producer ring, cursor-pull model; permissions `pty:spawn` / `pty:io`) | additive |
+| v17 | Auth policy export `auth-policy.verify-device-token` (desktop-only) | additive |
+| v18 | host-auth record surface (4 functions: trusted devices list/revoke, connection history list, auth setting set; desktop-only) | additive |
+| v19 | host-session config surface + create/action surface (`config-upsert`/`-get`/`-delete`; then `create-with-spec`, `restart`, `remove`, `rename`, `resize`; then `annotate`, `connections-list`; then `host-platform.wsl-distros` — all function-level additions, no bump) | additive |
+| v20 | host-task: host-scheduled concurrent task domain (desktop-only) | additive |
+| v21 | host-session consolidation retired: `create` (legacy by configId) and `restart` deleted — creation orchestration goes through `create-with-spec` | breaking |
+| v22 | `host-platform.reveal-in-dir` (desktop-only, no permission gate; `system:open` permission retired) | additive |
+| v23 | host-session config write primitives retired (`config-upsert` / `config-delete`; permission `session:config` retired, `config-get` moved to `session:read`) | breaking |
+| v24 | Auth records pushed down to the auth center (2026-09-22 user ruling): seven host-auth record functions retired and host-session config read surface (`config-list` / `config-get`) deleted with the main-db tables; kept: secret-store / biometric-* / device-token-* / link-identity-parts / auth-setting-set | breaking |
+| v25 | host-peer node lifecycle primitives `start-node` / `stop-node` (peer-net becomes owner-driven; kernel-side by-id branches retired; desktop-only) | additive |
+| v26 | host-crypto engine primitives (AEAD aes-256-gcm / chacha20-poly1305, KDF hkdf-sha256, X25519; permissions `crypto:aead` / `crypto:asym` / `crypto:kdf`; desktop-only, new interface) | additive |
+| v27 | Session primitive domain retired wholesale: `host-session` (12 functions), export `terminal-hooks`, and `events.on-session-lifecycle` / `on-input-submitted`; permission `session:write` retired | breaking |
+| v28 | WebSocket downsink: added `host-websocket.connection-context`; retired `host-events.broadcast-sync` and the `hostBroadcastSessionId` field of `host-pty.spawn` | breaking |
+| v29 | HTTP route registration pushed down: new `host-http` server domain (`register-endpoint` / `unregister-endpoint`), routes namespaced by plugin name | additive |
+| v30 | Transfer orchestration downsink ticket 1: host-peer gains `active-transfers` / `collect-outgoing`; `peer:transfer-event` / `peer:receive-event` dual-written | additive |
+| v31 | Transfer orchestration downsink ticket 3: `resume-all-transfers` retired; `send-files` narrowed to one call = one immediately started session with the `concurrency` field retired; old snapshot topics `peer:transfer` / `peer:receive` retired; `pull-files` per-file immediate start | breaking |
+| v32 | Auth center explicit registration + composable auth primitives (ADR 0031): host-auth gains `auth-center-register` / `-unregister` / `auth-methods-list` / `auth-method-invoke`, fail-closed (desktop-only) | additive (behavior-breaking: old auth centers must register) |
+| v33 | Auth center owns entry-token issuance and verification (ADR 0033): `device-token-issue` / `device-token-verify` deleted, host `utils/auth/jwt.rs` retired (desktop-only) | breaking |
+| v34 | Biometric credential surface pushed down: `biometric-credential-bound` / `biometric-verify-signature` / `biometric-credential-bind` deleted, host `utils/auth/biometric.rs` retired (desktop-only) | breaking |
+| v35 | Sequence number reused, no separate bump note: the 10 host-websocket server-domain functions kept their shape while the domain moved out with ADR 0039 | — |
+| v36 | Shared-intersection slicing: `host-fs` → `host-fs-desktop`, `host-platform` → `host-platform-desktop`, `host-events` → `host-events-desktop`, `abi` → `abi-form` (desktop-only) | breaking |
+| v37 | Intersection consolidation: `host-websocket` → `host-websocket-server` (10 functions), `host-http` → `host-http-endpoint` (2 functions; desktop-only) | breaking |
+| v38 | Single cross-end artifact for file-transfer (2026-10-13): core `host-platform` gains `platform` (both ends); desktop `events` widened to a seven-function union; new binding-only `world desktop-compat` | additive |
+
+Mobile:
+
+| v | Semantics | Nature |
+| --- | --- | --- |
+| v1–v5 | Self-built ABI history (after the component migration kept only as version-sequence continuity) | — |
+| v6 | First component-model version (semantics identical to the old v6) | — |
+| v7 | host-peer primitive-ization phase 1 (ADR 0022 v2): `dial-peer-endpoint` / `close` / `set-shared-roots`; new `host-mdns` (browse-only) and `host-platform` | additive |
+| v8 | host-peer WIT contraction, final 12-function mobile shape (commit `56ee094cb`) | breaking |
+| v9 | host-peer transfer control primitives | additive |
+| v10 | Bus binary payloads + optional export `events-binary` (merged with the dev-branch v9) | additive |
+| v11 | host-mdns v2: three primitives + owner-scoped `<owner>::mdns:found\|lost`, payload gains `serviceType` / `browserId` | additive |
+| v12 | Send orchestration pushed down (ticket 06): `resume-all-transfers` deleted, `send-files` narrowed, `concurrency` field explicitly refused, new `peer:transfer-event` topic | breaking |
+| v13 | Receive orchestration pushed down (ticket 07): interface function set unchanged (host-peer still 19 functions) — the change is the event-reflux contract (new `peer:receive-event`, old `peer:receive` retired). **Rebuild required**: negotiation is one-way, so v12 artifacts are not refused at load time | breaking |
+| v14 | WebSocket outbound client (host-websocket client domain, 5 functions + `ws:client` permission + two owner-private delivery channels). Does **not** follow the desktop server domain or `connection-context` | additive |
+| v15 | Terminal subscription protocol client moved into plugins (ticket 12): `host-terminal-stream.forward-output` + `host-connection.primary-target`; websocket config gains `jwt-auth` / `heartbeat-secs` / `auto-reconnect` | additive |
+| v16 | Auth / pairing orchestration pushed down (ticket 14 phase B): host-auth gains 5 functions + `auth` permission (fail-closed, credentials never handed to plugins) | additive |
+| v17 | host-terminal / terminal-hooks retired wholesale (ticket 15 phase B): `host-terminal` (send) and export `terminal-hooks` deleted, permission `terminal:input` retired; `terminal:output` kept | breaking |
+| v18 | Notification / vibration / sound family (new mobile-only `host-notify`, 5 functions + `notify` permission; `host-events.notify` folded in) | breaking (artifacts referencing `host-events.notify`) |
+| v19 | `host-database` (main db) retired wholesale (2026-10-09 dual-end mechanics decision): interface and `database:main` permission removed from both ends' WIT/SDK (desktop 34→35 / mobile 18→19); plugin database capability = private plugin db (`host-plugin-database`, `storage` permission) | breaking |
+| v20 | Intersection consolidation: shared core takes over `host-websocket` client 5 / `host-http` (`fetch`) / `host-fs` intersection 6; mobile-only `save-to-document` / `write-media-downloads` split into `host-fs-mobile` | breaking |
+| v21 | Shared-core `host-platform.platform: func() -> string` probe (2026-10-13, single cross-end artifact, additive); mobile host answers `mobile`, the rest of the mobile WIT unchanged (desktop ABI tracked v38 separately) | additive |
+
 #### wasm-core runtime is now single-form: no more common/bare shells, ABI policy injected by hosts
 
 `packages/bedcode-wasm-core` previously mounted two runtime assembly trees under the `common-host` / `bare-host` features. Per the 2026-10-13 rulings (`.scratch/2026-10-13-runtime-single-form/spec.md`) both form shells were merged into **one runtime** (desktop shape): `manager/runtime.rs` + `runtime/component.rs`; the features retired (`desktop-assembly` now gates the desktop-only assembly surface: PluginHost / intercall / auth-center / ServerSupervisor).
@@ -717,3 +801,5 @@ business code added, no ABI / WIT / wire change, no mobile front-end change).
   test relative imports, docs (`AGENTS.md`, `code-map.md`, `plugin-dev-mobile.md`, `commands.md`,
   `wasip3-toolchain.md`), audit record `.scratch/2026-10-08-mobile-wasm-app-rename/audit.md`
   (review-found touchpoints #18-#23 + release.yml #292-297 + code-map #299 corrections included)
+
+**Ticket 04 (integer ABI retirement) landed**: contract surface — `core.wit` drops `interface abi`, both ends' cap worlds drop `export abi` (`abi-form` kept as-is), both `compose.json` files drop `abi.version`; runtime — `AbiPolicy` narrows to form only (`FormPolicy` + an `AbiPolicy` alias; desktop `form = Some(1)`, mobile `None`), `verify_abi`'s version comparison and `core_binding::abi_version` are gone, and `test_support`'s `plugin_abi_version` forwarder retires with them; SDK — both `abi.rs` files **deleted** (the ledger moved to the changelog in ticket 01; desktop's `FORM_COMPONENT` moves to a new `form.rs`), `wasm_entry!` no longer exports `abi.version`, the `wasm_entry_with_abi!` macro is retired, and the `plugin-system-test` fixture's `impl abi::Guest` becomes `abi_form`; shared artifact — `SHARED_ABI_VERSION` and its negotiation mechanism retire wholesale, and `wiring_lock.rs` criterion 6 is rewritten as "both ends align on one package version" plus a must-not-resurrect check. **The four-way invariant collapses to two** (compose version == source package line, owned by the version lock), and end-to-end instantiation no longer negotiates versions at runtime — unequal versions are refused by the linker's versioned import-name match. Verification: wasm-core `cargo test --lib` 574/575, file-transfer-core 76/76, version lock 5/5, both SDKs and both hosts `cargo check` green, `pnpm run check:wit` 9/9; mutation self-check 1/1 (injecting the retired `SHARED_ABI_VERSION` turns the new criterion red and names the retired mechanism). **Known leftover**: `a03_p2_fuel_async_semantics` is red — it depends on wasip3 fixture bytes rebuilt after the WIT change and is sensitive to fuel accounting; an experiment (temporarily restoring `interface abi`) left the numbers bit-identical, so it is **not caused by this retirement** and is deferred to ticket 06's full rebuild regression.

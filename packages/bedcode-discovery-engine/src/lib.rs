@@ -63,7 +63,7 @@ pub use ports::{install_ports, DiscoveryPorts, DiscoveryTask};
 /// 能力模块名（白名单键；`HostModuleDesc::name` 的真源）
 pub const MODULE_NAME: &str = "discovery";
 /// 本模块提供的 guest interface 路径
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-mdns"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-mdns"];
 /// 本模块读写的权限位
 pub const MODULE_PERMISSIONS: &[&str] = &["network:mdns"];
 

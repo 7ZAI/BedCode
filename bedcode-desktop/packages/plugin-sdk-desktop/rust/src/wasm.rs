@@ -287,21 +287,10 @@ mod tests {
 #[macro_export]
 macro_rules! wasm_entry {
     ($plugin_type:ident) => {
-        // 默认 ABI = 本 SDK 的 ABI_VERSION（桌面原生插件路径）
-        $crate::wasm_entry_with_abi!($plugin_type, $crate::abi::ABI_VERSION as u32);
-    };
-}
 
-/// 同 `wasm_entry!`，但显式指定 `abi.version()` 导出值（双端共享产物路径）
-///
-/// 用途：file-transfer 单产物（规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）
-/// 按桌面 world 构建、双端宿主加载，其自报 ABI 必须 ≤ 双端宿主 `AbiPolicy` 的下界
-/// （当前 = 移动端 ABI）——桌面 SDK 的 `ABI_VERSION` 高于该下界，故共享产物经本宏
-/// 显式传协商值（共享 crate 常量 `SHARED_ABI_VERSION`；锁断言 ≤ 双端 `ABI_VERSION`）。
-/// 桌面原生插件一律走 `wasm_entry!`（默认值路径），不用本宏。
-#[macro_export]
-macro_rules! wasm_entry_with_abi {
-    ($plugin_type:ident, $abi_version:expr) => {
+/// 展开后即 `wasm_entry!` 全量导出实现（`wasm_entry_with_abi!` 已随整数 ABI 退役：
+/// 契约版本搬上 wire 后，共享产物不再需要自报协商下界——双端包版本对齐由
+/// `wit_package_version_lock.rs` + file-transfer 的 `wiring_lock.rs` 断言，见 ADR 0051 D3）。
         // ==================== command（原 __bedcode_invoke_command） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::command::Guest for $plugin_type {
@@ -564,22 +553,12 @@ macro_rules! wasm_entry_with_abi {
             }
         }
 
-        // ==================== abi（原 __bedcode_abi_version；v36 切片后只剩 version） ====================
-
-        impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：`wasm_entry!` 路径 = `abi::ABI_VERSION`；`wasm_entry_with_abi!`
-            /// 路径 = 调用方显式传入的协商值（双端共享产物，见该宏文档）
-            fn version() -> u32 {
-                $abi_version
-            }
-        }
-
-        // ==================== abi-form（v36 自 abi 拆出：产物形态声明） ====================
+        // ==================== abi-form（产物形态声明；与版本协商正交，ADR 0051 D2） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi_form::Guest for $plugin_type {
             /// 产物形态：组件（Component Model），宿主按 `form()==1` 识别
             fn form() -> u32 {
-                $crate::abi::FORM_COMPONENT as u32
+                $crate::form::FORM_COMPONENT as u32
             }
         }
 

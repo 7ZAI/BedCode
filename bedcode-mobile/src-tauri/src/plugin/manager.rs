@@ -219,7 +219,6 @@ impl PluginManager {
             self.app_handle.as_ref().cloned(),
             Vec::new(),
             crate::plugin::wasm_runtime::AbiPolicy {
-                version: bedcode_plugin_api_mobile::abi::ABI_VERSION,
                 form: None,
             },
         )?);
@@ -290,8 +289,10 @@ impl PluginManager {
         // 同步桥三面在此与宿主衔接（幂等，重复 init 首装胜出）
         crate::plugin::peer_ports::install(self.app_handle.as_ref().cloned());
 
-        // 组件路径无启动期签名表校验：契约由 WIT 编译期保证，
-        // 插件侧 `abi.version()` 协商在 instantiate_component 内逐实例校验
+        // 组件路径无启动期签名表校验：契约由 WIT 编译期保证；组件形态由
+        // instantiate_component 内的 `abi-form` 检查逐实例校验（移动 WIT 无该导出，
+        // 故形态要求为 None），wit 包版本由 linker 的 import 名逐字匹配保证
+        // （ADR 0051：整数 ABI 协商已退役）
 
         let _ = self.wasm_runtime.set(runtime);
         let _ = self.wasm_host_ctx.set(host_ctx);

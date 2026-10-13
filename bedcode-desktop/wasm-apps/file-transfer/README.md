@@ -76,7 +76,7 @@ node scripts/build.js --rust-only
 
 构建脚本串联：`vite build` → `cargo build --target wasm32-unknown-unknown --features wasm` → Component Model 编码（仓库级工具 `packages/bedcode-componentize`）→ 复制 `index.js` / `plugin.json` / `icon.svg` / `*.wasm` 到 `src-tauri/resources/plugins/desktop/com.bedcode.file-transfer/`。
 
-> **工具链口径**：本应用是双端共享产物源，与桌面其余 wasm 应用（wasm32-wasip3 直出 Component）不同——改用 unknown-unknown + 组件化，与移动端构建同一编码路径（stable 可编、移动宿主加载形态同构）。产物自报协商 ABI 21（`SHARED_ABI_VERSION`，≤ 双端宿主 AbiPolicy 下界；桌面 38 / 移动 21 均放行）。
+> **工具链口径**：本应用是双端共享产物源，与桌面其余 wasm 应用（wasm32-wasip3 直出 Component）不同——改用 unknown-unknown + 组件化，与移动端构建同一编码路径（stable 可编、移动宿主加载形态同构）。契约版本搬上 wire 后（ADR 0051），产物 import 名带 `package bedcode:plugin@<version>`，双端宿主版本对齐由 `bedcode-file-transfer-core/src/wiring_lock.rs` 断言（原自报协商 ABI `SHARED_ABI_VERSION` 已随整数 ABI 退役）。
 
 > 产物目录（`**/src-tauri/resources/plugins/`）已加入 .gitignore，打包/运行前需先执行构建。
 

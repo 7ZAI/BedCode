@@ -7,8 +7,10 @@
 //! 承接其**结构/计数面**职责（语义面 = `stale_artifact_rebuild_hint` 旧产物点名 +
 //! 双端 ABI 锁步流程 ADR 0019）：
 //!
-//! 1. 端清单 `compose.json` 的 `abi.version` == SDK `abi.rs` 的 `ABI_VERSION`
-//!    （「组合了什么」与 SDK 对外承诺的计数只有一个答案；bump 必须两处同步）；
+//! 1. 端清单 `compose.json` 的 package 版本 == 移动侧 WIT 源文件 package 行
+//!    （票 05 替代原 abi.version 双查；版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`，
+//!    票 03 单点化——「组合了什么」的版本只有一个答案；`abi.version` 随票 04 退役，
+//!    本锁不读它）；
 //! 2. 生成物 `bedcode.wit` 的 `world plugin` include 集 == `core` + 各 caps 键
 //!    （拼装脚本产物与端清单一致；手改生成物另有 `scripts/compose-wit.mjs --check`
 //!    的逐字漂移锁，本锁管**结构**，两者互补）；
@@ -32,29 +34,70 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{} 不可读: {e}", path.display()))
 }
 
-/// ① 端清单 abi.version == SDK abi.rs ABI_VERSION
+/// ① 端清单 package 版本 == 源文件 package 行（票 05 替代原 abi.version 双查）
+///
+/// 版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`（ADR 0051 D3 单点化，票 03
+/// 迁为 Rust 常量：能力域 `inventory` 静态自报要求编译期常量）：端清单 `package`
+/// 只声明包名，版本由 `scripts/compose-wit.mjs` 注入；本判据钉住「移动端组合面的
+/// package 版本 == 移动侧 WIT 源文件 package 行」——版本化后 import 名逐字匹配，
+/// 源文件版本漂移＝运行期实例化失败（编译面不红）。`abi.version` 是票 04 的退役面，
+/// 本判据不读它。
 #[test]
-fn compose_manifest_abi_matches_sdk_abi_version() {
+fn compose_manifest_package_version_matches_wit_sources() {
     let compose = read(&sdk_root().join("compose.json"));
     let m: serde_json::Value = serde_json::from_str(&compose).expect("端清单 JSON 可解析");
-    let declared = m["abi"]["version"].as_u64().expect("compose.json 缺 abi.version");
+    let declared = m["package"].as_str().expect("compose.json 缺 package");
 
-    let abi_src = read(&sdk_root().join("rust/src/abi.rs"));
-    let actual = abi_src
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .find_map(|l| {
-            let t = l.trim();
-            t.strip_prefix("pub const ABI_VERSION: u32 =")
-                .and_then(|rest| rest.trim().trim_end_matches(';').parse::<u64>().ok())
-        })
-        .expect("abi.rs 缺 ABI_VERSION 常量（形态漂移？）");
-
+    // 仓根版本真源（`bedcode-mobile/src-tauri` → `../..`）：Rust 常量文件，
+    // 抽取只认 `pub const <NAME>: &str = "<值>";` 形态并断言 PACKAGE 自洽。
+    let root = mobile_root().join("../..");
+    let raw = read(&root.join("contracts/bedcode-plugin-package.rs"));
+    let const_of = |name: &str| -> String {
+        let needle = format!("pub const {name}: &str = \"");
+        let start = raw.find(&needle).unwrap_or_else(|| {
+            panic!("contracts/bedcode-plugin-package.rs 缺常量 {name}")
+        }) + needle.len();
+        let rest = &raw[start..];
+        let end = rest.find('"').unwrap_or_else(|| {
+            panic!("contracts/bedcode-plugin-package.rs 常量 {name} 未闭合")
+        });
+        rest[..end].to_string()
+    };
+    let name = const_of("PACKAGE_NAME");
+    let version = const_of("PACKAGE_VERSION");
     assert_eq!(
-        declared, actual,
-        "端清单 abi.version({declared}) 与 SDK abi.rs ABI_VERSION({actual}) 漂移——\
-         「组合了什么」与 SDK 对外承诺必须同源（bump 走 ADR 0019 双端锁步流程）"
+        const_of("PACKAGE"),
+        format!("{name}@{version}"),
+        "contracts/bedcode-plugin-package.rs 的 PACKAGE 与 NAME@VERSION 自洽（ADR 0051 D3）"
     );
+    assert_eq!(
+        declared, name,
+        "端清单 package 与仓根版本真源 PACKAGE_NAME 漂移（ADR 0051 D3 单点化）"
+    );
+    assert!(
+        !declared.contains('@'),
+        "端清单 package 不应持版本字面量 `{declared}`——版本真源单点化在 \
+         contracts/bedcode-plugin-package.rs，清单回写版本=第二真源"
+    );
+
+    let expected = format!("package {name}@{version};");
+    for rel in [
+        "packages/bedcode-wasm-core/wit/core.wit",
+        "bedcode-mobile/packages/plugin-sdk-mobile/rust/wit-src/cap-mobile.wit",
+    ] {
+        let path = root.join(rel);
+        let line = read(&path)
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("package "))
+            .unwrap_or_else(|| panic!("{} 缺 package 声明行", path.display()))
+            .to_string();
+        assert_eq!(
+            line, expected,
+            "{rel} 的 package 行与仓根 contracts/bedcode-plugin-package.rs 漂移——版本化 \
+             后 import 名逐字匹配，源文件版本漂移＝运行期实例化失败（编译面不红）"
+        );
+    }
 }
 
 /// ② 生成物 world plugin 的 include 集 == core + 各 caps 键

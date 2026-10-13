@@ -23,7 +23,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "events-desktop";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-events-desktop"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-events-desktop"];
 
 /// 本域的权限位（`notify` 无权限门 ⇒ 空清单）
 pub const MODULE_PERMISSIONS: &[&str] = &[];
@@ -130,7 +130,7 @@ mod tests {
         );
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin/host-events-desktop"],
+            &["bedcode:plugin@0.1.0/host-events-desktop"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(MODULE_PERMISSIONS, &[] as &[&str], "notify 无权限门 ⇒ 空清单");

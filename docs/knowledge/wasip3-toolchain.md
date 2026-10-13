@@ -150,7 +150,8 @@ linker.instantiate_async(&mut store, &component)    // 实例化走 async 入口
 
 **关键发现（降低移动端成本）**：桌面 A0-3 计划里的 `Store::new_async` **最终没有采用**——
 桌面保持同步 `Store::new`，只在实例化/调用两个入口走 async。因此移动端 Phase B 的真实改动面是
-「**引擎配置 + 一个 linker 调用 + WasiView impl + 10 个导出调用点包一层 `block_on_async`**」，
+「**引擎配置 + 一个 linker 调用 + WasiView impl + 9 个导出调用点包一层 `block_on_async`**」
+（原记 10 处，含已随wit 包版本化退役的 `abi.version` 导出——ADR 0051 D2），
 而不是整条 async 迁移。`WasiView::ctx` 在 48 返回 `WasiCtxView`（结构体，含 `ctx` + `table`
 两个字段），移动端需加 `WasiCtx` + `ResourceTable` 两字段并实现该 trait。
 
@@ -174,7 +175,8 @@ linker.instantiate_async(&mut store, &component)    // 实例化走 async 入口
 4. **CI**：`test.yml` 的 `rust-mobile` job 要加 pinned nightly 安装 + target（桌面已有先例）。
 5. **无需 p2 兼容垫片**：移动端既有 unknown-unknown 组件不 import 任何 wasi，只需 p3 linker
    （桌面因有 wasip2 插件才必须加 `p2::add_to_linker_async`）。**存量插件产物无需强制重建**。
-6. **宿主调用 10 处 + bindgen 改 async**：`abi.version` / `activate` / `deactivate` / `invoke_command` /
+6. **宿主调用 9 处 + bindgen 改 async**（原 10 处含 `abi.version`，该导出已随 wit 包
+   版本化退役，ADR 0051 D2）：`activate` / `deactivate` / `invoke_command` /
    `on_terminal_input` / `on_terminal_output` / `on_startup` / `on_shutdown` / `on_message_binary` /
    `manifest`。同步→async 包裹经既有 `block_on_async`（重入/三线程路径已测），风险可控但需逐处 + 回归。
 

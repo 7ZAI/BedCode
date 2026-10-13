@@ -290,42 +290,9 @@ pub(crate) fn exports(
         .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
 }
 
-/// ABI 版本探测（`bedcode:plugin/abi#version` → `u32`）
+/// ABI 形态探测（`bedcode:plugin@0.1.0/abi-form.form` → `u32`，桌面独有 cap 导出）
 ///
-/// **走原生 `TypedFunc` 而非绑定**：`abi` 是 core.wit 的 interface，却不在
-/// `world core` 的导出表内（各端 cap 各自追加），把它绑进 core 绑定会让内核
-/// 对着「谁的 abi」表态。宿主侧发起协商时只需一个 `() -> u32`，原生探测零绑定、
-/// 零端差异。
-///
-/// 返回 `Ok(None)` = 该产物未导出 `abi`（旧 SDK 产物）；调用方据此给出
-/// 「按当前 SDK 重建」的指引——与实例化失败的处理同款可诊断性要求。
-pub(crate) fn abi_version(
-    store: &mut wasmtime::Store<WasmPluginState>,
-    instance: &wasmtime::component::Instance,
-) -> crate::Result<Option<u32>> {
-    // 组件接口导出是**嵌套实例**形态，探测必须用 ItemName 路径语法
-    // （`iface.func` 点号）——`iface#func` 平名 str 查找恒不命中（与
-    // `events-binary` / `events-ws` / `events-task` 探测同款理由）。
-    // 组件模型的返回值是 named-list：单个 `u32` 观测为 `(u32,)`。
-    let Some(item) = "bedcode:plugin/abi.version"
-        .parse::<wasmtime::component::wit_parser::ItemName>()
-        .ok()
-    else {
-        return Ok(None);
-    };
-    let func = match instance.get_typed_func::<(), (u32,)>(&mut *store, &item) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
-    crate::runtime_util::block_on_async(func.call_async(&mut *store, ()))
-        .map(|(version,)| Some(version))
-        .map_err(|e| AppError::Plugin(format!("Failed to call abi.version(): {}", e)))
-}
-
-
-/// ABI 形态探测（`bedcode:plugin/abi-form#form` → `u32`，桌面独有 cap 导出）
-///
-/// 与 [`abi_version`] 同手法的原生探测：`() -> u32` **无 `result` 返回**，因此能
+/// 原生探测（无绑定的 `TypedFunc` 直取，`abi-form` 不在 `world core` 表内）：`() -> u32` **无 `result` 返回**，因此能
 /// 用 `TypedFunc` 表达（带 `result` 的导出如 `events.*` 不能，见 ticket-03 §9.6）。
 /// 语义上 `form` 只判「component 形态 vs core 形态」这一跨端一致的事实，具体
 /// 期望值是端策略（桌面 `FORM_COMPONENT = 1`），由调用方比对。
@@ -333,7 +300,7 @@ pub(crate) fn abi_form(
     store: &mut wasmtime::Store<WasmPluginState>,
     instance: &wasmtime::component::Instance,
 ) -> crate::Result<Option<u32>> {
-    let Some(item) = "bedcode:plugin/abi-form.form"
+    let Some(item) = crate::contract::export_item("abi-form", "form")
         .parse::<wasmtime::component::wit_parser::ItemName>()
         .ok()
     else {
@@ -354,7 +321,8 @@ pub(crate) fn abi_form(
 /// 把 core 交集 interface 注册到 component linker（双端唯一一份）
 ///
 /// 与宿主 / 能力域自报的 cap interface **合流到同一个 `Linker`**：`Linker` 按
-/// interface 全名（`bedcode:plugin/host-*`）索引，重名注册才报 `defined twice`。
+/// interface 全名（`bedcode:plugin@<version>/host-*`，版本化契约下为含版本全名）索引，
+/// 重名注册才报 `defined twice`。
 /// core 8 与各端 cap 域天然不重叠，故两端宿主只需照常自报自己的域，本函数不必知道
 /// 它们的存在。
 ///

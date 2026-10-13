@@ -242,14 +242,15 @@ POC 1 周（R3）；双端 WIT 同步流程（ADR 0019）+ CHANGELOG + ADR。
 
 0 消费者，不做。等插件市场/签名链生态出现再议。
 
-## 6. 推进顺序（R6 / R7 已裁决 2026-10-13，其余待裁决）
+## 6. 推进顺序（R6 / R7 / bump 政策与起算值已裁决 2026-10-13，落 ADR 0051）
 
 1. ~~先裁决 R6 / R7~~ —— **已裁决**：R6 = 不派生、**退役整数 ABI**（wit 版本独立从
    `0` 起算，无用户不考虑兼容）；R7 = 版本真源仓根单点化 + 共享产物场景双端对齐
    （非共享场景双端各自演进）。两项落 ADR 即为 D1 前置，现已解除阻塞。
-2. **待裁决（新增，退役带来的必答题）**：新 bump 政策（建议：任何 WIT 变更含函数级
-   追加 → patch bump；interface 增删 / 签名变 → minor bump）与起算值（建议双端同为
-   `0.1.0`）。退役 `abi` 后版本纪律没有运行期载体，这两条必须先定，否则版本号会失控。
+2. ~~待裁决（新增，退役带来的必答题）~~ —— **已裁决（2026-10-13 票 01 实施时确认，
+   落 ADR 0051 D4）**：新 bump 政策 = 任何 WIT 变更含函数级追加 → patch bump；
+   interface 增删 / 签名变 → minor bump；起算值双端同为 `0.1.0`。理由：退役 `abi` 后
+   版本纪律没有运行期载体，patch / minor 区分只用于让破坏面大小可见。
 3. ~~整数收敛（bump 政策改「只数破坏性变更」）~~ —— **作废**：该提案的前提是
    `ABI_VERSION` 继续存在；既已裁决退役，bump 噪音问题随之消失（改为第 2 条的新政策）。
    事实基线 2 仍有效：现行是「任何契约变更都 bump」。
@@ -293,6 +294,7 @@ POC 1 周（R3）；双端 WIT 同步流程（ADR 0019）+ CHANGELOG + ADR。
   ⑤ 补 R7 双端版本相等约束（file-transfer 单产物）；⑥ 行号纠正（`runtime.rs:137`、
   `component.rs:416/445/399`、`bindings.rs:93`、ADR 0020 只覆盖桌面 zip）；⑦ D1 语义改写为
   「破坏性改名」并消除与 R5 的自相矛盾；⑧ 量级重估（1 + 2–3 人日）、建议 1 降级为需裁决。
+- **2026-10-13 · 工单发布（用户确认划分方案）**：按 to-tickets 方法论拆为 6 票落 `issues/01-06-*.md`，依赖与并行关系：票01（决策/ADR/台账，无依赖）→ 票02（契约层版本化）→ 票03（运行期按名匹配改造）∥ 票05（元数据与锁同步，仅依赖票02）→ 票04（ABI 退役，依赖票03——bindgen 联动不可并行）→ 票06（全量重建与回归，依赖 03+04+05）。票02/票04 涉及 `cap-desktop.wit` / `wiring_lock.rs` 落点**等并行线 file-transfer-single-wasm 合流后执行**（写前重读）。
 - **2026-10-13 · R6 裁决落文（用户：不做 1:1 派生，wit 版本从头从 0 起算，不考虑旧
   兼容，因项目在研发阶段无用户）**：新增 §2.1「ABI version 退役评估」——枚举 `ABI_VERSION`
   现有 5 项职能与可替代性（① 超限拒绝可替代且本已冗余、② 向后兼容加载**在现行 bump
@@ -304,3 +306,130 @@ POC 1 周（R3）；双端 WIT 同步流程（ADR 0019）+ CHANGELOG + ADR。
   ≈1 人日）、§6 推进顺序（R6/R7 阻塞解除；新增待裁：新 bump 政策与起算值；原「整数
   收敛」提案作废）、§7 票据重排为 T1–T6（新增 T4「ABI 退役」）。
 - （按票追加）
+- **2026-10-13 · 票 01 实施完成（决策与台账迁移）**：新增 `docs/adr/0051-wit-package-semver-and-abi-retirement.md`
+  ——落 R6（整数 ABI 一次性退役、不派生、分两阶段取消）、R7（版本真源仓根单点化 +
+  共享产物场景双端对齐 / 非共享各自演进）、**新 bump 政策**（任何 WIT 变更含函数级追加 →
+  patch；interface 增删 / 签名变 → minor；起算双端 `0.1.0`，实施时确认即为最终）、
+  记账去处（D5 = CHANGELOG 双语台账）、双端偏离条款（D6 = ADR 0018 维持不撤销）；
+  台账迁移完成：`CHANGELOG.md` / `CHANGELOG_zh.md` [Unreleased] / [未发布] 顶部新增条目 +
+  「契约演进台账（整数 ABI）」双表（桌面 v1…v38 / 移动 v1…v21 逐版语义与性质，逐条对照
+  双端 `abi.rs` 头注释，无断档）。本票未删 `abi.rs`（删除随票 04 退役面），未碰任何在途
+  文件（compose.json / cap-*.wit / wiring_lock.rs 等）。后续票 02–06 解除「待裁决」阻塞。
+- **2026-10-13 · 票 02 实施完成（契约层版本化）**：版本真源落 **仓根
+  `scripts/wit-package.json`**（`{ name: "bedcode:plugin", version: "0.1.0" }`，全仓唯一
+  手写处）——用户裁决取「仓根常量 + 脚本注入」方案（JSON 清单无引用机制，票内「脚本零改动」
+  门禁与「清单引用常量」不可兼得）。连带：双端 `compose.json` 的 `package` 从整行声明改为
+  **只声明包名**（`compose-wit.mjs` 注入版本 + 校验清单包名 == 真源 name，漂移即抛）；
+  **10 源** package 行带 `@0.1.0`；双端重拼 `pnpm run check:wit` 9/9 绿；新锁
+  `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs`（四判据：真源形状 / 清单
+  只声明包名 / 10 源 package 行 / 9 生成物 package 行；**变异自检 3/3**：源文件漂移→判③红、
+  清单回写版本→判②红、生成物漏重拼→判④红；还原后 sha256 一致 + 4/4 绿）。
+  注释同步：`core.wit` 头注（记账去处改指 CHANGELOG 台账 / import 名带版本而导出名不带）+
+  导出探测注释去 `bedcode:plugin/` 前缀 + 桌面 code-map（compose 表项 `abi.version` 36→38
+  纠偏 + 新锁索引）+ `docs/commands.md` §5.6。编译面全绿（wasm-core `cargo check`、双端 SDK
+  `cargo check --features wasm`、桌面宿主 `cargo check --lib`、移动宿主 `cargo check`）——
+  版本化不改代码生成。**运行期面按票序留待后续**：约 32 处按名匹配点（票 03）+ ABI 退役
+  （票 04）未落地，故本票之后端到端实例化路径暂红（属在途范围，非回归）。
+- **2026-10-13 · 票 03 实施完成（运行期按名匹配点单点派生）**：① **先实测再改**——临时探针
+  （wasmtime 48.0.5 + wit-parser 0.256，跑完即删）定死三件事：导出实例键 =
+  `ns:pkg/iface@version`（**版本在末尾**；无版本写法对版本化产物恒 None，前一轮误读探针输出
+  曾一度得出相反结论，已纠正）、实例内函数名按**平名**查找（`iface#func` 连语法都非法）、
+  `ItemName` 版本写中间会解析失败 ⇒ 正解 = 末尾追加版本 + 保留现有两段查找。
+  ② **单点派生** `packages/bedcode-wasm-core/src/contract.rs`：`export_item(iface, func)` /
+  `interface_path(iface)`，`OnceLock<Vec<(String, &'static str)>>` 池（保 `&'static
+  [&'static str]` 形态，避免闭表锁改成 `Vec<String>`）；内核 30 余处探测点全部改为只传
+  接口名 + 函数名（core_binding 2 · component 4 · owner 16 · capability 8），零散落版本字面量。
+  ③ **真源形态修正（用户裁决）**：JSON → Rust 常量 `contracts/bedcode-plugin-package.rs`
+  ——能力域 crate 的 `inventory` 静态自报（`static ROUTE` + `submit_routable_capability!`）
+  要求**编译期常量**，JSON 只能运行期解析，结构性冲突；`scripts/wit-package.json` 删除
+  （改后 compose 脚本直接读常量，少一处生成物与一把锁）。④ const 上下文的散落副本由锁兜底：
+  `routing.rs` 的 `EXPORTS` 加 `@0.1.0`，`wit_package_version_lock.rs` 新增判据⑤；
+  内核对偶锁改为「双形态抽取（内核 `export_item("host-mdns", …)` 调用形态 / 域侧字面量形态）
+  + 值层逐字比对」，并按结构锁通则逐行跳注释行。验证：wasm-core `cargo test --lib` 575/575、
+  `discovery-engine --features common-host` 35/35、版本锁 5/5、双端宿主 `cargo check` 绿、
+  `pnpm run check:wit` 9/9；变异自检 2/2（还原后 sha256 一致）。**工作区混杂提醒**：实施期间工作区同时存在**并行线（票 05 元数据与锁同步）**的在途改动——`bedcode-desktop/src-tauri/src/plugin/*.rs`（17）、各能力域 `plugin_binding.rs` / `discovery-engine/src/lib.rs`（`MODULE_INTERFACES` 带版本）、`bedcode-host-kit/src/module.rs`、`bedcode-mobile/src-tauri/tests/mobile_wit_composition_lock.rs` 等 24 文件。这些**非本票产出**，本票未触碰也未回退；本票门禁在含该并行改动的状态下复跑仍全绿（wasm-core 575 / 版本锁 5 / discovery-engine 35）。
+- **2026-10-13 · 票 03 事实核实（wasmtime 48.0.5 + wit-parser 0.256 实测，临时探针跑完即删）**——
+  纠正 R2 对「按名匹配点」形态的判断，并给出唯一可行的派生形态：
+  ① **导出实例键 = `ns:pkg/iface@version`（版本在末尾）**。实证：未版本化 fixture 命中
+  `bedcode:plugin/events`，版本化 file-transfer 产物命中 `bedcode:plugin/events@0.1.0`
+  且 `bedcode:plugin/events` **恒 None** ⇒ 版本确实参与导出查找，票 02 后这批探测点全断
+  （R2 判断成立）。
+  ② **平名恒不命中**：`events` / `events#on-message` / `bedcode:plugin/events#on-message`
+  在两种产物上均 None ⇒ 现有 `ItemName` 两段查找机制（顶层按接口实例、实例内按**平名**
+  函数名）是唯一可用形态，必须保留。
+  ③ **`ItemName` 字面量的版本只能写在末尾**：`bedcode:plugin@0.1.0/events.on-message`
+  **解析失败**（`expected '/', found '@'`——wit-parser 的 `FromStr` 在
+  `ns:pkg` 后强制要求 `/`），而 `bedcode:plugin/events.on-message@0.1.0` 解析出的
+  `instance_name()` 恰为 `bedcode:plugin/events@0.1.0`（与 ① 的键逐字一致）⇒ **现有
+  字面量末尾追加 `@<version>` 即为正解**，机制不需替换。
+  ④ **import 键形态未测**（linker 注册面由 wit-bindgen `add_to_linker` 自动生成，
+  运行期代码不手写 import 名）；`Component::get_export_index` 只查导出面，查不到
+  import 是预期而非缺陷。
+  ⇒ 实现约束从「禁 32 处各写后缀匹配」细化为：**单一派生入口（版本作构造参数注入
+  一次）+ 32 处消费该入口**；派生结果须为 `ns:pkg/iface.func@version` 形态（末尾版本）。
+- **2026-10-13 · 票 05 实施完成（元数据常量与锁同步）**：① **49 处元数据常量**全部带
+  `bedcode:plugin@0.1.0/` 前缀——桌面宿主 29（11 consts + 11 测试孪生 + 5 能力域测试断言）、
+  移动宿主 11、能力 crate 7（pty/peer/http/ws/mdns）、wasm-core whitelist 名词匹配测试 2；
+  随行修正**基线元数据漂移 4 处**（桌面 `host-connection`→`host-connection-registry`、
+  `host-auth`→`host-auth-center`，移动 `host-connection`→`host-connection-target`、
+  `host-auth`→`host-auth-client`——常量与 WIT 生成物对齐，bindings.rs 期望清单同步；
+  运行期绑定 `add_to_linker` 本就经 bindgen 走新名，纯元数据修正）；② 原两处 `abi.version`
+  双查（桌面 `bindings.rs:93` / 移动 `mobile_wit_composition_lock.rs:40`）改为**版本一致性检查**
+  （compose package 名 == 真源 PACKAGE_NAME，桌面/移动侧 WIT 源文件 package 行 ==
+  `package <name>@<version>;`；真源 = 仓根 `contracts/bedcode-plugin-package.rs`，随票 03 由
+  JSON 改 Rust 常量后本票不读已删的 `scripts/wit-package.json`）；③ 其余锁逐一核对：
+  purity 判据 7（`cap-*` needles 不受版本化影响）、`binding_surface_must_not_return_to_wasm_core`
+  （Rust 模块路径 needles 不受影响）、`wit_package_version_lock.rs`（真源同步为 contracts/）、
+  bindings `rsplit('/')` 版本免疫均成立；④ 两把改写锁**变异自检各 1/1**（pty.wit / cap-mobile.wit-src
+  注入版本漂移 → 红 → 还原 → sha256 一致 → 绿）。`pnpm run check:wit` 9/9；桌面宿主 lib 155/0、
+  移动组合锁 3/3 + purity 7/7、能力 crate（pty 100 / http 85 / ws 51 / peer 56 / discovery 34）
+  全绿。⚠️ 并行线票 03/04 在途红 2 项（wasm-core `a03_p2_fuel_async_semantics`、移动
+  `ws_client_e2e` 编译引用已删 `abi` 模块）非本票，待合流归绿。票 05 与票 03 并行期间工作区
+  出现版本真源迁移（`scripts/wit-package.json` → `contracts/bedcode-plugin-package.rs`）——
+  已按「写前重读、写后复查」对齐，未与并行线互相覆盖。
+- **2026-10-13 · 票 04 实施完成（整数 ABI 退役）**：契约面（`core.wit` 删
+  `interface abi` · 双端 cap world 删 `export abi` · 双端 `compose.json` 删 `abi.version`）·
+  运行期（`AbiPolicy` 退化为 `FormPolicy` 只管形态 · 删 `verify_abi` version 分支与
+  `core_binding::abi_version` · `test_support::plugin_abi_version` 退役）· SDK 面（双端
+  `abi.rs` **删除**，桌面 `FORM_COMPONENT` 迁入新模块 `form.rs` · `wasm_entry!` 去
+  `abi.version` 导出 · `wasm_entry_with_abi!` 宏退役 · 夹具 `plugin-system-test` 改
+  `abi_form`）· 共享产物（`SHARED_ABI_VERSION` 与协商机制退役，`wiring_lock.rs` 判据 6
+  改写为「双端包版本对齐 + 退役面不得复活」）全量落地；**四方不变量收敛为两方**。
+  门禁：wasm-core lib 574/575 · file-transfer-core 76/76 · 版本锁 5/5 · 双端 SDK/宿主
+  `cargo check` 绿 · `check:wit` 9/9 · 变异自检 1/1。
+  **过程中两项纠偏**：① 并行线把 `pty.wit` / `cap-mobile.wit` 单独 bump 到 `@0.1.1`
+  （真源未同步、无实质 WIT 变更、违反 `include` 同版本约束 ⇒ 编译红），版本锁判据③
+  正确抓到，已回退并保留记录（无实质变更的 bump 不成立）；② 遗留
+  `a03_p2_fuel_async_semantics` 红：实验（临时恢复 `interface abi`）数值逐字不变 ⇒
+  与本票无因果，根因是 wasip3 fixture 因 WIT 变更重建后产物字节变化 + fuel 计量敏感，
+  列入票 06 全量重建回归。- **2026-10-13 · 提交前审核修正（票 01–05 合流验收，基于 spec §0–§8 逐面核对）**：
+  ① **运行期按名匹配 3 处漏改（真断链，已修）**——票 03 只改了内核 30 余处消费点，
+  但 `a03_probe.rs` 的 `"bedcode:plugin/command.invoke"`（真 `get_typed_func`）、桌面
+  `auth_center_perf.rs` 的认证中心调用字面量（真 `call_capability_export`，且注释引用
+  已删常量 `EXPORT_AUTH_VERIFY_DEVICE_TOKEN`）、host-kit `route.rs` 自报探针
+  `exports` 字面量三处仍是无版本名（版本化后探测恒 None，测试静默退化/性能探针全走
+  Err）→ 统一改 `contract::export_item` 派生（host-kit 探针字面量带 `@0.1.0`）；
+  `owner.rs` `OpKind::export` 的 4 处日志/文案字面量（events-binary / events-ws ×2 /
+  events-task）与同函数其余 16 处不一致（只进 `log_trap` 的 `export=` 字段，不参与
+  匹配，但形态必须统一）→ 同改派生。② **票 04 断言适配缺陷 2 处（移动
+  component_e2e）**——燃料断言体在被测调用 `get_manifest()` **之前**执行（票 04 把
+  abi.version 原生探测换成 get_manifest 后无前置调用，断言空转恒红）；
+  fuel_trap 断言硬编码 `command#invoke` 旧符号名（版本化后 backtrace 为
+  `command@0.1.0#invoke`）→ 断言移至调用后 + 改 `#invoke` 版本免疫匹配。
+  ③ **注释/文档滞后一批**（AGENTS §6 强制）：core.wit 头注、`wit_package_version_lock.rs`
+  头注仍引用已删 `scripts/wit-package.json`（真源已迁 `contracts/`）；runtime.rs 模块头
+  doc 残留旧「桌面 37 / 移动 20 + 版本上限」；SDK `wasm_{binary,ws,task,auth_policy}.rs`
+  与 `plugin-system-test`、`core_binding.rs`、`capability.rs`、`d10_contract_test.rs`
+  （引用已退役 `abi#form`）接口名示例无版本；桌面 code-map 残留 `abi.version=38` /
+  `abi.rs` 引用 / `worlds/abi.version 漂移`；file-transfer README 残留
+  `SHARED_ABI_VERSION` 协商口径。④ **工作区遗留空目录** `packages/bedcode-wasm-core/tests/`
+  （09:48 迁移测试时留下的空壳，git 未跟踪）触发 `capability_crates_unit_tests_only`
+  → 已删。⑤ **既有基线红确认非本票**：`capability_crates_no_product_ids` /
+  `empty_dir_lock` 两锁文件与 HEAD 零 diff，触发物（headless-host-probe / host-api-core
+  未登记、移动 `plugins/` 目录缺失）均在 HEAD 树即存在 ⇒ dev 长期基线红（dev 本地不跑
+  CI）；6 个 wasm 产物依赖目标（broadcast_shutdown / pty_session_chain / session_e2e /
+  system_component_test / ws_auth_rules / ws_e2e）为 spec R5 迁移期语义（旧产物被版本化
+  宿主拒载），归票 06 重建。**合流后验证**：wasm-core lib **575/575**（含原遗留红
+  `a03_p2_fuel_async_semantics`，fixture 重建后归绿）· 桌面 lib 155/155 · 移动全量
+  全绿（226 + component_e2e 8/8）· 能力 crate pty 100 / http 85 / ws 51 / peer 56 /
+  discovery 35 / host-kit 全绿 · file-transfer-core 76/76 · 版本锁 5/5 · check:wit 9/9。

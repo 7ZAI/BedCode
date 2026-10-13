@@ -4,7 +4,8 @@
 //! 请求**都会走 `enforce_connection_policy` → `call_auth_policy` → 真实
 //! terminal-session WASM 插件的 `auth-policy.verify-device-token` 导出。本探针
 //! **v33（ADR 0033）后只剩一段**：验签与策略收进同一次调用——
-//! `call_capability_export(EXPORT_AUTH_VERIFY_DEVICE_TOKEN)` 一次跨界，
+//! `call_capability_export`（导出名经 `wasm_core::contract::export_item` 派生，
+//! ADR 0051 D3）一次跨界，
 //! guest 内部做密码学验签（密钥环）+ claims 复检 + 经 `host.records()`（`pairings_all`）
 //! **二次跨界**拉取全部配对记录做撤销检查。
 //!
@@ -132,7 +133,7 @@ fn auth_center_hotpath_cost_probe() {
     let mut b_err = 0usize;
     for _ in 0..n {
         match plugin.call_capability_export::<(String,), (Result<String, String>,)>(
-            "bedcode:plugin/auth-policy.verify-device-token",
+            bedcode_desktop_lib::wasm_core::contract::export_item("auth-policy", "verify-device-token"),
             (token.clone(),),
         ) {
             // 外层 Result = 宿主调用本身（trap / 实例缺失）；内层 = WIT `result`

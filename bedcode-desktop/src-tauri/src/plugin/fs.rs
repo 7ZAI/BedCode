@@ -24,7 +24,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "fs-desktop";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-fs-desktop"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-fs-desktop"];
 
 /// 本域的权限位（三函数同用机制位 `fs:read`——真源在 wasm-core `permission.rs`，
 /// 与交集 `host-fs` 的 `fs:read` 同一判据，无第二份判定）
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(MODULE_NAME, "fs-desktop", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin/host-fs-desktop"],
+            &["bedcode:plugin@0.1.0/host-fs-desktop"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(MODULE_PERMISSIONS, &["fs:read"], "三函数同用机制位 fs:read");

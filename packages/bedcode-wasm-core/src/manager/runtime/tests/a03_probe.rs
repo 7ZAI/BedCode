@@ -152,7 +152,7 @@ fn a03_p1c_sync_call_under_async_store_mechanism() {
         return;
     };
     let (store, instance) = plugin.raw_store();
-    let Ok(func) = "bedcode:plugin/command.invoke"
+    let Ok(func) = crate::contract::export_item("command", "invoke")
         .parse::<wasmtime::component::wit_parser::ItemName>()
         .map_err(|e| format!("parse export name: {e}"))
         .and_then(|item| {
@@ -200,14 +200,28 @@ fn a03_p2_fuel_async_semantics() {
 
     // ② 消耗量随 guest 工作量缩放（同一实例、同一燃料预算起点：exports() 续费到
     // fuel_budget 后执行；两次调用消耗差即 guest 指令计数在 async 调用内的净消耗）
-    let r1 = run_command(&mut plugin, CMD_SPIN, r#"{"iters": 1_000_000}"#);
+    //
+    // 载荷必须是**合法 JSON**：JSON 数字不允许 Rust 的下划线分隔符，`{"iters": 1_000_000}`
+    // 解析失败后 guest 侧退回默认 iters（同样是 1_000_000），于是「两次不同工作量」实际
+    // 跑的是同一份负载，燃料差只剩噪音——断言方向会随噪音翻转。故载荷写纯数字，并用
+    // guest 回显的 `iters` 把「载荷真的抵达 guest」钉成强断言（否则本段会静默退化成
+    // 「同一负载跑两次」的比值测试）。
+    let r1 = run_command(&mut plugin, CMD_SPIN, r#"{"iters":1000000}"#);
     assert_eq!(r1["ok"], true);
+    assert_eq!(
+        r1["iters"], 1_000_000_u64,
+        "spin 载荷必须原样抵达 guest（非法 JSON 会静默退回默认 iters）: {r1}"
+    );
     let left_small = {
         let (store, _) = plugin.raw_store();
         store.get_fuel().expect("get_fuel 必须可用")
     };
-    let r2 = run_command(&mut plugin, CMD_SPIN, r#"{"iters": 10_000_000}"#);
+    let r2 = run_command(&mut plugin, CMD_SPIN, r#"{"iters":10000000}"#);
     assert_eq!(r2["ok"], true);
+    assert_eq!(
+        r2["iters"], 10_000_000_u64,
+        "spin 载荷必须原样抵达 guest: {r2}"
+    );
     let left_large = {
         let (store, _) = plugin.raw_store();
         store.get_fuel().expect("get_fuel 必须可用")

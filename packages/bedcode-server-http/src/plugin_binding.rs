@@ -131,7 +131,7 @@ pub const MODULE_NAME: &str = "http";
 ///
 /// 票 04：`host-http` 拆为双端交集出站域（core.wit）+ 桌面扩展服务端域
 /// （`host-http-endpoint`，本分片）——一个能力域模块持两个 interface。
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin/host-http", "bedcode:plugin/host-http-endpoint"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-http", "bedcode:plugin@0.1.0/host-http-endpoint"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["network:http"];

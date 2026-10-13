@@ -35,7 +35,7 @@ use bedcode_desktop_lib::wasm_core::test_support::{
     hold_registry_desk, plugin_db_root, session_apis, session_plugin_db_guard,
     setup_wasm_runtime, TestInstanceDispatcher,
 };
-use bedcode_plugin_api::EndpointAuth;
+use bedcode_server_websocket::endpoint::EndpointAuth;
 use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::Message;
 

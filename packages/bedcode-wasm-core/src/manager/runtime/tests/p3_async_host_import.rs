@@ -337,10 +337,12 @@ async fn test_p3_async_host_import_yields_runtime() {
         manifest_dir.join("../../bedcode-desktop/packages/plugin-sdk-desktop/rust/wit/bedcode.wit"),
     )
     .expect("read production WIT");
+    // 生产 SDK 的形态常量模块（整数 ABI 随 wit 包版本化退役，`abi.rs` 已删，
+    // 形态常量迁 `form.rs`，ADR 0051 D2）
     let production_abi = fs::read_to_string(
-        manifest_dir.join("../../bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs"),
+        manifest_dir.join("../../bedcode-desktop/packages/plugin-sdk-desktop/rust/src/form.rs"),
     )
-    .expect("read production ABI");
+    .expect("read production form module");
     assert!(!production_wit.contains("p3-async-host-probe"));
     assert!(!production_abi.contains("P3_ASYNC_HOST_IMPORT_PROBE"));
 

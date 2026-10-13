@@ -2,8 +2,9 @@
 //!
 //! 基于 WIT 契约（plugin-sdk-mobile/rust/wit/bedcode.wit，单一事实来源）生成
 //! wit-bindgen 0.60.0 绑定；`features` 控制异常形态供宿主拒绝场景单测使用：
-//! `high-abi` / `spin-loop` / `big-alloc`（见 Cargo.toml；import-extra 已随
-//! 03 全量接线移除——所有 WIT 接口均已注册，未知接口由类型系统构造性排除）。
+//! `spin-loop` / `big-alloc`（见 Cargo.toml；import-extra 已随 03 全量接线移除——
+//! 所有 WIT 接口均已注册，未知接口由类型系统构造性排除；`high-abi` 已随整数 ABI
+//! 退役删除——版本不再由guest 自报，产物新旧由 linker 的 import 名逐字匹配裁决）。
 //!
 //! 产出形态：core module 含 `component-type` 段，由宿主导入链路用 wit-component
 //! 编码为组件（字节 `00 61 73 6d 0d 00 01 00`）。
@@ -19,7 +20,6 @@ wit_bindgen::generate!({
 
 // world 导出 → `exports::bedcode::plugin::*::Guest` trait；world 全部导出接口
 // 必须实现（组件 world 声明即契约，宿主 Plugin::new 按全量导出校验）
-use exports::bedcode::plugin::abi::Guest as AbiGuest;
 use exports::bedcode::plugin::command::Guest as CommandGuest;
 use exports::bedcode::plugin::events::Guest as EventsGuest;
 use exports::bedcode::plugin::lifecycle::Guest as LifecycleGuest;
@@ -64,26 +64,6 @@ mod ws_probe {
             .lock()
             .map(|mut guard| std::mem::take(&mut *guard))
             .unwrap_or_default()
-    }
-}
-
-// ==================== abi ====================
-
-impl AbiGuest for ComponentTestPlugin {
-    fn version() -> u32 {
-        #[cfg(feature = "high-abi")]
-        {
-            return 999;
-        }
-        // 夹具不依赖 SDK crate（仅 wit-bindgen 生成物），版本手写——**bump ABI
-        // 需同步此处**（file-transfer C4 同步点；2026-10-13 SDK 20→21 已跟）。
-        // （历史 v20 = 交集切片收拢——host-fs 交集 6 进共享 core + host-fs-mobile
-        //  拆分，2026-10-10 票 04；叠加 v19 host-database（主库）整面退役——主库由
-        //  wasm-core 管理、不给插件直接调用，2026-10-09 双端机制决策；再叠加 v18
-        //  host-notify 域收编、v17 host-terminal / terminal-hooks 整面退役（票 15
-        //  阶段 B）、v16 认证/配对编排下沉、v15 终端订阅协议客户端迁插件、
-        //  v14 host-websocket 客户端域 5 函数）
-        21
     }
 }
 

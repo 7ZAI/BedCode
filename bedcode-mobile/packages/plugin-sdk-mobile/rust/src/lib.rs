@@ -7,7 +7,6 @@
 //! 启用 `wasm` feature 后，额外提供 `WasmPlugin` trait 和 `wasm_entry!` 宏，
 //! 用于编译为 WASM 模块的插件。
 
-pub mod abi;
 pub mod args;
 pub mod command;
 pub mod context;

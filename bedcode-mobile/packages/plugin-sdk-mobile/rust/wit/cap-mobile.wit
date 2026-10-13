@@ -1,4 +1,4 @@
-package bedcode:plugin;
+package bedcode:plugin@0.1.0;
 
 // 移动端插件契约——**端扩展分片**（共享核心 interface 在 `wasm-core/wit/core.wit`，
 // 本文件只承载移动独有 / 非等接口；端 `wit/` 目录由 `scripts/compose-wit.mjs` 拼装生成）
@@ -200,7 +200,6 @@ world cap-mobile {
     import host-auth-client;
 
     export events;
-    export abi;
 }
 
 /// v9：二进制消息接收专用 world（**仅 SDK 绑定用，宿主不实例化它**）

@@ -1,5 +1,5 @@
 {
-  "package": "package bedcode:plugin;",
+  "package": "bedcode:plugin",
   "world": "plugin",
   "core": "packages/bedcode-wasm-core/wit/core.wit",
   "out": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit",

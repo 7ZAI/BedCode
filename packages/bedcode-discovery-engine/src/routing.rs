@@ -35,12 +35,20 @@ pub const FORWARD_PREFIX: &str = "mdns";
 ///
 /// 顺序与内核 `CapabilityTarget` 的方法族一致（browse / stop-browse / advertise /
 /// stop-advertise / is-advertising），宿主 adapter 逐条按名取用。
+///
+/// **版本后缀是契约包的组成部分**（ADR 0051 D3）：组件导出实例的键 = `ns:pkg/iface@version`，
+/// 无版本写法对版本化产物恒不命中。字面量里的 `@0.1.0` 与仓根真源
+/// `contracts/bedcode-plugin-package.rs` 必须一致——本表走 `inventory` 静态自报
+/// （`static ROUTE` + `submit_routable_capability!` 要求编译期常量），字面量无法跨文件
+/// 派生，故由机械锁钉住：`bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs`
+/// （值层）+ 内核 `manager::capability` 的
+/// `mdns_call_surface_names_match_the_domain_self_report`（与内核调用面对偶）。
 pub const EXPORTS: &[&str] = &[
-    "bedcode:plugin/host-mdns.browse",
-    "bedcode:plugin/host-mdns.stop-browse",
-    "bedcode:plugin/host-mdns.advertise",
-    "bedcode:plugin/host-mdns.stop-advertise",
-    "bedcode:plugin/host-mdns.is-advertising",
+    "bedcode:plugin/host-mdns.browse@0.1.0",
+    "bedcode:plugin/host-mdns.stop-browse@0.1.0",
+    "bedcode:plugin/host-mdns.advertise@0.1.0",
+    "bedcode:plugin/host-mdns.stop-advertise@0.1.0",
+    "bedcode:plugin/host-mdns.is-advertising@0.1.0",
 ];
 
 /// 自报项（`inventory` 静态）
@@ -85,6 +93,10 @@ mod tests {
     }
 
     /// 每条导出都属于 `MODULE_INTERFACES` 里那个以能力名结尾的接口
+    ///
+    /// 版本免疫（票 05）：`MODULE_INTERFACES` 是元数据常量（全名 `bedcode:plugin@0.1.0/
+    /// host-mdns`），`EXPORTS` 是运行期按名匹配面（版本化随票 03）——两侧都按 `/` 取尾段
+    /// 只比接口名与函数名，版本后缀漂移不破坏本判据。
     #[test]
     fn exports_belong_to_the_wit_interface() {
         let iface = crate::MODULE_INTERFACES
@@ -96,10 +108,12 @@ mod tests {
                     crate::MODULE_INTERFACES
                 )
             });
+        let iface_name = iface.rsplit('/').next().unwrap_or(iface);
         for export in EXPORTS {
+            let export_name = export.rsplit('/').next().unwrap_or(export);
             assert!(
-                export.starts_with(&format!("{iface}.")),
-                "导出 '{export}' 不属于接口 {iface}"
+                export_name.starts_with(&format!("{iface_name}.")),
+                "导出 '{export}' 不属于接口 {iface_name}"
             );
         }
     }
