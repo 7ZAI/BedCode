@@ -17,13 +17,13 @@
 use crate::host::{
     ConfigKey, CryptoKeypair, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig,
     HostConnection, HostCrypto, HostError, HostEvents, HostFs, HostHttp, HostLog, HostMdns,
-    HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage, HostTask,
-    HostWebsocket, ProcessSyncResult, PtyRingFetch,
+    HostNotify, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage,
+    HostTask, HostWebsocket, NotifyOptions, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth_center, host_bus, host_config, host_connection_registry, host_crypto, host_events,
-    host_events_desktop, host_fs, host_fs_desktop, host_http, host_http_endpoint, host_log,
-    host_mdns, host_peer, host_platform, host_platform_desktop, host_plugin_database,
+    host_fs, host_fs_desktop, host_http, host_http_endpoint, host_log,
+    host_mdns, host_notify, host_peer, host_platform, host_platform_desktop, host_plugin_database,
     host_process, host_pty, host_storage, host_task, host_timer, host_websocket,
     host_websocket_server,
 };
@@ -311,9 +311,15 @@ impl HostEvents for WasmHost {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         host_events::emit(event_name, &payload_str);
     }
+}
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-        host_events_desktop::notify(title, body).map_err(|e| host_err("notify", e))
+// ==================== HostNotify（共享域契约 host-notify） ====================
+
+impl HostNotify for WasmHost {
+    fn notify(&self, title: &str, body: &str, options: &NotifyOptions) -> Result<(), HostError> {
+        let options_json = serde_json::to_string(options)
+            .map_err(|e| HostError::custom(-1, format!("notify: serialize options failed: {e}")))?;
+        host_notify::notify(title, body, &options_json).map_err(|e| host_err("notify", e))
     }
 }
 
@@ -864,15 +870,12 @@ impl HostPlatform for WasmHost {
         })
     }
 
-    fn platform_pick_folder(&self) -> Result<String, HostError> {
-        host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
-    }
-
     fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_pick_folders",
-            host_platform_desktop::pick_folders()
-                .map_err(|e| host_err("platform_pick_folders", e))?,
+            // 2026-10-13 功能级统一：多选目录选择器已归 core `host-platform`
+            // （原桌面扩展 `host_platform_desktop::pick_folders` 退役）
+            host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
             HostError::custom(

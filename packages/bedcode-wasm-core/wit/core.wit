@@ -1,9 +1,16 @@
-/// BedCode 插件 Component Model 契约——**双端共享核心（single source of truth）**
+/// BedCode 插件 Component Model 契约——**内核机制能力（single source of truth）**
 ///
-/// 本文件是 wasm-core 单一 crate 的核心 WIT 真源（ADR 0037）：
-/// 只承载**双端函数集完全一致**的 interface（交集切片），
-/// 端独有 / 端扩展接口一律在各端 `cap-*.wit`（同 package **同版本**拼装，
-/// 版本不一致即拼装失败——wasmtime 的 `include` 要求 package 同名同版本）。
+/// 本文件是 wasm-core 单一 crate 的核心 WIT 真源（ADR 0037 / ADR 0052 D1）：
+/// **core 只收内核自己实现、双端同源、且为内核机制必需 / 全部插件共同需要的
+/// interface**（storage / plugin-database / log / config / events / bus / fs /
+/// platform + 三个导出 + events-binary）。
+///
+/// 业务能力契约（设备发现 / 对等网络 / 出站 HTTP / WS 客户端 / 通知 / 终端流…）
+/// **不落 core**：双端功能级交集住能力域 crate 的 `wit/<domain>.wit`（契约与实现
+/// 同处，ADR 0052 D2/D3），只有一端有的功能住该端 `cap-*.wit`（ADR 0052 D4）。
+/// 端生成物由 `scripts/compose-wit.mjs` 按 `compose.json` 将 core 与各 cap 分片
+/// 同 package **同版本**拼装（版本不一致即拼装失败——wasmtime 的 `include` 要求
+/// package 同名同版本）。
 ///
 /// 迁移约定（与桌面端原 bedcode.wit 头注释一致）：
 /// - `serde_json` 载荷保留：结构化参数/结果一律用 `string` 承载 JSON
@@ -19,7 +26,7 @@
 /// （`bedcode:plugin@<version>/<interface>`，版本取自仓根
 /// `contracts/bedcode-plugin-package.rs`）；
 /// **导出**名不带包版本（实例级 `interface#function`），故运行期按名探测导出不受版本影响。
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 /// 插件 KV 存储（原 storage.rs：storage_get/set/delete）
 interface host-storage {
     get: func(key: string) -> result<option<string>, string>;
@@ -29,8 +36,9 @@ interface host-storage {
 /// 事件（原 events.rs：emit_event；broadcast-sync 随 websocket 业务下沉
 /// 退役——插件事件走 bus/emit，宿主不再持同步广播面）
 ///
-/// 双端交集切片：桌面独有 `notify` 拆入 [`host-events-desktop`]（移动端收编在
-/// `host-notify`），本接口只剩双端交集 `emit`。
+/// 双端交集切片：原桌面独有 `notify` 已按功能级交集统一进共享域契约
+/// `host-notify`（真源 `packages/bedcode-notify-engine/wit/notify.wit`，ADR 0052 D3；
+/// 桌面 `host-events-desktop` 随之退役），本接口只剩双端交集 `emit`。
 interface host-events {
     emit: func(event-name: string, payload-json: string);
 }
@@ -67,138 +75,17 @@ interface host-bus {
     subscribe-binary: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
 }
-/// 对等网络基础能力：宿主只提供能力原语，
-/// file-transfer 插件是首个上层消费者
-///
-/// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
-/// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
-/// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
-/// - `peer:devices`    发现缓存全量列表变化
-/// - `peer:connection` 节点连上/断开
-/// - `peer:consent`    首次连接确认请求
-/// - `peer:transfer-event` / `peer:receive-event` 引擎原始事件流（唯一回流——
-///   旧快照 topic `peer:transfer` / `peer:receive` 已退役，任务状态真源在
-///   插件事件归约状态机）
-interface host-peer {
-    /// 按 endpoint 拨号连接（ADR 0022 v2 终态，原 dial-peer-endpoint 转正）：
-    /// endpoint = `{ nodeId, addr, port }`（camelCase JSON，插件从自身设备缓存/
-    /// mdns 事件解析后显式传入；宿主不内藏 node-id → 地址解析表）。握手期
-    /// 「证书指纹 ↔ nodeId 绑定 + 信任检查」语义不变。成功返回 session 句柄
-    /// （`sess-<uuid>`，后续按句柄寻址）；denied/unreachable 以错误上抛
-    dial-peer: func(endpoint-json: string) -> result<string, string>;
-    /// 统一资源关闭（ADR 0022 v2）：session 句柄 = 断开连接；传输句柄 = 取消传输
-    /// （先发送批取消、后接收批取消——pending 接收批被关闭即拒绝，闸门 fail-safe
-    /// 的自然结果）。返回是否命中并关闭了任意资源
-    close: func(handle: string) -> result<bool, string>;
-    /// 首次连接确认应答（返回是否命中了待确认项）
-    respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
-    /// 可信对端列表 → TrustedPeerDto JSON 数组
-    list-trusted: func() -> result<string, string>;
-    /// 撤销对指定节点的信任（返回是否删除了条目）
-    revoke-trusted: func(node-id: string) -> result<bool, string>;
-    /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
-    /// 扇出 = 对多个对端各调一次，各批相互独立）→ 传输句柄（batch-id 字符串）
-    ///
-    /// 一次调用 = 一个会话立即发起，无宿主并发闸门排队——发送方向并发节流由
-    /// 调用方在调用前自控（插件侧并发闸门）。paths 元素双形态：纯 string 或
-    /// `{ path, encrypt? }` 对象（任一元素 encrypt=true → 本批强制加密）；
-    /// 旧产物载荷携带的 `concurrency` 并发脉冲字段已退役，出现即**显性报错**
-    /// （fail-visible：旧产物按当前 SDK 重建）。连接已断时以句柄记忆的
-    /// endpoint 自动重拨（信任检查照走引擎握手）
-    send-files: func(session-handle: string, paths-json: string) -> result<string, string>;
-    /// 接收批应答：accept=false 或超时视为拒绝
-    respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
-    /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
-    /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
-    set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
-    /// 显式暂停进行中的发送批（batch-id 寻址）：会话数据面门控（wire Pause 帧
-    /// + 供方停推流，连接保持），任务保留（含已传字节）不落历史；本端发起的
-    /// 活跃会话查句柄表、serve 供流批查 handler 注册表。无命中返回错误
-    pause-transfer: func(batch-id: string) -> result<_, string>;
-    /// 恢复暂停的发送批（batch-id 寻址）：活跃会话写 Resume 帧续流；会话已
-    /// 中断的以句柄表记忆的源清单重新拨号续传（断点真源在接收端落盘侧）。
-    /// 无命中返回错误
-    resume-transfer: func(batch-id: string) -> result<_, string>;
-    /// 批量恢复暂停的发送批：**本接口不提供**——「全部」编排归插件自己
-    /// 完成（遍历暂停批逐个调 [`resume-transfer`]，并发节流由插件侧闸门
-    /// 自控），宿主句柄表不做批量调度。该批量函数已删除：旧产物 import
-    /// 它在实例化期因缺失 interface 显性失败（按当前 SDK 重建）
-    /// 全量幂等替换本插件声明的共享根清单（ADR 0022 v2）：
-    /// 条目 `[{ id, name, path }]`（camelCase JSON；移动端 SAF 树以
-    /// `safTreeUri` 字段替代 `path`）。注册表 CRUD 真源在插件侧，本函数
-    /// 只同步暴露面镜像；任一条目非法整批拒绝
-    set-shared-roots: func(dirs-json: string) -> result<_, string>;
-    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组（仅 session 句柄寻址；
-    /// 连接已断时以句柄记忆的 endpoint 自动重拨）
-    list-shared-roots: func(session-handle: string) -> result<string, string>;
-    /// 目录下钻 → RemoteBrowseDto JSON（仅 session 句柄寻址；重拨语义同上）
-    browse-directory: func(session-handle: string, dir-id: string, rel-path: string) -> result<string, string>;
-    /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
-    /// （仅 session 句柄寻址；重拨语义同上）。逐文件会话立即发起、无宿主
-    /// 并发信号量——并发节流由调用方分批调用自控；每个拉取会话发起时经
-    /// `peer:receive-event` 直推 `pull-started` 引擎事实事件
-    /// （batchId/nodeId/files/totalSize/tsMs），任务行由插件事件归约自建
-    pull-files: func(session-handle: string, dir-id: string, files-json: string) -> result<u32, string>;
-    /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
-    /// ADR 0022 v3）
-    set-download-dir: func(path: string) -> result<_, string>;
-    /// 按需启动本机 peer 节点（引擎级生命周期原语）：数据目录与设备名
-    /// 由宿主解析，起来后开始广播与监听。幂等——节点已在跑时返回 false（未改变状态）。
-    ///
-    /// 属主语义：把节点从「未跑」带到「跑」的那次调用，其调用方成为节点属主；
-    /// 已被别的插件起着的节点**不可被本调用接管**（报错，且文案不回带他方身份）。
-    /// 谁起谁停：内核不再按硬编码插件 id 猜测节点归属
-    /// （旧 `peer_net::FILE_TRANSFER_PLUGIN_ID` 与激活外壳随之退役）。
-    start-node: func() -> result<bool, string>;
-    /// 让本机节点下线（幂等；节点未跑为 no-op）：停广播 / 关监听 / 排水连接与
-    /// 入站记账。仅节点属主可关停——非属主报错，文案不回带属主身份
-    stop-node: func() -> result<bool, string>;
-    /// 活跃传输批清单（实现 = 会话句柄表投影，接口形状不变）：`[{ batchId, direction, status, totalBytes, transferredBytes,
-    /// rateBps, updatedAtMs }]`（camelCase JSON 数组）。仅引擎会话事实——不含
-    /// peerName / 文件清单 / 原因码等业务字段（展示名与业务视图由插件自持）；
-    /// 供插件事件归约状态机首屏重建（激活晚于事件时的兜底查询）
-    active-transfers: func() -> result<string, string>;
-    /// 收集发送源：paths = string[] JSON，目录递归展开 + 批内同名去重
-    /// （「名称 (2).ext」编号——批内 remote 路径唯一性属 wire 协议正确性）
-    /// → `[{ path, size }]` JSON（path 为相对落位形状，size 为字节）。
-    /// 仅读元数据不读内容；路径应来自 host-platform pick-* 用户选择（选择即授权）
-    collect-outgoing: func(paths-json: string) -> result<string, string>;
-}
-/// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
-///
-/// 发现/离开经消息总线**属主私有 topic** 推送（host-bus 订阅）：
-/// `<owner>::mdns:found` / `<owner>::mdns:lost`（构造用 SDK `mdns_event_topic`，
-/// 跨属主订阅被宿主拒绝），
-/// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
-/// Record<string,string> }`，宿主不做任何加工。设备列表（去重/TTL 过期/展示名
-/// 解读）是发现事件的派生视图，由消费插件自建缓存。
-///
-/// 自我广播（register/advertise）不进本接口：「本机是谁」与宿主 TLS 监听器
-/// 同生共死，留在 peer-net 启动流程自动完成；无插件激活时主机照样可被发现。
-interface host-mdns {
-    /// 浏览某服务类型，返回 browser 句柄；重复浏览同一类型允许（各自独立生命周期）。
-    /// 事件定向投递到 `<plugin-id>::mdns:found` / `<plugin-id>::mdns:lost`（宿主实现）
-    browse: func(service-type: string) -> result<string, string>;
-    /// 停止浏览并回收句柄（返回是否存在该句柄）；仅属主可停（跨插件拒绝）；
-    /// 插件停用时宿主自动回收其全部句柄
-    stop-browse: func(browser-id: string) -> result<bool, string>;
-
-    /// 广播某服务类型（v2 新增）：返回 advertise 句柄。
-    /// config-json 为纯引擎参数（服务类型 / 实例名 / 端口 / TXT 键值），
-    /// 宿主零业务拼装；实例名省略时宿主按 `{plugin}-{短指纹}` 默认。
-    advertise: func(config-json: string) -> result<string, string>;
-    /// 停止广播并回收句柄（返回是否存在该句柄）；仅属主可停；
-    /// 插件停用时宿主自动回收其全部广播句柄。
-    stop-advertise: func(advertise-id: string) -> result<bool, string>;
-    /// 查询广播状态（返回是否存在该句柄）；仅属主可查。
-    is-advertising: func(advertise-id: string) -> result<bool, string>;
-}
 /// 通用平台能力域（ADR 0022 v2）：系统对话框/授权等与领域无关的平台交互
 ///
-/// 双端交集切片：桌面独有 `pick-folders` / `wsl-distros` /
-/// `local-ipv4-addresses` / `reveal-in-dir` 拆入
-/// [`host-platform-desktop`]（cap-desktop 分片），本接口只剩双端交集
-/// `pick-files` / `pick-folder`，外加双端全等的 `platform`（宿主平台标识探测）。
+/// 双端交集切片：桌面独有 `wsl-distros` / `local-ipv4-addresses` /
+/// `reveal-in-dir` 拆入 [`host-platform-desktop`]（cap-desktop 分片），
+/// 本接口承载双端交集的 `pick-files` / `pick-folders`，外加双端全等的
+/// `platform`（宿主平台标识探测）。
+///
+/// **目录选择已按功能级统一**（2026-10-13，ADR 0052 D3）：原 `pick-folder`
+/// （单目录字符串，双端）与桌面 `host-platform-desktop.pick-folders`
+/// （多目录 JSON）是同一功能的两种形状 → 统一为本接口的 `pick-folders`
+/// （`string[]` JSON；移动 SAF 目录树选择器为单选语义，返回 0/1 项）。
 interface host-platform {
     /// 系统多文件选择器 → string[] JSON（用户取消为空数组）。
     ///
@@ -222,10 +109,11 @@ interface host-platform {
     /// 授权只交付「可访问用户亲手选中的路径」这一层；实际读 / 写仍分别要
     /// `fs:read` / `fs:write`（`pick-*` 不隐含读写位）。
     pick-files: func() -> result<string, string>;
-    /// 系统文件夹选择器 → 绝对路径；用户取消返回空串。
+    /// 系统文件夹选择器（多选）→ string[] JSON；用户取消返回空数组。
     /// 权限 `fs:pick` + 选择后授权校验（授权落账到所选目录本身），口径同
-    /// `pick-files`。（移动端为 SAF 目录树选择器，返回树 URI）
-    pick-folder: func() -> result<string, string>;
+    /// `pick-files`。移动端为 SAF 目录树选择器（单选语义），返回 0/1 个
+    /// 树 URI。
+    pick-folders: func() -> result<string, string>;
     /// 宿主平台标识探测（双端全等；**无权限门**——平台事实不是能力，ADR 0022 裁剪线）。
     ///
     /// 取值由各端宿主定义（当前约定：桌面 `desktop` / 移动 `mobile`）；guest 用于
@@ -234,34 +122,6 @@ interface host-platform {
     /// 的双实现间选择，无需双份产物。空/未知取值时 guest 侧按 fail-visible
     /// 处理（显性报错，不猜默认平台——猜错会把桌面分支静默跑在移动宿主上）。
     platform: func() -> string;
-}
-/// WebSocket 基础能力（v14 起；双端交集切片 = 客户端域 5 函数）
-///
-/// 桌面独有服务端域（入站端点 10 函数，v14/v28 追加）拆入
-/// [`host-websocket-server`]（cap-ws 分片，移动端不跑 WS 服务器、不跟演）；
-/// 本接口只剩双端交集（出站连接域）。
-///
-/// 事件投递（双端偏离见各端 cap 注释）：状态事件经 host-bus 属主私有 topic
-/// 推送（`<owner>::ws:open|error|close`），消息帧经可选导出 events-ws 回调。
-interface host-websocket {
-    /// 建立出站 WS 连接：**同步阻塞至握手完成**（上限 connect-timeout-secs，
-    /// 与 host-http 非流式模式同款 block_on 语义）。
-    /// config-json（camelCase）纯引擎参数：
-    /// `{ url, headers?, protocols?, connect-timeout-secs?, max-message-bytes? }`
-    /// url **仅接受 `ws://`**（`wss://` 本期不支持，返回明确错误）。
-    /// 成功 → 返回连接句柄 `wsc-<uuid>` 并发布 `<owner>::ws:open`；
-    /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）。
-    connect: func(config-json: string) -> result<string, string>;
-    /// 发送文本帧（UTF-8）；连接不存在/已关闭/发送队列满 → 错误
-    send-text: func(handle: string, text: string) -> result<_, string>;
-    /// 发送二进制帧；错误语义同 send-text
-    send-binary: func(handle: string, payload: list<u8>) -> result<_, string>;
-    /// 主动关闭连接（close-json：`{ code?, reason? }`，缺省 1000）；返回是否命中。
-    /// 该连接的 `ws:close.<owner>` 随即上报（wasClean=true 当且仅当 code ∈ {1000,1001}）
-    close: func(handle: string, close-json: string) -> result<bool, string>;
-    /// 查询连接是否处于 open 态（握手完成且未关闭）；仅属主可查。
-    /// 供插件在丢失状态事件后自愈
-    is-connected: func(handle: string) -> result<bool, string>;
 }
 /// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists；双端交集 6 函数）
 ///
@@ -278,14 +138,6 @@ interface host-fs {
     /// 批量请求目录授权：未授权路径合并为一次用户弹窗，阻塞等待答复
     /// （paths-json 为 JSON 字符串数组；返回是否全部同意）
     request-auth: func(paths-json: string) -> result<bool, string>;
-}
-/// HTTP 出站代理（原 http.rs：http_fetch，双端交集 1 函数）
-///
-/// 桌面独有服务端域（入站路由注册，v29）拆入 [`host-http-endpoint`]
-/// （cap-http 分片，移动端不承载服务端网关、不跟演）；本接口只剩双端交集
-/// 出站 `fetch`。
-interface host-http {
-    fetch: func(request-json: string) -> result<option<string>, string>;
 }
 /// 宿主日志与插件状态上报（原 log.rs + status.rs）
 interface host-log {
@@ -340,19 +192,16 @@ interface manifest {
     get: func() -> string;
 }
 
-
-// 核心 world：import/export 集合 = 双端交集（合成 package 的每端 world plugin
-// 由 include core 并入这些成员，其余端成员由各端 cap-*.wit 的 world 并入）。
+// 核心 world：只含内核机制能力（8 import + 3 必选导出；events-binary 是可选出
+// 导出面，不在 world 内）。合成 package 的每端 world plugin 由 include core 并入
+// 这些成员，其余端成员由各端 cap-*.wit 的 world 并入；业务能力交集由双端
+// compose.json 直接消费能力域 crate 的 `wit/<domain>.wit`（ADR 0052 D2）。
 world core {
     import host-storage;
     import host-events;
     import host-bus;
-    import host-peer;
-    import host-mdns;
     import host-platform;
-    import host-websocket;
     import host-fs;
-    import host-http;
     import host-log;
     import host-config;
     import host-plugin-database;

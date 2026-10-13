@@ -17,6 +17,10 @@ pub trait HostPlatform {
     fn platform(&self) -> String;
     /// 系统多文件选择器（用户取消为空数组）
     fn platform_pick_files(&self) -> Result<Vec<String>, HostError>;
-    /// 系统文件夹选择器（SAF 目录树选择器；用户取消返回空串，成功为树 URI）
-    fn platform_pick_folder(&self) -> Result<String, HostError>;
+    /// 系统文件夹选择器（用户取消返回空数组；SAF 目录树选择器为单选语义，
+    /// 返回 0/1 个树 URI）
+    ///
+    /// 2026-10-13 功能级统一（ADR 0052 D3）：原单目录 `platform_pick_folder`
+    /// 与桌面扩展多选形合并为本函数（WIT 在 core `host-platform`）。
+    fn platform_pick_folders(&self) -> Result<Vec<String>, HostError>;
 }

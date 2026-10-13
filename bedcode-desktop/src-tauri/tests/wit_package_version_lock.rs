@@ -5,7 +5,7 @@
 //! `inventory` 静态自报要求编译期常量，JSON 只能运行期解析）。
 //! 双端 `compose.json` 的 `package` 字段只声明**包名**（不持版本字面量——否则
 //! bump 要改三处且清单退化成第二真源）；端生成物 `bedcode.wit` 的 package 行由
-//! `scripts/compose-wit.mjs` 按真源拼装；WIT 源文件（10 个）自带版本字面量并被
+//! `scripts/compose-wit.mjs` 按真源拼装；WIT 源文件（11 个）自带版本字面量并被
 //! 逐字拷贝进生成物。
 //!
 //! ## 为什么 `--check` 的 sha256 漂移锁抓不到，要另立本锁
@@ -46,20 +46,25 @@ const PACKAGE_SOURCE: &str = "contracts/bedcode-plugin-package.rs";
 /// 字面量无法经 `contract::export_item` 派生，故由本锁钉住）
 const DOMAIN_EXPORT_LITERALS: &[&str] = &["packages/bedcode-discovery-engine/src/routing.rs"];
 
-/// 生产 WIT 源文件（10 个）——`package` 行必须与真源逐字一致
+/// 生产 WIT 源文件（11 个）——`package` 行必须与真源逐字一致
 ///
 /// 构成：共享核心真源 1（`core_binding.rs` 直接绑它，不能改绑生成物）+ 能力域自持分片
-/// 5（provider 侧 bindgen，注册名须与 guest import 名逐字一致）+ 端 cap-src 4
-/// （compose 逐字拷贝进生成物）。能力域分片里的 pty / http / ws 会被双端 compose 拷贝，
-/// peer / mdns 只由能力 crate 自绑——两类都要在本锁在场，否则 provider 侧与 guest 侧
-/// 版本漂移无人拦。
+/// 6（pty / http / ws / peer / mdns / notify；provider 侧 bindgen 或仅契约房
+/// 消费，注册名须与 guest import 名逐字一致）+ 端 cap-src 4（compose 逐字拷贝进生成物）。
+///
+/// 分片去向（ADR 0052 D2）：`pty` 由桌面 compose 消费；`mdns` / `peer` / `http` / `ws` /
+/// `notify` 由双端 compose 消费（客户端域契约真源 = `ws-client-engine` 分片；
+/// `server-websocket` 已删自家副本、provider 绑定直接指它，不再单列；notify 是
+/// 轻量契约房（只持 WIT，实现按端住宿主），不入 provider bindgen 面）。两类都要在本
+/// 锁在场，否则 provider 侧与 guest 侧版本漂移无人拦。
 const WIT_SOURCES: &[&str] = &[
     "packages/bedcode-wasm-core/wit/core.wit",
     "packages/bedcode-pty-engine/wit/pty.wit",
     "packages/bedcode-server-http/wit/http.wit",
-    "packages/bedcode-server-websocket/wit/ws.wit",
+    "packages/bedcode-ws-client-engine/wit/ws.wit",
     "packages/bedcode-server-peer-net/wit/peer.wit",
     "packages/bedcode-discovery-engine/wit/mdns.wit",
+    "packages/bedcode-notify-engine/wit/notify.wit",
     "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-http.wit",
     "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-ws.wit",
     "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit",
@@ -176,7 +181,7 @@ fn compose_manifests_declare_package_name_only() {
     }
 }
 
-/// ③ 10 个 WIT 源文件的 package 行 == 真源整行
+/// ③ 11 个 WIT 源文件的 package 行 == 真源整行
 #[test]
 fn wit_source_package_lines_match_source_of_truth() {
     assert!(
@@ -229,8 +234,8 @@ fn generated_package_lines_match_source_of_truth() {
         }
     }
     assert!(
-        count >= 9,
-        "生成物只遍历到 {count} 个（桌面 6 + 移动 3 = 9），清单字段读取可能已漂移"
+        count >= 12,
+        "生成物只遍历到 {count} 个（桌面 11 + 移动 8 = 19），清单字段读取可能已漂移"
     );
 }
 

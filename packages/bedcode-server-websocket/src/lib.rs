@@ -26,10 +26,11 @@
 //! 逐字一致由 `wire::drift_lock` 钉死（漂移即红）。
 //!
 //! **插件绑定层（wasm-core-lib-split 票 04）**：[`plugin_binding`] 是本 crate 的
-//! `host-websocket` 能力域（15 条原语）——出站连接表 / 入站端点原语 / 帧投递 /
-//! 属主回收的实现与 WIT 接线都在这里，经 [`bedcode_host_kit`] 的能力模块注册表
-//! 自动装配。宿主侧只剩一个端口 adapter（`src-tauri/src/plugin/ws.rs`）与一次开机装配
-//! 调用，不再有该域的逐接口接线。
+//! `host-websocket` 能力域——客户端域 WIT 接线（契约真源
+//! `bedcode-ws-client-engine/wit/ws.wit`，Q4 裁决）＋服务端/客户端引擎域函数，
+//! 经 [`bedcode_host_kit`] 的能力模块注册表自动装配（服务端 `host-websocket-server`
+//! 的声明与 Host impl 已随 ADR 0052 D4 归桌面宿主 `plugin/ws.rs`）。宿主侧只剩一个
+//! 端口 adapter 与一次开机装配调用，不再有该域的逐接口接线。
 
 pub mod channel;
 pub mod conn;

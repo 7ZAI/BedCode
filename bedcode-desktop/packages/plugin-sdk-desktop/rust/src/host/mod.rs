@@ -24,6 +24,8 @@ pub mod fs;
 pub mod http;
 pub mod log;
 pub mod mdns;
+/// 系统通知（共享域契约 `host-notify`；2026-10-13 自 events 迁出）
+pub mod notify;
 pub mod peer;
 pub mod platform;
 pub mod process;
@@ -47,6 +49,7 @@ pub use fs::{FsDirEntry, FsNodeType, FsStat, HostFs};
 pub use http::HostHttp;
 pub use log::HostLog;
 pub use mdns::{mdns_event_topic, HostMdns, MDNS_FOUND, MDNS_LOST};
+pub use notify::{HostNotify, NotifyOptions};
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use process::{HostProcess, ProcessSyncResult};
@@ -162,6 +165,7 @@ pub trait HostApi:
     HostStorage
     + HostPluginDatabase
     + HostEvents
+    + HostNotify
     + HostHttp
     + HostFs
     + HostLog
@@ -181,6 +185,7 @@ impl<T> HostApi for T where
     T: HostStorage
         + HostPluginDatabase
         + HostEvents
+        + HostNotify
         + HostHttp
         + HostFs
         + HostLog

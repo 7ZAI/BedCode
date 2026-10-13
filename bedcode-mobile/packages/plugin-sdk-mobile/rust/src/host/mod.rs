@@ -40,7 +40,7 @@ pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
 pub use mdns::HostMdns;
-pub use notify::{HostNotify, NotifyOptions};
+pub use notify::{HostNotify, HostNotifyMobile, NotifyOptions};
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
 pub use storage::HostStorage;
@@ -160,6 +160,7 @@ pub trait HostApi:
     + HostAuth
     + HostEvents
     + HostNotify
+    + HostNotifyMobile
     + HostHttp
     + HostFs
     + HostLog
@@ -180,6 +181,7 @@ impl<T> HostApi for T where
         + HostAuth
         + HostEvents
         + HostNotify
+        + HostNotifyMobile
         + HostHttp
         + HostFs
         + HostLog

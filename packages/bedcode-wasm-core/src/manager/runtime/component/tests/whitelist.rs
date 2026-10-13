@@ -124,7 +124,7 @@ fn descriptor_haystack_has_noun(haystack: &str, noun: &str) -> bool {
 fn descriptor_noun_matcher_keeps_compounds_and_drops_substrings() {
     // 正例：复合名词（连接符是段内的一部分）
     assert!(descriptor_haystack_has_noun(
-        "bedcode:plugin@0.1.0/host-session",
+        "bedcode:plugin@0.2.0/host-session",
         "session"
     ));
     assert!(descriptor_haystack_has_noun("pty-instance", "pty-instance"));
@@ -134,7 +134,7 @@ fn descriptor_noun_matcher_keeps_compounds_and_drops_substrings() {
     ));
     assert!(descriptor_haystack_has_noun("ai-chatbox", "ai"));
     assert!(descriptor_haystack_has_noun(
-        "bedcode:plugin@0.1.0/host-session",
+        "bedcode:plugin@0.2.0/host-session",
         "plugin"
     ));
     // 正例：分号 / 斜杠权限位与接口路径的词段照样命中

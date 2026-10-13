@@ -32,10 +32,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use bedcode_host_kit::ports::{downcast_host, HostPorts};
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
 use bedcode_server_http::plugin_binding::ports::{BoxedBlocked, HttpEventSink, HttpPorts, OutboundAuth};
 
 use bedcode_wasm_core::host_api::check_permission;
 use bedcode_wasm_core::host_api::context::WasmHostContext;
+
+use crate::plugin::bindings::bedcode;
 
 // 能力模块白名单条目与强制引用行**必须同处**（本文件），两者不漂移——漏引用 ⇒
 // 该 crate 的 inventory 自报静态不进最终二进制（装载期 missing 方向点名）；漏白名单
@@ -160,6 +163,76 @@ pub static HTTP_PORTS_INSTALLER: bedcode_host_kit::DomainPortsInstaller =
 
 bedcode_host_kit::submit_domain_ports_installer!(HTTP_PORTS_INSTALLER);
 
+// ==================== host-http-endpoint（桌面扩展：WIT 绑定 + 模块自报） ====================
+//
+// ADR 0052 D4（票 03）：`host-http-endpoint`（桌面服务端域）的 WIT 声明归桌面
+// `wit-src/cap-http.wit`（world `cap-http-endpoint`，T-02 落位），`impl Host` 与模块
+// 自报落本文件（路径 B）。域引擎 API（权限门 + config 契约解析 + 注册表仲裁）复用
+// `bedcode_server_http::plugin_binding::{http_register_endpoint, http_unregister_endpoint}`
+// —— 与服务器自身路由 / 中间件消费的 `registry` 同源，行为逐字不变（逐项盘点见票 03
+// Comments：registry / 路由匹配是服务器引擎基础设施，不随 WIT 绑定面外迁）。
+
+bedcode_host_kit::expect_host_module!(HTTP_ENDPOINT_MODULE_NAME);
+
+/// 能力模块名（白名单键即装载期日志与错误文案里的模块名）
+pub const HTTP_ENDPOINT_MODULE_NAME: &str = "http-endpoint";
+
+/// 本域提供的 WIT 接口（必须与桌面 wit-src 契约逐字一致；改错即 guest import 失配）
+pub const HTTP_ENDPOINT_MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-http-endpoint"];
+
+/// 本域的权限位（与前端面 `http.registerEndpoint` 同权限位，真源内核 `permission.rs`）
+pub const HTTP_ENDPOINT_MODULE_PERMISSIONS: &[&str] = &["network:http"];
+
+/// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
+///
+/// `abi_min = 29`：服务端域两条原语在 ABI v29 追加。
+const HTTP_ENDPOINT_DESC: HostModuleDesc = HostModuleDesc {
+    name: HTTP_ENDPOINT_MODULE_NAME,
+    interfaces: HTTP_ENDPOINT_MODULE_INTERFACES,
+    permissions: HTTP_ENDPOINT_MODULE_PERMISSIONS,
+    abi_min: 29,
+};
+
+/// host-http-endpoint 能力模块（桌面服务端域 2 函数）
+pub struct HttpEndpointModule;
+
+impl HostModule for HttpEndpointModule {
+    fn desc(&self) -> HostModuleDesc {
+        HTTP_ENDPOINT_DESC
+    }
+
+    fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
+        type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
+        bedcode::plugin::host_http_endpoint::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+    }
+}
+
+/// 静态单例（供 `inventory::submit!` 取址）
+static HTTP_ENDPOINT_MODULE: HttpEndpointModule = HttpEndpointModule;
+
+inventory::submit! {
+    ModuleEntry { module: &HTTP_ENDPOINT_MODULE }
+}
+
+// WIT 层：入站路由注册两条原语 → 服务器引擎 API（薄转发，与迁移前 impl 逐字同源）
+impl bedcode::plugin::host_http_endpoint::Host for WasmPluginState {
+    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
+        bedcode_server_http::plugin_binding::http_register_endpoint(
+            &bedcode_server_http::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &config_json,
+        )
+    }
+
+    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
+        bedcode_server_http::plugin_binding::http_unregister_endpoint(
+            &bedcode_server_http::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,14 +251,32 @@ mod tests {
         assert_eq!(module_name, "http", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             bedcode_server_http::plugin_binding::MODULE_INTERFACES,
-            &["bedcode:plugin@0.1.0/host-http", "bedcode:plugin@0.1.0/host-http-endpoint"],
-            "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配；票 04 拆出服务端域）"
+            &["bedcode:plugin@0.2.0/host-http"],
+            "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配；ADR 0052 D4 后服务端域归宿主路径 B 模块）"
         );
         assert_eq!(
             bedcode_server_http::plugin_binding::MODULE_PERMISSIONS,
             &["network:http"],
-            "权限位必须与 `bedcode.wit` / SDK 权限表逐字一致（装载期一致性核对用）"
+            "权限位必须与契约 / SDK 权限表逐字一致（装载期一致性核对用）"
         );
+    }
+
+    /// 桌面路径 B 模块声明：接口路径 / 权限位 / 白名单三件与 WIT 契约逐字一致
+    #[test]
+    fn http_endpoint_host_module_declaration_matches_contract() {
+        assert!(
+            bedcode_host_kit::expected_host_modules().contains(&HTTP_ENDPOINT_MODULE_NAME),
+            "能力模块白名单缺 {HTTP_ENDPOINT_MODULE_NAME}（expect_host_module! 行被删 / 未收集）"
+        );
+        assert_eq!(HTTP_ENDPOINT_MODULE_NAME, "http-endpoint");
+        assert_eq!(
+            HTTP_ENDPOINT_MODULE_INTERFACES,
+            &["bedcode:plugin@0.2.0/host-http-endpoint"]
+        );
+        assert_eq!(HTTP_ENDPOINT_MODULE_PERMISSIONS, &["network:http"]);
+        assert_eq!(HTTP_ENDPOINT_DESC.name, HTTP_ENDPOINT_MODULE_NAME);
+        assert_eq!(HTTP_ENDPOINT_DESC.interfaces, HTTP_ENDPOINT_MODULE_INTERFACES);
+        assert_eq!(HTTP_ENDPOINT_DESC.permissions, HTTP_ENDPOINT_MODULE_PERMISSIONS);
     }
 
     /// 装配器静态被内核装配链遍历到（自报 → 装 → 取回，三段闭环）

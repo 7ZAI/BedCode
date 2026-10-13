@@ -225,15 +225,16 @@ impl<H: ?Sized> NodePower for MobilePorts<'_, H> {
 
 // ==================== 平台交互面 ====================
 
-/// 差异面⑤⑥：移动端只有 `pick_files` / `pick_folder`（SAF 选择器）；
-/// 多选与「打开所在目录」桌面独有，不实现 ⇒ 核内默认显性 unsupported
+/// 差异面⑥：移动端无「打开所在目录」（不实现 ⇒ 核内默认显性 unsupported）；
+/// `pick_folders` 双端均有（2026-10-13 功能级统一后走 core `host-platform`，
+/// SAF 单选语义由宿主返回 0/1 项）
 impl<H: HostPlatform + ?Sized> PlatformPort for MobilePorts<'_, H> {
     fn platform_pick_files(&self) -> PortResult<Vec<String>> {
         map_err(self.0.platform_pick_files())
     }
 
-    fn platform_pick_folder(&self) -> PortResult<String> {
-        map_err(self.0.platform_pick_folder())
+    fn platform_pick_folders(&self) -> PortResult<Vec<String>> {
+        map_err(self.0.platform_pick_folders())
     }
 }
 

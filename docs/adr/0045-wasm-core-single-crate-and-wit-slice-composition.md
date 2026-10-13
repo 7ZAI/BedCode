@@ -1,6 +1,6 @@
 # ADR 0045：wasm-core 单一 crate + WIT 分片组合（能力域扫描装配）
 
-- 状态：**accepted**（2026-10-10 转正：票 01–06 全落地、票 07 收口锁与文档就位——实施记录见文末「实施记录」段：POC 四命题实际结论 / D3 复评实际形态（拆分执行）/ 移动 fork 退役证据 / 与 ADR 0035·0036·0037·0040 的衔接；**2026-10-13 部分条款被 ADR 0049 修订**：D5 的「Store 装配差异经 host-kit `wasi-store` feature 门控」作废（WASI 装配面住内核、双端同源、配置驱动，见 0049 D4），D1/D2 的「单一 crate + 分片组合」表述保留不变）
+- 状态：**accepted**（2026-10-10 转正：票 01–06 全落地、票 07 收口锁与文档就位——实施记录见文末「实施记录」段：POC 四命题实际结论 / D3 复评实际形态（拆分执行）/ 移动 fork 退役证据 / 与 ADR 0035·0036·0037·0040 的衔接；**2026-10-13 部分条款被 ADR 0049 修订**：D5 的「Store 装配差异经 host-kit `wasi-store` feature 门控」作废（WASI 装配面住内核、双端同源、配置驱动，见 0049 D4），D1/D2 的「单一 crate + 分片组合」表述保留不变；**同日 D3 被 ADR 0052 取代**：core 收录判据由「双端交集」改为「机制必需」，交集契约改住能力域 crate 分片由端 caps 直接消费）
 - 日期：2026-10-09
 - spec：`.scratch/2026-10-09-wasm-core-single-crate/spec.md`（票序与门禁的真源）
 - 相关：ADR 0035（能力域 crate 化 + 自动装配）、ADR 0036（机制与真源同侧）、ADR 0037（wasm-core 整核抽出）、ADR 0039（pty 域整面迁出并承接 WIT 接线）、ADR 0040（移动 fork 两步走）、ADR 0018（移动契约独立）、ADR 0019（双端锁版）、ADR 0022（边界裁决）
@@ -31,6 +31,14 @@
 ### D3 · 核心 world = 交集切片（含已知代价）
 
 核心 = 双端函数集完全一致的 14 个 interface（`command` / `lifecycle` / `manifest` / `events-binary` / `host-bus` / `host-config` / `host-log` / `host-storage` / `host-plugin-database` / `host-mdns` / `host-peer` + 批 06 拆分后已全等的 `host-platform` / `host-events` / `abi`）+ 三个交集切片（`host-websocket` 客户端 5、`host-fs` 交集 6、`host-http` 出站 1）⇒ **落地后核心 = 17 个全等 interface**。
+
+> **2026-10-13 修订（ADR 0052 D1–D4，取代本条判据）**：core 收录判据由「双端函数集交集」
+> 改为**机制必需**（内核自己实现 + 双端同源 + 内核机制必需/全部插件共同需要）——落地为
+> **8 import + 4 export = 12 个机制 interface**；`host-mdns` / `host-peer` / `host-http`（出站）/
+> `host-websocket`（客户端）出 core 归各能力域 crate 的 `wit/<domain>.wit`，由双端 caps
+> 直接消费（切片机制与本 ADR D2/D4 一致，只是集合与落点更窄）；通知/目录选择按功能级统一
+> （`host-notify` 共享契约、`host-platform.pick-folders`），端独有声明与实现均住宿主。
+> 本 ADR D1/D2/D4 保留；D3 的「核心 = 交集」表述仅作历史。
 
 **已知代价（显式接受）**：WIT 无 interface 级 `include`，一个 interface 只能有一份完整定义 ⇒ 交集切片必然**拆 interface**（桌面新增 `host-websocket-server` / `host-fs-desktop` / `host-platform-desktop` / `host-http-endpoint` / `abi-form`；移动新增 `host-fs-mobile`）⇒ 插件产物 import 集变化 ⇒ **双端 ABI bump + 产物全量重建**（走 `stale_artifact_rebuild_hint` fail-visible 形态②）。
 

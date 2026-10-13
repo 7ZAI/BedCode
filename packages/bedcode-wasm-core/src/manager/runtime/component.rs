@@ -75,9 +75,10 @@ use wasmtime::Store;
 // 能力域（经 `inventory` 自报装配，见下节），本节只剩留 core 的 POSIX / 机制面。
 
 
-// v36：`host-platform.pick-folders / wsl-distros / local-ipv4-addresses /
-// reveal-in-dir` 拆入 `host-platform-desktop`（桌面独有交集切片），WIT impl 已迁
-// 宿主 `src-tauri/src/plugin/platform.rs`（票 02 批次 06）。
+// v36：`host-platform` 的桌面扩展函数（wsl-distros / local-ipv4-addresses /
+// reveal-in-dir）拆入 `host-platform-desktop`（桌面独有交集切片），WIT impl 已迁
+// 宿主 `src-tauri/src/plugin/platform.rs`（票 02 批次 06）；`pick-folders` 随后
+// （2026-10-13 功能级统一，ADR 0052 D3）并入 core `host-platform`，不再在桌面扩展里。
 
 // ==================== Component Linker 组装 ====================
 

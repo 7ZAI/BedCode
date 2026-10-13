@@ -2,16 +2,19 @@
 //!
 //! ## 单形态（2026-10-13）后本模块只留**移动独有 / 端差异实现**
 //!
-//! `core.wit` 的 17 个双端全等 interface 里，**双端全等语义的 8 域**（host-log /
-//! host-storage / host-plugin-database / host-events / host-fs / host-config /
-//! host-bus / host-platform）由内核 `manager::runtime::core_binding` 单份实现
-//! （统一 Linker 装配；权限门收敛统一 `PermissionManager`，私有库布局统一内核
-//! `plugins/<plugin_id>/plugin.db`）——移动宿主**不再自报**这 8 域（同一 interface
-//! 两份 `add_to_linker` 注册 ⇒ 装配期 `defined twice`）。
+//! `core.wit` 现有 12 个 interface（8 import + 4 export，ADR 0052 D1）：其中**双端全等
+//! 语义的 8 域**（host-log / host-storage / host-plugin-database / host-events /
+//! host-fs / host-config / host-bus / host-platform）由内核
+//! `manager::runtime::core_binding` 单份实现（统一 Linker 装配；权限门收敛统一
+//! `PermissionManager`，私有库布局统一内核 `plugins/<plugin_id>/plugin.db`）——
+//! 移动宿主**不再自报**这 8 域（同一 interface 两份 `add_to_linker` 注册 ⇒ 装配期
+//! `defined twice`）。
 //!
-//! 本模块保留**实现按端不同**的 4 个 core 域（host-http / host-peer / host-mdns /
-//! host-websocket）——端差异经移动宿主自报（`HostModule` + `inventory`）；移动独有
-//! 5 域（`plugin/{notify,fs_mobile,terminal_stream,connection,auth}.rs`）各自自报。
+//! 本模块保留**实现按端不同**的 4 个能力域（host-http / host-peer / host-mdns /
+//! host-websocket）：契约真源已随 ADR 0052 D2 迁各能力域 crate 的 `wit/<domain>.wit`，
+//! 由移动 compose caps 直接消费；端差异经移动宿主自报（`HostModule` +
+//! `inventory`）；移动独有 5 域（`plugin/{notify,fs_mobile,terminal_stream,connection,auth}.rs`）
+//! 各自自报。
 //!
 //! ## 结构
 //!
@@ -73,12 +76,13 @@ pub fn purge_for_plugin(
 /// 能力模块名（白名单键 = 装载期日志与错误文案里的模块名）
 pub const MODULE_NAME: &str = "mobile-host-core";
 
-/// 本模块提供的 WIT 接口（移动独有 / 端差异 core 域；与 `core.wit` 逐字一致）
+/// 本模块提供的 WIT 接口（移动独有 / 端差异能力域；契约真源在各能力域 crate 的 wit 分片，
+/// 接口名与拼装 package 内定义逐字一致）
 pub const MODULE_INTERFACES: &[&str] = &[
-    "bedcode:plugin@0.1.0/host-http",
-    "bedcode:plugin@0.1.0/host-peer",
-    "bedcode:plugin@0.1.0/host-mdns",
-    "bedcode:plugin@0.1.0/host-websocket",
+    "bedcode:plugin@0.2.0/host-http",
+    "bedcode:plugin@0.2.0/host-peer",
+    "bedcode:plugin@0.2.0/host-mdns",
+    "bedcode:plugin@0.2.0/host-websocket",
 ];
 
 /// 本模块读写的权限位（各域权限门的并集；装载期一致性核对用）
@@ -98,7 +102,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 20,
 };
 
-/// 移动独有 / 端差异 core 域能力模块（4 个；双端全等 8 域在内核 core_binding）
+/// 移动独有 / 端差异能力域能力模块（4 个；双端全等 8 域在内核 core_binding）
 pub struct MobileHostCoreModule;
 
 impl HostModule for MobileHostCoreModule {

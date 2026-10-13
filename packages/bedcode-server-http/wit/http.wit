@@ -1,20 +1,18 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 // ======================================================================
-// HTTP 能力域自持 bindgen 分片
+// HTTP 能力域自持契约分片（ADR 0052 D2/D3）
 //
-// 本文件是 `bedcode-server-http` 为**自己 bindgen** 的契约分片（`world cap-http`
-// 同时 import 出站 `host-http` 与服务端 `host-http-endpoint`，crate 的 `Host`
-// impl 覆盖两者）——契约面不绑端 WIT：宿主能力接口由能力域 crate 自己持有，
-// 端生成物由 compose.json 驱动。
+// 本文件是 `bedcode-server-http` 持有的**共享契约真源**（world `cap-http`
+// 只 import 出站域 `host-http`）：双端 `compose.json` 的 caps.http 直接指向
+// 本文件（pty 先例）——契约与实现同属一处。
 //
-// 与端组合的关系：本文件与端 cap 真源
-// `plugin-sdk-desktop/rust/wit-src/cap-http.wit` 是**不同 package 实例的同名定义**
-// （不同目录 = 不同 package，二者不冲突）。`host-http`（双端交集切片）在本文件
-// 的段落是 `wasm-core/wit/core.wit` 的逐字副本——两处函数集必须逐字一致，
-// 漂移即红；端组合**不用本文件**：端生成物由 compose.json caps.http（→ wit-src 真源）拼装。
+// 服务端域 `host-http-endpoint`（桌面扩展）**不在本文件**：声明真源在桌面
+// `plugin-sdk-desktop/rust/wit-src/cap-http.wit`（world `cap-http-endpoint`），
+// 实现随端扩展归桌面宿主（ADR 0052 D4）。
 //
-// 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
-// 与 WIT 契约的函数集逐字一致。
+// 端生成物由 `scripts/compose-wit.mjs` 拼装（本文件与 core.wit 及其余 cap 分片
+// 同 package 同版本）。分片只换绑定源、不换装配语义：`impl Host` / `HostModule` /
+// `MODULE_*` / `DESC` 与 WIT 契约的函数集逐字一致。
 // ======================================================================
 
 /// HTTP 出站代理（原 http.rs：http_fetch，双端交集 1 函数）
@@ -25,38 +23,6 @@ package bedcode:plugin@0.1.0;
 interface host-http {
     fetch: func(request-json: string) -> result<option<string>, string>;
 }
-// ======================================================================
-/// HTTP 服务端域（桌面扩展分片，自 `host-http` 拆出）
-///
-/// 双端交集切片：出站 `fetch` 已收拢进共享核心 `wasm-core/wit/core.wit` 的
-/// `host-http`；本 interface 只剩桌面独有服务端域（入站路由注册 2 函数，
-/// v29 HTTP 路由代码注册下沉专项）。移动端是自持业务 App，不承载服务端
-/// 网关与插件入站路由（ADR 0018），不跟演（ADR 0019 双端偏离）。
-///
-/// 属主隔离：**全部函数仅属主可调**；注册表按调用方插件
-/// 注入 `plugin_id`（插件不能注册他人名下路由）；插件停用时宿主自动清空其全部注册
-/// 路由（同 host-websocket `purge_for_plugin` 先例）。
-///
-/// 权限：`network:http`（与前端面 `http.registerEndpoint` 同权限位）。
-interface host-http-endpoint {
-    /// 在宿主 HTTP 服务器注册插件端点。config-json（camelCase）：
-    /// `{ path, host?, methods?, auth? }`
-    /// - `path`：插件内相对端点段，宿主拼出内部可达路径 `/api/plugin/<plugin-id>/<path>`
-    ///   （命名空间段由宿主注入，插件只提供后缀）；
-    /// - `host`：可选对外 URL 别名（如 `/api/configs`；支持 `{id}` 模板段如
-    ///   `/api/sessions/{id}/stop`——模板捕获值经 `_http_endpoint` 的 `params` 字段
-    ///   传给插件，宿主不拿捕获值构造路径）；
-    /// - `methods`：host 别名的允许方法（缺省 `["GET"]`）；
-    /// - `auth` = "jwt"（缺省，最严：要求宿主已验签）| "none"（免凭证转发）。
-    ///
-    /// 冲突仲裁（fail-visible）：同一 `host+method` 已被其他插件注册 → `Err`（不覆盖
-    /// 在位者）；本插件内部 path 重复注册 → `Err`。成功 → 返回端点句柄 `http-<uuid>`。
-    register-endpoint: func(config-json: string) -> result<string, string>;
-    /// 注销本插件注册的端点（未知句柄 → `Ok(false)`，他人句柄 → `Err` 属主仲裁）；
-    /// 宿主侧插件停用回收同样会清空其全部注册路由（幂等）。
-    unregister-endpoint: func(endpoint-id: string) -> result<bool, string>;
-}
 world cap-http {
     import host-http;
-    import host-http-endpoint;
 }

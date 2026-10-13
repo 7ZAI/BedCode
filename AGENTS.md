@@ -147,8 +147,9 @@ wasm-core 内**只有一份机制 + 一份壳**（Engine / Store / 生命周期 
   + GuestEventDispatcher 注入（events 导出契约）+ AbiPolicy 注入（ABI 版本/形态）
         ↓ 消费 wasm-core 的纯机制 + 统一运行时壳
 wasm-core（packages/bedcode-wasm-core）
-  机制核心 + core.wit 交集绑定层（manager/runtime/core_binding.rs，17 个双端全等 interface，
-  双端全等 8 域单份实现——移动 host_domains 只留 http/peer/mdns/ws 端差异 4 域）
+  机制核心 + core.wit 机制绑定层（manager/runtime/core_binding.rs，12 个机制 interface
+  = 8 import + 4 export，ADR 0052 D1；双端全等 8 域单份实现——移动 host_domains
+  只留 http/peer/mdns/ws 端差异 4 域）
   + 组件引擎机制唯一一份（manager/runtime/engine.rs）
   + WASI 装配面双端同源（manager/runtime/wasi.rs，开/关走 CoreConfig::wasi）
   + 事件派发契约面上移（guest_events.rs，各端宿主实现本 trait 并注入）
@@ -167,9 +168,9 @@ SDK（plugin-sdk-{desktop,mobile}）
 
 **WASI 面是双端共享机制不是形态差异轴**（用户裁决 2026-10-12）：p2/p3 装配住内核、双端默认全开，开 / 关走运行期配置 `CoreConfig::wasi`（为将来 worker 类别插件双端都要跑 wasm 预备，ADR 0034 L3.b）。
 
-**双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（17 个双端全等 interface），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http / cap-ws，移动 cap-mobile）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`），可被任意端组合。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
+**双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（**机制必需面：8 import + 4 export，ADR 0052 D1**），端差异在各端 `compose.json` 驱动的 cap 分片（桌面 cap-desktop / cap-pty / cap-http-endpoint / cap-ws-server / cap-http / cap-ws / cap-mdns / cap-peer / cap-notify，移动 cap-mobile / cap-mdns / cap-peer / cap-http / cap-ws / cap-notify）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`，双端功能级交集），可被任意端组合；端独有功能的声明与实现都住端宿主（ADR 0052 D4）。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
 
-**命名与落点纪律**（ADR 0047 + 单形态收口，2026-10-13）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（peer → `server-peer-net`、http → `server-http`、ws → `server-websocket` / `ws-client-engine`、fs/storage/bus/db → `host-api-core` 或内核 `core_binding`）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——notify / terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已在票 04/05 一并删除**，别再照旧文加回来；双端全等 8 域由内核 `core_binding` 单份实现，移动 host_domains 只留 http/peer/mdns/ws）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
+**命名与落点纪律**（ADR 0047 + 单形态收口，2026-10-13）：wasm-core 内**自持标识符零端名**（desktop / mobile）、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（peer → `server-peer-net`、http → `server-http`、ws → `server-websocket` / `ws-client-engine`、fs/storage/bus/db → `host-api-core` 或内核 `core_binding`）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events / 移动通知扩展（`host-notify-mobile`）——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已在票 04/05 一并删除**，别再照旧文加回来；双端全等 8 域由内核 `core_binding` 单份实现，移动 host_domains 只留 http/peer/mdns/ws）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
 
 ---
 

@@ -29,7 +29,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "connection";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-connection-registry"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-connection-registry"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["connection:read"];
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(MODULE_NAME, "connection", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin@0.1.0/host-connection-registry"],
+            &["bedcode:plugin@0.2.0/host-connection-registry"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(

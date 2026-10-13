@@ -38,7 +38,7 @@ use crate::host_api::context::CapabilityTarget;
 
 // ==================== 能力名与导出探测表 ====================
 
-/// host-storage 能力（WIT `bedcode:plugin@0.1.0/host-storage`，装配框架首条路由能力）
+/// host-storage 能力（WIT `bedcode:plugin@0.2.0/host-storage`，装配框架首条路由能力）
 ///
 /// 内建可路由行（见 [`routable_capabilities`] 与 [`storage_exports`]）：它的端口与真源都在内核/宿主内
 /// （`host_api/sqlite_ports.rs`），故词汇由内核自持。**能力域侧的能力一律自报**
@@ -775,8 +775,8 @@ mod tests {
     ///
     /// **两侧抽取形态不同**（版本化后必然如此）：域侧是 const 字面量（`inventory` 静态
     /// 自报要求编译期常量），内核侧是运行期派生调用。故本锁抽「函数名」两侧对齐后再
-    /// **值层逐字比对**——只比函数名会漏掉版本漂移（域侧 `@0.1.0` vs 内核 `@0.2.0`
-    /// 函数名相同、值不等，而值不等正是运行期探测恒 None 的原因）。
+    /// **值层逐字比对**——只比函数名会漏掉版本漂移（域侧与内核侧各持一份字面量 /
+    /// 派生值，版本不等时函数名相同、值不等，而值不等正是运行期探测恒 None 的原因）。
     #[test]
     fn mdns_call_surface_names_match_the_domain_self_report() {
         let kernel_src = std::fs::read_to_string(
@@ -880,8 +880,8 @@ mod tests {
         let mut out: Vec<String> = export_literals(src)
             .into_iter()
             .map(|lit| {
-                // 先剥版本段（`…browse@0.1.0` → `…browse`），再取点号后的函数名；
-                // 顺序反了会被版本的点号（`0.1.0`）切成 `0`
+                // 先剥版本段（`…browse@0.2.0` → `…browse`），再取点号后的函数名；
+                // 顺序反了会被版本的点号（`0.2.0`）切成 `0`
                 let without_version = lit.split('@').next().expect("字面量非空");
                 without_version
                     .rsplit('.')

@@ -61,12 +61,16 @@ fn is_valid_source_name(name: &str) -> bool {
 }
 
 /// 系统文件夹选择器选日志来源目录（fs:pick 权限门与选中路径授权校验都在
-/// 宿主 `host-platform.pick-folder`：用户取消返回空串，授权拒绝直接 Err）。
+/// 宿主 core `host-platform.pick-folders`：用户取消返回空数组，授权拒绝直接 Err；
+/// 2026-10-13 功能级统一后的多选形，本场景取首项）。
 /// 返回选中绝对路径，由前端自动派生来源名后走 add-source / add-source-path 入库。
 pub(crate) fn pick_source_dir(h: &WasmHost) -> anyhow::Result<Value> {
     let path = h
-        .platform_pick_folder()
-        .map_err(|e| anyhow::anyhow!("pick-source-dir: {e}"))?;
+        .platform_pick_folders()
+        .map_err(|e| anyhow::anyhow!("pick-source-dir: {e}"))?
+        .into_iter()
+        .next()
+        .unwrap_or_default();
     Ok(json!({ "picked": !path.is_empty(), "path": path }))
 }
 

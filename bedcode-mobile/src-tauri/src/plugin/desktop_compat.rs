@@ -5,7 +5,7 @@
 //!
 //! file-transfer 双端共享一份 wasm 产物（按桌面 `world plugin` 构建）。该产物的
 //! import 面 = core 子集 + **`host-api-call`**（auth_center 互调认证中心）+
-//! **`host-platform-desktop`**（pick-folders / reveal-in-dir）——后两者只存在于桌面
+//! **`host-platform-desktop`**（reveal-in-dir 等桌面平台事实）——后两者只存在于桌面
 //! cap 分片，移动宿主的 `world plugin`（core + cap-mobile）不提供。组件模型**没有
 //! 「缺省 import」**：import 不闭合即实例化失败。
 //!
@@ -61,12 +61,6 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
 }
 
 impl bedcode::plugin::host_platform_desktop::Host for WasmPluginState {
-    /// 系统多目录选择器：移动不提供（共享产物移动分支只暴露 pick-files /
-    /// pick-folder 两项交集原语）
-    fn pick_folders(&mut self) -> Result<String, String> {
-        Err(unsupported("host-platform-desktop.pick-folders"))
-    }
-
     /// WSL 发行版枚举：桌面专属平台事实，移动不提供
     fn wsl_distros(&mut self) -> Result<String, String> {
         Err(unsupported("host-platform-desktop.wsl-distros"))
@@ -90,8 +84,8 @@ pub const MODULE_NAME: &str = "mobile-desktop-compat";
 
 /// 本模块提供的 WIT 接口（桌面兼容面；移动宿主 world 本身不 import 它们）
 pub const MODULE_INTERFACES: &[&str] = &[
-    "bedcode:plugin@0.1.0/host-api-call",
-    "bedcode:plugin@0.1.0/host-platform-desktop",
+    "bedcode:plugin@0.2.0/host-api-call",
+    "bedcode:plugin@0.2.0/host-platform-desktop",
 ];
 
 /// 本模块读写的权限位：**空**——桩不放行任何能力，调用即拒

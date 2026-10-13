@@ -11,7 +11,7 @@
 //! | 桌面 | `on-message` / `on-process-done` |
 //! | 移动 | `on-bus-message` / `on-auth-success` / `on-disconnect` / `on-session-created` / `on-session-stopped` |
 //!
-//! 二者都不是 core.wit 的 17 个双端全等 interface 之一，绑进内核等于让内核对
+//! 二者都不在 core.wit（内核机制面，ADR 0052 D1）内，绑进内核等于让内核对
 //! 「哪端的 events」表态，并把某端 SDK 依赖钉进内核。
 //!
 //! ## 为什么不能用原生 `TypedFunc` 探测绕过绑定

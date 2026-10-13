@@ -266,14 +266,11 @@ impl<H: HostPeer + ?Sized> NodePower for DesktopPorts<'_, H> {
 
 // ==================== 平台交互面 ====================
 
-/// 差异面⑤⑥：桌面支持目录多选与「打开所在目录」（移动端不实现 ⇒ 核内默认显性 unsupported）
+/// 差异面⑥：桌面支持「打开所在目录」（移动端不实现 ⇒ 核内默认显性 unsupported）；
+/// `pick_folders` 双端均有（2026-10-13 功能级统一后走 core `host-platform`）
 impl<H: HostPlatform + ?Sized> PlatformPort for DesktopPorts<'_, H> {
     fn platform_pick_files(&self) -> PortResult<Vec<String>> {
         map_err(self.0.platform_pick_files())
-    }
-
-    fn platform_pick_folder(&self) -> PortResult<String> {
-        map_err(self.0.platform_pick_folder())
     }
 
     fn platform_pick_folders(&self) -> PortResult<Vec<String>> {

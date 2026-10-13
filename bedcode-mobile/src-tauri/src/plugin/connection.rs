@@ -20,7 +20,7 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "mobile-connection";
 
 /// 本域提供的 WIT 接口（必须与 `cap-mobile.wit` 逐字一致）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-connection-target"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-connection-target"];
 
 /// 本域无权限门（ADR 0022 已登记的例外，见模块头注）
 pub const MODULE_PERMISSIONS: &[&str] = &[];

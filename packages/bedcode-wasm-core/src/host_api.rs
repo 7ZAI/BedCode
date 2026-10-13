@@ -24,15 +24,18 @@
 //! （见本文 [`forward_mdns_browse`] 一族的再导出）。本目录 `http.rs` 只剩
 //! `HttpUnitExecutor`（host-task 面执行器，注册点与留 core 的任务引擎同侧）。
 //!
-//! **v36 交集接口切片（批次 06）**：host-fs / host-platform / host-events / abi
-//! 四接口各自拆出桌面独有函数为新 interface（host-fs-desktop /
-//! host-platform-desktop / host-events-desktop / abi-form），其 **WIT impl 落宿主**
-//! `src-tauri/src/plugin/{fs,platform,events}.rs`（路径 B；abi-form 是 guest 导出，
-//! SDK 宏与宿主 verify_abi 消费）。本目录只留交集子集的域实现：`events` 只剩
-//! `emit_event`；`platform` 只剩 `pick-files` / `pick-folder`（含 `authorize_picked`
-//! 授权链）；`fs` 的交集 6 函数 + 桌面扩展三函数**实现本体**（`fs_read_dir` /
-//! `fs_canonicalize` / `fs_stat` 提 pub，双消费者：内核 `FsUnitExecutor` 的
-//! `fs.read-dir` / `fs.stat` 单元与宿主 WIT impl——与 `check_permission` 提 pub 同款）。
+//! **v36 交集接口切片（批次 06）+ 2026-10-13 通知功能统一**：host-fs /
+//! host-platform / host-events 各拆出桌面独有函数为新 interface（host-fs-desktop /
+//! host-platform-desktop / abi-form），其 **WIT impl 落宿主**
+//! `src-tauri/src/plugin/{fs,platform}.rs`（路径 B；abi-form 是 guest 导出，
+//! SDK 宏与宿主 verify_abi 消费）。`notify` 本体已按功能级交集统一进共享域契约
+//! `bedcode-notify-engine/wit/notify.wit`（实现按端住宿主 `plugin/notify.rs`）；
+//! 桌面 `host-platform-desktop.pick-folders` 并入 core `host-platform.pick-folders`。
+//! 本目录只留交集子集的域实现：`events` 只剩 `emit_event`；`platform` 只剩
+//! `pick-files` / `pick-folders`（含 `authorize_picked` 授权链）；`fs` 的交集 6
+//! 函数 + 桌面扩展三函数**实现本体**（`fs_read_dir` / `fs_canonicalize` / `fs_stat`
+//! 提 pub，双消费者：内核 `FsUnitExecutor` 的 `fs.read-dir` / `fs.stat` 单元与宿主
+//! WIT impl——与 `check_permission` 提 pub 同款）。
 //!
 //! v27（票 10）：**`session` 域整体退役**（`host-session` 整 interface 删除），
 //! 同域内的 `lifecycle` 子模块（两条观察面注册入口）在票 03 已降级为退役占位、

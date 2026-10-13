@@ -1,4 +1,4 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 
 // 移动端插件契约——**端扩展分片**（共享核心 interface 在 `wasm-core/wit/core.wit`，
 // 本文件只承载移动独有 / 非等接口；端 `wit/` 目录由 `scripts/compose-wit.mjs` 拼装生成）
@@ -8,7 +8,9 @@ package bedcode:plugin@0.1.0;
 //   `host-database` 主库面已随 v19 双端退役——主库由 wasm-core 管理、不给插件直接调用）
 // - host-fs-mobile 为移动端特有域（v20 自共享核心 host-fs 拆出：交集 6 函数进
 //   core.wit，SAF/下载目录能力 write-media-downloads / save-to-document 留在本端）
-// - host-notify 为移动端特有域（v18：通知/震动/声音，桌面不跟演——ADR 0018）
+// - host-notify-mobile 为移动端通知扩展域（2026-10-13 功能级统一后：原
+//   `host-notify` 的 `notify` 本体进共享契约 `bedcode-notify-engine/wit/notify.wit`；
+//   权限查询 / 请求、即时震动、提示音这 4 条桌面无对应平台概念，改名 `-mobile` 留本端）
 // - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
 //
 // 命名空间约定与桌面端一致：宿主能力 import 前缀 `host-`，插件导出为普通名；
@@ -51,29 +53,30 @@ package bedcode:plugin@0.1.0;
 ///   纯事件语义，只剩 emit）。**破坏性收缩**：v17 及更早产物在 v18 宿主
 ///   实例化期因缺失 import 函数被点名失败，须随 SDK
 ///   重编译；内置插件随 APK 同分发无旧产物
+/// - 2026-10-13（domain-owned-contracts 票 04，ADR 0052 D3）：通知按**功能级
+///   交集**统一——`notify` 本体迁共享域契约 `host-notify`（真源
+///   `packages/bedcode-notify-engine/wit/notify.wit`，双端 caps 消费同一份，
+///   桌面 `host-events-desktop` 退役）；本端 4 条附加函数改名
+///   `host-notify-mobile` 留本 cap。契约包 minor bump `0.1.0 → 0.2.0`，
+///   旧产物按包版本在实例化期被 linker 点名，须随 SDK 重建
 
-/// 系统通知与提醒反馈（移动端特有，ABI v18 新增——桌面不跟演，ADR 0018）
+/// 移动端通知权限与反馈原语（移动扩展；`notify` 本体在共享 `host-notify`）
 ///
-/// 覆盖 Android 原生桥的三类「触达用户」原语：系统通知（震动 / 声音可分别
-/// 控制）、即时震动反馈、提示音播放；另含 Android 13+ 通知权限
-/// （POST_NOTIFICATIONS）状态查询与请求。全部是「离宿主无法实现」的平台
-/// 交互原语，零业务语义（ADR 0022）：文案 / 时机 / 触发条件由插件决定，
-/// 宿主只负责投递。
+/// 覆盖 Android 原生桥的「非通知框」触达原语：通知权限
+/// （POST_NOTIFICATIONS）状态查询与请求、即时震动反馈、提示音播放。
+/// 全部是「离宿主无法实现」的平台交互原语，零业务语义（ADR 0022）：
+/// 文案 / 时机 / 触发条件由插件决定，宿主只负责投递。
 ///
-/// 本域 v18 收编原 `host-events.notify`（旧形震动/声音硬编码 true）——
-/// **破坏性收缩**：**引用了 `host-events.notify` 的** v17 及更早产物在 v18
-/// 宿主实例化期因缺失 import 函数被点名失败，须随 SDK
-/// 重编译（组件 import 按实际使用面声明，未引用者不受影响）；内置插件零
-/// 消费者且随 APK 同分发，产物随本版全量重建。
+/// **与共享 `host-notify` 的关系**（2026-10-13，ADR 0052 D3 功能级统一）：
+/// `notify` 本体是双端功能级交集 → 共享契约房
+/// `packages/bedcode-notify-engine/wit/notify.wit`（双端 caps 各消费同一份；
+/// 桌面 `host-events-desktop` 随之退役）；本接口 4 条是移动独有功能
+/// （桌面无通知权限 / 震动 / 提示音概念），按「只有一端提供 → 端 cap」留本端。
 ///
 /// 权限位 `notify`（fail-closed，未声明即拒）：通知 / 震动 / 声音是用户打扰面
-/// （高频弹通知或狂震会骚扰用户），独立成位，不与既有能力混位。
-interface host-notify {
-    /// 发送系统通知（文案由插件 i18n 构建、原样透传，宿主不做文案加工）。
-    /// options-json（camelCase，字段可省）：`{ vibrate?: bool, sound?: bool }`，
-    /// 两者缺省均为 true（与退役前 `host-events.notify` 行为一致）；
-    /// 非法 JSON / 字段类型错误 → Err（严格解析，禁静默降级）
-    notify: func(title: string, body: string, options-json: string) -> result<_, string>;
+/// （高频弹通知或狂震会骚扰用户），独立成位，不与既有能力混位；
+/// 共享 `host-notify.notify` 在移动端同样经此位门控（见该契约文档）。
+interface host-notify-mobile {
     /// 通知权限是否已授予（Android 13+ 需 POST_NOTIFICATIONS 且系统通知总开关
     /// 开启；Android 12 及以下恒 true）。供插件在发通知前对账；发送本身不因
     /// 无权限而报错（系统静默丢弃，宿主不代为降级）
@@ -193,7 +196,7 @@ interface events {
 // 交集完整）已收拢进共享核心 core.wit，本 world 不再 import 它们；本端独有
 // `host-fs-mobile` 2 函数（SAF/媒体下载目录）留在本文件。
 world cap-mobile {
-    import host-notify;
+    import host-notify-mobile;
     import host-fs-mobile;
     import host-terminal-stream;
     import host-connection-target;

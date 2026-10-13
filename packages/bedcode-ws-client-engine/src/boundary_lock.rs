@@ -640,10 +640,26 @@ fn crate_root_has_no_external_test_surfaces() {
             ));
         }
     }
-    // WIT 绑定层的载体同样不得在场
+    // WIT **绑定层**的载体不得在场；**纯契约分片**例外（ADR 0052 D2）：双端功能级
+    // 交集的契约真源住能力域 crate 的 `wit/<domain>.wit`（本 crate 自 2026-10-13
+    // 起持共享客户端域 `ws.wit`，由双端 compose 与 `server-websocket` 的 provider
+    // bindgen 消费）。绑定层仍零——B-1 标记禁词与 B-3 依赖面锁（禁 wit-bindgen /
+    // wasmtime / 内部 crate 依赖）继续钉住；`wit/` 只允许 `.wit` 契约文件。
     if root.join("wit").is_dir() {
-        violations
-            .push("wit/ 存在 —— 本 crate 是零 WIT 形态，WIT 绑定层收在宿主适配 crate".to_string());
+        let only_contracts = fs::read_dir(root.join("wit"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok()).all(|e| {
+                    e.file_type().map(|t| t.is_file()).unwrap_or(false)
+                        && e.file_name().to_string_lossy().ends_with(".wit")
+                })
+            })
+            .unwrap_or(false);
+        if !only_contracts {
+            violations.push(
+                "wit/ 含非契约文件 —— WIT 绑定层载体不得在场（只允许 `.wit` 契约分片，ADR 0052 D2）"
+                    .to_string(),
+            );
+        }
     }
     assert!(
         violations.is_empty(),

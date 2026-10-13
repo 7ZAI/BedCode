@@ -25,9 +25,10 @@ pub(crate) fn emit_event(
         .map_err(|e| format!("event emit failed: {}", e))
 }
 
-/// 通过 Tauri 事件发送到前端 toast 的实现（`host-events-desktop.notify`）已随
-/// WIT impl 迁宿主 `src-tauri/src/plugin/events.rs`（票 02 批次 06 / v36 交集切片：
-/// 域函数 + 单测随域走宿主，内核不再持有 `plugin:notify` 事件发射面）。
+/// 通知投递的实现（原 `host-events-desktop.notify`，2026-10-13 起统一为共享域
+/// 契约 `host-notify.notify(title, body, options-json)`）已随 WIT impl 迁各端宿主
+/// `src-tauri/src/plugin/notify.rs`（路径 B：域函数 + 单测随域走宿主；内核不再持有
+/// `plugin:notify` 事件发射面）。
 
 #[cfg(test)]
 mod tests {

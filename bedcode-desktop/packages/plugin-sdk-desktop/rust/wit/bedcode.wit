@@ -1,9 +1,14 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 
 world plugin {
     include core;
     include cap-pty;
+    include cap-mdns;
+    include cap-peer;
     include cap-http;
     include cap-ws;
+    include cap-notify;
+    include cap-http-endpoint;
+    include cap-ws-server;
     include cap-desktop;
 }

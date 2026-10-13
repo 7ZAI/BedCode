@@ -9,6 +9,17 @@
 
 ## [未发布]
 
+#### core 收窄为机制必需契约；功能级交集归能力域；端扩展归宿主（ADR 0052，票 04）
+
+WIT 包 **minor bump `0.1.0 → 0.2.0`**（ADR 0051 D4：interface 增删 / 签名变 = minor；file-transfer 双端单产物要求双端同步 bump，ADR 0051 D3）。规格与逐票记录：`.scratch/2026-10-13-domain-owned-contracts/`；决策：`docs/adr/0052-core-mechanism-only-and-domain-owned-contracts.md`。
+
+- **`core.wit` 只留机制（12 个 interface：8 import + 4 export）**：`host-mdns` / `host-peer` / `host-http`（出站）/ `host-websocket`（客户端）迁出到各能力域分片（`discovery-engine/wit/mdns.wit`、`server-peer-net/wit/peer.wit`、`server-http/wit/http.wit`、新建 `ws-client-engine/wit/ws.wit`，裁决 Q4=A），由双端 `compose.json` 的 caps 直接消费。内核唯一绑定仍是 `core_binding` 绑 `wit/core.wit`；core ↔ 分片的逐字重复副本消失。
+- **功能级统一（R2/D3）**：同一功能不再被两端形状切碎。① 通知：桌面 `host-events-desktop.notify(title, body)` 与移动 `host-notify.notify(title, body, options-json)` 合并为共享 `host-notify` 契约，住新建轻量契约房 `packages/bedcode-notify-engine/wit/notify.wit`（双端消费同一份）；平台不支持的选项（桌面 vibrate/sound）按契约文档**静默忽略**，非法 JSON 显性报错。② 目录选择：core `pick-folder` 与桌面扩展 `pick-folders` 合并为 core `host-platform.pick-folders`（`string[]` JSON，空数组=取消；移动 SAF 返回 0/1 个树 URI）。③ 移动通知附加 4 函数（权限查询/请求、震动、提示音）改名 `host-notify-mobile`，留移动 cap 分片。
+- **端扩展归宿主（D4）**：`host-http-endpoint` / `host-websocket-server` 的声明住桌面 `wit-src` cap（world `cap-http-endpoint` / `cap-ws-server`），其 `impl Host` 与端专属引擎面迁 `bedcode-desktop/src-tauri/src/plugin/{http,ws}.rs`；能力域 crate 端中立。
+- **连带变化**：`host-events-desktop` 整 interface 退役；桌面 `plugin/notify.rs` 实现共享契约（无权限门，与旧行为逐字一致），SDK 新增 `HostNotify`/`NotifyOptions`（桌面）与 `HostNotifyMobile`（移动）；移动 file-transfer manifest 补 `fs:pick`（原先缺失、会被内核权限门拒绝）。
+- **产物全量重建**（桌面 4 插件、移动 3 插件含 file-transfer 共享产物、wasm-core 夹具）；旧 `0.1.0` 产物在实例化期被 linker 点名包版本拒绝，并附 `stale_artifact_rebuild_hint` 重建指引（证据：`.scratch/2026-10-13-domain-owned-contracts/evidence/`）。
+- **验证**：`check:wit` 绿；wasm-core `sliced_interfaces` / `binding_surface` 锁绿；桌面 `cargo test --lib` 157/157 + `http_e2e` 1/1 · `ws_e2e` 6/6 · `system_component_test` 10/10 · `owner_e2e` 5/5 · `pty_wiring` 6/6 · `capabilities_lock` 9/9 · `sdk_e2e` 3/3 · `component_e2e` 2/2；移动组合锁 3/3 · 纯净锁 7/7 · 共享产物探针 4/4；file-transfer 应用 83/83；file-transfer 共享核 76/76。
+
 #### 宿主端事实搬出内核：平台标识 / 入站服务器端口由各端宿主注入
 
 收口 2026-10-13 单形态裁决的最后余量（ADR 0049 D1：「桌面这样写、移动那样写就不是机制」）——`packages/bedcode-wasm-core` 内最后两处编译期端分支消失。

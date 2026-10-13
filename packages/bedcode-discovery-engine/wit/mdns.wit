@@ -1,18 +1,14 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 // ======================================================================
-// mDNS 能力域自持 bindgen 分片
+// mDNS 能力域自持契约分片（ADR 0052 D2/D3）
 //
-// 本文件是 `bedcode-discovery-engine` 为**自己 bindgen** 的契约分片
-// （`world cap-mdns { import host-mdns; }`）——契约面不绑端 WIT：
-// 宿主能力接口由能力域 crate 自己持有，端生成物由 compose.json 驱动。
+// 本文件是 `bedcode-discovery-engine` 持有的**共享契约真源**（world `cap-mdns`
+// 只 import 浏览/广播域 `host-mdns`）：双端 `compose.json` 的 caps.mdns 直接指向
+// 本文件（pty 先例）——契约与实现同属一处，端组合不再经 core.wit 间接消费。
 //
-// 与端组合的关系：`host-mdns` 是双端全等交集，权威定义在
-// `wasm-core/wit/core.wit`（端生成物由 core 并入，端组合**不用本文件**）；
-// 本文件是**另一 package 实例的同名定义**（不同目录 = 不同 package，
-// 二者不冲突）——两处函数集必须逐字一致，漂移即红。
-//
-// 分片只换绑定源、不换装配语义：`impl Host` / `HostModule` / `MODULE_*` / `DESC`
-// 与 WIT 契约的函数集逐字一致。
+// 端生成物由 `scripts/compose-wit.mjs` 拼装（本文件与 core.wit 及其余 cap 分片
+// 同 package 同版本）。分片只换绑定源、不换装配语义：`impl Host` / `HostModule` /
+// `MODULE_*` / `DESC` 与 WIT 契约的函数集逐字一致。
 // ======================================================================
 
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传

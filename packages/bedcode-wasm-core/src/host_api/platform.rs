@@ -67,18 +67,22 @@ pub(crate) fn platform_pick_files(
     serde_json::to_string(&picked).map_err(|e| format!("serialize picked files failed: {e}"))
 }
 
-/// 系统文件夹选择器 → 绝对路径；用户取消返回空串
-pub(crate) fn platform_pick_folder(
+/// 系统文件夹选择器（多选）→ string[] JSON；用户取消为空数组
+///
+/// 2026-10-13 功能级统一（ADR 0052 D3）：原 `pick-folder`（单目录字符串）与桌面
+/// `host-platform-desktop.pick-folders`（多目录 JSON）是同一功能的两种形状 →
+/// 统一为本函数。移动端 SAF 目录树选择器为单选语义，返回 0/1 项。
+pub(crate) fn platform_pick_folders(
     perm: &dyn PermissionScope,
     app: &dyn AppHandleScope,
     fs: &dyn FsAuthScope,
     plugin_id: &str,
 ) -> Result<String, String> {
-    require_pick_permission(perm, plugin_id, "host_platform_pick_folder")?;
+    require_pick_permission(perm, plugin_id, "host_platform_pick_folders")?;
     let app = require_app(app)?;
-    let picked = sync_result(block_on_async(pick_folder(app)))?;
-    let picked = authorize_picked(fs, plugin_id, "host_platform_pick_folder", picked)?;
-    Ok(picked.into_iter().next().unwrap_or_default())
+    let picked = sync_result(block_on_async(pick_folders(app)))?;
+    let picked = authorize_picked(fs, plugin_id, "host_platform_pick_folders", picked)?;
+    serde_json::to_string(&picked).map_err(|e| format!("serialize picked folders failed: {e}"))
 }
 
 /// 选择结果的授权校验（`fs:pick` 契约第二段）
@@ -131,19 +135,19 @@ async fn pick_files(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> 
     }
 }
 
-async fn pick_folder(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
+async fn pick_folders(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folder(move |selection| {
+    app_handle.dialog().file().pick_folders(move |selection| {
         if tx.send(selection).is_err() {
-            tracing::debug!("platform_pick_folder: receiver dropped before dialog completed");
+            tracing::debug!("platform_pick_folders: receiver dropped before dialog completed");
         }
     });
     match rx.await {
-        Ok(Some(path)) => Ok(vec![path_to_string(path)?]),
+        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
         // 用户取消选择
         Ok(None) => Ok(Vec::new()),
         Err(e) => Err(crate::AppError::Plugin(format!(
-            "platform_pick_folder: dialog channel closed: {e}"
+            "platform_pick_folders: dialog channel closed: {e}"
         ))),
     }
 }
@@ -168,10 +172,12 @@ fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
     r.map_err(|e| e.to_string())
 }
 
-// 票 02 批次 06（v36 交集切片）：platform 桌面扩展四函数（pick-folds /
-// wsl-distros / local-ipv4-addresses / reveal-in-dir）已拆入 `host-platform-desktop`
-// 并迁宿主 `src-tauri/src/plugin/platform.rs`（路径 B：域函数 + 单测随域走宿主；
-// 内核不再持有桌面平台依赖 `local_ip_address` / `system::wsl`）。
+// 票 02 批次 06（v36 交集切片）：platform 桌面扩展三函数（wsl-distros /
+// local-ipv4-addresses / reveal-in-dir）已拆入 `host-platform-desktop` 并迁宿主
+// `src-tauri/src/plugin/platform.rs`（路径 B：域函数 + 单测随域走宿主；内核不再
+// 持有桌面平台依赖 `local_ip_address` / `system::wsl`）。桌面原
+// `host-platform-desktop.pick-folders` 已随 2026-10-13 功能级统一（ADR 0052 D3）
+// 并入本文件 [`platform_pick_folders`]。
 
 // ==================== Tests ====================
 
@@ -215,6 +221,20 @@ mod tests {
         let err = platform_pick_files(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
             .expect_err("无头上下文拿不到系统对话框");
         assert!(err.contains("headless"), "声明 fs:pick 后应走到对话框环节, got: {err}");
+    }
+
+    /// `pick-folders`（2026-10-13 统一函数）与 `pick-files` 同门：未声明
+    /// `fs:pick` 拒绝且早于对话框（防「多选变体绕过准入」的回接形态）
+    #[test]
+    fn pick_folders_requires_fs_pick_permission() {
+        let ctx = build_host_ctx();
+        let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
+            .expect_err("未声明 fs:pick 必须拒绝");
+        assert!(
+            err.contains(PERMISSION_FS_PICK),
+            "错误必须点名缺失的权限位（插件作者据此知道 manifest 补什么），got: {err}"
+        );
+        assert!(!err.contains("headless"), "权限门必须早于对话框, got: {err}");
     }
 
     /// 权限五同步点：新位进了 CLI 与前端两份**生成物**（漏跑 gen:permissions 即红）

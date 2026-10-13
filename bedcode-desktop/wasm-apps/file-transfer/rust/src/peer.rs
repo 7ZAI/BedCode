@@ -1210,11 +1210,15 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
 }
 
 /// 选择接收落点目录（桌面形态命令；移动 lib.rs 直接返回 unsupported 不入本模块）
+///
+/// 2026-10-13 功能级统一（ADR 0052 D3）：目录选择统一走 core
+/// `host-platform.pick-folders`（多选形）；落点语义单值 ⇒ 取首个结果，
+/// 空数组 = 用户取消。
 pub(crate) fn pick_download_dir(h: &WasmHost) -> Result<serde_json::Value> {
-    let folder = h.platform_pick_folder()?;
-    if folder.is_empty() {
+    let folder = h.platform_pick_folders()?;
+    let Some(folder) = folder.into_iter().next() else {
         return Ok(serde_json::json!({ "cancelled": true }));
-    }
+    };
     set_settings(
         h,
         &serde_json::json!({ "downloadDir": folder }),
@@ -1225,8 +1229,8 @@ pub(crate) fn pick_download_dir(h: &WasmHost) -> Result<serde_json::Value> {
 /// 添加共享目录（平台分支）：
 /// - 桌面：`args.path` 显式单路径，否则弹系统**多目录**选择器（一次可选多个）；
 ///   同根去重在注册表层完成（id=路径哈希）；推送失败自动回滚；
-/// - 移动：弹 SAF 目录树选择器（`host-platform.pick-folder`，单选）；宿主返回
-///   SAF 树 URI（引擎注册表校验 `content://` 根，真实路径会被整批拒绝导致
+/// - 移动：弹 SAF 目录树选择器（core `host-platform.pick-folders`，宿主返回
+///   0/1 项树 URI）；引擎注册表校验 `content://` 根（真实路径会被整批拒绝导致
 ///   「多次选择只显示一条」）；展示名由树 URI 末段解码（卷前缀剥离）派生。
 /// 用户取消以错误上抛（调用方按 'cancelled' 字样分流）。
 pub(crate) fn mount_local(
@@ -1289,13 +1293,16 @@ fn mount_local_desktop(
 }
 
 /// 移动 mount-local：SAF 目录树选择器（单选）+ 树 URI 展示名派生
+///
+/// 2026-10-13 功能级统一后走 core `host-platform.pick-folders`（多选形）；
+/// 移动宿主底层是 SAF 单选选择器，返回 0/1 项 ⇒ 取首项，空数组 = 用户取消。
 fn mount_local_mobile(
     h: &(impl HostPlatform + HostPluginDatabase + HostPeer + HostStorage),
 ) -> Result<serde_json::Value> {
-    let uri = h.platform_pick_folder()?;
-    if uri.is_empty() {
+    let picked = h.platform_pick_folders()?;
+    let Some(uri) = picked.into_iter().next() else {
         anyhow::bail!("cancelled");
-    }
+    };
     // 展示名：树 URI 末段 URL 解码 + 去卷前缀（primary:Download → Download）；
     // 空则固定占位
     let name = tree_uri_display_name(&uri);
@@ -1452,10 +1459,8 @@ mod tests {
         kv: RefCell<std::collections::HashMap<String, serde_json::Value>>,
         rows: RefCell<Vec<serde_json::Value>>,
         pushed_roots: RefCell<Vec<serde_json::Value>>,
-        /// platform_pick_folders 预设返回值（多选目录对话框桩）
+        /// platform_pick_folders 预设返回值（目录选择器桩：桌面多选 / 移动 SAF 单选 0/1 项）
         picked: RefCell<Vec<String>>,
-        /// platform_pick_folder 预设返回值（SAF 单选对话框桩）
-        picked_one: RefCell<String>,
         /// 全部 SQL 调用序列（persist_entries 事务形态断言用）
         sql_log: RefCell<Vec<String>>,
         /// 参数化执行故障注入（共享根回滚路径断言用）
@@ -1472,7 +1477,6 @@ mod tests {
                 rows: RefCell::new(vec![]),
                 pushed_roots: RefCell::new(vec![]),
                 picked: RefCell::new(vec![]),
-                picked_one: RefCell::new(String::new()),
                 sql_log: RefCell::new(vec![]),
                 fail_params: Cell::new(false),
                 fail_batch: Cell::new(false),
@@ -1518,12 +1522,6 @@ mod tests {
             self.logs
                 .borrow_mut()
                 .push(format!("event {name}: {payload}"));
-        }
-        fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-            self.logs
-                .borrow_mut()
-                .push(format!("notify {title}: {body}"));
-            Ok(())
         }
     }
 
@@ -1667,9 +1665,6 @@ mod tests {
         fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
             unimplemented!()
         }
-        fn platform_pick_folder(&self) -> Result<String, HostError> {
-            Ok(self.picked_one.borrow().clone())
-        }
         fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
             Ok(self.picked.borrow().clone())
         }
@@ -1753,8 +1748,8 @@ mod tests {
         let _g = platform::test_lock().lock().unwrap();
         platform::set_for_test(Platform::Mobile);
         let h = MockHost::new();
-        *h.picked_one.borrow_mut() =
-            "content://com.android.externalstorage.documents/tree/primary%3AShareX".to_string();
+        *h.picked.borrow_mut() =
+            vec!["content://com.android.externalstorage.documents/tree/primary%3AShareX".to_string()];
         let out = mount_local(&h, &serde_json::json!({})).unwrap();
         assert_eq!(out["name"], "ShareX", "展示名 = 树 URI 末段解码去卷前缀");
         assert_eq!(

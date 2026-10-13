@@ -227,7 +227,7 @@ fn test_component_fuel_trap() {
         // fuel 耗尽 trap 的 Display 含 wasm backtrace；trap 即通过，
         // 关键是 backtrace 顶部是 invoke 导出（trap 发生在 guest 死循环内）。
         // ⚠️ 断言**版本免疫**：版本化后 backtrace 符号带包版本（
-        // `bedcode_plugin_component_test.wasm!bedcode:plugin/command@0.1.0#invoke`），
+        // `bedcode_plugin_component_test.wasm!bedcode:plugin/command@0.2.0#invoke`），
         // 不能用 `command#invoke` 整串匹配（版本在中间）；匹配 `#invoke` 栈顶即可
         let msg = err.to_string();
         assert!(

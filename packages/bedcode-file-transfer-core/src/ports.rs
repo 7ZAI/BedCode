@@ -140,15 +140,12 @@ pub trait NodePower {
 
 /// 平台文件选择与目录打开
 ///
-/// `pick_files` / `pick_folder` 双端均有；`pick_folders`（多选）与 `reveal_in_dir`
-/// （打开所在目录）**桌面独有**——差异面⑤⑥，默认显性 unsupported。
+/// `pick_files` / `pick_folders` 双端均有（2026-10-13 功能级统一后，目录选择
+/// 统一为多选形 `pick_folders`，移动端 SAF 单选语义由宿主返回 0/1 项）；
+/// `reveal_in_dir`（打开所在目录）**桌面独有**——差异面⑥，默认显性 unsupported。
 pub trait PlatformPort {
     fn platform_pick_files(&self) -> PortResult<Vec<String>>;
-    fn platform_pick_folder(&self) -> PortResult<String>;
-
-    fn platform_pick_folders(&self) -> PortResult<Vec<String>> {
-        Err(PortError::unsupported("platform_pick_folders"))
-    }
+    fn platform_pick_folders(&self) -> PortResult<Vec<String>>;
 
     fn platform_reveal_in_dir(&self, path: &str) -> PortResult<()> {
         let _ = path;

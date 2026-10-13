@@ -26,7 +26,7 @@ wasm-core 内**只有一份机制**，双端零机制分叉代码：Engine 构�
 
 ### D2 · 绑定层归位宿主
 
-**wasm-core 内唯一合法的 WIT 绑定是 `manager/runtime/core_binding.rs`**——它绑契约真源 `packages/bedcode-wasm-core/wit/core.wit` 的 `world core`（双端全等的 17 个 interface）。它在双端都编译、双端都是同一份，这是「交集 ≠ 差异」。
+**wasm-core 内唯一合法的 WIT 绑定是 `manager/runtime/core_binding.rs`**——它绑契约真源 `packages/bedcode-wasm-core/wit/core.wit` 的 `world core`（双端全等的 17 个 interface；**2026-10-13 计数口径随 ADR 0052 更新为 12 个机制 interface = 8 import + 4 export**，业务能力交集改住能力域 crate 分片）。它在双端都编译、双端都是同一份，这是「交集 ≠ 差异」。
 
 其余全部归位：
 

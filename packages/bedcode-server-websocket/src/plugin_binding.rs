@@ -25,7 +25,8 @@
 //! ## 分层
 //!
 //! ```text
-//!   本文件        机制 + WIT 接线（15 条原语的宿主实现 + 能力模块自报）
+//!   本文件        机制 + 客户端 WIT 接线（5 条客户端原语的 Host 实现 + 能力模块自报；
+//!                 服务端 10 条原语保留为引擎 API，Host impl 在桌面宿主 plugin/ws.rs）
 //!   ports.rs      边界：宿主能力端口（权限门 / 事件发布 / 总线端口 / 帧投递 / 异步桥）
 //! ```
 //!
@@ -1071,14 +1072,18 @@ fn max_message_bytes() -> usize {
 /// （`expect_host_module!`）与装载期一致性核对改在宿主侧引用本常量。
 pub const MODULE_NAME: &str = "websocket";
 
-/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+/// 本域提供的 WIT 接口（必须与拼装 package 逐字一致；改错即 guest import 失配）
 ///
-/// 票 04：`host-websocket` 拆为双端交集客户端域（core.wit）+ 桌面扩展服务端域
-/// （`host-websocket-server`，本分片）——一个能力域模块持两个 interface。
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-websocket", "bedcode:plugin@0.1.0/host-websocket-server"];
+/// ADR 0052 D2/D4：客户端域 `host-websocket`（双端交集）契约真源在
+/// `bedcode-ws-client-engine/wit/ws.wit`，本 crate 的 `common-host` 绑定暂留客户端实现
+/// （Q4 裁决；双轨收敛另行立项）；服务端域 `host-websocket-server`（桌面扩展）的
+/// WIT 声明与 `impl Host` 已归桌面宿主（本模块不再注册/声明它）。
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-websocket"];
 
-/// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
-pub const MODULE_PERMISSIONS: &[&str] = &["ws:client", "ws:server"];
+/// 本域的权限位（必须与 WIT / SDK 权限表逐字一致）
+///
+/// 服务端域 `ws:server` 随 `impl Host` 一同归桌面宿主模块（`ws-server`）声明。
+pub const MODULE_PERMISSIONS: &[&str] = &["ws:client"];
 
 /// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
 #[cfg(feature = "common-host")]
@@ -1089,7 +1094,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 14,
 };
 
-/// WS 能力域模块（`host-websocket` 客户端域 5 + `host-websocket-server` 服务端域 10）
+/// WS 能力域模块（`host-websocket` 客户端域 5 条）
 #[cfg(feature = "common-host")]
 pub struct WebsocketModule;
 
@@ -1100,8 +1105,7 @@ impl HostModule for WebsocketModule {
     }
 
     fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()> {
-        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)?;
-        bedcode::plugin::host_websocket_server::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -1185,7 +1189,7 @@ pub use ports::install_ports;
 ///
 /// 依赖 `WasmPluginState`（host-kit 类型），随 `common-host` feature 编译。
 #[cfg(feature = "common-host")]
-fn ports_for(state: &WasmPluginState) -> Arc<dyn WsPorts> {
+pub fn ports_for(state: &WasmPluginState) -> Arc<dyn WsPorts> {
     match state
         .host
         .domain_ports(DOMAIN)
@@ -1207,11 +1211,12 @@ bindgen!({
     // `bedcode::plugin::host_websocket::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 ws `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
-    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/ws.wit`
-    // （`world cap-ws` 同时 import 客户端 `host-websocket` 与服务端
-    // `host-websocket-server`），不再读桌面 SDK 生成物目录（端组合改用 wit-src
-    // 真源，与本分片是不同 package 实例的同名定义，票 05 §3 摆法）。
-    path: "wit/ws.wit",
+    // 票 05 / ADR 0052 D2：契约面脱端——客户端域契约真源住能力域 crate
+    // `bedcode-ws-client-engine/wit/ws.wit`（world cap-ws 只 import `host-websocket`），
+    // 本 crate 的 provider 侧 bindgen 直接指向它（桌面客户端实现暂留本 crate 的
+    // common-host 绑定，Q4 裁决；本 crate 原有 `wit/ws.wit` 已删，不再持第二份副本）。
+    // 服务端域 `host-websocket-server` 的声明在桌面 wit-src、impl 在桌面宿主。
+    path: "../bedcode-ws-client-engine/wit/ws.wit",
     world: "cap-ws",
     // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
     // cap-ws 无 export 成员，此配置无生效对象（实测编译绿，票 05 实施记录）
@@ -1248,57 +1253,10 @@ impl bedcode::plugin::host_websocket::Host for WasmPluginState {
     }
 }
 
-/// v36/v37：`host-websocket` 拆为双端交集（客户端域）+ 桌面扩展服务端域（票 04）——
-/// 服务端 10 条原语落在 `host-websocket-server` interface 的 Host trait。
-#[cfg(feature = "common-host")]
-impl bedcode::plugin::host_websocket_server::Host for WasmPluginState {
-    // ==================== 服务端域（入站端点） ====================
-
-    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
-        ws_register_endpoint(&ports_for(self), &self.plugin_id, &config_json)
-    }
-
-    fn send_text_to_client(&mut self, endpoint_id: String, client_id: String, text: String) -> Result<(), String> {
-        ws_send_text_to_client(&ports_for(self), &self.plugin_id, &endpoint_id, &client_id, &text)
-    }
-
-    fn send_binary_to_client(
-        &mut self,
-        endpoint_id: String,
-        client_id: String,
-        payload: Vec<u8>,
-    ) -> Result<(), String> {
-        ws_send_binary_to_client(&ports_for(self), &self.plugin_id, &endpoint_id, &client_id, &payload)
-    }
-
-    fn broadcast_text(&mut self, endpoint_id: String, text: String) -> Result<u32, String> {
-        ws_broadcast_text(&ports_for(self), &self.plugin_id, &endpoint_id, &text)
-    }
-
-    fn broadcast_binary(&mut self, endpoint_id: String, payload: Vec<u8>) -> Result<u32, String> {
-        ws_broadcast_binary(&ports_for(self), &self.plugin_id, &endpoint_id, &payload)
-    }
-
-    fn close_client(&mut self, endpoint_id: String, client_id: String, close_json: String) -> Result<bool, String> {
-        ws_close_client(&ports_for(self), &self.plugin_id, &endpoint_id, &client_id, &close_json)
-    }
-
-    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
-        ws_unregister_endpoint(&ports_for(self), &self.plugin_id, &endpoint_id)
-    }
-
-    fn list_clients(&mut self, endpoint_id: String) -> Result<String, String> {
-        ws_list_clients(&ports_for(self), &self.plugin_id, &endpoint_id)
-    }
-
-    fn list_endpoints(&mut self) -> Result<String, String> {
-        ws_list_endpoints(&ports_for(self), &self.plugin_id)
-    }
-
-    fn connection_context(&mut self, endpoint_id: String, client_id: String) -> Result<String, String> {
-        ws_connection_context(&ports_for(self), &self.plugin_id, &endpoint_id, &client_id)
-    }
-}
+/// v36/v37 / ADR 0052 D4：`host-websocket-server`（桌面扩展服务端域）的 `impl Host`
+/// 已迁桌面宿主 `src-tauri/src/plugin/ws.rs`（路径 B 模块 `ws-server`）——
+/// 本模块不再生成/实现该 trait；引擎 API（`ws_*` 域函数）仍住本 crate，
+/// 被服务器自身（`conn` / `websocket_manager` / 路由）与宿主 e2e 消费。
 
 #[cfg(test)]
 mod tests;

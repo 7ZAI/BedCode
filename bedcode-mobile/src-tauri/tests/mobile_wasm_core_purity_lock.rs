@@ -6,7 +6,8 @@
 //! ADR 0049（单形态 + 绑定归位）+ 票 05 的绑定归位终态。
 //!
 //! 七道判据（任一被破坏即红）：
-//! 1. **移动独有域不得回流内核**：wasm-core 源码树不得出现 notify / fs_mobile /
+//! 1. **移动宿主实现的域不得回流内核**：wasm-core 源码树不得出现 notify（共享域契约
+//!    `host-notify` 的移动实现 + 移动扩展 `host-notify-mobile`）/ fs_mobile /
 //!    terminal_stream / connection-target / auth-client 五域的 `Host` impl 或域实现
 //!    文件；反向钉住移动宿主 adapter 在场（能力去内核化 ≠ 能力消失）。
 //! 2. **core 域绑定/实现不得回流内核形态壳**：wasm-core 不得再出现任何
@@ -96,7 +97,9 @@ fn code_lines(content: &str) -> impl Iterator<Item = (usize, &str)> {
 
 // ==================== 判据 1：移动独有域不得回流内核 ====================
 
-/// 移动独有域（ADR 0047 D5）：wasm-core 里不得再有这些域的 `Host` impl
+/// 移动宿主实现的域（ADR 0047 D5；notify 自 2026-10-13 起是共享域契约
+/// `host-notify`，其移动实现 + 移动扩展 `host-notify-mobile` 同住宿主 notify.rs）：
+/// wasm-core 里不得再有这些域的 `Host` impl
 const MOBILE_ONLY_TRAITS: [&str; 5] = [
     "bedcode::plugin::host_notify::Host for",
     "bedcode::plugin::host_fs_mobile::Host for",

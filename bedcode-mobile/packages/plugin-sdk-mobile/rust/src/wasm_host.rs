@@ -15,13 +15,13 @@
 
 use crate::host::{
     ConfigKey, HostAuth, HostBus, HostConfig, HostConnection, HostError, HostEvents,
-    HostFs, HostHttp, HostLog, HostMdns, HostNotify, HostPeer, HostPlatform, HostPluginDatabase,
-    HostStorage, HostTerminalStream, HostWs, NotifyOptions,
+    HostFs, HostHttp, HostLog, HostMdns, HostNotify, HostNotifyMobile, HostPeer, HostPlatform,
+    HostPluginDatabase, HostStorage, HostTerminalStream, HostWs, NotifyOptions,
 };
 use crate::wasm::bedcode::plugin::{
     host_auth_client, host_bus, host_config, host_connection_target, host_events, host_fs,
-    host_fs_mobile, host_http, host_log, host_mdns, host_notify, host_peer, host_platform,
-    host_plugin_database, host_storage, host_terminal_stream, host_websocket,
+    host_fs_mobile, host_http, host_log, host_mdns, host_notify, host_notify_mobile, host_peer,
+    host_platform, host_plugin_database, host_storage, host_terminal_stream, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -191,7 +191,7 @@ impl HostEvents for WasmHost {
     }
 }
 
-// ==================== HostNotify（ABI v18） ====================
+// ==================== HostNotify（共享域契约 host-notify） ====================
 
 impl HostNotify for WasmHost {
     fn notify(&self, title: &str, body: &str, options: &NotifyOptions) -> Result<(), HostError> {
@@ -199,21 +199,25 @@ impl HostNotify for WasmHost {
             .map_err(|e| host_err("notify", format!("serialize options failed: {e}")))?;
         host_notify::notify(title, body, &options_json).map_err(|e| host_err("notify", e))
     }
+}
 
+// ==================== HostNotifyMobile（移动扩展 host-notify-mobile） ====================
+
+impl HostNotifyMobile for WasmHost {
     fn notify_check_permission(&self) -> Result<bool, HostError> {
-        host_notify::check_permission().map_err(|e| host_err("notify_check_permission", e))
+        host_notify_mobile::check_permission().map_err(|e| host_err("notify_check_permission", e))
     }
 
     fn notify_request_permission(&self) -> Result<bool, HostError> {
-        host_notify::request_permission().map_err(|e| host_err("notify_request_permission", e))
+        host_notify_mobile::request_permission().map_err(|e| host_err("notify_request_permission", e))
     }
 
     fn notify_vibrate(&self, duration_ms: u32) -> Result<(), HostError> {
-        host_notify::vibrate(duration_ms).map_err(|e| host_err("notify_vibrate", e))
+        host_notify_mobile::vibrate(duration_ms).map_err(|e| host_err("notify_vibrate", e))
     }
 
     fn notify_play_sound(&self) -> Result<(), HostError> {
-        host_notify::play_sound().map_err(|e| host_err("notify_play_sound", e))
+        host_notify_mobile::play_sound().map_err(|e| host_err("notify_play_sound", e))
     }
 }
 
@@ -516,8 +520,15 @@ impl HostPlatform for WasmHost {
             .map_err(|e| HostError::custom(-1, format!("platform_pick_files: invalid JSON from host: {e}")))
     }
 
-    fn platform_pick_folder(&self) -> Result<String, HostError> {
-        host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
+    fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_pick_folders",
+            // 2026-10-13 功能级统一：多选目录选择器归 core `host-platform`
+            // （SAF 单选语义由宿主返回 0/1 个树 URI）
+            host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
+        )?;
+        serde_json::from_value(v)
+            .map_err(|e| HostError::custom(-1, format!("platform_pick_folders: invalid JSON from host: {e}")))
     }
 }
 

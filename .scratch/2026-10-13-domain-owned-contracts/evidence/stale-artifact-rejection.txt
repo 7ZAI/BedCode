@@ -1,0 +1,28 @@
+# fail-visible 旧产物拒绝证据（T-04，2026-10-13）
+#
+# 场景：宿主按契约包 0.2.0 装配 linker 后，加载 0.1.0 时代构建的 desktop
+# file-transfer 产物（bedcode-desktop/src-tauri/resources/plugins/desktop/
+# com.bedcode.file-transfer/bedcode_plugin_file_transfer.wasm，旧 SDK 构建）。
+#
+# 命令：cd bedcode-mobile/src-tauri && cargo test --test shared_artifact_probe
+# 结果：3/4 失败（预期失败——旧产物应被拒绝），1 通过（字节一致性不比产物版本）
+#
+# 判据①②同时命中：
+#  ① linker 按包版本拒绝（点名 `bedcode:plugin/host-storage@0.1.0` 不被 0.2.0 linker 认领）
+#  ② stale_artifact_rebuild_hint 追加「按当前 SDK 重建」指引
+
+---- desktop_artifact_instantiates_on_mobile_host_closing_desktop_only_imports ----
+thread panicked at tests/shared_artifact_probe.rs:154:14:
+instantiate desktop-built artifact on mobile host (imports must close): Plugin("Failed to instantiate WASM component for plugin 'com.bedcode.file-transfer': component imports instance `bedcode:plugin/host-storage@0.1.0`, but a matching implementation was not found in the linker（该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）")
+
+---- desktop_only_command_is_visibly_unsupported_on_mobile_branch ----
+thread panicked at tests/shared_artifact_probe.rs:236:14:
+instantiate shared artifact: Plugin("Failed to instantiate WASM component for plugin 'com.bedcode.file-transfer': component imports instance `bedcode:plugin/host-storage@0.1.0`, but a matching implementation was not found in the linker（该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）")
+
+---- mobile_vocabulary_event_dispatches_into_desktop_built_artifact ----
+thread panicked at tests/shared_artifact_probe.rs:194:14:
+instantiate shared artifact: Plugin("Failed to instantiate WASM component for plugin 'com.bedcode.file-transfer': component imports instance `bedcode:plugin/host-storage@0.1.0`, but a matching implementation was not found in the linker（该产物由其他插件协议（ABI）的插件 SDK 构建，请用当前 SDK 重建插件产物）")
+
+test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+# ③ 全量重建后同一用例复跑应 4/4 绿（见 rebuild-verification.txt）

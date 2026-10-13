@@ -17,12 +17,14 @@
 //! 迁移批次（票 02）：批次 02 = pty（本目录首个域）；批次 03 = http / ws / peer /
 //! mdns；批次 04 = auth / crypto（路径 B 首两域）；批次 05 = task / process / app /
 //! timer / connection / api_call（路径 B；api_call 是薄转发，编排留内核）；
-//! 批次 06 = 切片域的桌面扩展（fs / platform / events / abi-form）：v36 交集接口
-//! 切片——四个交集接口拆出桌面独有函数为新 interface（host-fs-desktop /
-//! host-platform-desktop / host-events-desktop / abi-form），桌面扩展的 WIT impl
-//! 落宿主（events.rs / fs.rs / platform.rs，路径 B；abi-form 是 guest 导出，SDK
-//! 宏 + 宿主 verify_abi 消费，宿主无实现）；实现本体除 fs 三函数（内核
-//! `host_api/fs.rs` 提 pub 双消费者机制）外随域走宿主。
+//! 批次 06 = 切片域的桌面扩展（fs / platform / notify / abi-form）：v36 交集接口
+//! 切片——交集接口拆出桌面独有函数为新 interface（host-fs-desktop /
+//! host-platform-desktop / abi-form），桌面扩展的 WIT impl 落宿主
+//! （fs.rs / platform.rs，路径 B；abi-form 是 guest 导出，SDK 宏 + 宿主
+//! verify_abi 消费，宿主无实现）；实现本体除 fs 三函数（内核 `host_api/fs.rs`
+//! 提 pub 双消费者机制）外随域走宿主。2026-10-13 通知功能统一（ADR 0052 D3）：
+//! `host-events-desktop` 退役，`notify` 归共享域契约 `host-notify`，桌面实现落
+//! 本目录 `notify.rs`。
 
 pub mod api_call;
 pub mod app;
@@ -33,13 +35,14 @@ pub mod bindings;
 pub mod guest_events;
 pub mod connection;
 pub mod crypto;
-pub mod events;
 pub mod fs;
 /// 宿主端事实（平台标识 / 入站服务器端口）——wasm-core 单形态收口后从内核迁出的
 /// 端差异实现（内核只持 `HostFactsPort` 端口词汇）
 pub mod host_facts;
 pub mod http;
 pub mod mdns;
+/// 通知（共享域契约 `host-notify` 的桌面实现；2026-10-13 自 events.rs 统一迁来）
+pub mod notify;
 pub mod peer;
 pub mod platform;
 pub mod process;

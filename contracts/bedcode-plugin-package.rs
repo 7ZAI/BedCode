@@ -26,7 +26,13 @@
 pub const PACKAGE_NAME: &str = "bedcode:plugin";
 
 /// 契约包版本（三段 semver）
-pub const PACKAGE_VERSION: &str = "0.1.0";
+///
+/// 0.2.0（2026-10-13，domain-owned-contracts 票 04）：功能级交集统一——新增共享
+/// `host-notify`（出 `bedcode-notify-engine` 契约房）并删除桌面 `host-events-desktop`；
+/// core `host-platform.pick-folder` 统一为 `pick-folders`，桌面扩展 `pick-folders`
+/// 退役；移动 `host-notify` 附加 4 函数改名 `host-notify-mobile`。interface 增删 /
+/// 签名变 ⇒ minor（ADR 0051 D4），双端同步 bump（ADR 0051 D3 共享产物对齐）。
+pub const PACKAGE_VERSION: &str = "0.2.0";
 
 /// 契约包全名（`namespace:name@version`）——组件**导出实例**的键形态
-pub const PACKAGE: &str = "bedcode:plugin@0.1.0";
+pub const PACKAGE: &str = "bedcode:plugin@0.2.0";

@@ -15,7 +15,7 @@
 //! - [`scan`]：规范库扫描（枚举 → 逐 skill 采集 → 分发比对）
 //! - [`editor`]：读 / 保存 / 分发命令
 //! - [`github`]：GitHub 安装（URL 解析 → trees API → raw 下载）
-//! - [`import`]：本地目录导入（pick-folder + 授权 → 枚举 → fs_copy）
+//! - [`import`]：本地目录导入（pick-folders + 授权 → 枚举 → fs_copy）
 //! - 本模块：域状态（host-storage `skills` 键，读-改-写 + 全量推送）+ 命令入口
 //!
 //! 编辑冲突检测用「保存前重读 + 内容比对」：WIT 无 stat 原语（mtime 不可得），

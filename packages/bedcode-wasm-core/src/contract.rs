@@ -12,9 +12,9 @@
 //! - 组件**导出实例**的键 = `ns:pkg/iface@version`（**版本在末尾**）；
 //! - 实例**内部**函数名的键 = **平名**（`on-message`），故 `ItemName` 的两段查找
 //!   （顶层按接口实例 → 实例内按平名）是唯一可用机制；
-//! - `ItemName` 字面量的版本**只能写在末尾**：`bedcode:plugin@0.1.0/events.on-message`
+//! - `ItemName` 字面量的版本**只能写在末尾**：`bedcode:plugin@0.2.0/events.on-message`
 //!   解析失败（wit-parser 在 `ns:pkg` 后强制要求 `/`），
-//!   `bedcode:plugin/events.on-message@0.1.0` 才合法且命中。
+//!   `bedcode:plugin/events.on-message@0.2.0` 才合法且命中。
 //!
 //! ## 版本真源
 //!
@@ -76,17 +76,23 @@ mod tests {
     use super::*;
 
     /// 派生形态是 wasmtime 匹配的事实前提：末尾版本 + 点号路径
+    ///
+    /// 预期值由真源常量派生（不写版本字面量）——否则 bump 时本用例会静止失败，
+    /// 而这正是版本单点化要避免的散落副本（`wit_package_version_lock.rs` 同旨）。
     #[test]
     fn export_item_has_trailing_version_and_dot_path() {
         let name = export_item("events", "on-message");
-        assert_eq!(name, "bedcode:plugin/events.on-message@0.1.0");
+        assert_eq!(
+            name,
+            format!("bedcode:plugin/events.on-message@{PACKAGE_VERSION}")
+        );
         // ItemName 必须能解析，且 instance_name 与组件导出实例键逐字一致
         let item = name
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .expect("派生名是合法 ItemName");
         assert_eq!(
             item.instance_name().as_deref(),
-            Some("bedcode:plugin/events@0.1.0"),
+            Some(format!("bedcode:plugin/events@{PACKAGE_VERSION}").as_str()),
             "instance_name 必须等于组件导出实例键（版本在末尾）"
         );
     }

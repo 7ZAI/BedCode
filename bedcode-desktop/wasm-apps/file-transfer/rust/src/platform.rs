@@ -129,9 +129,6 @@ mod tests {
         fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
             unimplemented!()
         }
-        fn platform_pick_folder(&self) -> Result<String, HostError> {
-            unimplemented!()
-        }
         fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
             unimplemented!()
         }

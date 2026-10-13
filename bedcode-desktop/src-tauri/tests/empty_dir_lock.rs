@@ -59,8 +59,8 @@ const SOURCE_ROOT_PATTERNS: [&str; 10] = [
     "bedcode-desktop/src",
     // 移动端：宿主 crate
     "bedcode-mobile/src-tauri/src",
-    // 移动端：插件
-    "bedcode-mobile/plugins/*/src",
+    // 移动端：wasm 应用（2026-10-08 plugins/ → wasm-apps/ 改名后同步，与桌面同形）
+    "bedcode-mobile/wasm-apps/*/src",
     // 移动端：SDK / 测试插件
     "bedcode-mobile/packages/*/src",
     // 移动端：前端

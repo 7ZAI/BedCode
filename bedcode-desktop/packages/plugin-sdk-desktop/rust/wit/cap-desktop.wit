@@ -1,4 +1,4 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 
 /// BedCode 插件 Component Model 契约
 ///
@@ -111,6 +111,21 @@ package bedcode:plugin@0.1.0;
 ///   点明 v33 重建）。token wire 格式逐字节不变，移动端零改动。**desktop 独有**，
 ///   移动端 WIT/ABI/SDK 不跟演不投影（mobile ABI 保持 11）。
 ///
+/// - **2026-10-13（domain-owned-contracts 票 04，ADR 0052 D2/D3）：契约包
+///   minor bump `0.1.0 → 0.2.0`（WIT 包 semver，ADR 0051 D4；整数 ABI 已退役，
+///   本文件保留的 vNN 号是历史台账，不再递增）**——功能级交集统一：
+///   ① 桌面 `host-events-desktop`（notify）整 interface 退役——`notify` 本体
+///   进双端共享契约 `bedcode-notify-engine/wit/notify.wit` 的 `host-notify`
+///   （签名统一为 `notify(title, body, options-json)`，桌面静默忽略不支持的
+///   vibrate/sound）
+///   ② 桌面 `host-platform-desktop.pick-folders` 退役——与 core
+///   `host-platform.pick-folder` 统一为 core `host-platform.pick-folders`
+///   （`string[]` JSON；本端剩 wsl-distros / local-ipv4-addresses / reveal-in-dir
+///   3 条）
+///   ③ 移动端 `host-notify` 附加 4 函数改名 `host-notify-mobile`（移动 cap）
+///   旧产物（0.1.0 SDK 构建）的 import 名与 linker 不等 → 实例化期被点名，
+///   须按当前 SDK 全量重建（`stale_artifact_rebuild_hint`，fail-visible）
+///
 /// **不 bump 版本号的语义变更（落在 v22 批次内）**：host-bus topic 命名空间。
 /// 函数签名零变化，故不动版本号；但**定向事件的 topic 串**由 `<base>.<owner>` 改为
 /// `<owner>::<base>`，且跨属主的订阅/伪发布由「无人拦截」改为**宿主显式拒绝**。
@@ -128,9 +143,11 @@ package bedcode:plugin@0.1.0;
 /// 契约破坏。旧产物（未声明 `fs:pick` 的 v31 SDK 构建）不兼容且**不会静默降级**：
 /// 调用点在弹对话框**之前**就拿到点名缺失权限位的 `Err`，按当前 SDK 在 manifest
 /// 补声明即可重建（宿主不强制 bump，故第三方插件无需为此重编 wasm）。
-/// **双端偏离**：移动端 `host-platform` 的 SAF 选择器（`pick-files` / `pick-folder`）
-/// 维持「选择即授权、不设门」——移动端系统本身按 tree URI 授予访问权（ADR 0018
-/// 移动独立契约），不跟演本条。
+/// **双端偏离（2026-10-13 收口，ADR 0049 D7 / ADR 0052 票 04）**：移动端
+/// `host-platform` 的 SAF 选择器曾维持「选择即授权、不设门」（移动端系统本身按
+/// tree URI 授予访问权，ADR 0018 移动独立契约，故当时不跟演本条）；单形态后
+/// host-platform 归内核 `core_binding` 单份实现，`fs:pick` 门对双端统一生效，
+/// 移动 manifest 已随票 04 补声明该位（audit §E.1 收口）。
 ///
 /// **第三例（出站授权记录与询问，2026-09-28 授权策略增强）**：`host-http` 的 `fetch`
 /// 由「权限位通过即请求」改为「权限位 + 出站授权记录」双门；未记录的新 origin 弹窗询问
@@ -146,14 +163,11 @@ package bedcode:plugin@0.1.0;
 /// v36 切片：`form`（桌面独有形态声明）拆入 [`abi-form`]，
 /// 本接口只剩双端交集 `version`。
 
-/// 通知（v36 自 `host-events` 拆出，双端交集切片——桌面独有；移动端收编在
-/// `host-notify`，不跟演）：经 Tauri 事件发送前端 toast，权限无（宿主命令面
-/// 原 `plugin_notify` 同口径，弹提示是插件常规能力）。
-interface host-events-desktop {
-    notify: func(title: string, body: string) -> result<_, string>;
-}
 /// 文件浏览域桌面扩展（v36 自 `host-fs` 拆出，双端交集切片——桌面独有 3 函数；
-/// `host-fs` 交集 6 函数已收拢进共享核心 core.wit）
+/// `host-fs` 交集 6 函数已收拢进共享核心 core.wit）。
+/// 注：原 `host-events-desktop`（notify）已随 2026-10-13 功能级统一整 interface
+/// 退役（notify 本体迁共享域契约 `bedcode-notify-engine/wit/notify.wit` 的
+/// `host-notify`；桌面实现落宿主路径 B 模块 `src-tauri/src/plugin/notify.rs`）。
 interface host-fs-desktop {
     /// v19 函数级追加（文件浏览域）：目录直读。
     /// 返回 JSON 数组 `[{name, nodeType}]`——`nodeType` ∈ `"folder" | "file" |
@@ -168,12 +182,9 @@ interface host-fs-desktop {
     /// 权限 `fs:read` + fs_auth。
     stat: func(path: string) -> result<option<string>, string>;
 }
-/// 平台能力桌面扩展（v36 自 `host-platform` 拆出，双端交集切片——桌面独有 4 函数；
-/// 移动端 `host-platform` 保持仅 `pick-files` / `pick-folder` 的交集形态）
+/// 平台能力桌面扩展（v36 自 `host-platform` 拆出，双端交集切片——桌面独有 3 函数；
+/// `pick-folders` 已按 2026-10-13 功能级统一迁 core `host-platform`）
 interface host-platform-desktop {
-    /// 系统多目录选择器 → string[] JSON（用户取消为空数组）。
-    /// 权限 `fs:pick` + 选择后授权校验，口径同 `host-platform` 的 `pick-files`
-    pick-folders: func() -> result<string, string>;
     /// WSL 发行版名枚举（v19 函数级追加）：`string[]` JSON，顺序即
     /// `wsl --list --verbose` 输出顺序。宿主无 WSL（非 Windows / 未安装 /
     /// 命令不可用）时**显性报错**而非空数组——空数组会被消费方读成「装了 0 个
@@ -598,11 +609,12 @@ interface auth-policy {
 }
 // 端扩展 world：import/export 并入合成后的 `plugin` world（include cap-desktop）
 //
-// `host-fs`（交集 6）已收拢进共享核心 core.wit，本 world 不再 import 它
-// （只留桌面扩展 host-fs-desktop）；host-websocket / host-http 的桌面扩展在各自
-// 能力域分片（cap-ws / cap-http），客户端/出站交集在 core。
+// `host-fs`（机制交集 6）住 core.wit，本 world 不再 import 它（只留桌面扩展
+// host-fs-desktop）；host-websocket / host-http 的桌面扩展声明在 wit-src 的
+// cap-ws-server / cap-http-endpoint，客户端/出站交集真源在能力域 crate 分片
+// （cap-ws → `bedcode-ws-client-engine/wit/ws.wit`；cap-http →
+// `bedcode-server-http/wit/http.wit`）。
 world cap-desktop {
-    import host-events-desktop;
     import host-fs-desktop;
     import host-platform-desktop;
     import host-api-call;

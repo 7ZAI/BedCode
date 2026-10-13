@@ -12,6 +12,7 @@
     "broadcast",
     "bus",
     "fileservice",
+    "fs:pick",
     "fs:read",
     "fs:write",
     "mdns",

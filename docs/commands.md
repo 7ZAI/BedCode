@@ -308,10 +308,10 @@ node scripts/compose-wit.mjs --all              # 双端拼装
 pnpm run check:wit                              # 只读漂移锁（= 双端 --check）
 ```
 
-- **真源**：`packages/bedcode-wasm-core/wit/core.wit`（核心交集，17 全等 interface）+ 能力域 `packages/bedcode-*/wit/*.wit`（pty/http/ws/peer/mdns）+ 端 `packages/plugin-sdk-*/rust/wit-src/cap-*.wit`；端清单 `packages/plugin-sdk-*/compose.json`（caps / worlds / package 包名）是「这一端组合了什么」的唯一答案（**清单不含版本号**——版本真源见下条 `contracts/bedcode-plugin-package.rs`；整数 ABI 已随wit 包版本化退役，不再有 `abi.version` 字段）。
-- **包版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`**（Rust 常量，ADR 0051 D3）：端清单 `package` 字段**只声明包名**（`bedcode:plugin`），`bedcode.wit` 的 `package bedcode:plugin@<version>;` 行由 `compose-wit.mjs` 按真源注入；10 个 WIT 源文件自带版本字面量（逐字拷贝进生成物），一致性由 `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs` 断言——`--check` 的 sha256 锁抓不到「源文件版本 ≠ 真源」这一漂移方向（重拼后一切自洽、漂移锁全绿，运行期实例化才炸）。bump 政策（任何 WIT 变更含函数级追加 → patch；interface 增删 / 签名变 → minor）见 ADR 0051 D4。
+- **真源**：`packages/bedcode-wasm-core/wit/core.wit`（**机制必需面：8 import + 4 export，ADR 0052 D1**）+ 能力域 `packages/bedcode-*/wit/*.wit`（pty / mdns / peer / http / ws / notify；双端功能级交集，契约与实现同属一处）+ 端 `packages/plugin-sdk-*/rust/wit-src/cap-*.wit`（端独有声明与实现都住宿主，ADR 0052 D4）；端清单 `packages/plugin-sdk-*/compose.json`（caps / worlds / package 包名）是「这一端组合了什么」的唯一答案（**清单不含版本号**——版本真源见下条 `contracts/bedcode-plugin-package.rs`；整数 ABI 已随 wit 包版本化退役，不再有 `abi.version` 字段）。
+- **包版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`**（Rust 常量，ADR 0051 D3）：端清单 `package` 字段**只声明包名**（`bedcode:plugin`），`bedcode.wit` 的 `package bedcode:plugin@<version>;` 行由 `compose-wit.mjs` 按真源注入；11 个 WIT 源文件自带版本字面量（逐字拷贝进生成物），一致性由 `bedcode-desktop/src-tauri/tests/wit_package_version_lock.rs` 断言——`--check` 的 sha256 锁抓不到「源文件版本 ≠ 真源」这一漂移方向（重拼后一切自洽、漂移锁全绿，运行期实例化才炸）。bump 政策（任何 WIT 变更含函数级追加 → patch；interface 增删 / 签名变 → minor）见 ADR 0051 D4。
 - **禁止手改生成物**：CI（`.github/workflows/wit-drift-lock.yml`）与 husky pre-commit 都跑 `--check`——手改生成物、或真源改了没重拼，即红并点名漂移文件。
-- **契约改动流程**：改真源 → `node scripts/compose-wit.mjs --all` 重拼 → 重编 SDK / 宿主（bindgen path 指生成物目录）；破坏性契约变更走 ADR 0019 双端锁步（双端各自 bump + 产物重建 + CHANGELOG 双语）；bump 时**改 `contracts/bedcode-plugin-package.rs` + 10 个源文件 package 行 + 能力域 const 导出名清单**（版本变更后 guest 需重建——版本进入 import 名，版本不等即实例化失败）。
+- **契约改动流程**：改真源 → `node scripts/compose-wit.mjs --all` 重拼 → 重编 SDK / 宿主（bindgen path 指生成物目录）；破坏性契约变更走 ADR 0019 双端锁步（双端各自 bump + 产物重建 + CHANGELOG 双语）；bump 时**改 `contracts/bedcode-plugin-package.rs` + 11 个源文件 package 行 + 能力域 const 导出名清单**（版本变更后 guest 需重建——版本进入 import 名，版本不等即实例化失败）。
 
 ---
 

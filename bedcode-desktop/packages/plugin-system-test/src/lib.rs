@@ -3,7 +3,7 @@
 //! 与 `plugin-component-test`（应用插件形态）平行：用 WIT `plugin-system`
 //! world 构建——plugin world 标准导出之外追加导出 `host-storage` 同形接口，
 //! 作为「系统组件提供宿主能力」的 fake 提供者，验证宿主侧装配闭环：
-//! - 宿主实例化时探测到 `bedcode:plugin@0.1.0/host-storage#{get,set,delete}` 导出
+//! - 宿主实例化时探测到 `bedcode:plugin@0.2.0/host-storage#{get,set,delete}` 导出
 //! - 激活时注册进能力注册表（替换宿主原语提供者）
 //! - 应用插件的 host-storage import 调用经 Linker 路由转发到本组件实例
 //!

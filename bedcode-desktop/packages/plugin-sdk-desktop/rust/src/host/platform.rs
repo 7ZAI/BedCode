@@ -27,13 +27,11 @@ pub trait HostPlatform {
     /// 需 manifest 声明 `fs:pick`；选中路径要过宿主 `fs_auth` 授权校验
     /// （已授权目录免弹）。返回的路径已被用户亲手选中并通过授权。
     fn platform_pick_files(&self) -> Result<Vec<String>, HostError>;
-    /// 系统文件夹选择器（用户取消返回空串；移动端为 SAF 目录树 URI）
+    /// 系统文件夹选择器（多选；用户取消返回空数组；移动端返回 0/1 个 SAF 目录树 URI）
     ///
-    /// 需 manifest 声明 `fs:pick`；授权落账到所选目录本身（口径同 `pick-files`）
-    fn platform_pick_folder(&self) -> Result<String, HostError>;
-    /// 系统多目录选择器（用户取消为空数组；移动端返回 SAF 目录树 URI 列表）
-    ///
-    /// 需 manifest 声明 `fs:pick`；口径同 `platform_pick_files`
+    /// 需 manifest 声明 `fs:pick`；授权落账到所选目录本身（口径同 `pick-files`）。
+    /// 2026-10-13 功能级统一（ADR 0052 D3）：原单目录 `platform_pick_folder` 与
+    /// 桌面扩展多选形合并为本函数（WIT 在 core `host-platform`）。
     fn platform_pick_folders(&self) -> Result<Vec<String>, HostError>;
     /// WSL 发行版名列表（v19 函数级追加，票 13）
     ///

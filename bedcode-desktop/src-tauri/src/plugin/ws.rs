@@ -33,6 +33,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use bedcode_host_kit::ports::{downcast_host, HostPorts};
+use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
 use bedcode_server_base::ports::BusPort;
 use bedcode_server_websocket::plugin_binding::ports::{
     BoxedBlocked, FrameDispatch, WsFrameTarget, WsPorts,
@@ -41,6 +42,8 @@ use bedcode_server_websocket::plugin_binding::ports::{
 use bedcode_wasm_core::bus::{HostBusPort, MessageBus, WsFrameDispatch};
 use bedcode_wasm_core::host_api::check_permission;
 use bedcode_wasm_core::host_api::context::WasmHostContext;
+
+use crate::plugin::bindings::bedcode;
 
 // 能力模块白名单条目与强制引用行**必须同处**（本文件），两者不漂移——漏引用 ⇒
 // 该 crate 的 inventory 自报静态不进最终二进制（装载期 missing 方向点名）；漏白名单
@@ -205,6 +208,150 @@ pub fn purge_for_plugin(plugin_id: &str) -> usize {
     )
 }
 
+// ==================== host-websocket-server（桌面扩展：WIT 绑定 + 模块自报） ====================
+//
+// ADR 0052 D4（票 03）：`host-websocket-server`（桌面服务端域，入站端点 10 函数）的
+// WIT 声明归桌面 `wit-src/cap-ws.wit`（world `cap-ws-server`，T-02 落位），`impl Host`
+// 与模块自报落本文件（路径 B）。域引擎 API（端点表 / 连接通道 / 属主仲裁 / 回收）
+// 仍住 `bedcode-server-websocket`——被服务器自身（`conn` / `websocket_manager` /
+// 路由）与 `ws_e2e` 消费，是服务器引擎基础设施（逐项盘点见票 03 Comments）。
+
+bedcode_host_kit::expect_host_module!(WS_SERVER_MODULE_NAME);
+
+/// 能力模块名（白名单键即装载期日志与错误文案里的模块名）
+pub const WS_SERVER_MODULE_NAME: &str = "ws-server";
+
+/// 本域提供的 WIT 接口（必须与桌面 wit-src 契约逐字一致；改错即 guest import 失配）
+pub const WS_SERVER_MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-websocket-server"];
+
+/// 本域的权限位（服务端域需 `ws:server`）
+pub const WS_SERVER_MODULE_PERMISSIONS: &[&str] = &["ws:server"];
+
+/// 能力模块描述符（只描述机制，禁带产品名词——AGENTS §5.1 B1/B5）
+const WS_SERVER_DESC: HostModuleDesc = HostModuleDesc {
+    name: WS_SERVER_MODULE_NAME,
+    interfaces: WS_SERVER_MODULE_INTERFACES,
+    permissions: WS_SERVER_MODULE_PERMISSIONS,
+    abi_min: 14,
+};
+
+/// host-websocket-server 能力模块（桌面服务端域 10 函数）
+pub struct WsServerModule;
+
+impl HostModule for WsServerModule {
+    fn desc(&self) -> HostModuleDesc {
+        WS_SERVER_DESC
+    }
+
+    fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
+        type HasSelf = wasmtime::component::HasSelf<WasmPluginState>;
+        bedcode::plugin::host_websocket_server::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+    }
+}
+
+/// 静态单例（供 `inventory::submit!` 取址）
+static WS_SERVER_MODULE: WsServerModule = WsServerModule;
+
+inventory::submit! {
+    ModuleEntry { module: &WS_SERVER_MODULE }
+}
+
+// WIT 层：服务端域 10 条原语 → 服务器引擎 API（薄转发，与迁移前 impl 逐字同源）
+impl bedcode::plugin::host_websocket_server::Host for WasmPluginState {
+    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
+        bedcode_server_websocket::plugin_binding::ws_register_endpoint(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &config_json,
+        )
+    }
+
+    fn send_text_to_client(&mut self, endpoint_id: String, client_id: String, text: String) -> Result<(), String> {
+        bedcode_server_websocket::plugin_binding::ws_send_text_to_client(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+            &text,
+        )
+    }
+
+    fn send_binary_to_client(
+        &mut self,
+        endpoint_id: String,
+        client_id: String,
+        payload: Vec<u8>,
+    ) -> Result<(), String> {
+        bedcode_server_websocket::plugin_binding::ws_send_binary_to_client(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+            &payload,
+        )
+    }
+
+    fn broadcast_text(&mut self, endpoint_id: String, text: String) -> Result<u32, String> {
+        bedcode_server_websocket::plugin_binding::ws_broadcast_text(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &text,
+        )
+    }
+
+    fn broadcast_binary(&mut self, endpoint_id: String, payload: Vec<u8>) -> Result<u32, String> {
+        bedcode_server_websocket::plugin_binding::ws_broadcast_binary(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &payload,
+        )
+    }
+
+    fn close_client(&mut self, endpoint_id: String, client_id: String, close_json: String) -> Result<bool, String> {
+        bedcode_server_websocket::plugin_binding::ws_close_client(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+            &close_json,
+        )
+    }
+
+    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
+        bedcode_server_websocket::plugin_binding::ws_unregister_endpoint(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+        )
+    }
+
+    fn list_clients(&mut self, endpoint_id: String) -> Result<String, String> {
+        bedcode_server_websocket::plugin_binding::ws_list_clients(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+        )
+    }
+
+    fn list_endpoints(&mut self) -> Result<String, String> {
+        bedcode_server_websocket::plugin_binding::ws_list_endpoints(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+        )
+    }
+
+    fn connection_context(&mut self, endpoint_id: String, client_id: String) -> Result<String, String> {
+        bedcode_server_websocket::plugin_binding::ws_connection_context(
+            &bedcode_server_websocket::plugin_binding::ports_for(self),
+            &self.plugin_id,
+            &endpoint_id,
+            &client_id,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,17 +367,32 @@ mod tests {
         assert_eq!(module_name, "websocket", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             bedcode_server_websocket::plugin_binding::MODULE_INTERFACES,
-            &[
-                "bedcode:plugin@0.1.0/host-websocket",
-                "bedcode:plugin@0.1.0/host-websocket-server"
-            ],
-            "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配；票 04 拆出服务端域）"
+            &["bedcode:plugin@0.2.0/host-websocket"],
+            "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配；ADR 0052 D4 后服务端域归宿主路径 B 模块）"
         );
         assert_eq!(
             bedcode_server_websocket::plugin_binding::MODULE_PERMISSIONS,
-            &["ws:client", "ws:server"],
-            "权限位必须与 `bedcode.wit` / SDK 权限表逐字一致"
+            &["ws:client"],
+            "权限位必须与契约 / SDK 权限表逐字一致（服务端位随实现归宿主模块）"
         );
+    }
+
+    /// 桌面路径 B 模块声明：接口路径 / 权限位 / 白名单三件与 WIT 契约逐字一致
+    #[test]
+    fn ws_server_host_module_declaration_matches_contract() {
+        assert!(
+            bedcode_host_kit::expected_host_modules().contains(&WS_SERVER_MODULE_NAME),
+            "能力模块白名单缺 {WS_SERVER_MODULE_NAME}（expect_host_module! 行被删 / 未收集）"
+        );
+        assert_eq!(WS_SERVER_MODULE_NAME, "ws-server");
+        assert_eq!(
+            WS_SERVER_MODULE_INTERFACES,
+            &["bedcode:plugin@0.2.0/host-websocket-server"]
+        );
+        assert_eq!(WS_SERVER_MODULE_PERMISSIONS, &["ws:server"]);
+        assert_eq!(WS_SERVER_DESC.name, WS_SERVER_MODULE_NAME);
+        assert_eq!(WS_SERVER_DESC.interfaces, WS_SERVER_MODULE_INTERFACES);
+        assert_eq!(WS_SERVER_DESC.permissions, WS_SERVER_MODULE_PERMISSIONS);
     }
 
     /// 装配器静态被内核装配链遍历到（自报 → 装 → 取回，三段闭环）

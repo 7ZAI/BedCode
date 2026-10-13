@@ -34,7 +34,8 @@
 //!   + 导出调用契约（GuestEventDispatcher 注入）+ ABI 支持版本（AbiPolicy 注入）
 //!         ↓ 消费本 crate 的纯机制 + 统一运行时壳（Engine/Linker/Store/导出调用骨架）
 //! wasm-core（packages/bedcode-wasm-core）
-//!   机制核心 + core.wit 交集绑定层（manager/runtime/core_binding.rs，17 个双端全等 interface）
+//!   机制核心 + core.wit 机制绑定层（manager/runtime/core_binding.rs，8 import +
+//!   3 必选导出；业务能力交集由各端 caps 消费能力域 crate 的 `wit/<domain>.wit`，ADR 0052 D1/D2）
 //!         ↑ cap 与端差异由各端 `HostModule` 自报汇入同一个 Linker
 //! SDK 层（plugin-sdk-{desktop,mobile}）
 //!   compose.json 各自组合 core + 各自 cap 分片；ABI 各端独立演进（38 / 21，ADR 0018）
@@ -492,11 +493,14 @@ mod tests {
         }
     }
 
-    /// v36 交集切片四接口**反向**防回接锁（票 02 批次 06）
+    /// v36 交集切片接口**反向**防回接锁（票 02 批次 06；2026-10-13 通知域统一后更新）
     ///
-    /// `host-fs-desktop`（3）/ `host-platform-desktop`（4）/ `host-events-desktop`
-    /// （notify）的 **WIT impl 落宿主** `src-tauri/src/plugin/{fs,platform,events}.rs`
-    /// （路径 B，自带 bindgen 装配）；`abi-form` 是 guest **导出**（SDK `wasm_entry!`
+    /// `host-fs-desktop`（3）/ `host-platform-desktop`（3：`pick-folders` 已随
+    /// ADR 0052 D3 功能级统一迁 core `host-platform`）的 **WIT impl 落宿主**
+    /// `src-tauri/src/plugin/{fs,platform}.rs`（路径 B，自带 bindgen 装配）；
+    /// 原 `host-events-desktop`（notify）整 interface 已随通知统一**退役**
+    /// （本体进共享域契约 `bedcode-notify-engine/wit/notify.wit`，实现按端住宿主
+    /// `plugin/notify.rs`）；`abi-form` 是 guest **导出**（SDK `wasm_entry!`
     /// 宏 + 宿主 verify_abi 消费），源在 SDK，内核无对应实现。内核只留交集子集的
     /// 域实现：`fs.rs` 的 `fs_read_dir` / `fs_canonicalize` / `fs_stat` **实现本体
     /// 显式留内核**（双消费者：内核 `FsUnitExecutor` 的 `fs.read-dir` / `fs.stat`
@@ -523,8 +527,9 @@ mod tests {
             .expect("src/host_api/platform.rs 必须在场（交集 pick-* 实现）");
         assert!(
             platform_src.contains("pub(crate) fn platform_pick_files")
-                && platform_src.contains("pub(crate) fn platform_pick_folder"),
-            "src/host_api/platform.rs 必须仍含交集 pick-files / pick-folder（本锁正面锚点）"
+                && platform_src.contains("pub(crate) fn platform_pick_folders"),
+            "src/host_api/platform.rs 必须仍含交集 pick-files / pick-folders（本锁正面锚点；\
+             pick-folder → pick-folders 是 2026-10-13 功能级统一，ADR 0052 D3）"
         );
         let events_src = std::fs::read_to_string(manifest_dir.join("src/host_api/events.rs"))
             .expect("src/host_api/events.rs 必须在场（交集 emit 实现）");
@@ -544,7 +549,8 @@ mod tests {
         ] {
             // 票 04：needle 补 `host_websocket_server` / `host_http_endpoint` /
             // `host_fs_mobile`——三个新拆分接口的 WIT impl 在能力域 crate /
-            // 移动 fork（host-fs-mobile 归移动端），不得回流内核。
+            // 移动 fork（host-fs-mobile 归移动端），不得回流内核；
+            // 2026-10-13 补 `host_notify`（共享域契约，实现按端住宿主）。
             for needle in [
                 "host_fs_desktop",
                 "host_platform_desktop",
@@ -553,6 +559,7 @@ mod tests {
                 "host_websocket_server",
                 "host_http_endpoint",
                 "host_fs_mobile",
+                "host_notify",
             ] {
                 let hit = source
                     .lines()
@@ -560,10 +567,10 @@ mod tests {
                     .find(|line| line.contains(needle));
                 assert!(
                     hit.is_none(),
-                    "{file} 的代码行出现 `{needle}`（行：{hit:?}）：v36/v37 交集切片桌面扩展接口的 \
-                     WIT impl 已迁宿主 `src-tauri/src/plugin/{{fs,platform,events}}.rs` / \
-                     `src/system/wsl.rs` / 能力域 crate（host-websocket-server / \
-                     host-http-endpoint，票 02 批次 06 + 票 04），不得回流内核"
+                    "{file} 的代码行出现 `{needle}`（行：{hit:?}）：交集切片 / 共享域的 \
+                     WIT impl 已迁宿主 `src-tauri/src/plugin/{{fs,platform}}.rs` / \
+                     `src/system/wsl.rs` / 能力域 crate / 各端 `plugin/notify.rs`\
+                     （票 02 批次 06 + 票 04 + 2026-10-13 通知统一），不得回流内核"
                 );
             }
         }
@@ -625,6 +632,8 @@ mod tests {
             "host_events_desktop::",
             "host_fs_desktop::",
             "host_platform_desktop::",
+            // 共享域（2026-10-13 通知统一）：WIT impl 归各端宿主，内核不得绑它
+            "host_notify::",
         ];
         let mut violations: Vec<String> = Vec::new();
         let mut stack = vec![manifest_dir.join("src")];

@@ -577,7 +577,7 @@ use wasmtime::component::{bindgen, Linker};
 pub const MODULE_NAME: &str = "peer-net";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-peer"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-peer"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["peer"];
@@ -673,9 +673,9 @@ bindgen!({
     // `bedcode::plugin::host_peer::Host` 是**同名但不同类型**的 trait。宿主必须
     // 同时删掉自己的 peer `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
-    // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/peer.wit`
-    // （`world cap-peer`，host-peer 从 core.wit 逐字复制的另一 package 实例副本，
-    // 票 05 §3 摆法），不再读桌面 SDK 生成物目录。
+    // 票 05 / ADR 0052 D2：契约面脱端——本文件是 `host-peer` 的**共享契约真源**
+    // （`world cap-peer`，双端 compose 直接消费），不再读桌面 SDK 生成物目录，
+    // 也不再是「core.wit 的副本」。
     path: "wit/peer.wit",
     world: "cap-peer",
     // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。

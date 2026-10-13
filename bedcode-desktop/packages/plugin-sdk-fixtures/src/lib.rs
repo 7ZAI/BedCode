@@ -708,8 +708,8 @@ pub mod pty {
 #[cfg(feature = "sdk")]
 pub mod sdk {
     use bedcode_plugin_api::host::{
-        ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostPluginDatabase,
-        HostStorage,
+        ConfigKey, HostBus, HostConfig, HostEvents, HostLog, HostNotify, HostPluginDatabase,
+        HostStorage, NotifyOptions,
     };
     use bedcode_plugin_api::types::PluginManifest;
     use bedcode_plugin_api::wasm::WasmPlugin;
@@ -906,8 +906,9 @@ pub mod sdk {
                     Ok(serde_json::json!({ "received": received }))
                 }
                 // 无头测试上下文无 AppHandle：宿主 notify 返回错误，验证错误透传
+                // （2026-10-13 起走共享 host-notify 契约，options 为显式空对象）
                 "test_notify" => {
-                    host.notify("sdk title", "sdk body")?;
+                    host.notify("sdk title", "sdk body", &NotifyOptions::new())?;
                     Ok(serde_json::json!({ "notified": true }))
                 }
                 // ==================== 插件互调（ADR 0017） ====================

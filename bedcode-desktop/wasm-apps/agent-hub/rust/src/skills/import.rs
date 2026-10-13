@@ -1,6 +1,7 @@
-//! 本地目录导入（pick-folder + 授权 → 枚举 → fs_copy）
+//! 本地目录导入（pick-folders + 授权 → 枚举 → fs_copy）
 //!
-//! 无 path 时先 pick-folder（同步对话框）+ 一次批量授权；目标同名 skill
+//! 无 path 时先 pick-folders（同步对话框，2026-10-13 功能级统一后的多选形；
+//! 本场景取首项）+ 一次批量授权；目标同名 skill
 //! 已存在且未确认覆盖时返回 exists 名单。确认后 spawn 枚举进程（异步），
 //! 回灌时逐文件 fs_copy 入规范库（保留相对路径，字节级复制支持二进制）。
 
@@ -19,7 +20,7 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 
 // ==================== 异步流：本地目录导入 ====================
 
-/// 本地目录导入：无 path 时先 pick-folder（同步对话框）+ 一次批量授权；
+/// 本地目录导入：无 path 时先 pick-folders（同步对话框，取首项）+ 一次批量授权；
 /// 目标同名 skill 已存在且未确认覆盖时返回 exists 名单。确认后 spawn 枚举
 /// 进程（异步），回灌时逐文件 fs_copy 入规范库。
 pub(crate) fn import_local(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
@@ -28,11 +29,11 @@ pub(crate) fn import_local(h: &WasmHost, args: &Value) -> anyhow::Result<Value> 
         Some(p) if !p.is_empty() => p.to_string(),
         _ => {
             let picked = h
-                .platform_pick_folder()
+                .platform_pick_folders()
                 .map_err(|e| anyhow::anyhow!("import: pick folder failed: {e}"))?;
-            if picked.is_empty() {
+            let Some(picked) = picked.into_iter().next() else {
                 return Ok(json!({ "picked": false }));
-            }
+            };
             picked
         }
     };

@@ -1,11 +1,14 @@
-//! Core 交集绑定层：**双端唯一一份**（票 03 Option A 裁决）
+//! Core 机制绑定层：**双端唯一一份**（票 03 Option A 裁决；ADR 0052 D1 收窄为机制面）
 //!
 //! ## 这份是什么
 //!
-//! `bindgen!` 直接绑定 **契约真源** `wit/core.wit` 的 `world core`——双端 world 全等的
-//! 交集部分。各端**组合面**（`cap-pty` / `cap-http` / `cap-ws` / `cap-desktop` /
-//! `cap-mobile`）不在这里绑定：由各端宿主自有 `bindgen!` + `HostModule` 自报汇入同一个
-//! `Linker`（机制见 [`add_to_linker`] 第二段与 host-kit 的 `registry` / `assembly`）。
+//! `bindgen!` 直接绑定 **契约真源** `wit/core.wit` 的 `world core`——内核机制能力面
+//! （8 import + 3 必选导出；业务能力交集住各能力域 crate 的 `wit/<domain>.wit`，
+//! 由双端 compose.json 的 caps 直接消费）。各端**组合面**（`cap-pty` / `cap-mdns` /
+//! `cap-peer` / `cap-http` / `cap-ws` / `cap-http-endpoint` / `cap-ws-server` /
+//! `cap-desktop` / `cap-mobile`）不在这里绑定：由各端宿主自有 `bindgen!` +
+//! `HostModule` 自报汇入同一个 `Linker`（机制见 [`add_to_linker`] 第二段与 host-kit
+//! 的 `registry` / `assembly`）。
 //!
 //! 绑定真源而非端生成物（`bedcode-*/packages/plugin-sdk-*/rust/wit`）是「零 cap 痕迹」的
 //! 关键：生成物目录是 `compose.json` 的产物、随各端 cap 组合增删，经它绑定等于把
@@ -17,8 +20,8 @@
 //! 逐字同构（桌面直调、移动经宿主侧 `host_domains/` 同形转发到同一处）。整体上移
 //! 宿主会在两个宿主各写一份，重新制造差异代码——正撞「wasm-core 就应该是统一的，
 //! 不应该有差异代码」的裁决。
-//! 与之相对，cap 域本就按端形状不同（`events` 导出双端各自定义，不属 core.wit 的 17 个
-//! 双端全等 interface），上移无重复成本。
+//! 与之相对，cap 域本就按端形状不同（`events` 导出双端各自定义，不在 core.wit 内），
+//! 上移无重复成本。
 //!
 //! ## 导出面分工（`world core` 只导出 command / lifecycle / manifest）
 //!
@@ -58,10 +61,12 @@ bindgen!({
 //
 // 已迁宿主 / 迁能力域（不在本文件，见各段注释）：host-auth / host-crypto /
 // host-process / host-app / host-timer / host-connection-registry / host-task /
-// host-api-call（桌面 `src-tauri/src/plugin/` 路径 B 域）；host-pty /
-// host-http-endpoint / host-websocket-server（能力域 crate）；host-peer /
-// host-mdns / host-http / host-websocket（`world core` 中声明但**实现按端不同**，
-// 桌面在宿主 adapter、移动在移动宿主——故本文件不实现它们）。
+// host-api-call（桌面 `src-tauri/src/plugin/` 路径 B 域）；host-notify（共享域契约
+// `bedcode-notify-engine/wit/notify.wit`，实现按端住宿主 `plugin/notify.rs`）；
+// host-pty / host-http-endpoint / host-websocket-server（能力域 crate 的端扩展面，
+// T-03 起迁桌面宿主）；host-peer / host-mdns / host-http / host-websocket（双端功能级
+// 交集，契约真源已随 ADR 0052 D2 迁各能力域 crate 的 `wit/<domain>.wit`，由 caps
+// 组合——不再在 core.wit）。
 
 // ==================== host-storage ====================
 
@@ -180,8 +185,10 @@ impl bedcode::plugin::host_events::Host for WasmPluginState {
     }
 }
 
-// v36：`host-events.notify` 拆入 `host-events-desktop`（桌面独有交集切片），WIT
-// impl 在桌面宿主 `src-tauri/src/plugin/events.rs`。
+// 2026-10-13 功能级统一（ADR 0052 D3）：`notify` 本体迁共享域契约
+// `bedcode-notify-engine/wit/notify.wit`（双端 caps 消费），桌面
+// `host-events-desktop` 整 interface 退役；实现按端住宿主
+// （桌面 / 移动各自 `src-tauri/src/plugin/notify.rs`），内核不再持有通知实现。
 
 // ==================== host-fs ====================
 
@@ -246,9 +253,10 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
 
 // ==================== host-platform（ADR 0022 v2）====================
 //
-// host-mdns / host-peer / host-websocket / host-http 虽在 `world core` 声明，实现按端
-// 不同（桌面在宿主 adapter、移动在移动宿主），故本文件不实现它们——core 绑定层只覆盖
-// 双端全等的这 8 个 interface。
+// host-peer / host-mdns / host-websocket / host-http 已随 ADR 0052 D2 移出 core.wit
+// （契约真源在各能力域 crate 的 `wit/<domain>.wit`，由双端 caps 组合；实现按端不同
+// ——桌面在宿主 adapter、移动在移动宿主），故本文件不实现它们——core 绑定层只覆盖
+// 内核自己实现、双端同源的那 8 个机制 interface。
 
 impl bedcode::plugin::host_platform::Host for WasmPluginState {
     // `pick-*` 需三件 scope：权限门（`fs:pick`）+ AppHandle（弹系统原生对话框）
@@ -257,8 +265,11 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
         platform::platform_pick_files(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
     }
 
-    fn pick_folder(&mut self) -> Result<String, String> {
-        platform::platform_pick_folder(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
+    /// `pick-folders`（2026-10-13 功能级统一，ADR 0052 D3：原
+    /// `pick-folder` 单值形与桌面扩展多选形合并）：返回 string[] JSON，
+    /// 空数组 = 用户取消 / 未选任何目录。
+    fn pick_folders(&mut self) -> Result<String, String> {
+        platform::platform_pick_folders(self.host_ctx(), self.host_ctx(), self.host_ctx(), &self.plugin_id)
     }
 
     /// 宿主平台标识（v38；无权限门——平台事实不是能力）
@@ -273,9 +284,10 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     }
 }
 
-// v36：`host-platform.pick-folders / wsl-distros / local-ipv4-addresses /
-// reveal-in-dir` 拆入 `host-platform-desktop`（桌面独有交集切片），WIT impl 在桌面
-// 宿主 `src-tauri/src/plugin/platform.rs`。
+// 2026-10-13 功能级统一（ADR 0052 D3）：桌面扩展 `host-platform-desktop.pick-folders`
+// 已并入 core `host-platform.pick-folders`（本文件上方 impl），桌面扩展只剩
+// wsl-distros / local-ipv4-addresses / reveal-in-dir 三函数，WIT impl 在桌面宿主
+// `src-tauri/src/plugin/platform.rs`。
 
 // ==================== 导出调用面（world core 的 3 个导出） ====================
 
@@ -295,7 +307,7 @@ pub(crate) fn exports(
         .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
 }
 
-/// ABI 形态探测（`bedcode:plugin@0.1.0/abi-form.form` → `u32`，桌面独有 cap 导出）
+/// ABI 形态探测（`bedcode:plugin@0.2.0/abi-form.form` → `u32`，桌面独有 cap 导出）
 ///
 /// 原生探测（无绑定的 `TypedFunc` 直取，`abi-form` 不在 `world core` 表内）：`() -> u32` **无 `result` 返回**，因此能
 /// 用 `TypedFunc` 表达（带 `result` 的导出如 `events.*` 不能，见 ticket-03 §9.6）。

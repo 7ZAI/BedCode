@@ -70,6 +70,9 @@ const SCANNED_CRATES: &[&str] = &[
     // 自移动 SDK rust/tools/ 提升）：core module → Component 编码（等价
     // wasm-tools component new），零产品语义。
     "bedcode-componentize",
+    // 通知域轻量契约房（2026-10-13 domain-owned-contracts 票 04）：只持 WIT 契约
+    // （实现按端住宿主），零产品语义；抽根即入扫描面。
+    "bedcode-notify-engine",
 ];
 
 /// 已知的、暂未纳入扫描的 `bedcode-*` crate（各有明确在办票据）

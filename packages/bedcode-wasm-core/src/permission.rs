@@ -46,8 +46,8 @@ pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
-/// 系统文件选择器（WIT `host-platform` 的 `pick-files` / `pick-folder` /
-/// `pick-folders`）：调起**系统原生**对话框（Windows IFileDialog / Linux
+/// 系统文件选择器（WIT `host-platform` 的 `pick-files` / `pick-folders`）：
+/// 调起**系统原生**对话框（Windows IFileDialog / Linux
 /// xdg-desktop-portal），用户可在**整盘任意位置**浏览与选择。
 ///
 /// **为什么单独立位**（与 `fs:read` / `fs:write` 分域）：

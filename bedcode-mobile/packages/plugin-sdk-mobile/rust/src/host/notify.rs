@@ -1,12 +1,15 @@
-//! 宿主能力：系统通知与提醒反馈（WIT `host-notify`，ABI v18 新增）
+//! 宿主能力：系统通知与提醒反馈
 //!
-//! 收编原 `host-events.notify`（旧形震动/声音硬编码 true）：系统通知
-//! （震动 / 声音由 [`NotifyOptions`] 分控）+ 通知权限查询 / 请求 + 即时
-//! 震动 + 提示音。全部是「离宿主无法实现」的平台交互原语（零业务语义，
-//! ADR 0022）——文案 / 时机 / 触发条件归插件，宿主只负责投递。
+//! 2026-10-13 功能级统一（ADR 0052 D3 / domain-owned-contracts 票 04）后分两个
+//! interface：
+//! - **`host-notify`（共享域契约，真源 `packages/bedcode-notify-engine/wit/notify.wit`）**：
+//!   `notify` 本体是双端功能级交集 → 统一签名 `notify(title, body, options)`，
+//!   桌面/移动各消费同一份契约；移动端权限位 `notify`（fail-closed）。
+//! - **`host-notify-mobile`（移动扩展，cap-mobile）**：通知权限查询 / 请求 +
+//!   即时震动 + 提示音（桌面无对应平台概念，不归交集）。
 //!
-//! 权限位 `notify`（fail-closed，未声明即拒）：通知 / 震动 / 声音是用户
-//! 打扰面（高频弹通知或狂震会骚扰用户），独立成位。
+//! 全部是「离宿主无法实现」的平台交互原语（零业务语义，ADR 0022）——文案 /
+//! 时机 / 触发条件归插件，宿主只负责投递。
 
 use super::HostError;
 
@@ -40,11 +43,14 @@ impl NotifyOptions {
     }
 }
 
-/// 系统通知与提醒反馈（权限位 `notify`，fail-closed）
+/// 系统通知（共享 `host-notify` 契约；权限位 `notify`，fail-closed）
 pub trait HostNotify {
     /// 发送系统通知（文案由插件 i18n 构建、原样透传，宿主不做文案加工）
     fn notify(&self, title: &str, body: &str, options: &NotifyOptions) -> Result<(), HostError>;
+}
 
+/// 移动端通知扩展（`host-notify-mobile`，cap-mobile；权限位同 `notify`）
+pub trait HostNotifyMobile {
     /// 通知权限是否已授予（Android 13+ 需 POST_NOTIFICATIONS 且系统通知
     /// 总开关开启；Android 12 及以下恒 true）
     fn notify_check_permission(&self) -> Result<bool, HostError>;

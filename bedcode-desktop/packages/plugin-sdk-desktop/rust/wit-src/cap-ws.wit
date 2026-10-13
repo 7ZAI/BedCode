@@ -1,10 +1,12 @@
-package bedcode:plugin@0.1.0;
+package bedcode:plugin@0.2.0;
 // ======================================================================
 // WebSocket 服务端域（桌面扩展分片，自 `host-websocket` 拆出）
 //
-// 双端交集切片：客户端域（出站连接 5 函数）已收拢进共享核心
-// `wasm-core/wit/core.wit` 的 `host-websocket`；本 interface 只剩桌面独有
-// 服务端域（入站端点 10 函数，v14 起 + v28 `connection-context`）。
+// 双端功能区分的归属（ADR 0052 D3/D4）：客户端域（出站连接 5 函数）是双端
+// 功能级交集，契约与移动侧实现归能力域 crate `bedcode-ws-client-engine`（真源
+// `packages/bedcode-ws-client-engine/wit/ws.wit`，world `cap-ws`；桌面侧实现
+// 暂留 `bedcode-server-websocket` 的双轨收敛另行立项）；本 interface 只剩桌面
+// 独有服务端域（入站端点 10 函数，v14 起 + v28 `connection-context`）。
 // 移动端不跑 WS 服务器（ADR 0018 移动端是消费端），服务端域与「插件入站
 // 端点」语义在本端**不存在**，不跟演（ADR 0019 双端偏离）。
 //
@@ -21,10 +23,8 @@ package bedcode:plugin@0.1.0;
 // `list-clients` / `list-endpoints` 查询原语。
 // 消息帧（text + binary）经可选导出 `events-ws` 回调投递。
 //
-// 桌面端 cap 真源：`compose.json` caps.ws 指向本文件，
-// 由 `scripts/compose-wit.mjs` 复制为生成物 `rust/wit/cap-ws.wit`。
-// 能力域 crate 的自持 bindgen 分片是 `packages/bedcode-server-websocket/wit/ws.wit`
-// （另一 package 实例，额外自持核心交集副本），端组合不用它。
+// 桌面端 cap 真源：`compose.json` caps.ws-server 指向本文件，
+// 由 `scripts/compose-wit.mjs` 复制为生成物 `rust/wit/cap-ws-server.wit`。
 interface host-websocket-server {
     // ==================== 服务端域（入站端点） ====================
     /// 在宿主 WS 服务器挂载插件端点（实际路径 `/ws/plugin/<plugin-id>/<path>`，
@@ -90,6 +90,6 @@ interface host-websocket-server {
     ///   设备派生视图由插件自 `list-clients` 与本原语组合建立。
     connection-context: func(endpoint-id: string, client-id: string) -> result<string, string>;
 }
-world cap-ws {
+world cap-ws-server {
     import host-websocket-server;
 }

@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(module_name, "discovery", "白名单键即装载期日志与错误文案里的模块名");
         assert_eq!(
             bedcode_discovery_engine::MODULE_INTERFACES,
-            &["bedcode:plugin@0.1.0/host-mdns"],
+            &["bedcode:plugin@0.2.0/host-mdns"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
         assert_eq!(

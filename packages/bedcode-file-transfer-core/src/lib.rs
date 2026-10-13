@@ -25,7 +25,6 @@
 //! | [`ports::RootsStore`] | `host-plugin-database` 表 `shared_roots` | `host-storage` 键 `shared_roots` |
 //! | [`ports::RootWireCodec`] | `{ id, name, path }` | `{ id, name, safTreeUri }` |
 //! | [`ports::NodePower`] | 插件显式请求起停节点 | 宿主外壳驱动（默认实现即拒绝） |
-//! | [`ports::PlatformPort::platform_pick_folders`] | 支持 | 不支持（默认实现拒绝） |
 //! | [`ports::PlatformPort::platform_reveal_in_dir`] | 支持 | 不支持（默认实现拒绝） |
 //! | [`ports::ConsentGate`] | 互调认证中心 + 双轨降级 | 直答宿主原语 |
 //! | [`ports::PluginProfile::uses_legacy_snapshot`] | 双写期仍订阅旧快照 topic | 已整条退役 |

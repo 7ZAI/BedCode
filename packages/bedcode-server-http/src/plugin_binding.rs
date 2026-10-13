@@ -1,7 +1,15 @@
-//! host-http 能力域 —— HTTP 协议能力（入站端点注册 2 条 + 出站 fetch 1 条）
+//! host-http 能力域 —— HTTP 协议能力（出站 fetch 1 条；服务端域端点注册引擎 API）
 //!
 //! spec：`.scratch/2026-10-04-wasm-core-lib-split/spec.md` §3.1 / §7 D10；票 06
 //! （自宿主 host_api 域的 http 实现整体迁入本 crate，入站 + 出站同 crate 两个模块）。
+//!
+//! **ADR 0052 D4 归位（票 03）**：`host-http-endpoint`（桌面扩展）的 **WIT 声明**
+//! 归桌面 `wit-src/cap-http.wit`（world `cap-http-endpoint`，T-02 落位）、**`impl Host`**
+//! 归桌面宿主 `src-tauri/src/plugin/http.rs`；本文件只保留**服务器引擎 API**
+//! （[`http_register_endpoint`] / [`http_unregister_endpoint`] / [`purge_for_plugin`]）
+//! 与路由表 [`crate::registry`]——后者被服务器自身的 `routes.rs` /
+//! `middleware/auth_gateway.rs` 与生命周期回收直接消费，是服务器引擎基础设施，
+//! 不是端扩展的 WIT 绑定面（逐项盘点见票 03 Comments）。
 //!
 //! **零业务代码红线（D1）**：本模块只做引擎原语——端点登记与属主仲裁、句柄铸造、
 //! 权限门位置、载荷形状校验、出站请求执行；HTTP 语义之外的任何解读（会话、供应商
@@ -24,13 +32,17 @@
 //!
 //! 宿主侧只剩一个 adapter（宿主 host_api 域的 http 适配器）与一次开机装配调用。
 //!
-//! ## 入站（服务端域，ABI v29）
+//! ## 入站（服务端域，ABI v29；端点注册引擎 API）
 //!
 //! 插件在宿主 HTTP 服务器挂载端点：内部路径 `/api/plugin/<owner>/<path>`（命名空间
 //! 段由宿主注入）+ 可选对外 URL 别名。端点表与冲突仲裁是**本 crate 既有**的
 //! [`crate::registry`]（本域只做「权限门 + config 契约解析 + 属主仲裁」三件事，
 //! 登记本身一次转发），fail-visible 语义不变：config 解析失败 / 形状非法 /
 //! 冲突 → `Err`，**不覆盖在位者**。
+//!
+//! 本组的两个 `pub fn` 是服务器引擎的插件面 API（WIT-无关，默认形态编译）：
+//! 桌面宿主的 `impl Host for host-http-endpoint`（`src/plugin/http.rs`）薄转发到这里；
+//! crate 内单测（`plugin_binding/tests/inbound.rs`）也直接消费它们。
 
 use std::sync::Arc;
 
@@ -127,19 +139,20 @@ use wasmtime::component::{bindgen, Linker};
 /// （`expect_host_module!`）与装载期一致性核对改在宿主侧引用本常量。
 pub const MODULE_NAME: &str = "http";
 
-/// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
+/// 本域提供的 WIT 接口（必须与拼装 package 逐字一致；改错即 guest import 失配）
 ///
-/// 票 04：`host-http` 拆为双端交集出站域（core.wit）+ 桌面扩展服务端域
-/// （`host-http-endpoint`，本分片）——一个能力域模块持两个 interface。
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-http", "bedcode:plugin@0.1.0/host-http-endpoint"];
+/// ADR 0052 D2/D4：`host-http`（出站交集）契约真源在本 crate `wit/http.wit`；
+/// 服务端域 `host-http-endpoint`（桌面扩展）的 WIT 声明与 `impl Host` 已归桌面
+/// 宿主（本模块不再注册/声明它）。
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-http"];
 
 /// 本域的权限位（必须与 `bedcode.wit` / SDK 权限表逐字一致）
 pub const MODULE_PERMISSIONS: &[&str] = &["network:http"];
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
-/// `abi_min = 29`：入站服务端域两条原语在 ABI v29 追加，低于该版本的插件不导入
-/// 本 interface 的服务端段。
+/// `abi_min = 29`：本域入站服务端域两条原语在 ABI v29 追加（声明/实现已归桌面
+/// 宿主模块，见模块头笔记）；保留常量值以避免宿主白名单元数据漂移。
 #[cfg(feature = "common-host")]
 const DESC: HostModuleDesc = HostModuleDesc {
     name: MODULE_NAME,
@@ -148,7 +161,7 @@ const DESC: HostModuleDesc = HostModuleDesc {
     abi_min: 29,
 };
 
-/// HTTP 能力域模块（`host-http` 出站 fetch 1 + `host-http-endpoint` 服务端域 2）
+/// HTTP 能力域模块（`host-http` 出站 fetch 1 条）
 #[cfg(feature = "common-host")]
 pub struct HttpModule;
 
@@ -159,8 +172,7 @@ impl HostModule for HttpModule {
     }
 
     fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()> {
-        bedcode::plugin::host_http::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)?;
-        bedcode::plugin::host_http_endpoint::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
+        bedcode::plugin::host_http::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }
 }
 
@@ -262,9 +274,9 @@ bindgen!({
     // 同时删掉自己的 http `Host` impl 与 `add_to_linker` 行，否则同一个 interface
     // 被注册两次 → 装配期 `defined twice`。
     // 票 05：契约面脱端——bindgen 改指本 crate 自持分片 `wit/http.wit`
-    // （`world cap-http` 同时 import 出站 `host-http` 与服务端 `host-http-endpoint`），
-    // 不再读桌面 SDK 生成物目录（端组合改用 wit-src 真源，与本分片是不同 package
-    // 实例的同名定义，票 05 §3 摆法）。
+    // （`world cap-http` 只 import 出站 `host-http`；ADR 0052 D2/D4 后服务端域
+    // `host-http-endpoint` 已移出本分片，声明在桌面 wit-src、impl 在桌面宿主），
+    // 不再读桌面 SDK 生成物目录。
     path: "wit/http.wit",
     world: "cap-http",
     // 与宿主同款：全部导出绑定生成 async 变体（wasmtime async store 要求）。
@@ -285,19 +297,9 @@ impl bedcode::plugin::host_http::Host for WasmPluginState {
     }
 }
 
-/// v37：`host-http` 拆为双端交集出站域 + 桌面扩展服务端域（票 04）——入站路由
-/// 注册两条原语落在 `host-http-endpoint` interface 的 Host trait。
-#[cfg(feature = "common-host")]
-impl bedcode::plugin::host_http_endpoint::Host for WasmPluginState {
-    // v29 服务端域：插件动态 HTTP 路由注册（权限门 + 注册表仲裁在同 crate 内）
-    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
-        http_register_endpoint(&ports_for(self), &self.plugin_id, &config_json)
-    }
-
-    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
-        http_unregister_endpoint(&ports_for(self), &self.plugin_id, &endpoint_id)
-    }
-}
+/// v37 / ADR 0052 D4：`host-http-endpoint`（桌面扩展服务端域）的 `impl Host`
+/// 已迁桌面宿主 `src-tauri/src/plugin/http.rs`（路径 B 模块 `http-endpoint`）——
+/// 本模块不再生成/实现该 trait。
 
 #[cfg(test)]
 mod tests;

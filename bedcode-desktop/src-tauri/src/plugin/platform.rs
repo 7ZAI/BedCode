@@ -1,24 +1,18 @@
 //! host-platform-desktop 宿主侧接线（路径 B：WIT 绑定 + `Host` impl + 域函数同处）
 //!
-//! v36 交集接口切片（票 02 批次 06）：`host-platform.pick-folders / wsl-distros /
-//! local-ipv4-addresses / reveal-in-dir` 拆入 `host-platform-desktop`（桌面独有 4
-//! 函数；移动端 `host-platform` 保持交集 `pick-files` / `pick-folder`，不跟演）。
+//! v36 交集接口切片（票 02 批次 06）：`host-platform` 的桌面扩展函数拆入
+//! `host-platform-desktop`（桌面独有）。2026-10-13 功能级统一（ADR 0052 D3）后，
+//! `pick-folders` 已并入 core `host-platform`（内核实现 `host_api/platform.rs`），
+//! 本域只剩 `wsl-distros` / `local-ipv4-addresses` / `reveal-in-dir` 3 条
+//! （无权限门——平台事实 / 平台交互动作，ADR 0022 裁剪线）。
 //!
 //! 域函数随 WIT impl 走宿主（迁移前内核 `host_api/platform.rs` 的对应函数整段
-//! 迁入，文案与判据逐字保留），**机制留内核**：`fs:pick` 权限判据（
-//! `bedcode_wasm_core::host_api::check_permission`）、选择结果授权校验（
-//! `FsAuthChecker::authorize_picked`，经 `FsAuthScope` 公开面）、平台分发
-//! （`bedcode_wasm_core::system::opener`，宿主 `system.rs` 垫片引用）。
-//! 内核不再持有桌面平台依赖：`local_ip_address` crate / `system::wsl` 已随本域迁出。
+//! 迁入，文案与判据逐字保留），**机制留内核**：平台分发
+//! （`bedcode_wasm_core::system::opener`，宿主 `system.rs` 垫片引用）与
+//! `local_ip_address` / `system::wsl` 依赖都在宿主侧。
 
-use bedcode_host_kit::ports::downcast_host;
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
-use bedcode_wasm_core::host_api::check_permission;
-use bedcode_wasm_core::host_api::context::{AppHandleScope, FsAuthScope, PermissionScope, WasmHostContext};
-use bedcode_wasm_core::permission::PERMISSION_FS_PICK;
 use bedcode_wasm_core::runtime_util::block_on_async;
-use std::sync::Arc;
-use tauri_plugin_dialog::DialogExt;
 
 use crate::plugin::bindings::bedcode;
 
@@ -30,11 +24,13 @@ bedcode_host_kit::expect_host_module!(MODULE_NAME);
 pub const MODULE_NAME: &str = "platform-desktop";
 
 /// 本域提供的 WIT 接口（必须与 `bedcode.wit` 逐字一致；改错即 guest import 失配）
-pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.1.0/host-platform-desktop"];
+pub const MODULE_INTERFACES: &[&str] = &["bedcode:plugin@0.2.0/host-platform-desktop"];
 
-/// 本域的权限位（仅 `pick-folders` 用机制位 `fs:pick`；wsl-distros /
-/// local-ipv4-addresses / reveal-in-dir 无权限门——真源在 wasm-core `permission.rs`）
-pub const MODULE_PERMISSIONS: &[&str] = &["fs:pick"];
+/// 本域的权限位：空——`wsl-distros` / `local-ipv4-addresses` / `reveal-in-dir`
+/// 全是平台事实 / 平台交互动作，不叠加权限门（ADR 0022 裁剪线，真源在
+/// wasm-core `permission.rs` 的判据注释）。原 `pick-folders`（用 `fs:pick`）已随
+/// 2026-10-13 功能级统一1 归 core `host-platform`（门随函数留在内核实现）。
+pub const MODULE_PERMISSIONS: &[&str] = &[];
 
 /// 能力模块描述符（机制面：接口路径 / 权限位 / ABI 下界；**禁带产品名词**）
 ///
@@ -73,10 +69,6 @@ inventory::submit! {
 // ==================== WIT 层（import 接口 → 域函数转发） ====================
 
 impl bedcode::plugin::host_platform_desktop::Host for WasmPluginState {
-    fn pick_folders(&mut self) -> Result<String, String> {
-        platform_pick_folders(ctx_of(self), ctx_of(self), ctx_of(self), &self.plugin_id)
-    }
-
     fn wsl_distros(&mut self) -> Result<String, String> {
         platform_wsl_distros()
     }
@@ -90,112 +82,14 @@ impl bedcode::plugin::host_platform_desktop::Host for WasmPluginState {
     }
 }
 
-/// guest 侧 import 取到 store state 里的宿主上下文（孤儿规则要求装配方自带
-/// bindgen，`context` 由 host-kit 的 HostPorts 擦除面持有，此处向下转型还原）
-fn ctx_of(state: &WasmPluginState) -> &WasmHostContext {
-    downcast_host::<WasmHostContext>(state.host.as_ref())
-}
-
 // ==================== 域函数（v36 自 wasm-core host_api/platform.rs 迁入） ====================
-
-/// 权限门（`fs:pick`）：未声明即拒绝，**且不弹对话框**
-///
-/// 文案点名缺失的权限位与补法（fail-visible）：插件拿到的错误必须能直接回答
-/// 「我在 manifest 里加什么」——「permission denied」这种无信息文案在这里是
-/// 把排障成本推给插件作者。判据复用内核 `check_permission`（同一份
-/// PermissionManager、同一条拒绝 warn 路径），无第二份判定。
-fn require_pick_permission(perm: &dyn PermissionScope, plugin_id: &str, api: &str) -> Result<(), String> {
-    if check_permission(perm, plugin_id, PERMISSION_FS_PICK, api) {
-        return Ok(());
-    }
-    Err(format!(
-        "permission denied: manifest must declare '{PERMISSION_FS_PICK}' to use the system file picker ({api})"
-    ))
-}
-
-/// 系统多目录选择器 → string[] JSON（用户取消为空数组）。
-/// 权限 `fs:pick`（准入门）+ 选择后授权校验（结果门），口径与交集 `pick-files` 一致。
-fn platform_pick_folders(
-    perm: &dyn PermissionScope,
-    app: &dyn AppHandleScope,
-    fs: &dyn FsAuthScope,
-    plugin_id: &str,
-) -> Result<String, String> {
-    require_pick_permission(perm, plugin_id, "host_platform_pick_folders")?;
-    let app = require_app(app)?;
-    let picked = sync_result(block_on_async(pick_folders(app)))?;
-    let picked = authorize_picked(fs, plugin_id, "host_platform_pick_folders", picked)?;
-    serde_json::to_string(&picked).map_err(|e| format!("serialize picked folders failed: {e}"))
-}
-
-/// 选择结果的授权校验（`fs:pick` 契约第二段）——编排本体在核心机制
-/// `FsAuthChecker::authorize_picked`；本包装随域迁宿主，语义逐字保留：
-///
-/// - **空选择**（用户取消）→ 直接放行：取消不是「拒绝授权」，不该多弹一个框；
-/// - **命中已授权目录** → 静默放行；
-/// - **未授权** → 弹一次框；拒绝 / 超时 / 无弹窗通道 → `Err`，**一个路径都不回传**。
-fn authorize_picked(
-    fs: &dyn FsAuthScope,
-    plugin_id: &str,
-    api: &str,
-    picked: Vec<String>,
-) -> Result<Vec<String>, String> {
-    if picked.is_empty() {
-        return Ok(picked);
-    }
-    let checker: Arc<bedcode_wasm_core::security::fs_auth::FsAuthChecker> = fs
-        .fs_auth_checker();
-    if block_on_async(checker.authorize_picked(plugin_id, &picked)) {
-        return Ok(picked);
-    }
-    tracing::warn!(
-        plugin_id = %plugin_id,
-        api = %api,
-        picked_count = picked.len(),
-        "platform pick: selection not authorized (denied or timed out)"
-    );
-    Err(format!(
-        "{api}: picked paths were not authorized (user denied or the request timed out); no path returned"
-    ))
-}
-
-/// 多目录选择对话框（阻塞至用户选择；取消 → 空）
-async fn pick_folders(app_handle: tauri::AppHandle) -> crate::Result<Vec<String>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folders(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("platform_pick_folders: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "platform_pick_folders: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
-fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
-    let path = file_path
-        .into_path()
-        .map_err(|e| crate::AppError::InvalidInput(format!("platform pick: failed to convert selected path: {e}")))?;
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| crate::AppError::InvalidInput("platform pick: selected path is not valid UTF-8".to_string()))
-}
-
-fn require_app(app: &dyn AppHandleScope) -> Result<tauri::AppHandle, String> {
-    app.app_handle()
-        .map(|a| a.clone())
-        .ok_or_else(|| "platform unavailable in headless context (no app_handle)".to_string())
-}
-
-fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
-    r.map_err(|e| e.to_string())
-}
+//
+// 2026-10-13 功能级统一（ADR 0052 D3）：原 `platform_pick_folders` +
+// `authorize_picked` + `pick_folders` 对话框 + `require_pick_permission` /
+// `require_app` / `sync_result` / `path_to_string` 辅助链已整体退役——`pick-folders`
+// 统一为 core `host-platform.pick-folders`，实现与 `fs:pick` 权限门 / 选择后
+// 授权校验留在内核 `host_api/platform.rs::platform_pick_folders`（桌面与移动同源）。
+// 本域只剩不调对话框、不碰路径授权的三条平台事实 / 交互函数。
 
 /// WSL 发行版名枚举（v19 函数级追加，票 13）：`string[]` JSON，顺序保持
 /// `wsl --list --verbose` 输出顺序。
@@ -267,41 +161,6 @@ fn platform_reveal_in_dir(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bedcode_wasm_core::host_api::grant_permissions;
-    use bedcode_wasm_core::test_support::build_host_ctx_at;
-
-    const PLUGIN: &str = "com.test.pick";
-
-    /// C-101 未声明 `fs:pick` → 显性拒绝，且**在弹对话框之前**（无头上下文拿不到
-    /// AppHandle，若顺序反了错误会是 headless 那条）
-    #[test]
-    fn pick_folders_requires_fs_pick_permission() {
-        let ctx = build_host_ctx_at(None);
-        for perm in ["fs:read", "fs:write", "storage", "peer"] {
-            grant_permissions(&ctx, PLUGIN, &[perm]);
-            let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
-                .expect_err("未声明 fs:pick 必须拒绝");
-            assert!(
-                err.contains(PERMISSION_FS_PICK),
-                "错误必须点名缺失的权限位（插件作者据此知道 manifest 补什么），got: {err}"
-            );
-            assert!(
-                !err.contains("headless"),
-                "权限门必须早于对话框：拿到了 headless 报错说明顺序反了, got: {err}"
-            );
-        }
-    }
-
-    /// 声明 `fs:pick` → 过得了权限门（下一步才会去要 AppHandle）——无头上下文
-    /// 拿不到系统对话框，验证权限门与对话框的先后
-    #[test]
-    fn pick_folders_passes_gate_then_headless_rejected() {
-        let ctx = build_host_ctx_at(None);
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_PICK]);
-        let err = platform_pick_folders(ctx.as_ref(), ctx.as_ref(), ctx.as_ref(), PLUGIN)
-            .expect_err("无头上下文拿不到系统对话框");
-        assert!(err.contains("headless"), "声明 fs:pick 后应走到对话框环节, got: {err}");
-    }
 
     /// 契约：只回发行版名（无 state / version / is_default 等派生信息），顺序保持
     #[test]
@@ -369,10 +228,15 @@ mod tests {
         );
         assert_eq!(
             MODULE_INTERFACES,
-            &["bedcode:plugin@0.1.0/host-platform-desktop"],
+            &["bedcode:plugin@0.2.0/host-platform-desktop"],
             "接口路径必须与 WIT 契约逐字一致（改错即 guest import 失配）"
         );
-        assert_eq!(MODULE_PERMISSIONS, &["fs:pick"], "仅 pick-folders 用机制位 fs:pick");
+        assert_eq!(
+            MODULE_PERMISSIONS,
+            &[] as &[&str],
+            "三函数（wsl-distros / local-ipv4-addresses / reveal-in-dir）均无权限门；\
+             pick-folders 已归 core（门随函数留内核）"
+        );
         assert_eq!(DESC.name, MODULE_NAME);
         assert_eq!(DESC.interfaces, MODULE_INTERFACES);
         assert_eq!(DESC.permissions, MODULE_PERMISSIONS);

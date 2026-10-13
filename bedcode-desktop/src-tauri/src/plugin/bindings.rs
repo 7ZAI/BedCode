@@ -39,11 +39,14 @@ mod tests {
     //! world）即红。
     //!
     //! 对照口径（首步静态版，语义核对留票 04/07 加深）：
-    //! - caps 键 = 组合单元：`pty` / `http` / `ws` 对应能力域引擎 crate 的
-    //!   MODULE_NAME（pty / http / websocket，宿主 Cargo.toml 依赖即编译期证明），
-    //!   `desktop` 对应宿主 `src/plugin/` 路径 B 域（MODULE_INTERFACES 并集）；
+    //! - caps 键 = 组合单元，分两类（ADR 0052 D2/D4）：
+    //!   ① 能力域 crate 分片（`pty` / `mdns` / `peer` / `http` / `ws`）——对应引擎
+    //!      crate 的 MODULE_NAME（pty / discovery / peer-net / http / websocket，
+    //!      宿主 Cargo.toml 依赖即编译期证明），cap 真源指向 crate 的 `wit/<domain>.wit`；
+    //!   ② 端扩展 / 宿主路径 B 域（`http-endpoint` / `ws-server` / `desktop`）——
+    //!      真源在宿主 `wit-src/`，MODULE_INTERFACES 在宿主 `src/plugin/`。
     //! - cap-desktop.wit 的 world cap-desktop import 名集合 == 宿主路径 B 域
-    //!   MODULE_INTERFACES 的 host-* 名并集（12 个）。
+    //!   MODULE_INTERFACES 的 host-* 名并集（11 个）。
     //! - 版本一致性（票 05 替代原 abi.version 双查）：端清单 package 名 == 仓根
     //!   `contracts/bedcode-plugin-package.rs` 的 `PACKAGE_NAME`，桌面 WIT 源文件
     //!   package 行 == `package <name>@<version>;`（ADR 0051 D3/D4；`abi.version`
@@ -117,10 +120,10 @@ mod tests {
 
         let mut caps: Vec<&str> = m["caps"].as_object().unwrap().keys().map(|s| s.as_str()).collect();
         caps.sort();
-        assert_eq!(caps, vec!["desktop", "http", "pty", "ws"],
-            "caps 键漂移：能力域 pty/http/ws（引擎 crate）+ desktop（宿主路径 B 域聚合）是当前唯一答案");
+        assert_eq!(caps, vec!["desktop", "http", "http-endpoint", "mdns", "notify", "peer", "pty", "ws", "ws-server"],
+            "caps 键漂移：能力域六片（pty/mdns/peer/http/ws/notify）+ 端扩展三片（http-endpoint/ws-server/desktop）是当前唯一答案（ADR 0052 D2/D4）");
 
-        for key in ["pty", "http", "ws", "desktop"] {
+        for key in ["pty", "mdns", "peer", "http", "ws", "notify", "http-endpoint", "ws-server", "desktop"] {
             let src = m["caps"][key].as_str().expect("caps 值为字符串路径");
             let abs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(src);
             assert!(abs.exists(), "cap 真源缺失: {src}");
@@ -146,6 +149,11 @@ mod tests {
         for rel in [
             "packages/bedcode-wasm-core/wit/core.wit",
             "packages/bedcode-pty-engine/wit/pty.wit",
+            "packages/bedcode-discovery-engine/wit/mdns.wit",
+            "packages/bedcode-server-peer-net/wit/peer.wit",
+            "packages/bedcode-server-http/wit/http.wit",
+            "packages/bedcode-ws-client-engine/wit/ws.wit",
+            "packages/bedcode-notify-engine/wit/notify.wit",
             "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-http.wit",
             "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-ws.wit",
             "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit",
@@ -180,14 +188,16 @@ mod tests {
         imports.sort();
         imports.dedup();
 
-        // 宿主路径 B 域 MODULE_INTERFACES 并集（11 个 host-* 名）；能力域
-        // （pty/http/websocket/peer/mdns）interface 在各自 cap-*.wit，不在本文件。
+        // 宿主路径 B 域 MODULE_INTERFACES 并集（10 个 host-* 名）；能力域
+        // （pty/http/websocket/peer/mdns/notify）interface 在各自 cap-*.wit，不在本文件。
         // 票 04：`host-fs` 交集 6 收拢进共享核心 core.wit，cap-desktop 不再 import 它。
         // 票 05 随元数据对齐修正：`host-auth` → `host-auth-center`（ADR 0031 认证中心）、
         // `host-connection` → `host-connection-registry`（连接清单机制化）。
+        // 2026-10-13（domain-owned-contracts 票 04）：`host-events-desktop` 退役
+        // （notify 进共享域 host-notify，cap `notify` 归能力域分片）。
         let expected = [
             "host-api-call", "host-app", "host-auth-center", "host-connection-registry",
-            "host-crypto", "host-events-desktop", "host-fs-desktop", "host-platform-desktop",
+            "host-crypto", "host-fs-desktop", "host-platform-desktop",
             "host-process", "host-task", "host-timer",
         ];
         assert_eq!(imports, expected,
@@ -227,25 +237,27 @@ mod tests {
             .collect()
     }
 
-    /// 能力域 crate 自持分片 bindgen 锁（票 05 终态；票 07 批次 02 收口）
+    /// 能力域 crate 自持分片 bindgen 锁（票 05 终态；票 07 批次 02 收口；ADR 0052 D2 更新）
     ///
-    /// 五能力域 crate 的 provider 侧 `bindgen!` 必须指向**自家分片**
-    /// （`path: "wit/<domain>.wit"` + `world: "cap-<domain>"`）。回接形态 = path 又指
-    /// 回端生成物目录（`plugin-sdk-desktop/rust/wit`）或 world 用整份 `plugin`——
-    /// 那是票 01 POC 实测的第一性问题：能力域在契约面绑死端，移动侧无法复用同一
-    /// 能力域 crate，「差异只来自组合的能力 lib」不成立。
+    /// 能力域 crate 的 provider 侧 `bindgen!` 不得指回端 SDK 生成物目录：
+    /// 共享交集域的绑定源必须是**能力域自己的契约文件**（`<crate>/wit/<domain>.wit`）；
+    /// 特例（ADR 0052 D2/D4 + Q4 裁决）：`bedcode-server-websocket` 是桌面侧服务端 /
+    /// 客户端引擎 crate，其客户端实现的 provider 绑定直接指共享契约真源
+    /// `bedcode-ws-client-engine/wit/ws.wit`（不再是自家副本，也不回接端 SDK）。
+    /// 回接形态 = path 又指回端生成物目录（`plugin-sdk-desktop/rust/wit`）或 world 用
+    /// 整份 `plugin`——那是票 01 POC 实测的第一性问题。
     ///
     /// 判据按**代码行**比对（跳注释行）：这些文件的模块文档正当地提到迁移史。
     #[test]
     fn capability_domains_bind_their_own_wit_slices() {
-        // (crate 目录, 绑定源文件, 自持分片, world)
+        // (crate 目录, 绑定源文件, 自持分片（可含 `..` 相对路径）, world)
         const DOMAINS: &[(&str, &str, &str, &str)] = &[
             ("packages/bedcode-pty-engine", "src/plugin_binding.rs", "wit/pty.wit", "cap-pty"),
             ("packages/bedcode-server-http", "src/plugin_binding.rs", "wit/http.wit", "cap-http"),
             (
                 "packages/bedcode-server-websocket",
                 "src/plugin_binding.rs",
-                "wit/ws.wit",
+                "../bedcode-ws-client-engine/wit/ws.wit",
                 "cap-ws",
             ),
             ("packages/bedcode-server-peer-net", "src/plugin_binding.rs", "wit/peer.wit", "cap-peer"),
@@ -308,7 +320,7 @@ mod tests {
     #[test]
     fn compose_caps_and_host_module_interfaces_cover_each_other() {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        // ① 装配面：白名单模块 → interface 名（`bedcode:plugin@0.1.0/host-x` → `host-x`，
+        // ① 装配面：白名单模块 → interface 名（`bedcode:plugin@0.2.0/host-x` → `host-x`，
         //    rsplit('/') 剥版本后缀——版本化契约下天然免疫，与 WIT world import 的
         //    纯接口名两侧对得上）
         let registry = bedcode_host_kit::ModuleRegistry::collected();
