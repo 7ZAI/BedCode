@@ -8,11 +8,15 @@
  *
  * 共享 rust 插件（package.json 声明 `bedcode.sharedRustManifest`，如
  * file-transfer 单产物）：先构建**共享 crate**（桌面 wasm-app 的 manifest，
- * unknown-unknown + 仓库级组件化工具）到本插件 rust/target/ 下，再以
- * --frontend-only 走 CLI（前端 + 清单 + 图标），wasm 由本脚本复制——
+ * unknown-unknown + 仓库级组件化工具）到移动端共享 target（`target/wasm-apps`），
+ * 再以 --frontend-only 走 CLI（前端 + 清单 + 图标），wasm 由本脚本复制——
  * 双端同一份 crate 源、同一编码路径，产物随各自构建产出。
  *
- * 用法：node scripts/plugin-build.js [--plugin <plugin-id>]
+ * 用法：node scripts/plugin-build.js [--plugin <plugin-id>] [--rust-only]
+ *
+ * `--rust-only`（dev-run 过期补建快速路径）：只（重）建 wasm——共享 rust 插件
+ * 走共享 crate 构建 + wasm 复制；自有 rust/ 插件委派给 SDK CLI 的 --rust-only。
+ * 前端 / 清单 / 图标不动（目录全新时调用方应先走全量构建）。
  */
 
 import { execSync } from 'child_process'
@@ -21,6 +25,8 @@ import { resolve, dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { platform, homedir } from 'os'
 
+import { readSharedRustManifest } from './lib/shared-rust.js'
+
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const REPO_ROOT = resolve(__dirname, '../..')
@@ -28,8 +34,10 @@ const IS_WIN = platform() === 'win32'
 
 const args = process.argv.slice(2)
 let targetPlugin = null
+let rustOnly = false
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--plugin' && args[i + 1]) { targetPlugin = args[i + 1]; i++ }
+  else if (args[i] === '--rust-only') rustOnly = true
 }
 
 const pluginsDir = resolve(ROOT, 'wasm-apps')
@@ -65,53 +73,56 @@ for (const name of selected) {
   console.log(`\n=== Plugin Build (Mobile): ${manifest.id} ===\n`)
   const npxCmd = IS_WIN ? 'npx.cmd' : 'npx'
 
-  // 共享 rust（file-transfer 单产物）：先构建共享 crate 产出 wasm，CLI 走
-  // --frontend-only（跳过其自有 rust/ 构建），wasm 复制由本脚本兜底
+  // 共享 rust（file-transfer 单产物）：先构建共享 crate 产出 wasm；非共享插件
+  // 没有这一步，其 rust 构建由 SDK CLI 在本脚本内统一发起
   const sharedRust = readSharedRustManifest(cwd)
-  let sharedWasmPath = null
-  if (sharedRust) {
-    sharedWasmPath = buildSharedRust(cwd, manifest, sharedRust)
-  }
+  const sharedWasmPath = sharedRust ? buildSharedRust(cwd, manifest, sharedRust) : null
 
-  const cliArgs = [
-    '--no-install', 'bedcode-plugin', 'build',
-    '--resources-dir', `"${resourcesDir}"`,
-  ]
-  if (sharedRust) cliArgs.push('--frontend-only')
-  try {
-    execSync(`${npxCmd} ${cliArgs.join(' ')}`, { cwd, stdio: 'inherit' })
-  } catch (e) {
-    // execSync 默认只透传底层错误（无 cwd/插件名上下文），这里补上插件定位信息
-    // 便于用户在多插件批量构建失败时定位是哪一支构建挂了
-    throw new Error(`[plugin-build] 插件 ${manifest.id}（${cwd}）构建失败: ${e.message}`)
-  }
-
-  // CLI 的 wasm 复制门控在 !frontendOnly；共享 rust 路径在此兜底复制
-  // （wasmHash 不注入：内置 APK 资源不走分发完整性校验，与既有移动构建一致）
-  if (sharedRust && sharedWasmPath) {
-    const dest = join(resourcesDir, manifest.id, `${manifest.rustLibrary}.wasm`)
-    copyFileSync(sharedWasmPath, dest)
-    console.log(`[plugin-build] 共享 wasm 已复制: ${dest}`)
+  if (rustOnly) {
+    // dev-run 过期补建快速路径：只刷新 wasm（前端 / 清单 / 图标保持既有产物）
+    if (sharedWasmPath) {
+      copySharedWasm(manifest, sharedWasmPath)
+    } else {
+      runCli(npxCmd, cwd, manifest.id, ['--rust-only', '--resources-dir', `"${resourcesDir}"`])
+    }
+  } else {
+    // 共享 rust 插件：CLI 只做前端 / 清单 / 图标（--frontend-only），wasm 由
+    // 本分支随后的 copySharedWasm 复制（CLI 的 wasm 复制门控在 !frontendOnly）
+    const cliArgs = ['--resources-dir', `"${resourcesDir}"`]
+    if (sharedRust) cliArgs.push('--frontend-only')
+    runCli(npxCmd, cwd, manifest.id, cliArgs)
+    if (sharedWasmPath) copySharedWasm(manifest, sharedWasmPath)
   }
 
   console.log(`\n=== Plugin build complete (Mobile): ${manifest.id} ===\n`)
 }
 
 /**
- * 读取插件目录 package.json 的共享 rust 声明（`bedcode.sharedRustManifest`）
+ * 调 SDK CLI 构建（自有 rust 插件）
  *
- * 落点选 package.json 而非 plugin.json：后者是**宿主解析的清单**，新增字段要
- * 过两端 manifest 结构校验；前者只被构建链消费，零宿主影响。
+ * execSync 默认只透传底层错误（无 cwd / 插件名上下文），这里补上插件定位信息，
+ * 便于用户在多插件批量构建失败时定位是哪一支构建挂了。
  */
-function readSharedRustManifest(cwd) {
-  const pkgPath = join(cwd, 'package.json')
-  if (!existsSync(pkgPath)) return null
+function runCli(npxCmd, cwd, pluginId, extraArgs) {
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-    return pkg.bedcode?.sharedRustManifest ?? null
-  } catch {
-    return null
+    execSync(`${npxCmd} --no-install bedcode-plugin build ${extraArgs.join(' ')}`, {
+      cwd,
+      stdio: 'inherit',
+    })
+  } catch (e) {
+    throw new Error(`[plugin-build] 插件 ${pluginId}（${cwd}）构建失败: ${e.message}`)
   }
+}
+
+/**
+ * 复制共享 crate 编出的 wasm 到宿主资源目录（按插件 id 建子目录）
+ *
+ * wasmHash 不注入：内置 APK 资源不走分发完整性校验，与既有移动构建一致。
+ */
+function copySharedWasm(manifest, wasmPath) {
+  const dest = join(resourcesDir, manifest.id, `${manifest.rustLibrary}.wasm`)
+  copyFileSync(wasmPath, dest)
+  console.log(`[plugin-build] 共享 wasm 已复制: ${dest}`)
 }
 
 /**

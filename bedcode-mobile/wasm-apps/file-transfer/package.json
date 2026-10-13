@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node ../../../scripts/plugin-build.js --plugin com.bedcode.file-transfer",
+    "build": "node ../../scripts/plugin-build.js --plugin com.bedcode.file-transfer",
     "dev": "bedcode-plugin dev"
   },
   "bedcode": {
