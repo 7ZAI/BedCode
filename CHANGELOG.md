@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: run-surface page switching is now "one page per screen" (fully off-screen docking + enter transition)
+
+- **Fix (terminal-session run surface)**: switching between the four bottom-tab pages with the horizontal
+  swipe produced *overlapping pages* and cuts that never finished. Two causes: docked panels parked at
+  `translateX(±24%)` with `opacity: 0.55` inside a container without clipping — panels have no background of
+  their own, so the neighbour showed through the current page and spilled over the header and nav bar; and a
+  first-time panel was mounted directly in its final position, leaving the browser no "docked → centred"
+  change to animate (a hard cut). Docked panels now park fully off-screen (`translateX(±100%)` +
+  `visibility: hidden`) and the panel container clips with `overflow: hidden`; a newly mounted panel renders
+  at its entry side, then a forced layout read flips it to centre so the slide actually runs. Docking and
+  neighbour lookup are extracted into pure functions (`panelDock.ts`) with 15 contract tests pinning the
+  rules plus a CSS/template lock against the half-screen overlap returning.
+- **Note**: the swipe still switches on release (no finger-following). Adding delta reporting to the SDK's
+  shared `useSwipeTabs` is a contract change affecting every plugin and is intentionally left out.
+
+#### Mobile: host-shell revision 3 (recents card track, recents entry on home, exit leaves the run screen)
+
+- **Recents track**: cards are laid out side by side instead of stacked — one page fully visible at a time,
+  neighbours only peek at the edge when the screen is too narrow (clipping, not overlap). The track
+  translates by `card step × index` (geometry lives in `shell.css`), drag follows the finger and snaps on
+  release. Tapping any card enters it (Android recents); the standalone "Enter" button is gone, and the
+  ×-dismiss button stays a separate control with a 44 px hit area.
+- **Gesture robustness**: drags capture the pointer once the axis lock confirms a drag (a fast flick that
+  leaves the track used to freeze the card mid-offset), touches starting within 24 px of either screen edge
+  are left to the system back gesture, and the click the browser emits after a drag is swallowed so a
+  swipe-up dismiss no longer opens the app it just closed.
+- **Accessibility**: the position indicator is now announced ("card N of M"), and the empty recents screen
+  offers a "Back to home" action instead of only a header back button.
+- **Exit fix**: stopping or uninstalling an app now removes its run screen from the shell stack
+  (`closeAppRun`), so leaving an app lands on the home screen instead of the "no interface available"
+  placeholder.
+- **Discoverability**: the home screen's running-apps section gains a recents entry, so the app switcher is
+  reachable without entering a run screen first.
+- Mobile suite: 87 files / 1043 tests green; `vue-tsc` and ESLint clean.
+
 #### Mobile: fix toolbox swipe being swallowed by “scrollable container” misdetection
 
 - **Fix (terminal-session toolbox)**: horizontal swipes inside the auto-task toolbox (task history ↔
