@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: host shell turned into an Android-style platform (home / recents / notification shade / wallpaper)
+
+- **Home screen** follows the desktop device-shell layout: wallpaper layer → running card strip (MRU, tap to
+  switch, stop chip) → app-contributed quick cards → app grid (every installed app, state dots, approval badge)
+  → system grid (app manager / permissions / platform settings).
+- **Navigation**: the bottom tab bar (`ShellTabbar`) is retired in favour of a bottom **system bar**
+  (`ShellSystemBar`, Android nav-bar semantics: back / home / recents). Home key = back to home, swipe up =
+  recents; the explicit recents key keeps the drag path optional (WCAG 2.2 Dragging Movements). App manager
+  and platform settings gained back rows, and system entries are pushed onto the shell stack (so back works).
+- **Recents** (`ShellSwitcherScreen`) is now an Android-style horizontal card track (native scroll-snap):
+  running apps first (MRU), then recently-used-but-stopped apps; tap to enter, `×` or swipe-up to close,
+  “close all” stops every running instance and clears the recent list. Cards show platform facts only
+  (state / permission count / app id) — no fabricated in-app previews.
+- **Notification shade** (`ShellNotificationShade` + `useShellNotifications` + `useShellHostEvents`): an
+  independent surface sliding down from the top, opened from the status bar (when the shell draws one) or the
+  home bell. Contents: pending approvals (derived from app state, gone once approved), platform notifications
+  (app start/stop/approve/install/uninstall/failure plus engine events `ws_connected` / `ws_reconnected` /
+  `ws_disconnected` / `ws_reauth_rejected`, the last being sticky), per-item dismiss and “clear all” (sticky
+  entries survive). No quick toggles in v1: the real platform switches live in `@/composables/**`, which the
+  shell must not import (L7) — fake toggles would break the honesty rule.
+- **Approval flow**: `needsApproval` is no longer flattened to “disabled” — it is a first-class shell state
+  (`ShellAppState: 'approval'`), surfaced as a home-grid badge, a pending section in the permission manager
+  and an “approve and start” action in app details. `ShellAppSource` gained `approve()`;
+  `installFromLocalPackage()` now returns the installed app id (or `null` when the picker is cancelled) so
+  lifecycle notifications name the right app.
+- **Wallpaper**: settings gained a “Background” group with four token-derived gradient wallpapers
+  (none / aurora / dune / reef) and a 0–70 % dim slider, persisted in shell-local storage (no host AppConfig
+  field — the engine surface stays free of shell vocabulary). Custom image wallpapers need a host command
+  (SAF pick + `$APPDATA` copy) and are deliberately left out of this batch.
+- Tests: six new shell suites (notifications, preferences, recents, system bar, host-event bridge, app
+  actions) and the retired-UI lock now pins the new shell faces; full mobile suite 84 files / 968 tests green.
+- Unchanged: Rust backend, WIT / ABI, wasm-app sources. `packages/plugin-sdk-mobile/dev-shell` still carries
+  the previous shell copies (dev preview only) — to be aligned separately.
+
 #### Mobile: frontend switched back to the new shell (feature/mobile-shell-host)
 
 - The mobile frontend is back on the new-shell line: the host frontend (`bedcode-mobile/src/**`), the three
