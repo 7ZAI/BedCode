@@ -177,10 +177,14 @@ pub struct PermissionManager {
 impl PermissionManager {
     pub fn new() -> Self { Self { granted: std::sync::RwLock::new(HashMap::new()) } }
 
+    /// 为插件授权：只授予 manifest 声明且在词汇表内的位
+    ///
+    /// **无默认位**（2026-10-14 桌面同构）：与宿主内核 `PermissionManager`
+    /// （wasm-core `permission.rs`）和桌面 SDK 同一条口径。`storage` 曾是移动独有
+    /// 默认位——它会质变为「不声明也有」，与宿主授权链（只授生效权限）不一致。
     pub fn grant_permissions(&self, plugin_id: &str, requested: &[String]) -> HashSet<String> {
         let valid_set: HashSet<&str> = VALID_PERMISSIONS.iter().copied().collect();
-        let mut granted: HashSet<String> = requested.iter().filter(|p| valid_set.contains(p.as_str())).cloned().collect();
-        granted.insert(PERMISSION_STORAGE.to_string());
+        let granted: HashSet<String> = requested.iter().filter(|p| valid_set.contains(p.as_str())).cloned().collect();
         let mut lock = self.granted.write().unwrap_or_else(|e| e.into_inner());
         lock.insert(plugin_id.to_string(), granted.clone());
         granted
@@ -228,8 +232,10 @@ mod tests {
         ]);
         assert!(granted.contains("terminal:output"));
         assert!(!granted.contains("invalid:permission"));
-        // storage 无条件默认授予
-        assert!(granted.contains("storage"));
+        // 无默认位（桌面同构）：storage 只有 manifest 声明才授予
+        assert!(!granted.contains("storage"));
+        assert!(!pm.check("test-plugin", "storage"));
+        assert!(pm.check("test-plugin", "terminal:output"));
     }
 
     #[test]
@@ -238,7 +244,10 @@ mod tests {
         pm.grant_permissions("test-plugin", &["terminal:output".to_string()]);
         assert!(pm.check("test-plugin", "terminal:output"));
         assert!(!pm.check("test-plugin", "mdns"));
-        assert!(pm.check("test-plugin", "storage"));
+        // 无默认位（2026-10-14 桌面同构）：storage 只有声明才授予
+        assert!(!pm.check("test-plugin", "storage"));
+        pm.grant_permissions("declared-plugin", &["storage".to_string()]);
+        assert!(pm.check("declared-plugin", "storage"));
     }
 
     #[test]
@@ -307,6 +316,9 @@ mod tests {
         assert!(pm.get_granted("unknown").is_empty());
         let granted = pm.grant_permissions("p", &["bus".to_string()]);
         assert_eq!(pm.get_granted("p"), granted);
+        // 无默认位（2026-10-14 桌面同构）：未声明的 storage 不得出现在授予集
+        assert!(!pm.get_granted("p").contains("storage"));
+        pm.grant_permissions("p", &["bus".to_string(), "storage".to_string()]);
         assert!(pm.get_granted("p").contains("storage"));
     }
 

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: permission granting now mirrors desktop (single source = kernel PermissionManager)
+
+- **Fix (mobile host)**: built-in plugins (file-transfer / terminal-session / ai-chatbox) were always
+  denied host capabilities such as `host-storage` on device (log: `permission denied … permission=storage
+  api=host_storage_get`). Only approved non-built-in plugins granted their effective permissions to the
+  kernel `PermissionManager`; built-ins used a second, instantiation-time `granted_permissions` copy
+  (full manifest, bypassing approval, never revoked). Mobile now matches desktop with **one** source:
+  activation grants the effective set for every plugin (built-in = full manifest; user-installed =
+  approval ∩ requested) and deactivation calls `revoke_all`; host adapters (bindings / mdns / ws / http /
+  peer) and the kernel core_binding domains read the same decision.
+- **Removed (mobile-only machinery retired)**: the `WasmHostContext.granted_permissions` field, the
+  `for_plugin(permissions)` argument, the `LoadedPlugin.granted_permissions` mirror and the loader's
+  implicit "storage is always granted" — approval narrowing and deactivation revocation are no longer
+  bypassed; this also closes the narrow hole where unapproved permission bits still passed adapter gates.
+- **SDK (guest-side semantics aligned)**: the mobile SDK's `PermissionManager::grant_permissions` no
+  longer adds `storage` by default (same rule as the desktop SDK / kernel: no default grants, declare in
+  the manifest); README and template updated.
+- **Companion fix (approval entry)**: `mark_error` no longer overwrites `NeedsApproval` — the frontend
+  loader always calls it after a failed activation, which used to hide the shell's approval entry points
+  (app detail / permissions overview).
+- Verification: mobile host `cargo test` green (lib 239 + full integration), kernel `cargo test` 578 green,
+  mobile SDK `cargo test --features wasm` green, desktop `cargo check --all-targets` clean; 5 new
+  permission / approval contract tests.
+
 
 #### Mobile: stopping an app now disposes its run-scoped stores (fresh state on next launch)
 

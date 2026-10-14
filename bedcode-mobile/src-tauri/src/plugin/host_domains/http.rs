@@ -153,7 +153,9 @@ pub(crate) fn http_fetch(
     // 端口快照（能力域端口要求 `'static`，故在此一次性取句柄而非借 state）
     let ctx = host_ctx(state);
     let ports: Arc<dyn HttpPorts> = Arc::new(StateHttpPorts {
-        granted: ctx.granted_permissions.clone(),
+        // 权限快照向内核真源结算（端口要求 `'static`；判定口径与
+        // `WasmHostContext::has_permission` 同一份）
+        granted: ctx.granted_permissions(&state.plugin_id),
         ports: ctx.ports.clone(),
         app_handle: ctx.app_handle.clone(),
     });

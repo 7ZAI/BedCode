@@ -9,6 +9,25 @@
 
 ## [未发布]
 
+#### 移动端：权限授权面与桌面同构（单一真源 = 内核 PermissionManager）
+
+- **修复（移动宿主）**：内建插件（file-transfer / terminal-session / ai-chatbox）的 `host-storage`
+  等宿主能力在真机上恒被拒（日志 `permission denied … permission=storage api=host_storage_get`）。
+  成因是移动端只有「已批准的非内置插件」才把生效权限授予内核 `PermissionManager`，而内置插件走
+  另一套实例化期 `granted_permissions` 副本（manifest 全量、不经审批、也不随停用撤销）。现与桌面
+  对齐为**一套**：激活时按生效权限授予全部插件（内置 = manifest 全量；用户安装 = 批准 ∩ 请求），
+  停用时 `revoke_all`；宿主 adapter（bindings / mdns / ws / http / peer）与内核 core_binding 域读
+  同一份判定。
+- **删除（移动独有面退役）**：`WasmHostContext.granted_permissions` 字段、`for_plugin(权限集)`
+  参数、`LoadedPlugin.granted_permissions` 镜像、loader 的「`storage` 默认授予」全部退役——审批
+  收窄与停用撤销不再被旁路；同时收紧了「未获批准的权限位在 adapter 门仍放行」的窄口子。
+- **SDK（guest 侧语义摆正）**：移动 SDK `PermissionManager::grant_permissions` 不再默认附带
+  `storage`（与桌面 SDK / 内核同口径：无默认位，全部按 manifest 声明授予）；README / 模板同步。
+- **附带修复（审批入口）**：`mark_error` 不再覆盖 `NeedsApproval`——前端 loader 在激活失败后固定
+  调它，覆盖后壳的「待审批」入口（详情页 / 权限总览）会消失。
+- 验证：移动宿主 `cargo test` 全绿（lib 239 + 集成全量）、内核 `cargo test` 578 全绿、移动 SDK
+  `cargo test --features wasm` 全绿、桌面 `cargo check --all-targets` 通过；新增 5 条权限 / 审批契约用例。
+
 
 #### 移动端：停止应用即作废其运行期 store（再次启动为全新状态）
 

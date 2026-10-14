@@ -246,12 +246,16 @@ pub fn setup_headless_runtime_with_abi(
 /// 构造插件实例 state（统一 host-kit 形态，wasm-core-mobile-purity 票 04）
 ///
 /// 取代旧自持 `WasmPluginState { plugin_id, host_ctx, runtime_handle,
-/// granted_permissions, on_message_binary }` 字面量：权限集经 `for_plugin`
-/// 注入 per-plugin 上下文；`host` 槽是 host-kit state 的 `Arc<dyn HostPorts>`。
+/// granted_permissions, on_message_binary }` 字面量：权限真源 = 共享内核
+/// `PermissionManager`（与生产激活路径 `grant_permissions` 同一条路），不再有
+/// 逐实例 `granted_permissions` 副本（2026-10-14 桌面同构收口）；
+/// `host` 槽是 host-kit state 的 `Arc<dyn HostPorts>`。
 /// StoreSpec 取默认资源上限 + 关燃料（测试不设限、不注入燃料预算）。
 pub fn build_component_state(plugin_id: &str, granted: &[&str]) -> crate::manager::runtime::WasmPluginState {
-    let ctx = build_host_ctx().for_plugin(granted.iter().map(|p| p.to_string()).collect());
-    build_component_state_with_ctx(plugin_id, std::sync::Arc::new(ctx))
+    let ctx = build_host_ctx();
+    let requested: Vec<String> = granted.iter().map(|p| p.to_string()).collect();
+    ctx.grant_permissions(plugin_id, &requested);
+    build_component_state_with_ctx(plugin_id, ctx)
 }
 
 /// 同上，允许注入自定义宿主上下文（域测试需覆盖端口 / 构造无头上下文时用）

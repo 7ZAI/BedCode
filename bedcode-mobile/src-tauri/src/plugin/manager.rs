@@ -151,13 +151,11 @@ impl PluginManager {
         let mut plugins = HashMap::new();
         for manifest in builtin_manifests() {
             let id = manifest.id.clone();
-            let permissions: std::collections::HashSet<String> = manifest.permissions.iter().cloned().collect();
             plugins.insert(
                 id,
                 LoadedPlugin {
                     manifest,
                     state: PluginState::Loaded,
-                    granted_permissions: permissions,
                     source: PluginSource::FrontendOnly,
                     extension_path: String::new(),
                 },
@@ -648,7 +646,22 @@ impl PluginManager {
         let Some((source, extension_path)) = gate else {
             return Err(crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)));
         };
-        if source != PluginSource::ApkAsset && source != PluginSource::FrontendOnly {
+        let trusted_source =
+            source == PluginSource::ApkAsset || source == PluginSource::FrontendOnly;
+        // 生效权限集（桌面同款口径，`PluginHost::activate_plugin`）：受信来源 = manifest
+        // 全量；用户安装 = 批准 ∩ 请求。**只算不授**：授予在审批门禁之后、guest
+        // activate 之前（见 step 1.5）——未批准插件不得拿到任何权限。
+        let requested: Vec<String> = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| p.manifest.permissions.clone())
+                .unwrap_or_default()
+        };
+        let effective: std::collections::HashSet<String> = if trusted_source {
+            // 受信来源直接全量（等价 `effective_permissions(requested, None, trusted=true)`）
+            effective_permissions(&requested, None, true)
+        } else {
             let approval = self.approvals.get(plugin_id).await?;
             // 目录哈希不进 async 事件循环（Android 主线程阻塞风险）
             let (status, _current_hash) = {
@@ -663,30 +676,7 @@ impl PluginManager {
             };
             match status {
                 ApprovalStatus::Approved => {
-                    // 生效权限 = 用户批准 ∩ manifest 请求（storage 恒授予），
-                    // 收紧 LoadedPlugin.granted_permissions（宿主侧权限裁决点）。
-                    // 注：WASM 实例内嵌权限集为实例化时的全量（上限），
-                    // 宿主侧检查（manager.has_permission 等）以本集合为准。
-                    let requested = {
-                        let plugins = self.plugins.read().await;
-                        plugins
-                            .get(plugin_id)
-                            .map(|p| p.manifest.permissions.clone())
-                            .unwrap_or_default()
-                    };
-                    let effective = effective_permissions(&requested, approval.as_ref(), false);
-                    // 统一权限门（单形态 2026-10-13）：WASM 实例内的 host-* 权限判定
-                    // 收敛内核 `PermissionManager`（core_binding 8 域）——把生效权限
-                    // 集 grant 进统一词表（词表外词静默过滤，不影响移动独有域读
-                    // `granted_permissions` 全量）
-                    if let Some(ctx) = self.wasm_host_ctx.get() {
-                        let granted: Vec<String> = effective.iter().cloned().collect();
-                        ctx.grant_permissions(plugin_id, &granted);
-                    }
-                    let mut plugins = self.plugins.write().await;
-                    if let Some(p) = plugins.get_mut(plugin_id) {
-                        p.granted_permissions = effective;
-                    }
+                    effective_permissions(&requested, approval.as_ref(), false)
                 }
                 _ => {
                     // Pending / HashMismatch 一律置 NeedsApproval 并拒绝激活
@@ -714,7 +704,7 @@ impl PluginManager {
                     )));
                 }
             }
-        }
+        };
 
         // 0.5 预授权 — 审批门禁之后、状态写之前(无锁);失败直接返回,
         // 前端 catch 后回退 toggle。loading 遮罩由前端 toggle 推迟到此
@@ -738,6 +728,43 @@ impl PluginManager {
             }
             plugin.manifest.plugin_type.clone()
         };
+
+        // 1.5 授予生效权限（桌面 `PluginHost::activate_plugin` 同款：每次激活重新授予
+        // ——停用会 revoke，重激活不复授就全拒）。唯一真源 = 内核 `PermissionManager`：
+        // 宿主 adapter 判定（bindings / host_domains）与内核 core_binding 域读同一份，
+        // 移动独有 `granted_permissions` 镜像已退役（2026-10-14 权限面桌面同构）。
+        // 授予必须早于 guest activate：插件启动期（activate / on_startup）即可用宿主能力。
+        if let Some(ctx) = self.wasm_host_ctx.get() {
+            let effective_vec: Vec<String> = effective.iter().cloned().collect();
+            let granted = ctx.grant_permissions(plugin_id, &effective_vec);
+            // 受信来源：manifest 声明但未生效 = 不在 SDK 词表（授权时被过滤）——
+            // 必须可见，否则插件作者只能靠运行时 denied 反推（桌面同款告警）。
+            // 用户安装插件不查：未批准位本就不在生效集，告警会误导。
+            if trusted_source {
+                let dropped: Vec<&String> = requested
+                    .iter()
+                    .filter(|p| !granted.contains(p.as_str()))
+                    .collect();
+                if !dropped.is_empty() {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        dropped = ?dropped,
+                        "plugin manifest declared permissions outside the SDK vocabulary; filtered at grant time"
+                    );
+                }
+            }
+            tracing::info!(
+                plugin_id = %plugin_id,
+                granted = granted.len(),
+                "plugin permissions granted (effective set)"
+            );
+        } else {
+            // 上下文未装配（扫描前 / 无头异常）：不授予——后续 host 调用一律 fail-closed 拒绝
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "WASM host context not initialized; activation continues with no granted permissions"
+            );
+        }
 
         if plugin_type != PluginType::Wasm {
             // TS-only 插件：仅标记状态
@@ -864,17 +891,25 @@ impl PluginManager {
         crate::plugin::host_domains::purge_for_plugin(self.wasm_host_ctx(), plugin_id);
 
         // 1. 检查状态与插件类型（短锁）
-        let plugin_type = {
+        let (plugin_type, was_active) = {
             let mut plugins = self.plugins.write().await;
             let plugin = plugins
                 .get_mut(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-            if !matches!(plugin.state, PluginState::Activated | PluginState::Degraded { .. }) {
-                return Ok(());
-            }
-            plugin.manifest.plugin_type.clone()
+            (
+                plugin.manifest.plugin_type.clone(),
+                matches!(plugin.state, PluginState::Activated | PluginState::Degraded { .. }),
+            )
         };
+        if !was_active {
+            // 未在运行（Loaded / Deactivated / Error）：无 guest 需要清理，直接收权——
+            // Error 态可能是「激活成功后前端 mark_error」残留，授权不能留在下一轮激活
+            if let Some(ctx) = self.wasm_host_ctx.get() {
+                ctx.revoke_permissions(plugin_id);
+            }
+            return Ok(());
+        }
 
         // 2. WASM 插件：取实例句柄（短锁），执行 deactivate 导出（不持 map 守卫）
         if plugin_type == PluginType::Wasm {
@@ -896,7 +931,16 @@ impl PluginManager {
         // 3. 清理消息总线订阅（async 上下文直接 await，禁止 block_on）
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        // 4. 更新状态（短锁）
+        // 4. 权限随停用撤销（桌面 `PluginHost::deactivate_plugin` 的 `revoke_all` 同款）：
+        // 真源是内核 PermissionManager，未撤销的授权会活到下一轮激活。放在 guest
+        // deactivate **之后**——清理期 guest 仍要调宿主原语（mdns 停浏览 / peer 断开 /
+        // 总线退订），先收权会把插件自己的清理动作拒掉；且在 plugins 锁之前取权限
+        // 锁，避免锁序交叉。
+        if let Some(ctx) = self.wasm_host_ctx.get() {
+            ctx.revoke_permissions(plugin_id);
+        }
+
+        // 5. 更新状态（短锁）
         let mut plugins = self.plugins.write().await;
         if let Some(plugin) = plugins.get_mut(plugin_id) {
             plugin.state = PluginState::Deactivated;
@@ -942,13 +986,14 @@ impl PluginManager {
             .unwrap_or(false)
     }
 
-    /// 插件是否持有指定权限（加载时从 manifest 解析并过滤为合法权限集）
+    /// 插件是否持有指定权限（真源 = 内核 `PermissionManager`，2026-10-14 桌面同构）
+    ///
+    /// 与桌面 `host_api::check_permission` 同一判定；上下文未装配即拒（fail-closed）。
     pub async fn has_permission(&self, plugin_id: &str, permission: &str) -> bool {
-        let plugins = self.plugins.read().await;
-        plugins
-            .get(plugin_id)
-            .map(|p| p.granted_permissions.contains(permission))
-            .unwrap_or(false)
+        match self.wasm_host_ctx.get() {
+            Some(ctx) => ctx.has_permission(plugin_id, permission),
+            None => false,
+        }
     }
 
     /// 查询插件启用状态
@@ -969,9 +1014,20 @@ impl PluginManager {
     }
 
     /// 标记插件错误状态
+    ///
+    /// 例外：`NeedsApproval` 不被覆盖——待审批是「需要用户动作」的事实（壳的详情页
+    /// / 权限总览靠它派生审批入口），被通用 `Error` 覆盖会让审批入口消失（前端
+    /// loader 在 `plugin_activate` 失败后固定调本方法，审批被拒走的正是那条路径）。
     pub async fn mark_error(&self, plugin_id: &str, error: String) {
         let mut plugins = self.plugins.write().await;
         if let Some(plugin) = plugins.get_mut(plugin_id) {
+            if plugin.state == PluginState::NeedsApproval {
+                tracing::debug!(
+                    plugin_id = %plugin_id,
+                    "mark_error skipped: plugin needs approval (approval entry must stay visible)"
+                );
+                return;
+            }
             plugin.state = PluginState::Error { error };
         }
     }
@@ -1250,8 +1306,7 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
 mod tests {
     use super::*;
     use crate::plugin::wasm_runtime::LoadedWasmPlugin;
-    use bedcode_wasm_core::test_support::{build_host_ctx, build_test_component};
-    use std::collections::HashSet;
+    use bedcode_wasm_core::test_support::build_test_component;
     use std::sync::Arc as StdArc;
     use tempfile::TempDir;
     use wasmtime::component::Component;
@@ -1332,7 +1387,6 @@ mod tests {
             LoadedPlugin {
                 manifest,
                 state,
-                granted_permissions: HashSet::new(),
                 source: PluginSource::ApkAsset, // 信任域放行审批门禁（manager.rs:514）
                 extension_path: "/tmp/test".to_string(),
             },
@@ -1341,14 +1395,17 @@ mod tests {
 
     /// 用真组件实例化一个 LoadedWasmPlugin 并塞入 manager.wasm_plugins
     async fn attach_wasm(manager: &PluginManager, pid: &str, features: &[&str]) {
-        let host_ctx = build_host_ctx();
+        // 与生产同形：实例共享宿主唯一上下文（权限真源 = 管理器，2026-10-14 收口）
+        let host_ctx = manager
+            .wasm_host_ctx
+            .get()
+            .expect("host ctx initialized")
+            .clone();
         let runtime = manager.wasm_runtime.get().expect("wasm runtime initialized");
         let component =
             Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(runtime), &build_test_component(features)).expect("compile test component");
-        // 统一 instantiate（单形态）：权限经 for_plugin 派生上下文注入
-        let plugin_ctx = Arc::new(host_ctx.for_plugin(HashSet::new()));
         let loaded: LoadedWasmPlugin = runtime
-            .instantiate_component(&component, pid, plugin_ctx, &[], None)
+            .instantiate_component(&component, pid, host_ctx, &[], None)
             .expect("instantiate component");
         let mut wasm_plugins = manager.wasm_plugins.write().await;
         wasm_plugins.insert(pid.to_string(), StdArc::new(tokio::sync::Mutex::new(loaded)));
@@ -1527,7 +1584,6 @@ mod tests {
             LoadedPlugin {
                 manifest,
                 state: PluginState::Loaded,
-                granted_permissions: HashSet::new(),
                 source: PluginSource::RemoteDownload,
                 extension_path: ext_dir.to_string_lossy().to_string(),
             },
@@ -1573,9 +1629,47 @@ mod tests {
         assert_eq!(info.state, PluginState::NeedsApproval);
     }
 
+    /// 构造信任源（ApkAsset）插件记录：审批门禁直接放行（内置插件路径）
+    async fn seed_trusted_plugin(
+        manager: &PluginManager,
+        pid: &str,
+        permissions: Vec<String>,
+        plugin_type: bedcode_plugin_api_mobile::types::PluginType,
+    ) {
+        let manifest = bedcode_plugin_api_mobile::types::PluginManifest {
+            id: pid.to_string(),
+            name: pid.to_string(),
+            version: "0.1.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            main: String::new(),
+            plugin_type,
+            permissions,
+            contributes: bedcode_plugin_api_mobile::types::PluginContributes {
+                lifecycle: None,
+                ..Default::default()
+            },
+            icon: None,
+            wasm_hash: String::new(),
+            rust_library: String::new(),
+            preauth_dirs: vec![],
+            preauth_urls: vec![],
+        };
+        let mut plugins = manager.plugins.write().await;
+        plugins.insert(
+            pid.to_string(),
+            LoadedPlugin {
+                manifest,
+                state: PluginState::Loaded,
+                source: PluginSource::ApkAsset,
+                extension_path: "/tmp/test".to_string(),
+            },
+        );
+    }
+
     #[tokio::test]
     async fn test_activate_approved_plugin_grants_effective_permissions() {
-        // 闸门正例：批准 ∩ manifest 请求 = 生效权限（storage 恒授予）
+        // 闸门正例：批准 ∩ manifest 请求 = 生效权限（唯一真源 = 内核 PermissionManager）
         let (manager, _tmp) = setup_manager().await;
         let pid = "com.bedcode.test.mgr-approve";
         let ext_dir = manager.plugins_dir().join(pid);
@@ -1610,20 +1704,108 @@ mod tests {
         manager.activate(pid).await.expect("approved 应激活成功");
         let info = manager.get_info(pid).await.expect("info");
         assert_eq!(info.state, PluginState::Activated);
-        let granted = manager
-            .plugins
-            .read()
-            .await
-            .get(pid)
-            .expect("plugin record")
-            .granted_permissions
-            .clone();
-        assert!(granted.contains("storage"), "storage 恒授予");
-        assert!(granted.contains("session:read"), "批准权限应生效");
+        // 生效权限集直接读权限真源（内核 PermissionManager），不再经 LoadedPlugin 镜像
         assert!(
-            !granted.contains("terminal:output"),
+            manager.has_permission(pid, "storage").await,
+            "批准且声明 → 生效"
+        );
+        assert!(
+            manager.has_permission(pid, "session:read").await,
+            "批准权限应生效"
+        );
+        assert!(
+            !manager.has_permission(pid, "terminal:output").await,
             "未批准权限不得生效（生效 = 批准 ∩ 请求）"
         );
+    }
+
+    #[tokio::test]
+    async fn test_activate_trusted_plugin_grants_manifest_permissions() {
+        // 内置（ApkAsset）插件：无需审批，激活后持有 manifest 声明权限（词表外声明被过滤）。
+        // 回归：修复前内建插件从不授予 PermissionManager，host_storage_get 恒拒
+        // （真机日志 file-transfer permission=storage api=host_storage_get）。
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-trusted";
+        seed_trusted_plugin(
+            &manager,
+            pid,
+            vec![
+                "storage".to_string(),
+                "fs:read".to_string(),
+                "not-a-permission".to_string(),
+            ],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+
+        manager.activate(pid).await.expect("内置插件激活成功");
+
+        assert!(
+            manager.has_permission(pid, "storage").await,
+            "manifest 声明即生效（内置插件）"
+        );
+        assert!(manager.has_permission(pid, "fs:read").await);
+        assert!(
+            !manager.has_permission(pid, "not-a-permission").await,
+            "词表外声明在授权时被过滤"
+        );
+        assert!(
+            !manager.has_permission(pid, "terminal:output").await,
+            "未声明即无（无默认授予）"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deactivate_revokes_all_permissions() {
+        // 停用撤销（桌面 `revoke_all` 同款）：未撤销的授权会活到下一轮激活之前
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-revoke";
+        seed_trusted_plugin(
+            &manager,
+            pid,
+            vec!["storage".to_string()],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+        manager.activate(pid).await.expect("activate");
+        assert!(manager.has_permission(pid, "storage").await, "激活期已授权");
+
+        manager.deactivate(pid).await.expect("deactivate");
+
+        assert!(
+            !manager.has_permission(pid, "storage").await,
+            "停用后权限全部撤销"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mark_error_keeps_needs_approval_state() {
+        // 待审批是需用户动作的事实：前端 loader 在 plugin_activate 失败后固定调
+        // mark_error，若被覆盖成 Error，壳的审批入口（详情页 / 权限总览）会消失
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-needs-approval";
+        seed_plugin(&manager, pid, PluginState::NeedsApproval).await;
+
+        manager.mark_error(pid, "activation failed".to_string()).await;
+
+        let info = manager.get_info(pid).await.expect("info");
+        assert_eq!(info.state, PluginState::NeedsApproval);
+    }
+
+    #[tokio::test]
+    async fn test_mark_error_sets_error_for_other_states() {
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-mark-error";
+        seed_plugin(&manager, pid, PluginState::Loaded).await;
+
+        manager.mark_error(pid, "frontend load failed".to_string()).await;
+
+        match manager.get_info(pid).await.expect("info").state {
+            PluginState::Error { error } => {
+                assert!(error.contains("frontend load failed"), "err: {error}")
+            }
+            other => panic!("期望 Error 终态，实际: {other:?}"),
+        }
     }
 
     #[tokio::test]

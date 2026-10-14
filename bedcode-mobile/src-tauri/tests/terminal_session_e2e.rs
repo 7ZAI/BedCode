@@ -2,9 +2,7 @@
 //! （票 12 · ABI v15；票 05 迁移动宿主集成测试）
 
 
-use std::collections::HashSet;
 use std::sync::Arc;
-
 use bedcode_wasm_core::manager::runtime::{LoadedWasmPlugin, WasmRuntime};
 use bedcode_wasm_core::test_support::{build_test_component, test_engine, TEST_PLUGIN_ID};
 use wasmtime::component::Component;
@@ -87,16 +85,21 @@ fn terminal_session_domain_full_loop_with_real_component() {
         let component =
             Component::from_binary(bedcode_wasm_core::test_support::runtime_engine(&runtime), &build_test_component(&["terminal-session"]))
                 .expect("compile terminal-session component");
+        // 权限真源 = 内核 PermissionManager（2026-10-14 桌面同构）：向共享上下文
+        // 授权后再实例化（逐实例 `granted_permissions` 副本 / for_plugin 参数已退役）
+        host_ctx.grant_permissions(
+            TEST_PLUGIN_ID,
+            &[
+                PERMISSION_WS_CLIENT.to_string(),
+                bedcode_plugin_api_mobile::permission::PERMISSION_BUS.to_string(),
+                bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT.to_string(),
+            ],
+        );
         let mut plugin = runtime
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                // 权限经 for_plugin 派生 per-plugin 上下文注入（统一 instantiate 签名）
-                Arc::new(host_ctx.for_plugin(HashSet::from([
-                    PERMISSION_WS_CLIENT.to_string(),
-                    bedcode_plugin_api_mobile::permission::PERMISSION_BUS.to_string(),
-                    bedcode_plugin_api_mobile::permission::PERMISSION_TERMINAL_OUTPUT.to_string(),
-                ]))),
+                Arc::clone(&host_ctx),
                 &[],
                 None,
             )

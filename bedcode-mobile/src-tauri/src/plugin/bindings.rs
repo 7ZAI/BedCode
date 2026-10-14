@@ -35,10 +35,13 @@ pub fn ctx_of(state: &bedcode_host_kit::WasmPluginState) -> &crate::plugin::wasm
 
 /// 插件权限门（宿主 adapter 统一入口）
 ///
-/// 权限集 = `WasmHostContext::granted_permissions`（实例化时按插件注入）；
+/// 权限真源 = 内核 `PermissionManager`（`WasmHostContext::has_permission`；
+/// 与桌面 `host_api::check_permission` 同一判定）。移动历史上按实例化时注入的
+/// `granted_permissions` 副本仲裁——副本已退役（2026-10-14 权限面桌面同构），
+/// 否则审批收窄与停用撤销都到不了 adapter 门。
 /// 拒绝时落 `warn`（结构化字段，AGENTS §8），域函数不重复落日志。
 pub fn check_permission(state: &bedcode_host_kit::WasmPluginState, permission: &str, api: &str) -> bool {
-    let allowed = ctx_of(state).granted_permissions.contains(permission);
+    let allowed = ctx_of(state).has_permission(&state.plugin_id, permission);
     if !allowed {
         tracing::warn!(
             plugin_id = %state.plugin_id,

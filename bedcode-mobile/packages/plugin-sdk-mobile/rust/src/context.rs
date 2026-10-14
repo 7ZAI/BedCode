@@ -199,10 +199,14 @@ mod tests {
     #[test]
     fn test_has_permission_consults_manager() {
         let (ctx, _, _, _, _) = make_context(&["mdns"]);
-        // storage 默认授予，无需显式请求
-        assert!(ctx.has_permission("storage"));
+        // 无默认位（2026-10-14 桌面同构）：未声明的 storage 不授予
+        assert!(!ctx.has_permission("storage"));
         assert!(ctx.has_permission("mdns"));
         assert!(!ctx.has_permission("terminal:output"));
+
+        // 显式声明时才持有
+        let (ctx, _, _, _, _) = make_context(&["mdns", "storage"]);
+        assert!(ctx.has_permission("storage"));
     }
 
     // ==================== Storage API（透传 plugin_id 前缀） ====================

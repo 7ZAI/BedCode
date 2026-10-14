@@ -67,7 +67,7 @@ struct StateDiscoveryPorts {
     host_ports: Arc<dyn HostEnginePorts>,
     /// 宿主 AppHandle（节点 ID 查询入口；无头 / purge 形态 None）
     app: Option<Arc<tauri::AppHandle>>,
-    /// 该插件实例是否已授权 `network:mdns`（构造时结算，权限门零延迟）
+    /// 该插件实例是否已授权 `network:mdns`（构造时向内核权限真源结算，权限门零延迟）
     permitted: bool,
 }
 
@@ -80,8 +80,12 @@ impl StateDiscoveryPorts {
             // 无头 / 测试形态 app_handle 为 None：自播回显不拦截（与历史 is_self_broadcast
             // 的 None 分支同口径）
             app: host_ctx(state).app_handle.clone(),
-            permitted: host_ctx(state).granted_permissions
-                .contains(bedcode_plugin_api_mobile::permission::PERMISSION_MDNS),
+            // 权限真源 = 内核 PermissionManager（`WasmHostContext::has_permission`）；
+            // 构造时取快照（引擎事件线程会长期持有本端口，目的权限门零延迟）
+            permitted: host_ctx(state).has_permission(
+                &state.plugin_id,
+                bedcode_plugin_api_mobile::permission::PERMISSION_MDNS,
+            ),
         })
     }
 
@@ -107,8 +111,9 @@ impl DiscoveryTask for TauriSpawnedTask {
 
 impl DiscoveryPorts for StateDiscoveryPorts {
     fn check_permission(&self, _plugin_id: &str, _api: &str) -> bool {
-        // 权限仲裁走 manifest granted_permissions（与桌面 check_permission 同语义）；
-        // 引擎在每次原语入口先问本门，denied 时原语直接拒绝（fail-closed）
+        // 权限仲裁已统一到内核 PermissionManager（构造时向真源结算的快照，
+        // 与桌面 check_permission 同语义）；引擎在每次原语入口先问本门，
+        // denied 时原语直接拒绝（fail-closed）
         self.permitted
     }
 

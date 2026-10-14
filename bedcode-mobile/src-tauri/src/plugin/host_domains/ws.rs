@@ -90,8 +90,12 @@ impl StateWsClientPorts {
             bus: Arc::clone(&host_ctx(state).message_bus),
             host_ports: Arc::clone(&host_ctx(state).ports),
             runtime: current_handle().clone(),
-            permitted: host_ctx(state).granted_permissions
-                .contains(bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT),
+            // 权限真源 = 内核 PermissionManager（`WasmHostContext::has_permission`）；
+            // 构造时取快照（reader / writer 任务会长期持有本端口，权限门零延迟）
+            permitted: host_ctx(state).has_permission(
+                &state.plugin_id,
+                bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT,
+            ),
         })
     }
 }
@@ -132,8 +136,9 @@ impl ReconnectPolicy for StateReconnectPolicy {
 impl WsClientPorts for StateWsClientPorts {
     /// 权限门（fail-closed）：出站连接是 SSRF 面，未在 manifest 声明即拒
     fn check_permission(&self, _plugin_id: &str) -> bool {
-        // 权限仲裁走 manifest granted_permissions（与 mdns 域同语义）；引擎在每次
-        // 原语入口先问本门，denied 时原语直接拒绝并给出统一文案
+        // 权限仲裁已统一到内核 PermissionManager（构造时向真源结算的快照，
+        // 与 mdns 域同语义）；引擎在每次原语入口先问本门，denied 时原语直接
+        // 拒绝并给出统一文案
         self.permitted
     }
 
@@ -260,26 +265,27 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
 mod tests {
     use super::*;
     use bedcode_wasm_core::bus::MessageBus;
-    use std::collections::HashSet;
 
     /// 无头插件状态：权限集按 `ws:client` 授权开关构建
     ///
     /// 旧 fork 版本的字段直构（host_ctx / runtime_handle / granted_permissions）随
-    /// 统一 host-kit state 退役：现经 test_support 的 `build_host_ctx`（无头上下文
-    /// 同形夹具）+ `for_plugin` 权限面 + `WasmPluginState::new` 装配（管理域测试
-    /// 同款路径，wasm-core-mobile-purity 票 04）。runtime 句柄不再进 state——
-    /// ws 引擎侧统一走 `current_handle()`（无上下文线程回落 ambient）。
+    /// 统一 host-kit state 退役；逐实例权限副本也已退役（2026-10-14）：现经
+    /// test_support 的 `build_host_ctx`（无头上下文同形夹具）+ 内核
+    /// `grant_permissions`（与生产激活路径同一入口）+ `WasmPluginState::new` 装配
+    /// （管理域测试同款路径，wasm-core-mobile-purity 票 04）。runtime 句柄不再进
+    /// state——ws 引擎侧统一走 `current_handle()`（无上下文线程回落 ambient）。
     fn state(
         plugin_id: &str,
         ws_granted: bool,
         _runtime: tokio::runtime::Handle,
     ) -> WasmPluginState {
-        let mut granted_permissions = HashSet::new();
-        if ws_granted {
-            granted_permissions
-                .insert(bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT.to_string());
-        }
-        let ctx = std::sync::Arc::new(bedcode_wasm_core::test_support::build_host_ctx().for_plugin(granted_permissions));
+        let ctx = bedcode_wasm_core::test_support::build_host_ctx();
+        let granted: Vec<String> = if ws_granted {
+            vec![bedcode_plugin_api_mobile::permission::PERMISSION_WS_CLIENT.to_string()]
+        } else {
+            Vec::new()
+        };
+        ctx.grant_permissions(plugin_id, &granted);
         bedcode_wasm_core::test_support::build_component_state_with_ctx(plugin_id, ctx)
     }
 

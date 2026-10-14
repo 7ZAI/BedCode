@@ -187,15 +187,10 @@ impl PluginLoader {
                         if wasm_file.exists() {
                             match wasm_runtime.compile_component_from_file(&wasm_file) {
                                 Ok(component) => {
-                                    // 与 SDK PermissionManager::grant_permissions 语义一致：storage 默认授予
-                                    let mut granted: std::collections::HashSet<String> =
-                                        manifest.permissions.iter().cloned().collect();
-                                    granted
-                                        .insert(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string());
-                                    // 统一 instantiate（单形态）：权限经 for_plugin 派生 per-plugin
-                                    // 上下文注入（移动语义保留）；preopen 声明与资源覆盖移动无
-                                    // 桌面 worker 通道 / manifest 覆盖面 ⇒ 传空与 None
-                                    let plugin_ctx = Arc::new(wasm_host_ctx.for_plugin(granted));
+                                    // 统一 instantiate（单形态）：宿主上下文按插件共享同一份（权限真源 =
+                                    // 内核 `PermissionManager`，激活时授予/停用时撤销）；
+                                    // preopen 声明与资源覆盖移动无桌面 worker 通道 / manifest 覆盖面 ⇒ 传空与 None
+                                    let plugin_ctx = wasm_host_ctx.clone();
                                     match wasm_runtime.instantiate_component(
                                         &component,
                                         &plugin_id,
@@ -237,12 +232,9 @@ impl PluginLoader {
                         }
                     }
 
-                    let permissions: std::collections::HashSet<String> = manifest.permissions.iter().cloned().collect();
-
                     let loaded = LoadedPlugin {
                         manifest,
                         state: PluginState::Loaded,
-                        granted_permissions: permissions,
                         source,
                         extension_path,
                     };

@@ -28,6 +28,22 @@ use wasmtime::ResourceLimiter;
 
 use bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE;
 
+/// 授权并取共享宿主上下文（2026-10-14 权限面桌面同构）
+///
+/// 权限真源 = 内核 `PermissionManager`：逐实例 `granted_permissions` 副本 /
+/// `for_plugin` 参数已退役；需要权限的岗位先向共享上下文授权，再注入实例。
+fn ctx_with_grant(
+    host_ctx: &Arc<bedcode_wasm_core::host_api::WasmHostContext>,
+    plugin_id: &str,
+    granted: HashSet<String>,
+) -> Arc<bedcode_wasm_core::host_api::WasmHostContext> {
+    let requested: Vec<String> = granted.into_iter().collect();
+    if !requested.is_empty() {
+        host_ctx.grant_permissions(plugin_id, &requested);
+    }
+    Arc::clone(host_ctx)
+}
+
 /// 组件完整加载往返：实例化 + 形态校验（移动 WIT 无 abi-form 导出⇒ 宿主不要求）
 /// + 导出完整性 + 燃料注入生效 + manifest 读取 + Host trait（storage/log）接线直测
 
@@ -71,7 +87,7 @@ fn test_component_roundtrip_and_host_impl() {
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(HashSet::from([PERMISSION_STORAGE.to_string()]))),
+                ctx_with_grant(&host_ctx, TEST_PLUGIN_ID, HashSet::from([PERMISSION_STORAGE.to_string()])),
                 &[],
                 None,
             )
@@ -138,7 +154,7 @@ fn test_component_business_methods_roundtrip() {
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(HashSet::from([PERMISSION_STORAGE.to_string()]))),
+                ctx_with_grant(&host_ctx, TEST_PLUGIN_ID, HashSet::from([PERMISSION_STORAGE.to_string()])),
                 &[],
                 None,
             )
@@ -218,7 +234,7 @@ fn test_component_fuel_trap() {
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(HashSet::new())),
+                ctx_with_grant(&host_ctx, TEST_PLUGIN_ID, HashSet::new()),
                 &[],
                 None,
             )
@@ -275,7 +291,7 @@ fn test_component_limiter_rejects_over_limit_memory() {
             .instantiate_component(
                 &component,
                 TEST_PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(HashSet::new())),
+                ctx_with_grant(&host_ctx, TEST_PLUGIN_ID, HashSet::new()),
                 &[],
                 None,
             )
@@ -333,7 +349,7 @@ fn test_sdk_macro_component_loads_and_activates() {
             .instantiate_component(
                 &component,
                 "com.bedcode.terminal-session",
-                Arc::new(host_ctx.for_plugin(granted)),
+                ctx_with_grant(&host_ctx, "com.bedcode.terminal-session", granted),
                 &[],
                 None,
             )

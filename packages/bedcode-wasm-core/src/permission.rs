@@ -1,11 +1,12 @@
-//! 权限管理器（Host）——中性自持副本（票 02 M4）
+//! 权限管理器（Host）——双端唯一真源（2026-10-14 移动权限面收口）
 //!
 //! Permission Manager
 //!
-//! 插件权限校验 — 双重校验的后端最终仲裁层
-//! 中性自持副本（票 02 M4）：原为桌面 SDK 的 `permission` 模块再导出，现整份
-//! 自持于 wasm-core（机制层零 SDK 依赖；移动宿主不经本表仲裁——其 granted
-//! 权限面直取 manifest，词汇表不在机制内）
+//! 插件权限校验 — 双重校验的后端最终仲裁层。桌面与移动的授权/撤销/判定全部落
+//! 本表（桌面 `PluginHost` 与移动 `PluginManager` 同一条路径）；移动宿主原有的
+//! `granted_permissions` 副本 + `for_plugin` 逐实例注入已退役。本模块由 wasm-core
+//! 自持（机制层零 SDK 依赖），宿主侧经 `WasmHostContext::{grant_permissions,
+//! has_permission, granted_permissions, revoke_permissions}` 窄接口进出。
 //!
 //! **权限词汇单一真源**：本文件的 [`VALID_PERMISSIONS`] 与 [`PERMISSION_API_MAP`]
 //! 是桌面端唯一的权限清单。打包 CLI（`bin/cli.js`）与宿主前端（`src/plugin/permission.ts`）

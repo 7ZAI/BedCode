@@ -78,6 +78,19 @@ fn read_artifact(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|e| panic!("read artifact {}: {e}", path.display()))
 }
 
+
+/// 授权并取共享宿主上下文（2026-10-14 权限面桌面同构）
+///
+/// 权限真源 = 内核 `PermissionManager`：逐实例 `granted_permissions` 副本 /
+/// `for_plugin` 参数已退役；本探针按 manifest 声明授权（等价宿主激活路径）。
+fn ctx_with_declared_permissions(
+    host_ctx: &Arc<bedcode_wasm_core::host_api::WasmHostContext>,
+) -> Arc<bedcode_wasm_core::host_api::WasmHostContext> {
+    let requested: Vec<String> = declared_permissions().into_iter().collect();
+    host_ctx.grant_permissions(PLUGIN_ID, &requested);
+    Arc::clone(host_ctx)
+}
+
 /// 移动 manifest 声明的权限集（真实加载路径：宿主从文件读 manifest）
 fn declared_permissions() -> HashSet<String> {
     let manifest_path = mobile_root()
@@ -146,7 +159,7 @@ fn desktop_artifact_instantiates_on_mobile_host_closing_desktop_only_imports() {
             .instantiate_component(
                 &component,
                 PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(declared_permissions())),
+                ctx_with_declared_permissions(&host_ctx),
                 &[],
                 None,
             )
@@ -187,7 +200,7 @@ fn mobile_vocabulary_event_dispatches_into_desktop_built_artifact() {
             .instantiate_component(
                 &component,
                 PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(declared_permissions())),
+                ctx_with_declared_permissions(&host_ctx),
                 &[],
                 None,
             )
@@ -229,7 +242,7 @@ fn desktop_only_command_is_visibly_unsupported_on_mobile_branch() {
             .instantiate_component(
                 &component,
                 PLUGIN_ID,
-                Arc::new(host_ctx.for_plugin(declared_permissions())),
+                ctx_with_declared_permissions(&host_ctx),
                 &[],
                 None,
             )

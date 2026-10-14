@@ -7,7 +7,6 @@ pub use bedcode_plugin_api_mobile::types::PluginManifest;
 pub use bedcode_plugin_api_mobile::types::*;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// 插件来源
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +25,6 @@ pub enum PluginSource {
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     pub state: bedcode_plugin_api_mobile::types::PluginState,
-    pub granted_permissions: HashSet<String>,
     /// 插件来源
     pub source: PluginSource,
     /// 插件目录路径（包含 plugin.json 的目录）

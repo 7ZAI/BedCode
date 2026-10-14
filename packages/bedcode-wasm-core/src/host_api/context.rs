@@ -23,7 +23,7 @@
 //! `manager/runtime.rs` 保留 `pub use` 再导出（manager→host_api 合法方向），
 //! 历史路径编译绿直至迭代清理。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -240,7 +240,7 @@ pub struct WasmHostContext {
     /// 住宿主，内核侧无第二读者（内核自己的 `get_or_create_plugin_db` 走另一布局）。
     pub plugin_dbs: Arc<Mutex<HashMap<String, Arc<Mutex<Database>>>>>,
     /// `pub`：移动宿主 adapter（`plugin/host_domains/storage.rs`）直读字段
-    /// （票 05 绑定归位后域逻辑住宿主，与 `ports` / `granted_permissions` 同侧先例）。
+    /// （票 05 绑定归位后域逻辑住宿主，与 `ports` / `plugin_dbs` 同侧先例）。
     pub storage: Arc<PluginStorage>,
     /// 密钥托管读缓存（v15 host-auth）：read-through（get 命中直接返回，
     /// set/delete 失效对应键）；真源为主库 plugin_secrets 表（重启后一致）
@@ -286,8 +286,8 @@ pub struct WasmHostContext {
     api_registry: Arc<crate::security::api_registry::ApiRegistry>,
     /// 统一授权框架（core-security）：三段决策管线 + 仲裁器注册表
     ///
-    /// 票 02 B5 改 `Arc`：移动 `for_plugin` 逐插件派生上下文需共享同一框架
-    /// （注册表语义是宿主级，逐实例复制会丢 FsAuthorizer/ApiCallAuthorizer）。
+    /// 票 02 B5 改 `Arc`：宿主上下文（含历史逐插件派生，`for_plugin` 已于 2026-10-14 删）
+    /// 需共享同一框架（注册表语义是宿主级，逐实例复制会丢 FsAuthorizer/ApiCallAuthorizer）。
     /// 访问器 [`Self::security`] 返回 `&SecurityFramework`（`Arc::as_ref`），消费点零改动。
     security: Arc<crate::security::SecurityFramework>,
     /// 能力注册表（core-plugin-manager 票据 06）：能力名 → 宿主原语/系统组件
@@ -338,13 +338,6 @@ pub struct WasmHostContext {
     /// [`UnimplementedHostFacts`] 是 fail-visible 占位（无头 / 测试上下文命中即显性
     /// 失败，不猜端值）。
     host_facts: Arc<std::sync::RwLock<Arc<dyn HostFactsPort>>>,
-    /// 本插件的已授予权限集（移动装配面，票 02 B5 并入超集）：移动权限门在
-    /// 域函数内经此集合仲裁（**不经** [`PermissionManager`]——桌面 grant 过滤
-    /// 桌面词汇集，移动专属词会被滤 → 权限门恒拒），实例化时按插件注入。
-    /// 桌面形态不使用（权限判定走 `permission` 字段）。
-    ///
-    /// `pub`：移动宿主（外部 crate）的域 adapter（`plugin/bindings.rs`）直读。
-    pub granted_permissions: HashSet<String>,
     /// 插件错误状态上报回调（移动装配面，票 02 B5 并入超集）：由
     /// `host_mark_plugin_error` 触发（置 Error + 持久化未启用 + 前端通知）。
     /// 桌面等价物是 `plugin_services.mark_plugin_error`，构造给 noop 缺省。
@@ -532,7 +525,6 @@ impl WasmHostContext {
             platform_picker: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedPlatformPicker))),
             // 端事实缺省：未注入即 fail-visible（`set_host_facts` 装配期覆盖）
             host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
-            granted_permissions: HashSet::new(),
             status_reporter: Arc::new(|_, _| {}),
         }
     }
@@ -542,9 +534,9 @@ impl WasmHostContext {
     /// 用户裁决 2026-10-11「wasm-core 机制全部以桌面为准收敛一套」：`fs_auth`
     /// 与桌面同型 `Arc<FsAuthChecker>`（移动不再自持闸门实现，白名单管理命令随
     /// 移动实现退役——路径白名单 / 插件白名单语义不进入统一机制）；`permission` /
-    /// `capabilities` 给空缺省（移动权限门走 `granted_permissions`，能力路由无
-    /// 消费方）。
-    ///
+    /// `capabilities` 给空缺省（权限判定走内核 `PermissionManager`、由激活路径授予，
+    /// 能力路由无消费方；逐实例 `for_plugin` 派生已退役——调用方直接 `Arc::clone`
+    /// 共享上下文）。    ///
     /// 平台选择器**从 `ports` 派生**（[`EnginePortsPlatformPicker`]）：移动的 SAF
     /// 选择器端口与引擎端口同住 `plugin/host_ports.rs`，本构造器把两者一次接线；
     /// 端口未装配时推选即 `port_err` fail-visible（与 `new_headless` 同口径）。
@@ -589,7 +581,6 @@ impl WasmHostContext {
             platform_picker: Arc::new(std::sync::RwLock::new(platform_picker)),
             // 端事实缺省：移动/桌面宿主装配后经 `set_host_facts` 注入本端实现
             host_facts: Arc::new(std::sync::RwLock::new(Arc::new(UnimplementedHostFacts))),
-            granted_permissions: HashSet::new(),
             status_reporter,
         }
     }
@@ -605,41 +596,6 @@ impl WasmHostContext {
         status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync>,
     ) -> Self {
         Self::new_with_ports(db, storage, app_handle, fs_auth, message_bus, status_reporter, Arc::new(UnimplementedPorts))
-    }
-
-    /// 按插件实例化派生上下文（移动装配面）：共享全部机制句柄（Arc 克隆），
-    /// 替换权限集
-    ///
-    /// 实例化点调用（`manager/runtime/bare/component.rs::instantiate_component`）；
-    /// `plugin_dbs` 是进程级共享表（按 plugin_id 分区），其余字段为宿主装配期
-    /// 注入的共享句柄。`security` 是 `Arc<SecurityFramework>`（B5 起），逐实例
-    /// 共享同一注册表（复制会丢仲裁器）。
-    pub fn for_plugin(&self, granted_permissions: HashSet<String>) -> Self {
-        Self {
-            db: self.db.clone(),
-            plugin_dbs: self.plugin_dbs.clone(),
-            storage: self.storage.clone(),
-            secrets_cache: self.secrets_cache.clone(),
-            app_handle: self.app_handle.clone(),
-            plugin_db_root: self.plugin_db_root.clone(),
-            permission: self.permission.clone(),
-            fs_auth: self.fs_auth.clone(),
-            net_auth: self.net_auth.clone(),
-            message_bus: self.message_bus.clone(),
-            plugin_services: self.plugin_services.clone(),
-            task_engine: self.task_engine.clone(),
-            process_registry: self.process_registry.clone(),
-            api_registry: self.api_registry.clone(),
-            security: self.security.clone(),
-            capabilities: self.capabilities.clone(),
-            domain_ports: self.domain_ports.clone(),
-            peer_ctx_provider: self.peer_ctx_provider.clone(),
-            ports: self.ports.clone(),
-            platform_picker: self.platform_picker.clone(),
-            host_facts: self.host_facts.clone(),
-            granted_permissions,
-            status_reporter: self.status_reporter.clone(),
-        }
     }
 
     /// 为某能力域装配**实例级**端口（生产与无头测试共用此入口）
@@ -664,17 +620,40 @@ impl WasmHostContext {
         *self.plugin_db_root.write().unwrap_or_else(|e| e.into_inner()) = root;
     }
 
-    /// 为插件授予权限（测试装配便捷方法；manifest 授权路径的测试等价物）
+    /// 为插件授予权限（宿主激活路径入口；与桌面 `PluginHost::activate_plugin`
+    /// 的 `PermissionManager::grant_permissions` 同一实现）
     ///
     /// pub（wasm-core 纯净性收口票 05b）：lib 集成测试（session_e2e）经此装配
-    /// 权限——薄转发 `PermissionManager`（SDK，真源在 bedcode-plugin-api），
+    /// 权限——薄转发 `PermissionManager`（真源在 wasm-core `permission` 模块），
     /// 机制本体不变，`permission` 字段保持 pub(crate)。
+    ///
+    /// **双端唯一真源（2026-10-14）**：桌面与移动的权限面都只落本管理器；
+    /// 移动宿主不再自持 `granted_permissions` 镜像/副本（已删）。
     pub fn grant_permissions(
         &self,
         plugin_id: &str,
         requested: &[String],
     ) -> std::collections::HashSet<String> {
         self.permission.grant_permissions(plugin_id, requested)
+    }
+
+    /// 插件是否持有指定权限（宿主侧重判定统一入口）
+    ///
+    /// 双端同源：桌面 `host_api::check_permission`、移动宿主 adapter
+    /// （`plugin/bindings.rs` 与各 `host_domains` 端口）均经此判定。
+    pub fn has_permission(&self, plugin_id: &str, permission: &str) -> bool {
+        self.permission.check(plugin_id, permission)
+    }
+
+    /// 插件当前生效权限集快照（端口构造用；与 [`Self::has_permission`] 同源）
+    pub fn granted_permissions(&self, plugin_id: &str) -> std::collections::HashSet<String> {
+        self.permission.get_granted(plugin_id)
+    }
+
+    /// 撤销插件全部权限（停用路径；与桌面 `PluginHost::deactivate_plugin` 的
+    /// `revoke_all` 同一实现）
+    pub fn revoke_permissions(&self, plugin_id: &str) {
+        self.permission.revoke_all(plugin_id)
     }
 
     /// 读取插件私有库根目录覆盖（None = 走 app_handle 派生）
@@ -827,7 +806,8 @@ impl WasmHostContext {
     /// 获取统一授权框架引用（core-security 三段决策管线）
     /// 统一授权框架（core-security）：三段决策管线 + 仲裁器注册表
     ///
-    /// 票 02 B5：字段改 `Arc<SecurityFramework>`（for_plugin 共享注册表），
+    /// 票 02 B5：字段改 `Arc<SecurityFramework>`（宿主上下文共享同一注册表；
+    /// 历史逐实例派生 `for_plugin` 已于 2026-10-14 删），
     /// 访问器返回值不变（`Arc::as_ref` 解引用）。
     pub fn security(&self) -> &crate::security::SecurityFramework {
         self.security.as_ref()

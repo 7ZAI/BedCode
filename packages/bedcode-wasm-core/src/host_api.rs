@@ -138,8 +138,9 @@ pub(crate) mod sqlite_scaffold;
 
 // 票 05c：顶层 `grant_permissions`（常编译 pub）签名需要 WasmHostContext——
 // 统一上下文经 `pub use context::WasmHostContext` 常编译再导出（见文件头），
-// 本函数签名直接用该名，无需再 import。桌面装配面（移动形态的权限模型是
-// granted_permissions state 内仲裁，无此守卫——fork host_api.rs 无本段）
+// 本函数签名直接用该名，无需再 import。双端同源（2026-10-14 移动权限面收口）：
+// 桌面与移动的判定都走本守卫 → `WasmHostContext::has_permission` → 内核
+// `PermissionManager`，移动不再有 `granted_permissions` 副本。
 // ==================== Shared Guards ====================
 
 /// 统一权限守卫

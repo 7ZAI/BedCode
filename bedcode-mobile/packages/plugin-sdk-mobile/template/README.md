@@ -33,7 +33,7 @@ WASM 后端命令与真机专属能力仍需真机验证（见下方指南）。
 
 ## 常用修改点
 
-- **权限**：`plugin.json` 的 `permissions` 数组（`storage` 默认授予，其余按需声明）
+- **权限**：`plugin.json` 的 `permissions` 数组（全部按需声明，**含 `storage`**——无默认位，未声明即被拒）
 - **扩展点**：`plugin.json` 的 `contributes`（命令、视图、navTab、终端工具栏、设置区）
 - **前端逻辑**：`src/index.ts` 使用 `context` 提供的 API（`ui`/`events`/`storage`/`logger`/`dialogs` 等）
 

@@ -252,9 +252,9 @@ Rust permission.check() ──── 最终仲裁，拒绝越权调用
 
 ### 5.3 权限生命周期
 
-- **授予**：`PluginLoader::load_all()` 时调用 `grant_permissions()`，过滤非法权限
+- **授予**：`PluginLoader::load_builtin_and_user()` 时向 `PermissionManager` 授权（静态插件在 `PluginHost::new` 里同样授权），过滤非法权限
+- **激活重授**：`activate_plugin()` 按**生效权限**重新授予（受信来源 = manifest 全量；用户安装 = 批准 ∩ 请求）——`deactivate_plugin()` 会 `revoke_all()`，不复授则重激活后全拒（`manager/host/activation.rs`）
 - **撤销**：`deactivate_plugin()` 时调用 `revoke_all()`，清除所有已授予权限
-- **重新激活**：`activate_plugin()` 不重新授权（权限在 load 时已授予，deactivate 后被撤销，再次 activate 无权限）
 
 ## 6. PluginContext API
 

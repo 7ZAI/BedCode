@@ -9,9 +9,9 @@
 //! 三个端口方法即「离宿主无法实现」的三件事：
 //!
 //! - [`PeerPorts::check_permission`]：权限门（安全闸门不外出）——复用移动唯一
-//!   权限判定 `PluginManager::has_permission`（加载期 manifest 过滤后的
-//!   `granted_permissions` 集合）；manager 未初始化一律拒绝（fail-safe）。
-//!   拒绝时宿主侧落 `warn`（结构化字段，AGENTS §8），能力域不重复落日志。
+//!   权限判定 `PluginManager::has_permission`（真源 = 内核 `PermissionManager`，
+//!   与桌面 `host_api::check_permission` 同一份）；manager 未初始化一律拒绝
+//!   （fail-safe）。拒绝时宿主侧落 `warn`（结构化字段，AGENTS §8），能力域不重复落日志。
 //! - [`PeerPorts::peer_ctx`]：引擎上下文装配（`crate::peer::net::peer_ctx` 是
 //!   唯一认识 `AppHandle` 的引擎装配点）；无头（未持 AppHandle）返回能力域
 //!   定义的 `HEADLESS_UNAVAILABLE` 文案，不做静默降级。

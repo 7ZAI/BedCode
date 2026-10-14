@@ -99,7 +99,7 @@ The `PluginContext` received by `activate(context)` is the **single channel** th
 | `context.session` | Session list, status change subscription | `session:read` / `session:write` |
 | `context.ui` | Toolbox pages, bottom nav tabs, terminal toolbar, settings sections, dynamic routes | `ui:toolbox` / `ui:navtab` / `ui:settings` / `ui:input` / `ui:route` / `ui:back` |
 | `context.events` | Host event subscription & publishing (`on` / `emit`) | granted by default |
-| `context.storage` | Key-value storage (`get` / `set` / `delete`) | `storage` (default) |
+| `context.storage` | Key-value storage (`get` / `set` / `delete`) | `storage` |
 | `context.fileService` | File service mounts, SAF storage access, system pickers | `fileservice` |
 | `context.lifecycle` | App lifecycle hooks (start / connect / session / terminal I/O) | granted by default |
 | `context.dialogs` | Dialogs (`showDialog` / `showConfirm` / `showPrompt` / `showToast`) | granted by default |
@@ -108,6 +108,8 @@ The `PluginContext` received by `activate(context)` is the **single channel** th
 | `context.logger` | Leveled logging (`info` / `debug` / `warn` / `error`) | granted by default |
 | `context.i18n` | Register plugin translations, `t()` helper | granted by default |
 | `context.system` | System-level operations (e.g. open file with system viewer) | `system:open` |
+
+> Every permission must be declared — **there are no default grants** (including `storage`): the host grants the effective set from the manifest `permissions`; anything undeclared is denied.
 
 All `register*` / `on*` calls return a `Disposable`; the host collects them automatically on plugin deactivation — no manual `dispose()` needed.
 
