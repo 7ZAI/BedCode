@@ -21,6 +21,14 @@ use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState}
 use bedcode_plugin_api_mobile::permission::PERMISSION_NOTIFY;
 
 use crate::plugin::bindings::{bedcode, check_permission};
+// 平台桥三件套（panic 守卫 / 端口 trait / 异步桥）只被 `#[cfg(target_os =
+// "android")]` 分支使用——import 与平台分支同门开合，避免非 Android 构建报未用导入
+#[cfg(target_os = "android")]
+use crate::plugin::bindings::guarded;
+#[cfg(target_os = "android")]
+use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+#[cfg(target_os = "android")]
+use bedcode_wasm_core::runtime_util::block_on_async;
 
 bedcode_host_kit::expect_host_module!(MODULE_NAME);
 

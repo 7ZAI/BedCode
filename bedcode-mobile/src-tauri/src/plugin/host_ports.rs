@@ -383,7 +383,9 @@ impl HostEnginePorts for HostPorts {
 
     async fn notify_show(
         &self,
-        plugin_id: &str,
+        // Android 分支的 Kotlin 载荷只含 title/body/vibrate/sound（不带调用方
+        // 插件标识），故该参数仅在非 Android 兜底分支被消费
+        _plugin_id: &str,
         title: &str,
         body: &str,
         vibrate: bool,
@@ -410,7 +412,7 @@ impl HostEnginePorts for HostPorts {
         }
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (plugin_id, title, body, vibrate, sound);
+            let _ = (_plugin_id, title, body, vibrate, sound);
             Err("only supported on Android".to_string())
         }
     }
