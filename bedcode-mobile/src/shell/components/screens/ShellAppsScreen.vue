@@ -49,7 +49,7 @@
       </div>
 
       <!-- ==================== 已安装列表 ==================== -->
-      <ShellSection :title="t('shell.apps.installedTitle')" :note="t('shell.apps.installedNote')" />
+      <ShellSection :title="t('shell.apps.installedTitle')" />
       <div class="px-4 pb-1">
         <ShellGroupCard v-if="sortedApps.length > 0">
           <button

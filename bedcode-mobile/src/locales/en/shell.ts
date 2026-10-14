@@ -3,15 +3,13 @@
  *
  * Keys mirror zh-CN/shell.ts one-to-one (i18n bilingual discipline).
  * Grouping: home=home screen, switcher=recents, notify=notification shade,
- * systemBar=bottom system bar, settings=platform settings, permissions=permission manager.
+ * run=app run screen, settings=platform settings, permissions=permission manager.
+ *
+ * Copy discipline (2026-10-14 revision): state only facts and consequences a user can
+ * perceive — no platform implementation notes or prototype-stage explanations.
  */
 export default {
   shell: {
-    /** Entry row in the legacy settings page (kept in shell.ts to avoid clashing with parallel edits) */
-    entry: {
-      title: 'WASM app platform (host shell)',
-      subtitle: 'New platform shell · coexists with the current UI',
-    },
     common: {
       loading: 'Loading…',
       retry: 'Retry',
@@ -28,19 +26,17 @@ export default {
       localDevice: 'This device',
       appCount: '{count} apps',
       runningTitle: 'Running',
-      runningNote: 'Most recent first',
       switchTo: 'Switch to {name}',
       stopInstance: 'Stop',
       slotsTitle: 'Quick cards',
-      slotsNote: 'Provided by apps',
       appsTitle: 'My WASM apps',
       appsNote: '{count} installed',
-      manage: 'Manage',
+      /** Icon button in the app grid section header (opens app manager) */
+      manageApps: 'Manage apps',
       appAria: '{name}, {state}',
       emptyApps: 'No WASM app installed',
       emptyAppsHint: 'Install or enable an app in "App manager" and its entry shows up here',
       sysTitle: 'System',
-      sysNote: 'Built into the platform',
       sysApps: 'App manager',
       sysPermissions: 'Permissions',
       sysSettings: 'Platform settings',
@@ -52,12 +48,9 @@ export default {
       statRunning: 'Running',
       statSize: 'Total size',
       installedTitle: 'Installed apps',
-      installedNote: 'Listed from loaded apps',
       addTitle: 'Add app',
-      discover: 'Discover more apps',
-      discoverHint: 'Local repo / pushed from desktop',
       installLocal: 'Install local package (.wasm)',
-      installLocalHint: 'Approval + hash pinning required',
+      installLocalHint: 'Approval required',
       empty: 'No apps',
       permissionCount: '{count} permissions',
       installSuccess: 'Installed — approve and start it from the list',
@@ -74,8 +67,8 @@ export default {
       approvalDesc:
         'This app requests {count} permissions. Approve it before it can start — approving also pins the current file hashes.',
       approveStart: 'Approve and start',
-      connection: 'Connection',
-      connectionNote: 'Owned by this app',
+      /** Runtime state (each app owns its connection; the platform projects state only) */
+      state: 'Runtime state',
       permissions: 'Permissions',
       permissionsNote: '{granted} granted · {locked} by default',
       permissionLocked: 'Granted by default · cannot be turned off',
@@ -83,42 +76,34 @@ export default {
       permissionToggleFailed: 'Permission change not applied: {reason}',
       storage: 'Storage',
       appData: 'App data',
-      cache: 'Cache',
-      clear: 'Clear',
       grants: 'Grant log',
       grantsNote: 'Last 7 days',
       grantsEmpty: 'No grant records',
-      demoPrompt: 'Demo: runtime permission prompt',
       disable: 'Disable app',
       uninstall: 'Uninstall and delete data',
       version: 'v{version}',
     },
     run: {
-      capsule: 'App menu',
-      exitApp: 'Exit app',
-      noSurface: 'This app provides no surface yet',
-      noSurfaceHint:
-        'An app must register its surface component after activation — the platform cannot guess what to render',
-      /** Reserved slot: before a real wasm-app lands, the surface stays a placeholder */
-      reservedTitle: 'Surface reserved',
-      reservedHint:
-        'This is the mount point for a future wasm-app. Once the app registers its surface, its UI renders here — the platform only owns mounting and lifecycle, never in-app pages.',
-      reservedStatus: '{state} · {count} permissions · {id}',
+      menu: 'App menu',
+      recents: 'Recents',
+      home: 'Back home',
+      noSurface: 'No interface available',
+      noSurfaceHint: 'This app does not provide a run surface yet',
       notFound: 'App not found or uninstalled',
     },
     switcher: {
       title: 'Recents',
-      backHome: 'Back home',
+      back: 'Back',
       closeAll: 'Close all',
       closeCard: 'Close the card for {name}',
       dormant: 'Not running',
       enter: 'Open',
       launch: 'Start',
-      previewHint: 'The platform does not hold in-app frames',
-      previewMeta: '{count} permissions · {id}',
+      /** Deck navigation — keyboard/click alternative to dragging (WCAG 2.2) */
+      prev: 'Previous app',
+      next: 'Next app',
       empty: 'No running apps',
       emptyHint: 'Open an app from the home screen and it will show up here',
-      foot: 'Tap a card to open · swipe a card up to close it',
     },
     notify: {
       title: 'Notifications',
@@ -188,12 +173,6 @@ export default {
         },
       },
     },
-    systemBar: {
-      label: 'System navigation',
-      back: 'Back',
-      home: 'Home',
-      recents: 'Recents',
-    },
     settings: {
       title: 'Platform settings',
       background: 'Background',
@@ -202,30 +181,23 @@ export default {
       wallAurora: 'Aurora',
       wallDune: 'Dune',
       wallReef: 'Reef',
+      wallCustom: 'Custom',
+      wallPick: 'Choose from gallery',
+      wallReplace: 'Replace image',
+      wallRemove: 'Remove image',
+      wallPickFailed: 'Could not read the selected image. Try another one.',
       wallDim: 'Dim strength',
       platform: 'Platform',
       appearance: 'Appearance',
       appearanceHint: 'Theme and palette',
       permissions: 'Permission overview',
       permissionsHint: 'Group apps by permission',
-      // Connection / authentication / egress: shell-side entries (reuse the legacy
-      // settings pages until the old host is retired — no functional regression)
-      connection: 'Connection',
-      connectionHint: 'Port and auto-reconnect',
-      authentication: 'Authentication',
-      authenticationHint: 'Pairing and credentials',
+      // 2026-10-14: Connection / authentication entries were removed from platform
+      // settings — they are not host-owned (connections and credentials belong to each
+      // app). The legacy pages stay until their last reference retires; see revision-2.md R11.
       egress: 'Egress policy',
       egressHint: 'Security egress tiers',
       about: 'About WasmApp',
-      // Ticket 2026-10-10: the notification entry retired with its business settings
-      // moving to terminal-session. "Clear all data" is a device-lifecycle action (its
-      // targets include entry credentials and host connection state), so it stays in the
-      // host per the credential-zero-transit rule. See src/composables/useClearAllData.ts.
-      dangerZone: 'Danger Zone',
-      clearAllData: 'Clear All Data',
-      clearAllDataHint:
-        'Disconnects and wipes preset tasks, connection history, paired devices, session configs and local cache. This cannot be undone.',
-      clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
       appSettings: 'App settings',
       runtime: 'WasmApp Mobile {version}',
     },
@@ -238,21 +210,18 @@ export default {
     },
     capsule: {
       title: 'App',
-      subtitle: 'Platform controls stacked above the app, like a mini-program capsule',
       permissions: 'Permission settings',
       about: 'About this app',
       disable: 'Disable this app',
-      note: 'Stopping an app frees its memory and background tasks; data is kept',
     },
     permissionPrompt: {
       title: '{name} requests permissions',
-      subtitle: 'Unified platform prompt · denial disables the feature',
       purpose: 'Purpose: {reason}',
       purposeUnknown: 'Purpose: not declared by the app',
       deny: 'Deny',
       allow: 'Allow',
       fineprint:
-        'Denying disables the related feature; you can change it anytime in "Apps → {name} → Permissions". Authorization is enforced on the Rust side — this prompt is UX only.',
+        'Denying disables the related feature; you can change it anytime in "Apps → {name} → Permissions".',
     },
     permission: {
       group: {

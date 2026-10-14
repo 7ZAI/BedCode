@@ -1,8 +1,9 @@
 export default {
   settings: {
     title: '设置',
-    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用；
-    // 危险区标题改用 `shell.settings.dangerZone`）
+    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用）。
+    // 2026-10-14：设备级擦除的文案迁入本文件 `about` 组的 dangerZone 系列
+    // （入口从平台设置一级页迁到「关于 WasmApp」）。
     groups: {
       connection: '连接',
       security: '安全',
@@ -139,11 +140,17 @@ export default {
       installingUpdate: '正在安装更新...',
       downloadUpdate: '立即更新',
       currentVersion: '当前版本',
+      // 危险操作（2026-10-14 修订）：从平台设置一级页迁入「关于 WasmApp」。
+      // 擦除对象含设备入场凭据与宿主连接态，按 §8 凭据零过境只能由宿主执行，
+      // 实现见 src/composables/useClearAllData.ts。
+      dangerZone: '危险操作',
+      clearAllData: '清除所有数据',
+      clearAllDataHint: '断开连接并清空预设任务、连接历史、配对设备、会话配置与本机缓存，无法撤销。',
+      clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
     },
     // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
     // 「重置设置」→ wasm-apps/terminal-session/src/settings/i18n.ts（重置业务设置项）；
-    // 「清除所有数据」→ src/locales/*/shell.ts 的 shell.settings.clearAllData*（设备级擦除，
-    // 留宿主危险区）。留在宿主会造成同一串文案两份真源，改一处漏一处。
+    // 「清除所有数据」→ 本文件 about 组的 dangerZone 系列（设备级擦除，留宿主）。
     browser: {
       confirmOpen: '确定要在浏览器中打开此链接吗？',
     },

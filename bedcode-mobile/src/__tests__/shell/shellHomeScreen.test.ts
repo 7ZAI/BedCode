@@ -11,6 +11,10 @@
  * | C-H4 | 系统宫格 | 三个平台自有面进栈（可返回） | navigate('apps') / openPermissions / navigate('settings') |
  * | C-H5 | 铃铛 | 角标 = 通知 + 待审批；点击开通知栏 | 计数与 toggleShade |
  * | C-H6 | 空态 | 无应用时给出下一步说明 | 渲染 emptyAppsHint |
+ * | C-H7 | 快捷卡片轨道 | 横向 scroll-snap 轨道（原型形态），不定宽竖排 | 轨道内 listitem 数 = 卡片数 |
+ * | C-H8 | 管理入口 | 图标按钮 + 可访问名（不是文字 chip） | 点击 navigate('apps') |
+ * | C-H9 | 文案纪律 | 不渲染方案期解释（由应用提供 / 平台自带 / 最近使用在前） | 三个退役 key 缺席 |
+ * | C-H10 | 自定义壁纸 | custom 档 + 路径 → 壁纸层用 asset URL 铺底 | 图片层 style 含 URL |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -51,6 +55,9 @@ vi.mock('@/shell/composables/useShellOverlays', () => ({
 }))
 vi.mock('@/shell/composables/useShellNavigation', () => ({
   useShellNavigation: () => ({ navigate: mockNavigate, openPermissions: mockOpenPermissions }),
+}))
+vi.mock('@/plugin/assets', () => ({
+  toFileAssetUrl: (path: string) => `asset://${path}`,
 }))
 
 import ShellHomeScreen from '@/shell/components/screens/ShellHomeScreen.vue'
@@ -197,5 +204,86 @@ describe('C-H6 空态', () => {
 
     expect(text).toContain('shell.home.emptyAppsHint')
     expect(text, '没有应用时不渲染运行卡片带').not.toContain('shell.home.runningTitle')
+  })
+})
+
+describe('C-H7 快捷卡片轨道（横向轮播）', () => {
+  const SlotCard = { template: '<div class="slot-card">slot</div>' }
+
+  function withSlot(): ShellApp {
+    return {
+      ...app('a', 'running', 'AppA'),
+      contributions: { slots: [{ id: 's1', component: SlotCard }] },
+    }
+  }
+
+  it('should_renderCardsInHorizontalSnapTrack_when_slotsRegistered', () => {
+    apps.value = [withSlot()]
+
+    const wrapper = mount(ShellHomeScreen)
+    const track = wrapper.find('.shell-slot-track')
+
+    expect(track.exists(), '快捷卡片应有独立轨道').toBe(true)
+    expect(track.attributes('role')).toBe('list')
+    expect(track.findAll('[role="listitem"]')).toHaveLength(1)
+    expect(wrapper.find('.slot-card').exists()).toBe(true)
+  })
+
+  it('should_notRenderTrack_when_noSlots', () => {
+    apps.value = [app('a', 'running', 'AppA')]
+
+    expect(mount(ShellHomeScreen).find('.shell-slot-track').exists()).toBe(false)
+  })
+})
+
+describe('C-H8 应用管理入口（图标按钮）', () => {
+  it('should_navigateToApps_when_manageIconTapped', async () => {
+    apps.value = [app('a', 'stopped', 'AppA')]
+    const wrapper = mount(ShellHomeScreen)
+
+    const manage = wrapper.find('button[aria-label="shell.home.manageApps"]')
+    expect(manage.exists(), '管理入口应带可访问名（单图标按钮必须有）').toBe(true)
+    // 图标按钮不再带「管理」文字（旧的文字 chip 观感扁平）
+    expect(manage.text()).toBe('')
+
+    await manage.trigger('click')
+    expect(mockNavigate).toHaveBeenCalledWith('apps')
+  })
+})
+
+describe('C-H9 宿主文案纪律（方案期解释不得回接）', () => {
+  it('should_notRenderDesignStageNotes_when_mounted', () => {
+    apps.value = [app('a', 'running', 'AppA'), app('b', 'stopped', 'AppB')]
+    const text = mount(ShellHomeScreen).text()
+
+    expect(text, '「由应用提供」应删除').not.toContain('shell.home.slotsNote')
+    expect(text, '「平台自带」应删除').not.toContain('shell.home.sysNote')
+    expect(text, '「最近使用在前」应删除').not.toContain('shell.home.runningNote')
+  })
+})
+
+describe('C-H10 自定义壁纸图片层', () => {
+  it('should_renderAssetUrl_when_customWallpaperSelected', () => {
+    const prefs = useShellPreferences()
+    prefs.setWallpaperImage('/data/app/shell-assets/wallpaper/wallpaper-1.png')
+
+    const layer = mount(ShellHomeScreen).find('.shell-wallpaper')
+
+    expect(layer.attributes('style')).toContain(
+      'asset:///data/app/shell-assets/wallpaper/wallpaper-1.png',
+    )
+    prefs.setWallpaperImage(null)
+  })
+
+  it('should_notRenderImageLayer_when_builtinWallpaperSelected', () => {
+    const prefs = useShellPreferences()
+    prefs.setWallpaperImage('/data/app/x.png')
+    prefs.setWallpaper('reef')
+
+    const layer = mount(ShellHomeScreen).find('.shell-wallpaper')
+
+    expect(layer.attributes('style') ?? '').not.toContain('background-image')
+    prefs.setWallpaperImage(null)
+    prefs.setWallpaper('aurora')
   })
 })

@@ -177,37 +177,129 @@ html:not(.dark) .shell-ui {
 }
 
 /* ============================================================================
-   多任务卡片（Android 卡片式切换）
+   分组标题行动作（图标按钮）
    ----------------------------------------------------------------------------
-   关闭动效只动 transform / opacity；列表移动由 TransitionGroup 的 move 类接管。
+   分分组头右侧的动作位：单图标 + 可访问名（ui-ux-pro-max `--domain icons`：
+   图标控件必须有 accessible name）。44px 触控目标与壳内其它图标按钮同口径。
    ============================================================================ */
-.shell-recent-card-enter-active,
-.shell-recent-card-leave-active,
-.shell-recent-card-move {
+.shell-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--mobile-touch-target-min);
+  min-height: var(--mobile-touch-target-min);
+  border-radius: var(--shell-radius-control);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
   transition:
-    transform 0.24s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.24s ease;
+    background-color 0.2s ease,
+    color 0.2s ease,
+    opacity 0.2s ease;
 }
-.shell-recent-card-enter-from,
-.shell-recent-card-leave-to {
-  transform: scale(0.94) translateY(10px);
-  opacity: 0;
+.shell-icon-action:active {
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
 }
-.shell-recent-card-leave-active {
-  /* 离场元素脱离文档流，其余卡片才能平滑上移（否则会先跳一下） */
-  position: absolute;
-  left: 0;
-  right: 0;
+.shell-icon-action:disabled {
+  opacity: 0.35;
 }
 
 /* ============================================================================
-   底部系统条（Android 导航条：返回 / 主屏 / 多任务）
+   主屏快捷卡片轨道（横向轮播）
+   ----------------------------------------------------------------------------
+   定宽卡片 + 原生 scroll-snap：一次滑动定格一张，轨道自身滚动而不把页面
+   撑宽（组件内滚动，无页面级横向滚动条）。
    ============================================================================ */
-.shell-system-bar {
-  background: color-mix(in srgb, var(--mobile-bg-primary) 88%, transparent);
-  backdrop-filter: blur(12px);
-  border-top: 1px solid var(--mobile-group-border);
+.shell-slot-track {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 16px 6px;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 16px;
+  scrollbar-width: none;
 }
+.shell-slot-track::-webkit-scrollbar {
+  display: none;
+}
+.shell-slot-item {
+  flex: 0 0 min(76vw, 300px);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/* ============================================================================
+   应用运行页胶囊（菜单 / 多任务 / 回主屏）
+   ----------------------------------------------------------------------------
+   平台叠加在应用之上的控制项：半透明 + 毛玻璃，下丝 44px 触控目标。
+   ============================================================================ */
+.shell-capsule {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: var(--shell-radius-pill);
+  border: 1px solid var(--mobile-border);
+  background: color-mix(in srgb, var(--mobile-bg-card) 92%, transparent);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.shell-capsule-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
+  color: var(--mobile-text-primary);
+  transition: background-color 0.2s ease;
+}
+.shell-capsule-btn:active {
+  background: var(--mobile-accent-muted);
+}
+.shell-capsule-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--mobile-border);
+}
+
+/* ============================================================================
+   多任务卡片叠放（deck）
+   ----------------------------------------------------------------------------
+   固定宽高居中 + 等差错位（错位量与缩放比由组件算好写在 inline style 里，
+   此处只定义尺寸、层叠上下文与过渡）。拖拽期间关掉过渡与开启 will-change，
+   抬起后交回 CSS 过渡——否则手指与卡片之问会慢半拍。
+   ============================================================================ */
+.shell-deck {
+  position: relative;
+  overflow: hidden;
+}
+.shell-deck-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  width: min(78vw, 320px);
+  height: min(calc(100% - 24px), 440px);
+  border-radius: 18px;
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-card);
+  box-shadow: var(--mobile-card-shadow);
+  overflow: hidden;
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.24s ease;
+}
+.shell-deck--dragging .shell-deck-card {
+  transition: none;
+  will-change: transform;
+}
+
+/* ============================================================================
+   底部系统条已退役（2026-10-14）：常驻导航条占掉一截应用可视高度且与 Android
+   系统手势条重复。导航入口：各非根屏页头返回 + 应用运行页胶囊（多任务 / 回主屏）。
+   ============================================================================ */
 
 @media (prefers-reduced-motion: reduce) {
   .shell-screen-enter-active,
@@ -216,9 +308,7 @@ html:not(.dark) .shell-ui {
   .shell-sheet-leave-active,
   .shell-shade-enter-active,
   .shell-shade-leave-active,
-  .shell-recent-card-enter-active,
-  .shell-recent-card-leave-active,
-  .shell-recent-card-move {
+  .shell-deck-card {
     transition-duration: 0.01ms;
   }
 }

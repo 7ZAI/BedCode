@@ -2,16 +2,14 @@
  * 宿主壳（Host Shell）文案 — 简体中文
  *
  * 与 en/shell.ts 一一对应（i18n 双语纪律：新增/修改 key 必须两侧同步）。
- * 分组口径：home=主屏、switcher=多任务、notify=通知栏、systemBar=底部系统条、
+ * 分组口径：home=主屏、switcher=多任务、notify=通知栏、run=应用运行页、
  * settings=平台设置、permissions=权限管理。
+ *
+ * 文案纪律（2026-10-14 修订）：只写用户能感知的事实与后果，不写平台实现说明
+ * 或原型/方案期解释（如「平台叠加的控制项」「运行面预留位」）。
  */
 export default {
   shell: {
-    /** 既有设置页里的宿主壳入口（与 settings.ts 解耦，避免并行动改动撞车） */
-    entry: {
-      title: 'WASM 应用平台（宿主壳）',
-      subtitle: '新版平台壳 · 与当前实现并存',
-    },
     common: {
       loading: '加载中…',
       retry: '重试',
@@ -28,19 +26,17 @@ export default {
       localDevice: '本机',
       appCount: '{count} 个应用',
       runningTitle: '正在运行',
-      runningNote: '最近使用在前',
       switchTo: '切换到 {name}',
       stopInstance: '停止',
       slotsTitle: '快捷卡片',
-      slotsNote: '由应用提供',
       appsTitle: '我的 WASM 应用',
       appsNote: '{count} 个已安装',
-      manage: '管理',
+      /** 应用宫格分组头的图标按钮（打开应用管理） */
+      manageApps: '应用管理',
       appAria: '{name}，{state}',
       emptyApps: '尚未安装 WASM 应用',
       emptyAppsHint: '在「应用管理」里安装或启用后，入口会出现在这里',
       sysTitle: '系统',
-      sysNote: '平台自带',
       sysApps: '应用管理',
       sysPermissions: '权限管理',
       sysSettings: '平台设置',
@@ -52,12 +48,9 @@ export default {
       statRunning: '运行中',
       statSize: '总占用',
       installedTitle: '已安装应用',
-      installedNote: '清单来自已加载的应用',
       addTitle: '添加应用',
-      discover: '发现更多应用',
-      discoverHint: '本地仓库 / 桌面侧推送',
       installLocal: '安装本地包（.wasm）',
-      installLocalHint: '需审批 + 哈希钉扎',
+      installLocalHint: '需审批',
       empty: '暂无应用',
       permissionCount: '{count} 项权限',
       installSuccess: '安装完成，可在列表中批准并启动',
@@ -73,8 +66,8 @@ export default {
       /** 待审批说明：批准是整单的（全部声明权限 + 内容哈希钉扎），不做逐项勾选 */
       approvalDesc: '该应用申请 {count} 项权限，批准后才能启动；批准会同时钉扎当前文件哈希。',
       approveStart: '批准并启动',
-      connection: '连接',
-      connectionNote: '本应用独立持有',
+      /** 运行态（应用自持连接，平台只投影运行态） */
+      state: '运行状态',
       permissions: '权限',
       permissionsNote: '{granted} 项已授予 · {locked} 项默认',
       permissionLocked: '默认授予 · 不可关闭',
@@ -82,40 +75,34 @@ export default {
       permissionToggleFailed: '权限变更未生效：{reason}',
       storage: '存储',
       appData: '应用数据',
-      cache: '缓存',
-      clear: '清除',
       grants: '授权记录',
       grantsNote: '近 7 天',
       grantsEmpty: '暂无授权记录',
-      demoPrompt: '演示：运行时授权弹窗',
       disable: '停用应用',
       uninstall: '卸载并删除数据',
       version: 'v{version}',
     },
     run: {
-      capsule: '应用菜单',
-      exitApp: '退出应用',
-      noSurface: '该应用尚未提供运行面',
-      noSurfaceHint: '应用激活后需向平台注册运行面组件，平台才知道该渲染什么',
-      /** 预留位：真实 wasm-app 接入前，运行面就是这个占位说明，不实现应用内页面 */
-      reservedTitle: '运行面预留位',
-      reservedHint: '这里是将来 wasm-app 的挂载点。应用注册运行面后，其界面会渲染在此处；平台只提供挂载与生命周期，不实现应用内页面。',
-      reservedStatus: '{state} · {count} 项权限 · {id}',
+      menu: '应用菜单',
+      recents: '多任务',
+      home: '回主屏',
+      noSurface: '应用暂无可用界面',
+      noSurfaceHint: '该应用尚未提供运行界面',
       notFound: '应用不存在或已卸载',
     },
     switcher: {
       title: '多任务',
-      backHome: '回主屏',
+      back: '返回',
       closeAll: '全部关闭',
       closeCard: '关闭 {name} 的卡片',
       dormant: '未运行',
       enter: '进入',
       launch: '启动',
-      previewHint: '平台不持有应用内画面',
-      previewMeta: '{count} 项权限 · {id}',
+      /** 卡片叠放导航（拖拽的键盘 / 单击替代路径，WCAG 2.2 Dragging Movements） */
+      prev: '上一个应用',
+      next: '下一个应用',
       empty: '没有运行中的应用',
       emptyHint: '回到主屏打开一个应用，它会出现在这里',
-      foot: '点卡片进入 · 卡片上滑关闭',
     },
     notify: {
       title: '通知栏',
@@ -185,12 +172,6 @@ export default {
         },
       },
     },
-    systemBar: {
-      label: '系统导航',
-      back: '返回',
-      home: '主屏',
-      recents: '多任务',
-    },
     settings: {
       title: '平台设置',
       background: '背景',
@@ -199,27 +180,22 @@ export default {
       wallAurora: '极光',
       wallDune: '沙丘',
       wallReef: '礁湖',
+      wallCustom: '自定义',
+      wallPick: '从相册选择',
+      wallReplace: '更换图片',
+      wallRemove: '移除图片',
+      wallPickFailed: '未能读取所选图片，请换一张重试。',
       wallDim: '遮罩强度',
       platform: '平台',
       appearance: '外观',
       appearanceHint: '主题与色板',
       permissions: '权限总览',
       permissionsHint: '按权限看应用',
-      // 连接/认证/出站：壳内入口补齐（旧宿主的设置在退役前仍复用其实现页，功能不回归）
-      connection: '连接',
-      connectionHint: '端口与自动重连',
-      authentication: '认证',
-      authenticationHint: '配对与凭据',
+      // 2026-10-14：连接 / 认证两项从平台设置删除——它们不是宿主面（连接与凭据归
+      // 各应用自持）；底层实现页在其最后引用退役前暂留，见 revision-2.md R11。
       egress: '出站策略',
       egressHint: '安全出口档位',
       about: '关于 WasmApp',
-      // 票 2026-10-10：通知入口随业务设置下沉 terminal-session 退役；
-      // 「擦除本机数据」是设备生命周期动作（清理对象含入场凭据与宿主连接态），
-      // 按 §8 凭据零过境留壳，见 src/composables/useClearAllData.ts。
-      dangerZone: '危险操作',
-      clearAllData: '清除所有数据',
-      clearAllDataHint: '断开连接并清空预设任务、连接历史、配对设备、会话配置与本机缓存，无法撤销。',
-      clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
       appSettings: '应用设置',
       runtime: 'WasmApp Mobile {version}',
     },
@@ -232,21 +208,17 @@ export default {
     },
     capsule: {
       title: '应用',
-      subtitle: '平台叠加的控制项，与小程序胶囊一致',
       permissions: '权限设置',
       about: '关于此应用',
       disable: '停用此应用',
-      note: '停下应用即释放其内存与后台任务，数据保留',
     },
     permissionPrompt: {
       title: '{name} 申请权限',
-      subtitle: '平台统一弹窗 · 拒绝即功能不可用',
       purpose: '用途：{reason}',
       purposeUnknown: '用途：应用未说明',
       deny: '拒绝',
       allow: '允许',
-      fineprint:
-        '拒绝后应用的相关功能将不可用；可随时在「应用 → {name} → 权限」中变更。授权裁决在 Rust 端执行，前端弹窗只是 UX。',
+      fineprint: '拒绝后应用的相关功能将不可用；可随时在「应用 → {name} → 权限」中变更。',
     },
     permission: {
       group: {

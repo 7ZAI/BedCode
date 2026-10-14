@@ -12,7 +12,7 @@
     :style="{ '--wall-dim': wallDim }"
   >
     <!-- 壁纸层：纯装饰，不参与交互与读屏 -->
-    <div class="shell-wallpaper" aria-hidden="true" />
+    <div class="shell-wallpaper" aria-hidden="true" :style="wallImageStyle" />
 
     <!-- ==================== 头部 ==================== -->
     <header class="relative z-10 flex items-center gap-3 px-4 pt-3 pb-2 flex-shrink-0">
@@ -52,7 +52,7 @@
     <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6">
       <!-- ======== 正在运行（MRU 卡片带，桌面同构） ======== -->
       <template v-if="runningOrdered.length > 0">
-        <ShellSection :title="t('shell.home.runningTitle')" :note="t('shell.home.runningNote')" />
+        <ShellSection :title="t('shell.home.runningTitle')" />
         <div class="px-4 flex gap-2.5 overflow-x-auto pb-1" role="list">
           <article
             v-for="app in runningOrdered"
@@ -90,23 +90,38 @@
         </div>
       </template>
 
-      <!-- ======== 快捷卡片（由应用提供） ======== -->
+      <!-- ======== 快捷卡片（应用贡献，横向轮播） ========
+           定宽卡片 + 原生 scroll-snap 横向滚动（原型 .slots 同形态）：拍一屏只露一张，
+           滑动切下一张。定宽而非 flex-1 是刻意的——卡片内容由应用自持，等宽拉伸会让
+           单行信息量不同的卡片看起来参差。 -->
       <template v-if="slotCards.length > 0">
-        <ShellSection :title="t('shell.home.slotsTitle')" :note="t('shell.home.slotsNote')" />
-        <div class="px-4 flex flex-col gap-2.5">
-          <component
-            :is="card.component"
-            v-for="card in slotCards"
-            :key="card.key"
-            :app="card.app"
-          />
+        <ShellSection :title="t('shell.home.slotsTitle')" />
+        <div class="shell-slot-track" role="list">
+          <div v-for="card in slotCards" :key="card.key" class="shell-slot-item" role="listitem">
+            <component :is="card.component" :app="card.app" />
+          </div>
         </div>
       </template>
 
       <!-- ======== 应用宫格 ======== -->
       <ShellSection :title="t('shell.home.appsTitle')" :note="t('shell.home.appsNote', { count: apps.length })">
         <template #action>
-          <ShellChip :label="t('shell.home.manage')" tone="accent" clickable @click="nav.navigate('apps')" />
+          <!-- 图标按钮（44px 触控目标）：入口语义是「应用管理」，文字 chip 在宫格标题行里
+               抢视觉重心且显得扁平，改用单图标 + 可访问名（ui-ux-pro-max --domain icons：
+               图标控件必须有 accessible name，不能只有一个图形） -->
+          <button
+            type="button"
+            class="shell-icon-action"
+            :aria-label="t('shell.home.manageApps')"
+            @click="nav.navigate('apps')"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 6h8M17.5 6H19M5 12h1.5M11 12h8M5 18h8M17.5 18H19" />
+              <circle cx="15" cy="6" r="2" />
+              <circle cx="8.5" cy="12" r="2" />
+              <circle cx="15" cy="18" r="2" />
+            </svg>
+          </button>
         </template>
       </ShellSection>
       <div class="px-4">
@@ -123,7 +138,7 @@
       </div>
 
       <!-- ======== 系统宫格（平台自有面，与应用同层） ======== -->
-      <ShellSection :title="t('shell.home.sysTitle')" :note="t('shell.home.sysNote')" />
+      <ShellSection :title="t('shell.home.sysTitle')" />
       <div class="px-4">
         <div class="grid grid-cols-4 gap-1" role="list">
           <button
@@ -163,6 +178,9 @@
  *
  * 壁纸与遮罩来自壳偏好（useShellPreferences）；壁纸只落主屏——应用运行面保持纯色，
  * 业务内容可读性优先（与桌面壳同口径）。
+ *
+ * 正文案纪律（2026-10-14 修订）：分组标题行只留标题与计数，不再写「平台自带」
+ * 「由应用提供」「最近使用在前」这类方案期解释——用户看得到事实，不需要旁白。
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -173,6 +191,7 @@ import { useShellOpen } from '../../composables/useShellOpen'
 import { useShellOverlays } from '../../composables/useShellOverlays'
 import { useShellPreferences } from '../../composables/useShellPreferences'
 import { useShellRecent } from '../../composables/useShellRecent'
+import { toFileAssetUrl } from '@/plugin/assets'
 import type { ShellApp } from '../../types'
 import ShellAppCell from '../ShellAppCell.vue'
 import ShellAppIcon from '../ShellAppIcon.vue'
@@ -187,10 +206,21 @@ const { recentIds } = useShellRecent()
 const { open } = useShellOpen()
 const overlays = useShellOverlays()
 const { notificationCount } = useShellNotifications()
-const { wallpaper, wallDim } = useShellPreferences()
+const { wallpaper, wallDim, wallpaperImage } = useShellPreferences()
 
-/** 壁纸类名：none 时只保留壳根类（纯页面底色） */
+/** 壁纸类名：none 时只保留壳根类（纯页面底色）；自定义图片走 style 背景 */
 const wallClass = computed(() => (wallpaper.value === 'none' ? '' : `wall-${wallpaper.value}`))
+
+/**
+ * 自定义壁纸的图片层（asset protocol URL）
+ *
+ * 路径来自宿主命令落盘结果（壳不能自行读盘，AGENTS §6 前端零资源访问），
+ * URL 由宿主侧 asset 工具拼接；未落盘或已切换档位时不渲染图片层。
+ */
+const wallImageStyle = computed(() => {
+  if (wallpaper.value !== 'custom' || !wallpaperImage.value) return undefined
+  return { backgroundImage: `url("${toFileAssetUrl(wallpaperImage.value)}")` }
+})
 
 /** 未读计数：通知 + 待审批（与状态条角标同口径） */
 const badgeCount = computed(

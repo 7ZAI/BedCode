@@ -12,6 +12,9 @@
  * | C-P5 | setWallDim | 越界与小数 | 钳制到 [0,70] 并取整 |
  * | C-P6 | watch 写穿 | 变更即持久化 | localStorage 里有新值 |
  * | C-P7 | watch 写入异常 | 存储不可用（隐私模式 / 配额） | 不抛，仅 warn |
+ * | C-P8 | setWallpaperImage(路径) | 记路径并切到 custom 档 | 档位=custom + 路径持久化 |
+ * | C-P9 | setWallpaperImage(null) | 移除图片；正停在 custom 档时回落默认 | 档位回落 + 路径清空 |
+ * | C-P10 | load 一致性 | custom 档但没有图 = 没选过 | 回落默认档，不渲染空背景 |
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
@@ -40,6 +43,7 @@ describe('C-P1..C-P4 偏好加载', () => {
 
     expect(prefs.wallpaper.value).toBe(WALLPAPER_DEFAULT)
     expect(prefs.wallDim.value).toBe(WALL_DIM_DEFAULT)
+    expect(prefs.wallpaperImage.value, '未选过自定义图时为 null').toBeNull()
   })
 
   it('should_readStoredPrefs_when_valid', async () => {
@@ -111,6 +115,7 @@ describe('C-P5..C-P7 偏好写入', () => {
 
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')).toEqual({
       wallpaper: 'dune',
+      wallpaperImage: null,
       wallDim: 42,
     })
   })
@@ -128,5 +133,65 @@ describe('C-P5..C-P7 偏好写入', () => {
     expect(prefs.wallpaper.value).toBe('reef')
     await Promise.resolve()
     expect(warn).toHaveBeenCalled()
+  })
+})
+
+describe('C-P8..C-P10 自定义壁纸', () => {
+  it('should_switchToCustomAndPersistPath_when_imageSet', async () => {
+    const { useShellPreferences, WALLPAPER_CUSTOM } = await loadPrefsWith()
+    const prefs = useShellPreferences()
+
+    prefs.setWallpaperImage('/data/app/shell-assets/wallpaper/wallpaper-1.png')
+    await Promise.resolve()
+
+    expect(prefs.wallpaperImage.value).toBe('/data/app/shell-assets/wallpaper/wallpaper-1.png')
+    expect(prefs.wallpaper.value, '选图即切换到自定义档').toBe(WALLPAPER_CUSTOM)
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').wallpaperImage).toBe(
+      '/data/app/shell-assets/wallpaper/wallpaper-1.png',
+    )
+  })
+
+  it('should_fallBackToBuiltin_when_customImageRemoved', async () => {
+    const { useShellPreferences, WALLPAPER_CUSTOM, WALLPAPER_DEFAULT } = await loadPrefsWith()
+    const prefs = useShellPreferences()
+    prefs.setWallpaperImage('/tmp/a.png')
+    expect(prefs.wallpaper.value).toBe(WALLPAPER_CUSTOM)
+
+    prefs.setWallpaperImage(null)
+
+    expect(prefs.wallpaperImage.value).toBeNull()
+    expect(prefs.wallpaper.value, '停在 custom 档但不能没有图').toBe(WALLPAPER_DEFAULT)
+  })
+
+  it('should_keepBuiltinChoice_when_removingImageNotInCustomMode', async () => {
+    const { useShellPreferences } = await loadPrefsWith()
+    const prefs = useShellPreferences()
+    prefs.setWallpaperImage('/tmp/a.png')
+    prefs.setWallpaper('reef')
+
+    prefs.setWallpaperImage(null)
+
+    expect(prefs.wallpaper.value, '移除图不影响已选的内置档').toBe('reef')
+  })
+
+  it('should_loadCustomWallpaper_when_storeHasPath', async () => {
+    const { useShellPreferences, WALLPAPER_CUSTOM } = await loadPrefsWith(
+      JSON.stringify({ wallpaper: 'custom', wallpaperImage: '/data/x.png', wallDim: 30 }),
+    )
+    const prefs = useShellPreferences()
+
+    expect(prefs.wallpaper.value).toBe(WALLPAPER_CUSTOM)
+    expect(prefs.wallpaperImage.value).toBe('/data/x.png')
+  })
+
+  it('should_fallBackToDefault_when_customModeHasNoImage', async () => {
+    // 旧数据 / 手改数据：custom 档但没有图 = 没选过，必须回落而不是渲染空背景
+    const { useShellPreferences, WALLPAPER_DEFAULT } = await loadPrefsWith(
+      JSON.stringify({ wallpaper: 'custom', wallDim: 30 }),
+    )
+    const prefs = useShellPreferences()
+
+    expect(prefs.wallpaper.value).toBe(WALLPAPER_DEFAULT)
+    expect(prefs.wallpaperImage.value).toBeNull()
   })
 })

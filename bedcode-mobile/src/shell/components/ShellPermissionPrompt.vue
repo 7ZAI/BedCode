@@ -2,7 +2,6 @@
   <ShellSheet
     :open="request !== null"
     :title="request ? t('shell.permissionPrompt.title', { name: appName }) : ''"
-    :subtitle="t('shell.permissionPrompt.subtitle')"
     @close="deny"
   >
     <div v-if="request && app" class="flex items-center gap-3 pb-3">

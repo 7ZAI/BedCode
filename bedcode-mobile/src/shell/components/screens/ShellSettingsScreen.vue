@@ -38,12 +38,13 @@
 
       <!-- ==================== 背景（主屏壁纸） ==================== -->
       <!-- 壁纸只落主屏：应用运行面保持纯色，业务内容可读性优先。
-           偏好是壳 UI 偏好（localStorage），不写宿主 AppConfig——引擎面不加壳词汇。 -->
+           内置四档是 token 派生的渐变；自定义图由**宿主**选图并拷进 $APPDATA
+           （前端零资源访问，AGENTS §6），壳只存路径偏好。 -->
       <ShellSection :title="t('shell.settings.background')" :note="t('shell.settings.backgroundNote')" />
       <div class="px-4 pb-1">
         <ShellGroupCard>
           <div class="px-3 py-3">
-            <div class="flex items-center gap-2.5">
+            <div class="flex items-center gap-2">
               <button
                 v-for="wall in wallpaperOptions"
                 :key="wall.id"
@@ -64,6 +65,65 @@
                     <path d="M20 6L9 17l-5-5" />
                   </svg>
                 </span>
+              </button>
+
+              <!-- 自定义图档位：未选过时是「＋」入口，选过后是图片缩略图 -->
+              <button
+                type="button"
+                class="relative flex-1 h-14 rounded-[10px] border overflow-hidden transition-colors duration-200 min-h-[var(--mobile-touch-target-min)]"
+                :class="wallpaper === WALLPAPER_CUSTOM ? 'border-[var(--mobile-accent)]' : 'border-[var(--mobile-border)]'"
+                :style="{ background: 'var(--mobile-bg-elevated)' }"
+                :aria-label="t('shell.settings.wallCustom')"
+                :aria-pressed="wallpaper === WALLPAPER_CUSTOM"
+                :disabled="pickingWallpaper"
+                @click="onCustomWallpaperTap"
+              >
+                <img
+                  v-if="wallpaperImage"
+                  :src="toFileAssetUrl(wallpaperImage)"
+                  alt=""
+                  class="w-full h-full object-cover"
+                />
+                <span
+                  v-else
+                  class="flex items-center justify-center w-full h-full text-[var(--mobile-text-secondary)]"
+                  aria-hidden="true"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="5" width="18" height="14" rx="3" />
+                    <path d="M3 15l4.5-4 4 3.5L15 11l6 5" />
+                    <circle cx="9" cy="9.5" r="1.3" />
+                  </svg>
+                </span>
+                <span
+                  v-if="wallpaper === WALLPAPER_CUSTOM"
+                  class="absolute right-1 bottom-1 flex items-center justify-center w-4 h-4 rounded-full"
+                  :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+                  aria-hidden="true"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                </span>
+              </button>
+            </div>
+
+            <!-- 自定义图操作行：只在已经选过图时出现（没图时点上面的档位即可） -->
+            <div v-if="wallpaperImage" class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+                :disabled="pickingWallpaper"
+                @click="pickCustomWallpaper"
+              >
+                {{ pickingWallpaper ? t('shell.common.loading') : t('shell.settings.wallReplace') }}
+              </button>
+              <button
+                type="button"
+                class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+                @click="removeCustomWallpaper"
+              >
+                {{ t('shell.settings.wallRemove') }}
               </button>
             </div>
 
@@ -113,34 +173,6 @@
         </ShellGroupCard>
       </div>
 
-      <!-- ==================== 危险区：擦除本机数据 ==================== -->
-      <!-- 票 2026-10-10：补回旧 SettingsView 丢失的「清除所有数据」（spec §1.6 回归项）。
-           刻意留在壳而不进应用设置页——擦除对象含设备入场凭据与宿主连接态，
-           按 §8 凭据零过境 / ADR 0033，插件不得触碰；见 useClearAllData.ts 头注。 -->
-      <ShellSection :title="t('shell.settings.dangerZone')" />
-      <div class="px-4 pb-1">
-        <button
-          type="button"
-          class="w-full flex items-center gap-3 px-3 py-3 text-left rounded-[12px] border transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
-          :style="{
-            background: 'var(--mobile-error-muted)',
-            border: '1px solid var(--mobile-error)',
-            color: 'var(--mobile-error)',
-          }"
-          @click="onClearAllData"
-        >
-          <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-          <span class="flex-1 min-w-0 text-[var(--font-size-base)] truncate">
-            {{ t('shell.settings.clearAllData') }}
-          </span>
-        </button>
-        <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] px-1 mt-1.5">
-          {{ t('shell.settings.clearAllDataHint') }}
-        </p>
-      </div>
-
       <!-- ==================== 应用贡献的设置入口 ==================== -->
       <ShellSection v-if="appEntries.length > 0" :title="t('shell.settings.appSettings')" />
       <div v-if="appEntries.length > 0" class="px-4 pb-2">
@@ -150,7 +182,7 @@
             :key="entry.key"
             type="button"
             class="flex items-center gap-3 w-full px-3 py-3 text-left transition-colors duration-200 active:bg-[var(--mobile-group-row-active)] min-h-[var(--mobile-touch-target-min)]"
-            @click="entry.entry.onSelect?.()"
+            @click="onAppEntrySelect(entry)"
           >
             <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: 'var(--mobile-text-secondary)' }">
               <path :d="entry.entry.icon ?? DEFAULT_ENTRY_ICON" />
@@ -172,18 +204,23 @@
 /**
  * 我的 / 平台设置
  *
- * 平台项是壳自带的（链路加密 / 生物凭证 / 出站授权 / 权限总览 / 外观 / 关于），
+ * 平台项是壳自带的（背景 / 出站授权 / 权限总览 / 外观 / 关于），
  * 应用项来自各应用的 registerSettingsEntry——两者在同一张卡里按「平台项在前」排列，
  * 新增应用设置不需要改本文件。
+ *
+ * 三条 2026-10-14 修订：
+ *   ① 「连接」「认证」入口从这里删除——连接与凭据归各应用自持，不是宿主面；
+ *   ② 「危险操作（清除所有数据）」迁入「关于 WasmApp」——它是设备生命周期动作，
+ *      与版本/更新同属「关于本机」，一级设置页不再摆一排红按钮；
+ *   ③ 应用贡献的设置项没给 onSelect 时落到该应用详情页——不留点了没反应的死行。
  *
  * 票 2026-10-10 批次 C4：业务设置入口（连接策略 / 通知）随真源下沉 terminal-session
  * 从本表删除；壳只留平台机制与安全闸门，避免同一个开关在壳与应用各存一份真值。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { clearAllData } from '@/composables/useClearAllData'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { importShellWallpaper, toFileAssetUrl } from '@/plugin/assets'
 import { logger } from '@/utils/frontendLogger'
 import { usePlatform } from '../../composables/usePlatform'
 import { useToast } from '../../composables/useToast'
@@ -191,6 +228,7 @@ import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
 import {
   WALL_DIM_MAX,
+  WALLPAPER_CUSTOM,
   useShellPreferences,
   type ShellWallpaper,
 } from '../../composables/useShellPreferences'
@@ -217,13 +255,15 @@ const toast = useToast()
 const nav = useShellNavigation()
 const { apps } = useShellApps()
 const { platformInfo } = usePlatform()
-const { wallpaper, wallDim, setWallpaper, setWallDim } = useShellPreferences()
+const { wallpaper, wallpaperImage, wallDim, setWallpaper, setWallpaperImage, setWallDim } =
+  useShellPreferences()
 
 /**
  * 壁纸档位（id + 预览类 + 本地化名）
  *
  * 预览色块复用主屏同一份 --wall-* 真源（shell.css）：两处各写一份渐变必然漂移。
- * 「无」档不给 shell-wall 类，显示纯页面底色。
+ * 「无」档不给 shell-wall 类，显示纯页面底色；自定义图不在本表（第五个档位
+ * 是图片缩略图，不是渐变）。
  */
 const wallpaperOptions = computed<
   Array<{ id: ShellWallpaper; label: string; swatchClass: string }>
@@ -233,6 +273,46 @@ const wallpaperOptions = computed<
   { id: 'dune', label: t('shell.settings.wallDune'), swatchClass: 'shell-wall wall-dune shell-wall-swatch' },
   { id: 'reef', label: t('shell.settings.wallReef'), swatchClass: 'shell-wall wall-reef shell-wall-swatch' },
 ])
+
+/** 自定义壁纸选图中（按钮置灰 + 文案切「加载中」，避免重复拉起选择器） */
+const pickingWallpaper = ref(false)
+
+/**
+ * 选图并落盘（宿主命令）：返回 null = 用户取消，不作为错误处理
+ *
+ * 成功路径由 setWallpaperImage 同时把档位切到 custom；失败只提示、不动现有偏好。
+ */
+async function pickCustomWallpaper(): Promise<void> {
+  if (pickingWallpaper.value) return
+  pickingWallpaper.value = true
+  try {
+    const path = await importShellWallpaper()
+    if (path !== null) setWallpaperImage(path)
+  } catch (e) {
+    logger.error('[ShellSettings] wallpaper import failed', e)
+    toast.error(t('shell.settings.wallPickFailed'))
+  } finally {
+    pickingWallpaper.value = false
+  }
+}
+
+/** 点自定义档位：已选中 → 换图；有图未选中 → 选中；无图 → 选图 */
+function onCustomWallpaperTap(): void {
+  if (wallpaper.value === WALLPAPER_CUSTOM) {
+    void pickCustomWallpaper()
+    return
+  }
+  if (wallpaperImage.value) {
+    setWallpaper(WALLPAPER_CUSTOM)
+    return
+  }
+  void pickCustomWallpaper()
+}
+
+/** 移除自定义图（文件留在 $APPDATA，下次换图由宿主单槽位覆盖） */
+function removeCustomWallpaper(): void {
+  setWallpaperImage(null)
+}
 
 /** 遮罩滑杆：原生 input 只给数值，钳制交给偏好模块（越界值不抛错） */
 function onDimInput(event: Event): void {
@@ -250,23 +330,6 @@ const deviceLabel = computed(() => {
 })
 
 const platformEntries = computed<PlatformEntry[]>(() => [
-  {
-    id: 'link-encryption',
-    label: t('shell.settings.connection'),
-    hint: t('shell.settings.connectionHint'),
-    icon: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71 M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71',
-    // 票 2026-10-10 批次 C4：本入口只剩**平台项**（链路加密，ADR 0022 ②类安全闸门）。
-    // 原先同页的自动重连 / 保持连接 / 默认端口是业务设置，已下沉 terminal-session。
-    onSelect: () => router.push({ name: 'mobile-settings-connection' }),
-  },
-  {
-    // 票 2026-10-10 C4：只剩生物凭证（安全面）。「首选认证方式」是业务设置，已下沉。
-    id: 'biometric',
-    label: t('shell.settings.authentication'),
-    hint: t('shell.settings.authenticationHint'),
-    icon: 'M7 11V8a5 5 0 0110 0v3 M5 11h14v10H5z',
-    onSelect: () => router.push({ name: 'mobile-settings-authentication' }),
-  },
   {
     id: 'egress',
     label: t('shell.settings.egress'),
@@ -299,34 +362,27 @@ const platformEntries = computed<PlatformEntry[]>(() => [
 ])
 
 /**
- * 擦除本机数据
+ * 应用贡献的设置入口（按应用顺序展开）
  *
- * 二次确认用宿主 confirm 对话框：这是不可撤销的动作，误触代价是重新配对 + 重建全部配置。
- * 确认后执行；断连失败不阻断清理（用户的目标是清数据，不是断连），
- * 但清理失败必须如实告知——不能 reload 完就说成功。
+ * 自带的 appId 用于兜底：应用只登记了入口却忘了给 onSelect 时，落到该应用详情页，
+ * 而不是渲染一个点了没反应的死行（ui-ux-pro-max `--domain ux`：可点即须有去处）。
  */
-async function onClearAllData(): Promise<void> {
-  const confirmed = await confirm(
-    t('shell.settings.clearAllData'),
-    { title: t('shell.settings.clearAllData'), kind: 'warning' },
-  )
-  if (!confirmed) return
-
-  const result = await clearAllData()
-  if (!result.completed) {
-    // 清理失败时不能 reload——那会让用户以为已经清干净
-    logger.error(`[ShellSettings] clear all data incomplete: ${result.error ?? 'unknown'}`)
-    toast.error(t('shell.settings.clearAllDataFailed'))
-  }
-}
-
-/** 应用贡献的设置入口（按应用顺序展开） */
 const appEntries = computed(() =>
   apps.value.flatMap((app) =>
     (app.contributions.settingsEntries ?? []).map((entry) => ({
       key: `${app.id}:${entry.id}`,
+      appId: app.id,
       entry,
     })),
   ),
 )
+
+/** 选中应用设置项：有应用自己的入口就走它，否则落应用详情 */
+function onAppEntrySelect(item: { appId: string; entry: { onSelect?: () => void | Promise<void> } }): void {
+  if (item.entry.onSelect) {
+    void item.entry.onSelect()
+    return
+  }
+  nav.openDetail(item.appId)
+}
 </script>

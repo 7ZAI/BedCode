@@ -15,10 +15,6 @@
       </Transition>
     </div>
 
-    <!-- 底部系统条（Android 导航条语义：返回 / 主屏 / 多任务）。应用运行面同样显示——
-         平台导航是设备级事实，不随内容让位（旧底部页签已退役，见组件头注） -->
-    <ShellSystemBar />
-
     <!-- 平台级覆盖层：固定在壳根渲染，与当前屏幕无关 -->
     <ShellCapsuleMenu />
     <ShellPermissionPrompt />
@@ -30,7 +26,11 @@
 /**
  * 宿主壳根组件
  * -----------------------------------------------------------------------------
- * 职责：状态条 + 屏幕栈 + 底部系统条 + 平台级覆盖层 + 宿主事件桥。就这些。
+ * 职责：状态条 + 屏幕栈 + 平台级覆盖层 + 宿主事件桥。就这些。
+ *
+ * 底部系统条（返回 / 主屏 / 多任务）已于 2026-10-14 整条退役：常驻导航条
+ * 会永久占掉一截应用可视高度，且与 Android 系统手势条重复；导航入口改为
+ * ① 各非根屏页头自持返回键 ② 应用运行页胶囊里的多任务 / 回主屏。
  *
  * 不含的东西（都是刻意的）：
  *   · 不含任何应用业务——应用界面由其 surface 组件自持（见 ShellAppSurface）
@@ -48,7 +48,6 @@ import ShellCapsuleMenu from './ShellCapsuleMenu.vue'
 import ShellNotificationShade from './ShellNotificationShade.vue'
 import ShellPermissionPrompt from './ShellPermissionPrompt.vue'
 import ShellStatusbar from './ShellStatusbar.vue'
-import ShellSystemBar from './ShellSystemBar.vue'
 import ShellAppRunScreen from './screens/ShellAppRunScreen.vue'
 import ShellAppDetailScreen from './screens/ShellAppDetailScreen.vue'
 import ShellAppsScreen from './screens/ShellAppsScreen.vue'

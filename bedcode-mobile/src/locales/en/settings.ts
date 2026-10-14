@@ -1,8 +1,9 @@
 export default {
   settings: {
     title: 'Settings',
-    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用；
-    // 危险区标题改用 `shell.settings.dangerZone`）
+    // Ticket 2026-10-10: `general` / `dangerZone` retired with the `actions` group
+    // (no UI callers left). 2026-10-14: the device-level wipe copy moved into this
+    // file's `about` group (entry moved from platform settings to "About WasmApp").
     groups: {
       connection: 'Connection',
       security: 'Security',
@@ -139,11 +140,18 @@ export default {
       installingUpdate: 'Installing update...',
       downloadUpdate: 'Update Now',
       currentVersion: 'Current Version',
+      // Danger zone (2026-10-14 revision): moved here from the top-level platform
+      // settings page. Its targets include device entry credentials and host
+      // connection state, so only the host may run it. See useClearAllData.ts.
+      dangerZone: 'Danger Zone',
+      clearAllData: 'Clear All Data',
+      clearAllDataHint:
+        'Disconnects and wipes preset tasks, connection history, paired devices, session configs and local cache. This cannot be undone.',
+      clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
     },
-    // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
-    // 「重置设置」→ wasm-apps/terminal-session/src/settings/i18n.ts（重置业务设置项）；
-    // 「清除所有数据」→ src/locales/*/shell.ts 的 shell.settings.clearAllData*（设备级擦除，
-    // 留宿主危险区）。留在宿主会造成同一串文案两份真源，改一处漏一处。
+    // Ticket 2026-10-10: the `actions` group retired; both actions were moved by
+    // ownership — "reset settings" to the terminal-session app, "clear all data"
+    // to this file's about group (device-level wipe, host-owned).
     browser: {
       confirmOpen: 'Are you sure you want to open this link in a browser?',
     },

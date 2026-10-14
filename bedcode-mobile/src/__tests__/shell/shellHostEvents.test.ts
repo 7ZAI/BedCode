@@ -183,7 +183,13 @@ describe('C-B6/C-B7 状态条', () => {
   it('should_hideBadge_when_nothingPending', () => {
     const wrapper = mountBar()
 
-    // 0 条不占位（不显示「0」）：角标只在有内容时出现
-    expect(wrapper.find('button').text()).not.toContain('0')
+    // 0 条不占位（不显示「0」）：角标只在有内容时出现。
+    // 不能拿整条文本断言「不含 0」——状态条上还有 HH:mm 时间（16:06 里就有 0），
+    // 断言会随时钟跳红。改为直接找角标元素（唯一带 rounded-full 的 span）。
+    expect(wrapper.find('button').attributes('aria-label')).toContain('"count":0')
+    const badge = wrapper
+      .findAll('span')
+      .find((span) => span.classes().includes('rounded-full'))
+    expect(badge, '无待处理项时不得渲染角标').toBeUndefined()
   })
 })
