@@ -60,7 +60,7 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
   /** 后端在激活前返回的清单快照：state 仍是 Loaded（真实时序） */
   const staleManifest = makePluginInfo({
     id: PLUGIN_ID,
-    state: { state: 'Loaded' },
+    state: { state: 'loaded' },
     permissions: ['ui:sidebar'],
   })
 
@@ -84,7 +84,7 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
 
     await pluginLoader.activate(PLUGIN_ID)
 
-    expect(registry.getPluginState(PLUGIN_ID)).toEqual({ state: 'Activated' })
+    expect(registry.getPluginState(PLUGIN_ID)).toEqual({ state: 'activated' })
     expect(registry.sidebarViews.value.map((v) => `${v.pluginId}:${v.viewId}`)).toEqual([
       `${PLUGIN_ID}:pairing`,
     ])

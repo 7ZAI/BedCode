@@ -323,9 +323,13 @@ export function isHighRiskPermission(perm: string): boolean {
   return HIGH_RISK_PERMISSIONS.includes(perm)
 }
 
-/** 是否为「待人工批准」状态（未确认权限清单，启用前需审批） */
+/** 是否为「待人工批准」状态（未确认权限清单，启用前需审批）
+ *
+ * 比较线上值：宿主 `PluginState` 序列化为 camelCase（见 `./types.ts` 头注），
+ * PascalCase 分支永远命中不了，审批前置门禁会退化成死代码。
+ */
 export function isNeedsApproval(state: PluginState): boolean {
-  return state.state === 'NeedsApproval'
+  return state.state === 'needsApproval'
 }
 
 /** 详细信息行（详情页"详细信息"折叠区使用） */
@@ -356,43 +360,44 @@ export function getDetailRows(
   ]
 }
 
-/** 获取插件状态 i18n key */
+/** 获取插件状态 i18n key（按线上 camelCase 值分支，词表见 `./types.ts`） */
 export function getStateKey(state: PluginState): string {
-  if (state.state === 'Error') return 'desktop.plugin.error'
-  if (state.state === 'Activated') return 'desktop.plugin.activated'
-  if (state.state === 'Degraded') return 'desktop.plugin.degraded'
-  if (state.state === 'Activating') return 'desktop.plugin.activating'
-  if (state.state === 'NeedsApproval') return 'desktop.plugin.needsApproval'
-  if (state.state === 'Loaded') return 'desktop.plugin.loaded'
-  if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
+  if (state.state === 'error') return 'desktop.plugin.error'
+  if (state.state === 'activated') return 'desktop.plugin.activated'
+  if (state.state === 'degraded') return 'desktop.plugin.degraded'
+  if (state.state === 'activating') return 'desktop.plugin.activating'
+  if (state.state === 'needsApproval') return 'desktop.plugin.needsApproval'
+  if (state.state === 'loaded') return 'desktop.plugin.loaded'
+  if (state.state === 'deactivated') return 'desktop.plugin.deactivated'
   return 'desktop.plugin.loaded'
 }
 
 /** 判断插件是否为激活状态 */
 export function isActivated(state: PluginState): boolean {
-  return state.state === 'Activated'
+  return state.state === 'activated'
 }
 
 /** 判断插件是否为降级态（activate 成功但 on_startup 失败：实例在运行，启动初始化未完成） */
 export function isDegraded(state: PluginState): boolean {
-  return state.state === 'Degraded'
+  return state.state === 'degraded'
 }
 
 /**
- * 判断实例是否在运行（Activated 或 Degraded）。
+ * 判断实例是否在运行（activated 或 degraded）。
  *
  * Degraded 实例 activate 成功且 phase 3 扩展点注册已完成，仅 on_startup 失败 ——
  * 对「运行中」语义（列表已启用分区归属、启停开关 ON 态、配置入口放行）应视为运行；
  * 依据 spec §5.1 开放问题裁决：功能门禁先放行 + UI 降级标识。
- * 注意 `is_activated()` 后端 API 门禁仍严格 Activated，本函数只用于前端展示/入口归类。
+ * 注意后端 `is_activated()` API 门禁仍严格要求 activated（Rust 侧 `PluginState::Activated`），
+ * 本函数只用于前端展示/入口归类。
  */
 export function isRunning(state: PluginState): boolean {
-  return state.state === 'Activated' || state.state === 'Degraded'
+  return state.state === 'activated' || state.state === 'degraded'
 }
 
 /** 判断插件是否为错误状态 */
 export function isErrorState(state: PluginState): boolean {
-  return state.state === 'Error'
+  return state.state === 'error'
 }
 
 // 票 03 / ADR 0030 决定 11：`getErrorMessage` / `getDegradedMessage` 已删除。

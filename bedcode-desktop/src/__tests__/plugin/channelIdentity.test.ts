@@ -37,7 +37,7 @@ function makePluginInfo(): PluginInfo {
     main: 'index.js',
     pluginType: 'ts-only',
     permissions: ['storage', 'terminal:input'],
-    state: { state: 'Activated' },
+    state: { state: 'activated' },
     extensionPath: '/tmp/com.test.channel',
     contributes: {},
     source: 'builtin',

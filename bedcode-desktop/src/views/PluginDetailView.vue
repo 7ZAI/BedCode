@@ -108,7 +108,7 @@
             </div>
             <!-- 操作列：启停 + 配置，上下并排 -->
             <div class="flex flex-col gap-2 shrink-0">
-              <!-- 启停按钮（Degraded 实例在运行，同样展示停用语义） -->
+              <!-- 启停按钮（degraded 实例在运行，同样展示停用语义） -->
               <button
                 v-if="plugin.pluginType !== 'rust'"
                 class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors flex items-center justify-center"
@@ -148,7 +148,7 @@
                 {{ $t('desktop.plugin.goConfig') }}
               </span>
               <!-- 卸载按钮（所有来源的插件都可卸载：内置随包 / 文件扫描 / zip 安装。
-                   规则：未启用的插件才能卸载——实例运行中（含 Degraded）按钮禁用并提示先停用） -->
+                   规则：未启用的插件才能卸载——实例运行中（含 degraded）按钮禁用并提示先停用） -->
               <button
                 class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--color-danger)] transition-colors flex items-center justify-center disabled:opacity-50"
                 :class="
@@ -696,7 +696,7 @@ function goBack(): void {
   router.push({ path: '/plugins', query: { ...route.query } })
 }
 
-/** 状态徽章样式（Error 红 / Degraded 与待授权 琥珀 / Activated 绿 / 其余中性） */
+/** 状态徽章样式（error 红 / degraded 与待授权 琥珀 / activated 绿 / 其余中性） */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) return 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
   if (isDegraded(state) || isNeedsApproval(state))
@@ -794,7 +794,7 @@ async function copyPath(path: string): Promise<void> {
 
 /** 卸载可用条件：仅未启用的插件可卸载（运行中、激活进行中均不可，与后端守卫一致） */
 function canUninstall(target: PluginInfo): boolean {
-  return !isRunning(target.state) && target.state.state !== 'Activating'
+  return !isRunning(target.state) && target.state.state !== 'activating'
 }
 
 /** 请求卸载（弹确认框：删除插件所有数据，不可恢复） */

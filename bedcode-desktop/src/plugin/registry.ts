@@ -13,11 +13,12 @@ import { ref, shallowRef, type Ref, type ShallowRef } from 'vue'
  * 设置分组贡献面复用同一缺省值（缺省行为与既有贡献面一致） */
 const DEFAULT_VIEW_ORDER = 600
 
-/** 插件贡献「生效」的运行态：Activated 正常，Degraded 实例仍在运行（仅启动初始化未完成）。
- * Activating / Loaded / NeedsApproval 尚未注册扩展点；Error / Deactivated 一律视为未生效 */
+/** 插件贡献「生效」的运行态：activated 正常，degraded 实例仍在运行（仅启动初始化未完成）。
+ * activating / loaded / needsApproval 尚未注册扩展点；error / deactivated 一律视为未生效。
+ * 取值是**线上 camelCase**（宿主 `PluginState` serde 形状，见 `./types.ts` 头注） */
 const ACTIVE_CONTRIBUTION_STATES: ReadonlySet<PluginState['state']> = new Set([
-  'Activated',
-  'Degraded',
+  'activated',
+  'degraded',
 ])
 
 /**

@@ -140,20 +140,26 @@ export interface FileHandlerContribution {
 
 /** 插件运行时状态
  *
- * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）：
- * 单元变体 → `{ state: "Loaded" }`；newtype 变体 → `{ state: "Degraded", error: "..." }`。
- * Rust 源：packages/plugin-sdk-desktop/rust/src/types.rs 的 PluginState
+ * 取值口径（2026-10-14 对齐）：真源 = 共享内核 crate
+ * `packages/bedcode-wasm-core/src/manifest.rs` 的 `PluginState`，其 serde 属性为
+ * `#[serde(tag = "state", rename_all = "camelCase")]`——宿主命令
+ * `plugin_list_loaded` / `plugin_get_info`（经 wasm-core `api_bridge` 绑定）返回的
+ * JSON 是 **camelCase**：单元变体 `{ state: "activated" }`，结构体变体
+ * `{ state: "degraded", error: "..." }`。
+ * 旧声明写成 PascalCase（`'Activated'` 等），与后端序列化不一致，状态判断将永远
+ * 命中不了（表现为启停开关恒「未启用」、分区恒为未启用、贡献面永不生效）。
+ * 改动词表时先改共享 crate，再同步本类型与两端消费者。
  */
 export type PluginState =
-  | { state: 'Loaded' }
+  | { state: 'loaded' }
   /** 激活进行中（auto-activation / 手动激活期间的瞬时中间态） */
-  | { state: 'Activating' }
-  | { state: 'Activated' }
+  | { state: 'activating' }
+  | { state: 'activated' }
   /** activate 成功但 on_startup 失败：实例可用、扩展点已注册，启动初始化未完成 */
-  | { state: 'Degraded'; error: string }
-  | { state: 'NeedsApproval' }
-  | { state: 'Error'; error: string }
-  | { state: 'Deactivated' }
+  | { state: 'degraded'; error: string }
+  | { state: 'needsApproval' }
+  | { state: 'error'; error: string }
+  | { state: 'deactivated' }
 
 /** 插件信息（从后端获取） */
 export interface PluginInfo {

@@ -330,13 +330,13 @@ function sliderDisplayValue(key: string, prop: ConfigProperty): string {
 }
 
 /**
- * 判断插件是否可进入配置（实例运行中：Activated 或 Degraded）。
+ * 判断插件是否可进入配置（实例运行中：activated 或 degraded）。
  *
- * Degraded 放行依据 spec §5.1 开放问题裁决：实例存活、扩展点已注册，
+ * degraded 放行依据 spec §5.1 开放问题裁决：实例存活、扩展点已注册，
  * 且用户可能正是要通过改配置修复启动失败，门禁收紧只会堵住修复路径。
  */
 function canConfigure(state: PluginState): boolean {
-  return state.state === 'Activated' || state.state === 'Degraded'
+  return state.state === 'activated' || state.state === 'degraded'
 }
 
 /** 从 manifest defaults 构建初始值 */

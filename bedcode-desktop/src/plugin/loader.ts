@@ -37,7 +37,7 @@ class PluginLoaderClass {
    * 等待启动期插件加载完成（幂等）——首次调用即发起 loadAll，后续调用共用同一句柄。
    *
    * 供视图宿主在渲染插件视图前等待「插件已注册贡献面」。rejection 在此收口：
-   * 单个插件的加载失败已在 loadAll 内各自登记 Error 态，整批 reject 只是凭证获取
+   * 单个插件的加载失败已在 loadAll 内各自登记 error 态，整批 reject 只是凭证获取
    * 之类的致命故障——调用方拿到的是「加载已结束」而非再次抛出。
    */
   async ensureLoaded(): Promise<void> {
@@ -51,11 +51,11 @@ class PluginLoaderClass {
 
   /** 加载所有插件（应用启动时调用）
    *
-   * 根据 Rust 后端返回的插件状态决定前端加载策略：
-   * - Rust 端已 Activated 的插件：加载前端 TS 模块（UI 组件注册）
-   * - Degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
+   * 根据 Rust 后端返回的插件状态（线上 camelCase，见 `./types.ts` 头注）决定前端加载策略：
+   * - 已 activated 的插件：加载前端 TS 模块（UI 组件注册）
+   * - degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
    *   UI 入口应可见；仅 console.warn 标注降级原因（spec §3.6）
-   * - 其余状态（含 Activating 中间态）：跳过，等待用户手动激活
+   * - 其余状态（含 activating 中间态）：跳过，等待用户手动激活
    * - Rust-only 插件：完全由后端管理，前端无需处理
    */
   async loadAll(): Promise<void> {
@@ -77,18 +77,19 @@ class PluginLoaderClass {
         continue
       }
 
-      // 加载门禁：Activated 正常加载；Degraded 也放行（实例在运行，仅降级）；
+      // 加载门禁：线上值 activated 正常加载；degraded 也放行（实例在运行，仅降级）；
       // 其余状态跳过。功能门禁归类依据 spec §5.1 开放问题裁决：先放行 + UI 降级标识
+      // （状态判定必须用 camelCase 线上值，见 `./types.ts` 头注）
       const stateName = manifest.state.state
 
-      if (stateName !== 'Activated' && stateName !== 'Degraded') {
+      if (stateName !== 'activated' && stateName !== 'degraded') {
         logger.log(
           `[PluginLoader] Plugin ${manifest.id} not activated (state: ${stateName}), skipping frontend load`,
         )
         continue
       }
 
-      if (stateName === 'Degraded') {
+      if (stateName === 'degraded') {
         logger.warn(
           `[PluginLoader] Plugin ${manifest.id} is DEGRADED, loading frontend module anyway. Reason: ${manifest.state.error}`,
         )
@@ -143,9 +144,9 @@ class PluginLoaderClass {
       logger.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
-      // 加载失败即贡献面失效：先登记 Error 态摘除贡献，再上报后端
+      // 加载失败即贡献面失效：先登记 error 态摘除贡献，再上报后端
       getPluginRegistry().setPluginState(manifest.id, {
-        state: 'Error',
+        state: 'error',
         error: e.message || 'Frontend load failed',
       })
       // 已预登记的 context 随失败撤下：Provider 不再渲染，避免残留半激活插件子树
@@ -192,7 +193,7 @@ class PluginLoaderClass {
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       getPluginRegistry().setPluginState(manifest.id, {
-        state: 'Error',
+        state: 'error',
         error: e.message || 'Frontend load failed',
       })
       getPluginRegistry().clearContext(manifest.id)
@@ -366,7 +367,7 @@ class PluginLoaderClass {
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
       getPluginRegistry().setPluginState(pluginId, {
-        state: 'Error',
+        state: 'error',
         error: e.message || 'Hot reload failed',
       })
       getPluginRegistry().clearContext(pluginId)
@@ -413,14 +414,14 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      // manifest 是 activate() 前取的快照，其 state 仍是激活前的形态（Loaded / Inactive）；
+      // manifest 是 activate() 前取的快照，其 state 仍是激活前的形态（loaded / deactivated）；
       // 贡献面生效判据读的是 registry 状态，此处必须记激活后的真实运行态
-      getPluginRegistry().setPluginState(manifest.id, { state: 'Activated' })
+      getPluginRegistry().setPluginState(manifest.id, { state: 'activated' })
       logger.log(`[PluginLoader] Plugin activated: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to activate ${manifest.id}:`, e)
       getPluginRegistry().setPluginState(manifest.id, {
-        state: 'Error',
+        state: 'error',
         error: e.message || 'Activation failed',
       })
       // 已预登记的 context 随失败撤下（同 loadFrontendOnly 失败分支）

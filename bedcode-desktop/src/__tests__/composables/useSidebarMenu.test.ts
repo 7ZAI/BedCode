@@ -25,7 +25,7 @@ describe('useSidebarMenu', () => {
     viewType: string,
     order?: number,
   ): string {
-    registry.setPluginState(pluginId, { state: 'Activated' })
+    registry.setPluginState(pluginId, { state: 'activated' })
     usedPluginIds.add(pluginId)
     const d = registry.registerView(pluginId, viewType, {
       id: viewId,
@@ -166,11 +166,11 @@ describe('useSidebarMenu', () => {
 
       // error 态：四目录整组摘除，不残留空目录
       usedPluginIds.add(MERGED)
-      registry.setPluginState(MERGED, { state: 'Error', error: 'wasm trap in task domain' })
+      registry.setPluginState(MERGED, { state: 'error', error: 'wasm trap in task domain' })
       expect(ids()).toEqual(['plugins', 'settings'])
 
       // 恢复激活：整组回来
-      registry.setPluginState(MERGED, { state: 'Activated' })
+      registry.setPluginState(MERGED, { state: 'activated' })
       expect(ids()).toEqual([...panelIds, 'plugins', 'settings'])
     })
 
@@ -184,7 +184,7 @@ describe('useSidebarMenu', () => {
           component: {},
         }),
       )
-      registry.setPluginState('p-activating', { state: 'Activating' })
+      registry.setPluginState('p-activating', { state: 'activating' })
 
       const ids = () => useSidebarMenu().menuItems.value.map((m) => m.id)
       expect(ids()).toEqual(['plugins', 'settings'])

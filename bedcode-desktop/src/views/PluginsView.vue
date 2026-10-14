@@ -149,7 +149,7 @@
                     >{{ $t('desktop.plugin.config') }}</span
                   >
                   <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>）；
-                       Degraded 实例在运行，开关保持 ON 态（停用语义） -->
+                       degraded 实例在运行，开关保持 ON 态（停用语义） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
                     class="plugin-toggle"

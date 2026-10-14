@@ -43,7 +43,7 @@ describe('useSettingsSections', () => {
 
   /** 模拟插件激活后贡献一个设置分组（登记运行态即视为贡献生效） */
   function contribute(pluginId: string, id: string, order?: number): void {
-    registry.setPluginState(pluginId, { state: 'Activated' })
+    registry.setPluginState(pluginId, { state: 'activated' })
     usedPluginIds.add(pluginId)
     disposables.push(
       registry.registerSettingsSection(pluginId, {
@@ -155,16 +155,16 @@ describe('useSettingsSections', () => {
     contribute('com.bedcode.terminal-session', 'session-settings')
     expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
 
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Error', error: 'trap' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'error', error: 'trap' })
     expect(keys()).not.toContain('plugin-com.bedcode.terminal-session-session-settings')
 
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
     expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
   })
 
   it('Degraded 态（实例仍在运行）保留贡献分组', () => {
     contribute('com.bedcode.terminal-session', 'session-settings')
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Degraded', error: 'startup failed' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'degraded', error: 'startup failed' })
     expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
   })
 
@@ -186,7 +186,7 @@ describe('useSettingsSections', () => {
       titleKey: 'settings.session.title',
       component: {},
     })
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
     usedPluginIds.add('com.bedcode.terminal-session')
 
     expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
@@ -220,7 +220,7 @@ describe('ui:settings 权限门', () => {
       titleKey: 'x.title',
       component: {},
     })
-    registry.setPluginState('com.bedcode.granted', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.granted', { state: 'activated' })
     expect(registry.settingsSectionsRef.value.map((s) => `${s.pluginId}:${s.id}`)).toContain(
       'com.bedcode.granted:x',
     )

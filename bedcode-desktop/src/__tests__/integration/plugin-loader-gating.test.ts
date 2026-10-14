@@ -2,10 +2,13 @@
  * 插件启动加载门禁测试（spec §3.6 / issue 02）+ 前端加载诊断上报（issue 04）
  *
  * 被测行为：pluginLoader.loadAll 按后端返回的插件状态决定是否加载前端模块——
- * - Activated：放行（现状）
- * - Degraded：也放行（实例在运行、扩展点已注册），且 console.warn 标注降级原因
- * - 其余状态（Activating 中间态 / Loaded / Error / NeedsApproval / Deactivated）：
+ * - activated：放行（现状）
+ * - degraded：也放行（实例在运行、扩展点已注册），且 console.warn 标注降级原因
+ * - 其余状态（activating 中间态 / loaded / error / needsApproval / deactivated）：
  *   跳过；rust 类型（后端自管）同样跳过
+ *
+ * 状态值口径：宿主 `PluginState` 序列化为 camelCase（wasm-core manifest.rs），
+ * 夹具与断言一律用线上值，避免 PascalCase 夹具把门禁死代码测成「通过」
  *
  * issue 04：放行插件的导入失败路径经 plugin_frontend_load_report 上报一次
  * （宿主内部诊断通道，仅写 tracing 不入状态机）；跳过的插件零上报；
@@ -15,7 +18,7 @@
  * 「尝试加载前端模块」的可观测结果 = 动态 import 在 vitest 内必然失败（asset://
  * 协议无服务器可解析）→ loader 失败恢复路径调用 plugin_mark_error。
  * 因此断言：mark_error 恰好出现在门禁放行的插件上，跳过的插件零调用；
- * Degraded 的降级原因经 console.warn 上报（含插件 id 与原始错误串）。
+ * degraded 的降级原因经 console.warn 上报（含插件 id 与原始错误串）。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -100,31 +103,31 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
           makePluginInfo({
             id: 'com.bedcode.gate-ok',
             name: 'Gate Ok',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
           makeDegradedPluginInfo({
             id: 'com.bedcode.gate-degraded',
             name: 'Gate Degraded',
-            state: { state: 'Degraded', error: DEGRADED_REASON },
+            state: { state: 'degraded', error: DEGRADED_REASON },
           }),
           makeActivatingPluginInfo({ id: 'com.bedcode.gate-activating' }),
-          makePluginInfo({ id: 'com.bedcode.gate-loaded', state: { state: 'Loaded' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-loaded', state: { state: 'loaded' } }),
           makePluginInfo({
             id: 'com.bedcode.gate-error',
-            state: { state: 'Error', error: 'boom' },
+            state: { state: 'error', error: 'boom' },
           }),
-          makePluginInfo({ id: 'com.bedcode.gate-approval', state: { state: 'NeedsApproval' } }),
-          makePluginInfo({ id: 'com.bedcode.gate-off', state: { state: 'Deactivated' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-approval', state: { state: 'needsApproval' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-off', state: { state: 'deactivated' } }),
           // rust 类型：后端自管，即使 Activated 也跳过
           makePluginInfo({
             id: 'com.bedcode.gate-rust',
             pluginType: 'rust',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
           // sandbox 字段已退役（审计票 06：前端不做隔离）：不再参与门禁，Activated 照常放行
           makePluginInfo({
             id: 'com.bedcode.gate-retired-sandbox',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
         ])
       }

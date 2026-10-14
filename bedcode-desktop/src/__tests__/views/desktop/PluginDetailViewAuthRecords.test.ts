@@ -74,7 +74,7 @@ function makePlugin(): Record<string, unknown> {
     main: 'index.html',
     pluginType: 'rust-ts',
     permissions: ['fs:read'],
-    state: { state: 'Activated' },
+    state: { state: 'activated' },
     extensionPath: '/path/to/app',
     contributes: { contributes: [] },
     source: 'wasm',

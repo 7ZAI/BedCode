@@ -55,7 +55,7 @@ async function makeContext(permissions: string[]) {
     main: 'index.js',
     pluginType: 'ts-only',
     permissions,
-    state: { state: 'Activated' },
+    state: { state: 'activated' },
     extensionPath: '/tmp/plugin',
     contributes: {},
     source: 'builtin',
@@ -67,7 +67,7 @@ async function makeContext(permissions: string[]) {
 describe('PluginContext.session 终端窗口原语', () => {
   // 默认登记会话中心插件为激活态（终端窗口视图由它贡献，三方法过激活门禁）
   beforeEach(() => {
-    getPluginRegistry().setPluginState(SESSION_PLUGIN_ID, { state: 'Activated' })
+    getPluginRegistry().setPluginState(SESSION_PLUGIN_ID, { state: 'activated' })
     vi.clearAllMocks()
     setActivePinia(createPinia())
     computeDesktopInitialTerminalSize.mockResolvedValue({ cols: 120, rows: 30 } as never)
@@ -152,7 +152,7 @@ describe('PluginContext.session 终端窗口原语', () => {
   })
 
   it('C7 会话中心插件未激活时终端窗口三方法显性报错，不委派宿主窗口管理器（票 05）', async () => {
-    getPluginRegistry().setPluginState(SESSION_PLUGIN_ID, { state: 'Deactivated' })
+    getPluginRegistry().setPluginState(SESSION_PLUGIN_ID, { state: 'deactivated' })
     const ctx = await makeContext(['session:read'])
 
     await expect(ctx.session.openTerminal({ id: 's-1', name: 'dev' })).rejects.toThrow(

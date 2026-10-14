@@ -31,7 +31,7 @@ function makePlugin(overrides: Partial<PluginInfo> = {}): PluginInfo {
     pluginType: 'ts-only',
     rustLibrary: '',
     permissions: ['storage', 'process:run', 'pty:spawn'],
-    state: { state: 'NeedsApproval' },
+    state: { state: 'needsApproval' },
     extensionPath: '/tmp/plugins/com.test.approve',
     contributes: {},
     source: 'user-installed',

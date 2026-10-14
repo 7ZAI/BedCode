@@ -96,7 +96,7 @@ beforeEach(() => {
     makePluginInfo({
       id: 'com.bedcode.demo',
       name: 'Demo Plugin',
-      state: { state: 'Deactivated' },
+      state: { state: 'deactivated' },
     }),
   ]
   installInvokeMock()
@@ -186,7 +186,7 @@ describe('插件管理域错误信封垂直切片', () => {
 
   it('停用失败：兜底文案且列表状态不变', async () => {
     backendPlugins = [
-      makePluginInfo({ id: 'com.bedcode.demo', name: 'Demo Plugin', state: { state: 'Activated' } }),
+      makePluginInfo({ id: 'com.bedcode.demo', name: 'Demo Plugin', state: { state: 'activated' } }),
     ]
     await mountView()
     // 真实链路：loader.deactivate 清理前端资源后调用后端 plugin_deactivate，

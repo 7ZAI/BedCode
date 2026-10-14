@@ -110,7 +110,7 @@ describe('SettingsView 分组渲染', () => {
   })
 
   it('贡献分组按 order 落到内置分组之间，标题取插件命名空间文案', async () => {
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
     /* 真实时序：loader 在 activate 前把 context 预登记进注册表（两次都在贡献面渲染前），
        测试需同步补齐，否则 keyed Provider 判「无 context」不渲染卡片正文 */
     registry.setContext('com.bedcode.terminal-session', makeContext())
@@ -138,7 +138,7 @@ describe('SettingsView 分组渲染', () => {
   })
 
   it('插件进入 error 态后贡献分组被摘除，设置页回落到纯内置形态', async () => {
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
     registry.setContext('com.bedcode.terminal-session', makeContext())
     registry.registerSettingsSection('com.bedcode.terminal-session', {
       id: 'session-settings',
@@ -149,7 +149,7 @@ describe('SettingsView 分组渲染', () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(true)
 
-    registry.setPluginState('com.bedcode.terminal-session', { state: 'Error', error: 'wasm trap' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'error', error: 'wasm trap' })
     await flushPromises()
 
     expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(false)

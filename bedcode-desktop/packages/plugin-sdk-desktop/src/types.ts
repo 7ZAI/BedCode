@@ -553,16 +553,19 @@ export type PluginDevMock = Record<string, unknown>
 /** 插件运行时状态
  *
  * 与宿主侧 `bedcode-desktop/src/plugin/types.ts` 为双写副本，修改任一文件必须同步另一份。
- * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）。
+ * 线协议真源 = 共享内核 crate `packages/bedcode-wasm-core/src/manifest.rs` 的
+ * `PluginState`（`#[serde(tag = "state", rename_all = "camelCase")]`）——宿主命令返回
+ * 的 JSON 是 camelCase（`{state:'activated'}` / `{state:'needsApproval'}` …），
+ * 插件前端消费状态时必须按线上值分支。
  */
 export type PluginState =
-  | { state: 'Loaded' }
-  | { state: 'Activating' }
-  | { state: 'Activated' }
-  | { state: 'Degraded'; error: string }
-  | { state: 'NeedsApproval' }
-  | { state: 'Error'; error: string }
-  | { state: 'Deactivated' }
+  | { state: 'loaded' }
+  | { state: 'activating' }
+  | { state: 'activated' }
+  | { state: 'degraded'; error: string }
+  | { state: 'needsApproval' }
+  | { state: 'error'; error: string }
+  | { state: 'deactivated' }
 
 /** 插件信息（从后端获取） */
 export interface PluginInfo {

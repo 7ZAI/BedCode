@@ -174,7 +174,7 @@ describe('插件运行时错误信封', () => {
       makeDegradedPluginInfo({
         id: 'com.bedcode.other',
         name: 'Other Plugin',
-        state: { state: 'Degraded', error: 'on_startup failed: db migration error at line 42' },
+        state: { state: 'degraded', error: 'on_startup failed: db migration error at line 42' },
       }),
     ]
     const router = createRouter({
