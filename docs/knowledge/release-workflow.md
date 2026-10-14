@@ -48,6 +48,13 @@
 
 ## 发布流程
 
+### 0. 发布前总结 CHANGELOG（一次性写入）
+
+日常修改代码**不**向 `CHANGELOG.md` / `CHANGELOG_zh.md` 逐次记录；只在每次发布前，按上次发布
+以来的提交记录（`git log <last-tag>..HEAD`）归纳出**当前版本**章节（如 `## [x.x.x] - date`），
+替换 Unreleased 占位内容。Release body 由流水线从 CHANGELOG 提取当前版本章节自动生成（见下方
+「Release Body 格式」），因此发布前必须完成本节总结。
+
 ### 1. 更新版本号
 
 同时更新以下两处版本号：
