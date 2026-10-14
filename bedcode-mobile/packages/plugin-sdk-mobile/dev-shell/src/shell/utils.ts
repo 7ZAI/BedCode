@@ -28,16 +28,27 @@ export function initialOf(name: string): string {
   return trimmed ? trimmed.slice(0, 1).toUpperCase() : '?'
 }
 
-/** 图标形态：emoji / SVG path d / 无 */
-export type IconKind = 'emoji' | 'path' | 'none'
+/** 图标形态：emoji / SVG path d / 图片路径 / 无 */
+export type IconKind = 'emoji' | 'path' | 'image' | 'none'
+
+/**
+ * 图片图标的扩展名判据（与宿主 shell/utils.ts 同源）
+ *
+ * 调试数据源读不到插件包内资源，会把图片路径换成通用 path 图形（见 adapters/devAppSource.ts
+ * 的 resolveIcon），因此壳内当前不会从 `icon` 命中 image；保留判据是为了与宿主同构——
+ * 数据源给出已解析 iconUrl 时，两种运行环境走同一条渲染分支。
+ */
+const IMAGE_ICON_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 
 /**
  * 判断图标形态
  *
- * SVG path d 的判据是「只含路径指令字符」，避免把 emoji 或图片路径误判成 path。
+ * 与宿主 utils.iconKindOf 同构，判据顺序一致：图片路径必须先于 path 判定——「icon.svg」
+ * 这类值不含路径指令字符，漏掉这一步会被当 emoji 字面量渲染。
  */
 export function iconKindOf(icon: string | undefined): IconKind {
   if (!icon) return 'none'
+  if (IMAGE_ICON_RE.test(icon.trim())) return 'image'
   if (/^[MmLlHhVvCcSsQqTtAaZz0-9\s.,+-]+$/.test(icon)) return 'path'
   return 'emoji'
 }

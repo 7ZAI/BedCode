@@ -66,8 +66,15 @@ export interface ShellApp {
   version: string
   description?: string
   author?: string
-  /** 图标：emoji 或 SVG path d；两者都不是时壳生成首字母回退 */
+  /** 图标：emoji / SVG path d / 相对插件目录的图片路径（如 icon.svg）；都取不到时壳生成首字母回退 */
   icon?: string
+  /**
+   * 图片图标的已解析地址（asset protocol URL）：数据源能解析时必须给出，否则首字母回退。
+   * dev-shell 的浏览器预览读不到插件包内资源（adapters/devAppSource.ts 的 resolveIcon 会把
+   * 图片路径换成通用 path 图形），因此调试数据源当前不产出该字段；保留字段是为与宿主
+   * ShellApp 契约逐字一致（dev-shell/__tests__/shell/contractDrift.test.ts 钉住）。
+   */
+  iconUrl?: string
   /** 官方应用标记 */
   official?: boolean
   state: ShellAppState

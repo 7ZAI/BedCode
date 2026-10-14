@@ -6,9 +6,18 @@
     role="img"
     :aria-label="app.name"
   >
+    <!-- 图片图标：宿主给出的是 asset protocol URL；dev-shell 数据源读不到插件包资源，
+         该分支仅在数据源能产出 iconUrl 时命中；加载失败退回首字母，不留空白格 -->
+    <img
+      v-if="kind === 'image' && app.iconUrl && !imageFailed"
+      :src="app.iconUrl"
+      :alt="app.name"
+      class="w-full h-full object-cover"
+      @error="imageFailed = true"
+    />
     <!-- SVG path d（应用自带图标，24×24 视框 stroke 风格） -->
     <svg
-      v-if="kind === 'path'"
+      v-else-if="kind === 'path'"
       :width="innerSize"
       :height="innerSize"
       viewBox="0 0 24 24"
@@ -42,10 +51,10 @@
 /**
  * 应用图标
  *
- * 三种形态归一：emoji / SVG path d / 首字母回退。判据集中在 utils.iconKindOf，
+ * 四种形态归一：图片路径 / emoji / SVG path d / 首字母回退。判据集中在 utils.iconKindOf，
  * 避免各屏各写一份「这是不是 path」的判断。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ShellApp } from '../types'
 import { iconKindOf, initialOf } from '../utils'
 
@@ -65,6 +74,15 @@ const initial = computed(() => initialOf(props.app.name))
 /** 图形占盒子的比例：emoji 顶格显小，path 留白更协调 */
 const innerSize = computed(() => Math.round(props.size * (kind.value === 'emoji' ? 0.62 : 0.55)))
 
+/** 图片加载失败标记：数据源换图标/地址后重置，避免停在首字母回退 */
+const imageFailed = ref(false)
+watch(
+  () => [props.app.icon, props.app.iconUrl],
+  () => {
+    imageFailed.value = false
+  },
+)
+
 const boxStyle = computed(() => ({
   width: `${props.size}px`,
   height: `${props.size}px`,
@@ -78,8 +96,8 @@ const toneClass = computed(() => {
     case 'ghost':
       return 'bg-transparent text-[var(--mobile-text-secondary)] border-dashed border-[var(--mobile-border-hover)]'
     default:
-      // emoji 自带颜色，不再叠加前景色，否则会出现双色描边
-      return kind.value === 'emoji'
+      // emoji 与图片自带颜色，不再叠加前景色，否则会出现双色描边
+      return kind.value === 'emoji' || kind.value === 'image'
         ? 'bg-[var(--mobile-bg-elevated)] border-[var(--mobile-border)]'
         : 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] border-[var(--mobile-border)]'
   }
