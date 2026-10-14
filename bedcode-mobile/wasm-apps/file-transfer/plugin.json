@@ -23,7 +23,8 @@
     "transfer",
     "ui:back",
     "ui:dialog",
-    "ui:route"
+    "ui:route",
+    "ui:settings"
   ],
   "contributes": {
     "commands": [
