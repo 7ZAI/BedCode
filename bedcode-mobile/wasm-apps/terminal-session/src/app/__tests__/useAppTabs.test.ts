@@ -11,9 +11,10 @@
  * | C-AT2 | active 初值三元分支 | available 含 connection 时缺省它，否则取首项 | 见用例 |
  * | C-AT3 | select 可用分支 | 切到可用页签 | 返回 true，active 更新 |
  * | C-AT4 | select 不可用分支（反例） | 切到未开放页签 | 返回 false，active **不变** |
- * | C-AT5 | step 在界分支 | left→下一个 / right→上一个 | 返回 true，active 步进 |
- * | C-AT6 | step 越界分支（边界） | 首屏 right / 末页 left | 返回 false，active **不变** |
- * | C-AT7 | activeIndex computed | 当前页签在 tabs 中的序号 | 与 tabs 顺序一致 |
+ * | C-AT5 | activeIndex computed | 当前页签在 tabs 中的序号 | 与 tabs 顺序一致 |
+ *
+ * 横滑「一步去哪一页」的取邻与越界拒绝已随入场过渡一起下沉到 `../panelDock`
+ * （neighborTabId），本文件只留状态机自身的契约。
  */
 import { describe, it, expect } from 'vitest'
 import { APP_TABS, useAppTabs, type AppTab } from '../useAppTabs'
@@ -94,58 +95,7 @@ describe('C-AT3/C-AT4 select 正反例', () => {
   })
 })
 
-describe('C-AT5/C-AT6 step 正例与边界', () => {
-  it('should_stepForward_when_swipingLeft', () => {
-    const tabs = useAppTabs(ALL)
-
-    const moved = tabs.step('left')
-
-    expect(moved).toBe(true)
-    expect(tabs.active.value).toBe('sessions')
-  })
-
-  it('should_stepBackward_when_swipingRight_fromMiddle', () => {
-    const tabs = useAppTabs(ALL)
-    tabs.select('toolbox')
-
-    const moved = tabs.step('right')
-
-    expect(moved).toBe(true)
-    expect(tabs.active.value).toBe('sessions')
-  })
-
-  it('should_rejectAndKeepActive_when_swipingRightOnFirstTab', () => {
-    // 边界：首屏再向右是越界，必须被拒（否则内层区上交的滑动会跳到不存在的页）
-    const tabs = useAppTabs(ALL)
-
-    const moved = tabs.step('right')
-
-    expect(moved).toBe(false)
-    expect(tabs.active.value).toBe('connection')
-  })
-
-  it('should_rejectAndKeepActive_when_swipingLeftOnLastTab', () => {
-    // 边界：末页再向左越界
-    const tabs = useAppTabs(ALL)
-    tabs.select('settings')
-
-    const moved = tabs.step('left')
-
-    expect(moved).toBe(false)
-    expect(tabs.active.value).toBe('settings')
-  })
-
-  it('should_stepWithinSubsetOnly_when_someTabsUnavailable', () => {
-    // 可用集只有两页时，步进不得跳到被过滤掉的页签
-    const tabs = useAppTabs(['connection', 'sessions'])
-
-    expect(tabs.step('left')).toBe(true)
-    expect(tabs.active.value).toBe('sessions')
-    expect(tabs.step('left')).toBe(false)
-  })
-})
-
-describe('C-AT7 当前序号', () => {
+describe('C-AT5 当前序号', () => {
   it('should_reportIndexWithinRenderedTabs_when_activeSet', () => {
     const tabs = useAppTabs(['connection', 'sessions', 'toolbox'])
 

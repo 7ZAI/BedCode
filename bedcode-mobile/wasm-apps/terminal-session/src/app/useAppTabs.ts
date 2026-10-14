@@ -39,8 +39,6 @@ export interface AppTabs {
   activeIndex: ComputedRef<number>
   /** 切到指定页签；页签不可用时不切换（返回是否切换成功） */
   select(id: AppTab): boolean
-  /** 按方向步进（横滑翻页）；越界返回 false */
-  step(dir: 'left' | 'right'): boolean
 }
 
 /**
@@ -64,12 +62,5 @@ export function useAppTabs(available: readonly AppTab[]): AppTabs {
     return true
   }
 
-  function step(dir: 'left' | 'right'): boolean {
-    const next = activeIndex.value + (dir === 'left' ? 1 : -1)
-    if (next < 0 || next >= tabs.value.length) return false
-    active.value = tabs.value[next].id
-    return true
-  }
-
-  return { tabs, active, activeIndex, select, step }
+  return { tabs, active, activeIndex, select }
 }

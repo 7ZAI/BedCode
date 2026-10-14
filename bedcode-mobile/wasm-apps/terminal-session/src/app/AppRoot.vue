@@ -36,9 +36,12 @@
         {{ t('app.reconnecting') }}
       </p>
 
-      <!-- ==================== 页签容器：首次访问后常驻，横滑或点导航切换 ==================== -->
+      <!-- ==================== 页签容器：首次访问后常驻，横滑或点导航切换 ====================
+           overflow-hidden 是「同屏只允许一页可见」的兑现处：停靠面板完全停在屏外，
+           由容器裁掉。没有它，停靠面板会溢出到头部与导航之上。 -->
       <div
-        class="relative flex-1 min-h-0"
+        ref="panelsEl"
+        class="relative flex-1 min-h-0 overflow-hidden"
         @touchstart.passive="onZoneTouchStart"
         @touchmove.passive="onZoneTouchMove"
         @touchend="onZoneTouchEnd"
@@ -88,10 +91,13 @@
  * - 横滑翻页经 SDK useSwipeTabs；嵌套区（工具箱双页签）越界时经
  *   ./swipeArbitration 上交本组件——旧宿主由 MobileSwipeContainer 承担的仲裁职责
  *
+ * 切页形态：同屏只允许一页可见（停靠面板停在屏外 + 容器裁切），停靠位判定见
+ * ./panelDock，几何见 ./app.css。首次挂载的面板先停靠再切居中，避免硬切。
+ *
  * 终端为整页沉浸态：进终端后隐藏头部与导航（终端自带 Header / 输入栏 / 键盘避让）。
  * 数据面全部走 useHostPage（宿主投影 + 插件命令），本组件不直连宿主 Tauri 命令。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useSwipeTabs } from '@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs'
 import DevicesSection from '../host/components/DevicesSection.vue'
 import SessionsSection from '../host/components/SessionsSection.vue'
@@ -100,11 +106,12 @@ import SettingsPage from '../settings/SettingsPage.vue'
 import AutoTaskToolboxView from '../task/components/AutoTaskToolboxView.vue'
 import TerminalView from '../terminal/TerminalView.vue'
 import NavBar from './components/NavBar.vue'
+import { dockClassOf, enterSideOf, neighborTabId } from './panelDock'
 import { setSwipeDelegate } from './swipeArbitration'
 import { useAppTabs, type AppTab } from './useAppTabs'
 import './app.css'
 
-/** 已具备内容的页签（顺序即 AVAILABLE_TABS 的数组序，仅作面板停靠的相对序依据） */
+/** 本应用开放的全部页签（可用性过滤后的呈现集合见 useAppTabs） */
 const AVAILABLE_TABS: readonly AppTab[] = ['connection', 'sessions', 'toolbox', 'settings']
 
 const ctrl = useHostPage()
@@ -146,15 +153,22 @@ const statusChipStyle = computed(() => {
   }
 })
 
+/** 页签视觉顺序（面板停靠的相对序依据；与底部导航一致，过滤后即可用页签） */
+const panelOrder = computed<AppTab[]>(() => tabs.tabs.value.map((t) => t.id))
+
 /**
  * 面板停靠态：当前页居中；已过页停左侧、未到页停右侧
+ *
+ * 新挂载的面板先按入场侧停靠、再切居中（见 gotoTab），否则新元素一上来就在
+ * 最终位置，浏览器没有「停靠 → 居中」的变化可过渡，切页表现为硬切。
  */
 function panelClass(id: AppTab): string {
-  const order = AVAILABLE_TABS
-  const current = order.indexOf(tabs.active.value)
-  const index = order.indexOf(id)
-  if (index === current) return 'app-tab-panel--active'
-  return index < current ? 'app-tab-panel--left' : 'app-tab-panel--right'
+  return dockClassOf({
+    id,
+    active: tabs.active.value,
+    order: panelOrder.value,
+    enterFrom: enteringId.value === id ? enteringFrom.value : null,
+  })
 }
 
 /**
@@ -175,14 +189,47 @@ function markVisited(id: AppTab): void {
   visited.value = new Set(visited.value).add(id)
 }
 
-function onSelectTab(id: AppTab): void {
+/** 正在入场的新面板：先停靠、下一次布局后切居中（null = 无入场动画） */
+const enteringId = ref<AppTab | null>(null)
+const enteringFrom = ref<'left' | 'right'>('right')
+const panelsEl = ref<HTMLElement | null>(null)
+
+/**
+ * 切到指定页签（底部导航点击与横滑翻页共用这一条路径）
+ *
+ * 已挂载的面板走 CSS 停靠过渡即可；首次挂载的面板必须多走一步：先以停靠态渲染，
+ * 强制一次布局读取让浏览器把停靠态确认为起始值，再切到当前页——否则新挂载元素
+ * 不会产生过渡（切页变成硬切，表现为「没切干净」）。
+ */
+async function gotoTab(id: AppTab): Promise<void> {
+  if (id === tabs.active.value) return
+  const firstVisit = !isVisited(id)
+  const enterFrom = enterSideOf(id, tabs.active.value, panelOrder.value)
   if (!tabs.select(id)) return
   markVisited(id)
+  if (!firstVisit) return
+
+  enteringId.value = id
+  enteringFrom.value = enterFrom
+  await nextTick()
+  // 强制一次布局：让浏览器先把「停靠态」定下来（读取 offsetHeight 即可，不必改值）
+  if (panelsEl.value) void panelsEl.value.offsetHeight
+  enteringId.value = null
 }
 
+function onSelectTab(id: AppTab): void {
+  void gotoTab(id)
+}
+
+/** 横滑翻页：按方向取相邻页签，越界即无操作（页签序与可用性以状态机为准） */
 function stepTab(dir: 'left' | 'right'): void {
-  if (!tabs.step(dir)) return
-  markVisited(tabs.active.value)
+  const target = neighborTabId(
+    tabs.tabs.value.map((t) => t.id),
+    tabs.activeIndex.value,
+    dir,
+  )
+  if (!target) return
+  void gotoTab(target)
 }
 
 // ==================== 横滑翻页 + 嵌套区仲裁 ====================
