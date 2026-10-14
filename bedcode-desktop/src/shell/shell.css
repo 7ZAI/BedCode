@@ -1,0 +1,448 @@
+/**
+ * 设备壳共享样式（src/shell/** 全组件可用）
+ *
+ * 设计真源：`.scratch/2026-10-08-desktop-shell-redesign/shell-preview-c.html`
+ * 铁律（frontend-styles token-bound）：颜色 / 圆角 / 阴影全部走 style.css token
+ * 或 color-mix 自 token 派生；零新增 hex、零新字体族。
+ *
+ * 跨组件复用才放这里（3+ 组件）；单组件私有样式放 scoped。
+ */
+  /* ==================== 应用图标底色（tone 档：color-mix 自语义 token，双主题自动适配） ==================== */
+  .tone-primary {
+    background: color-mix(in srgb, var(--color-primary) 14%, var(--bg-card));
+    color: var(--color-primary);
+    border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  }
+  .tone-info {
+    background: var(--color-info-light);
+    color: var(--color-info);
+    border: 1px solid color-mix(in srgb, var(--color-info) 25%, transparent);
+  }
+  .tone-success {
+    background: var(--color-success-light);
+    color: var(--color-success);
+    border: 1px solid color-mix(in srgb, var(--color-success) 25%, transparent);
+  }
+  .tone-warning {
+    background: var(--color-warning-light);
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
+  }
+  .tone-mix {
+    background: color-mix(in srgb, var(--color-info) 10%, var(--color-success-light));
+    color: color-mix(in srgb, var(--color-info) 55%, var(--color-success));
+    border: 1px solid color-mix(in srgb, var(--color-info) 22%, transparent);
+  }
+  :root.dark .tone-primary {
+    color: var(--text-primary);
+  }
+  .tone-system {
+    background: var(--bg-sidebar);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+
+  /* ==================== 状态点 ==================== */
+  .sdot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .sdot.running {
+    background: var(--color-success);
+  }
+  .sdot.degraded {
+    background: var(--color-warning);
+  }
+  .sdot.dormant {
+    background: var(--text-tertiary);
+  }
+  .sdot.approval,
+  .sdot.error {
+    background: var(--color-danger);
+  }
+
+  /* ==================== chip（状态徽标） ==================== */
+  .shell-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: calc(11px * var(--ui-scale));
+    padding: 2px 8px;
+    border-radius: var(--radius-tag);
+    background: var(--color-primary-light);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    line-height: 1.4;
+  }
+  .shell-chip.ok {
+    background: var(--color-success-light);
+    color: var(--color-success);
+  }
+  .shell-chip.warn {
+    background: var(--color-warning-light);
+    color: var(--color-warning);
+  }
+  .shell-chip.danger {
+    background: var(--color-danger-light);
+    color: var(--color-danger);
+  }
+  .shell-chip.info {
+    background: var(--color-info-light);
+    color: var(--color-info);
+  }
+
+  /* ==================== pill（权限位等技术标识） ==================== */
+  .shell-pill {
+    font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace);
+    font-size: calc(10px * var(--ui-scale));
+    padding: 2px 7px;
+    border-radius: var(--radius-tag);
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .shell-pill.risk {
+    background: var(--color-danger-light);
+    border-color: transparent;
+    color: var(--color-danger);
+  }
+
+  /* ==================== 开关（原生 checkbox + token 外观，键盘可达） ==================== */
+  .shell-sw {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+  .shell-sw input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+  .shell-sw .track {
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    background: var(--border-strong);
+    transition: background-color 0.2s;
+    pointer-events: none;
+  }
+  .shell-sw .knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    transition: transform 0.2s;
+    pointer-events: none;
+  }
+  .shell-sw input:checked ~ .track {
+    background: var(--color-success);
+  }
+  .shell-sw input:checked ~ .knob {
+    transform: translateX(14px);
+  }
+  .shell-sw input:focus-visible ~ .track {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+  }
+  .shell-sw.risk input:checked ~ .track {
+    background: var(--color-danger);
+  }
+  .shell-sw input:disabled ~ .track,
+  .shell-sw input:disabled ~ .knob {
+    opacity: 0.5;
+  }
+
+  /* ==================== 分段控件 ==================== */
+  .shell-seg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-button);
+  }
+  .shell-seg button {
+    min-width: 62px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+  .shell-seg button:hover {
+    color: var(--text-primary);
+  }
+  .shell-seg button.on {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-weight: 500;
+    box-shadow: var(--shadow-card);
+  }
+  .shell-seg button.on.risky {
+    background: var(--color-danger-light);
+    color: var(--color-danger);
+    box-shadow: none;
+  }
+
+  /* ==================== 按钮（壳内 mini / ghost / danger 形态） ==================== */
+  .shell-btn {
+    height: 28px;
+    padding: 0 12px;
+    border-radius: var(--radius-button);
+    background: var(--color-primary);
+    color: var(--color-primary-contrast);
+    font-size: calc(12px * var(--ui-scale));
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition:
+      background-color 0.15s,
+      filter 0.15s;
+  }
+  .shell-btn:hover {
+    background: var(--color-primary-hover);
+  }
+  .shell-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .shell-btn.ghost {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+  }
+  .shell-btn.ghost:hover {
+    background: var(--bg-hover);
+  }
+  .shell-btn.danger-outline {
+    background: var(--bg-card);
+    color: var(--color-danger);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
+  }
+  .shell-btn.danger-outline:hover {
+    background: var(--color-danger-light);
+  }
+  .shell-btn.danger-fill {
+    background: var(--color-danger);
+    color: var(--color-primary-contrast);
+  }
+  .shell-btn.danger-fill:hover {
+    filter: brightness(0.92);
+  }
+  .shell-mini {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: var(--radius-button);
+    font-size: calc(11px * var(--ui-scale));
+    border: 1px solid var(--border-strong);
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    white-space: nowrap;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
+  }
+  .shell-mini:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .shell-mini.danger {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  }
+  .shell-mini.danger:hover {
+    background: var(--color-danger-light);
+  }
+  .shell-mini:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* ==================== 提示块 ==================== */
+  .shell-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 11px;
+    font-size: calc(11px * var(--ui-scale));
+    line-height: 1.55;
+    border-radius: var(--radius-button);
+  }
+  .shell-callout svg {
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+  .shell-callout.warn {
+    background: var(--color-warning-light);
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+  }
+  .shell-callout.danger {
+    background: var(--color-danger-light);
+    color: var(--color-danger);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+  }
+
+  /* ==================== kv / 记录行 ==================== */
+  .shell-kv {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: calc(12px * var(--ui-scale));
+    padding: 3px 0;
+  }
+  .shell-kv b {
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .shell-kv span {
+    color: var(--text-secondary);
+    text-align: right;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace);
+    font-size: calc(11px * var(--ui-scale));
+  }
+  .shell-rec {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-radius: var(--radius-button);
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+  }
+  .shell-rec + .shell-rec {
+    margin-top: 5px;
+  }
+  .shell-rec .tg {
+    font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace);
+    font-size: calc(11px * var(--ui-scale));
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .shell-rec.deny {
+    border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  }
+  .shell-rec.deny .tg {
+    color: var(--color-danger);
+  }
+
+  /* ==================== 主屏壁纸（token 派生渐变 + 可调遮罩，spec-c §5） ==================== */
+  .home-wall {
+    background-image:
+      linear-gradient(
+        color-mix(in srgb, var(--bg-page) calc(var(--wall-dim, 0.3) * 100%), transparent) 0%,
+        color-mix(in srgb, var(--bg-page) calc(var(--wall-dim, 0.3) * 100%), transparent) 100%
+      ),
+      var(--wall-active);
+  }
+  .home-wall.wall-aurora {
+    --wall-active: var(--wall-aurora);
+  }
+  .home-wall.wall-dune {
+    --wall-active: var(--wall-dune);
+  }
+  .home-wall.wall-reef {
+    --wall-active: var(--wall-reef);
+  }
+  /* 设置页壁纸预览色块（无遮罩层，直出渐变） */
+  .wall-swatch.wall-aurora {
+    background-image: var(--wall-aurora);
+  }
+  .wall-swatch.wall-dune {
+    background-image: var(--wall-dune);
+  }
+  .wall-swatch.wall-reef {
+    background-image: var(--wall-reef);
+  }
+
+  /* ==================== 屏幕切换动效（减速到达，只动 transform/opacity，spec-c §1） ==================== */
+  .screen-entering {
+    animation: shell-scr-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  @keyframes shell-scr-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* ==================== 运行卡片错峰升起（--i = 索引，stagger 40ms，spec-c §4） ==================== */
+  .shell-rc-up {
+    animation: shell-rc-up 0.24s cubic-bezier(0.2, 0.8, 0.3, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 40ms);
+  }
+  @keyframes shell-rc-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* ==================== 弹窗进入动效 ==================== */
+  .shell-dlg-in {
+    animation: shell-dlg-in 0.2s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  @keyframes shell-dlg-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* ==================== 覆层淡入 ==================== */
+  .shell-fade-in {
+    animation: shell-fade-in 0.15s ease-out;
+  }
+  @keyframes shell-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }

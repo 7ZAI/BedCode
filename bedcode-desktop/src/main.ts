@@ -16,6 +16,7 @@ import { initFrontendLogger } from '@/utils/frontendLogger'
 import { applyPageTransitionEffect, DEFAULT_PAGE_TRANSITION_EFFECT } from '@/utils/pageTransition'
 import 'vue-sonner/style.css'
 import './style.css'
+import '@/shell/shell.css'
 
 const app = createApp(App)
 
@@ -57,26 +58,24 @@ setupPluginRuntimeListeners()
 // 预初始化：并行执行平台检测与设置加载
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
-Promise.all([initPlatform(), settingsStore.loadSettings()]).then(
-  ([platformInfo]) => {
-    // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
-    // - platform-desktop / platform-mobile：通用桌面/移动区分
-    // - platform-linux：仅 Linux，启用 font-size:115% + --ui-scale:1.15 体系修正
-    //   WebKitGTK 下字号偏小（issue 06 已移除 zoom，避免破坏 xterm 鼠标坐标系）
-    if (platformInfo.isDesktop) {
-      document.documentElement.classList.add('platform-desktop')
-    } else if (platformInfo.isMobile) {
-      document.documentElement.classList.add('platform-mobile')
-    }
-    if (platformInfo.isLinux) {
-      document.documentElement.classList.add('platform-linux')
-    }
+Promise.all([initPlatform(), settingsStore.loadSettings()]).then(([platformInfo]) => {
+  // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
+  // - platform-desktop / platform-mobile：通用桌面/移动区分
+  // - platform-linux：仅 Linux，启用 font-size:115% + --ui-scale:1.15 体系修正
+  //   WebKitGTK 下字号偏小（issue 06 已移除 zoom，避免破坏 xterm 鼠标坐标系）
+  if (platformInfo.isDesktop) {
+    document.documentElement.classList.add('platform-desktop')
+  } else if (platformInfo.isMobile) {
+    document.documentElement.classList.add('platform-mobile')
+  }
+  if (platformInfo.isLinux) {
+    document.documentElement.classList.add('platform-linux')
+  }
 
-    // 设置加载完成后初始化语言偏好
-    i18nStore.initLanguage()
-    logger.log('[Init] Platform and settings pre-loaded')
-  },
-)
+  // 设置加载完成后初始化语言偏好
+  i18nStore.initLanguage()
+  logger.log('[Init] Platform and settings pre-loaded')
+})
 
 // 页面过渡效果写到根元素：必须在 app.mount 之前，否则首屏先按 CSS 缺省效果
 // 渲染一帧。启动路径不得被效果名拼写错误整死（D-06，2026-10-04 OCR）：

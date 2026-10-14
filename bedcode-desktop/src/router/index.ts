@@ -10,6 +10,15 @@ const router = createRouter({
     // （仍可经 URL 直达做诊断），故落地页取插件管理
     { path: '/', redirect: '/plugins' },
     {
+      // 设备壳（方案 C：主屏 + 卡片切换，.scratch/2026-10-08-desktop-shell-redesign/spec-c.md）：
+      // 新宿主前端根路由。与旧布局（TitleBar + Sidebar 工作台）并存，切换壳/旧面经此路由。
+      // bareWindow：壳自带工具栏，不套旧桌面外壳（侧边栏 / 标题栏）
+      path: '/shell',
+      name: 'shell',
+      component: () => import('@/shell/ShellView.vue'),
+      meta: { bareWindow: true },
+    },
+    {
       path: '/server',
       name: 'server',
       component: () => import('@/views/ServerView.vue'),

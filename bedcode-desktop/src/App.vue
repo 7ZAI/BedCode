@@ -98,7 +98,16 @@ const toastOptions: ToasterProps['toastOptions'] = {
 
 // 键盘快捷键（会话 / 设备配对页已下沉插件，宿主无对应页面，快捷键随之删除）
 useKeyboardShortcuts([
-  { key: ',', ctrl: true, handler: () => router.push('/settings') },
+  {
+    key: ',',
+    ctrl: true,
+    // 设备壳路由（/shell）自带 Ctrl+, 快捷键（打开设置卡），旧布局的
+    // 全局快捷键让位，避免在壳内按 Ctrl+, 被弹回旧设置页
+    handler: () => {
+      if (router.currentRoute.value.path.startsWith('/shell')) return
+      router.push('/settings')
+    },
+  },
 ])
 
 // 启动画面：保证最低展示时长避免闪烁，初始化完成后淡出
