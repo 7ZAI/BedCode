@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: fix toolbox swipe being swallowed by “scrollable container” misdetection
+
+- **Fix (terminal-session toolbox)**: horizontal swipes inside the auto-task toolbox (task history ↔
+  scheduled jobs) were swallowed whenever any task row pushed the list into a small horizontal overflow
+  (unbroken strings like log fragments / URLs / error codes, or DPR sub-pixel rounding). The
+  `insideHorizontallyScrollable` check treated such vertical list containers as horizontally scrollable —
+  `overflow-x` computes to `auto` by spec whenever `overflow-y` is scrollable — and the entire swipe round
+  was skipped: the inner tab never switched and the outer page never flipped, so the swipe appeared
+  dead and the still-docked neighbour panels (semi-transparent by design) read as *pages overlapping*.
+  The detector now excludes containers that actually scroll vertically and only treats ≥25 px of real
+  horizontal overflow as a horizontal scroll zone (verified in real Chromium layout: the 6 px overflow
+  from a long log string no longer kills the swipe). 7 new contract tests pin the detector
+  (`wasm-apps/terminal-session/src/task/swipe-zone.ts`); full mobile suite 86 files / 1005 tests green.
+
 #### Mobile: host-shell revision 2 (navigation / recents deck / settings ownership / custom wallpaper)
 
 - **Navigation**: the bottom system bar (`ShellSystemBar`) is retired outright — a permanent nav bar eats a

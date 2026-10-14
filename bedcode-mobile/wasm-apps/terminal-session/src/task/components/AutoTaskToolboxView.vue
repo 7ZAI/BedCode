@@ -54,6 +54,7 @@ import ScheduledJobsTab from './ScheduledJobsTab.vue'
 import { useTaskHistory } from '../composables/useTaskHistory'
 import { useScheduledJobs } from '../composables/useScheduledJobs'
 import { delegateSwipe } from '../../app/swipeArbitration'
+import { insideHorizontallyScrollable } from '../swipe-zone'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string): string => context.i18n.t(key)
@@ -80,23 +81,12 @@ function panelClass(index: number): string {
 // 仲裁载体是 app 域的 delegateSwipe（原为宿主 MobileSwipeContainer，该容器已随
 // 票 2026-10-09 阶段 B 退役；data-zone-at-* 属性保留为无障碍/调试可读状态）。
 // 手势跳过：输入类控件内的触摸（定时任务表单，防文本选择拖动误触切页）、
-// 可横向滚动容器（任务记录状态筛选 chips 行，横滑语义是滚动自身）。
+// 真正可横向滚动的容器（如横向卡片 / chips 行——横滑语义是滚动自身）。
+// 横向滚动判定见 ../swipe-zone.ts（注意不可用「overflow-x 计算值 + 微小溢出」
+// 判定——纵向容器的 overflow-x 会被规范强算为 auto，长串溢出几 px 就误判，
+// 会让整个横滑整轮失效；判据已在实测后收紧）。
 
 const zoneRoot = ref<HTMLElement | null>(null)
-
-/** 触摸目标到横滑区根之间是否存在可横向滚动容器 */
-function insideHorizontallyScrollable(target: EventTarget | null): boolean {
-  let el = (target as HTMLElement | null)?.parentElement ?? null
-  const root = zoneRoot.value
-  while (el && el !== root) {
-    if (el.scrollWidth > el.clientWidth + 1) {
-      const overflowX = getComputedStyle(el).overflowX
-      if (overflowX === 'auto' || overflowX === 'scroll') return true
-    }
-    el = el.parentElement
-  }
-  return false
-}
 
 const {
   onTouchStart: onZoneTouchStart,
@@ -117,7 +107,7 @@ const {
       const el = target as HTMLElement | null
       return (
         !!el?.closest?.('input, textarea, [contenteditable="true"]') ||
-        insideHorizontallyScrollable(target)
+        insideHorizontallyScrollable(target, zoneRoot.value)
       )
     },
   },
