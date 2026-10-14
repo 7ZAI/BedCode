@@ -96,12 +96,17 @@ export default {
       closeAll: '全部关闭',
       closeCard: '关闭 {name} 的卡片',
       dormant: '未运行',
-      enter: '进入',
-      launch: '启动',
+      /** 整卡可点的可访问名（点卡片 = 进入 / 启动，Android recents 同一交互） */
+      enterApp: '进入 {name}',
+      launchApp: '启动 {name}',
       /** 卡片叠放导航（拖拽的键盘 / 单击替代路径，WCAG 2.2 Dragging Movements） */
       prev: '上一个应用',
       next: '下一个应用',
-      empty: '没有运行中的应用',
+      /** 卡片位置播报（圆点本身是纯视觉，读屏靠这句） */
+      position: '第 {index} 张，共 {total} 张',
+      /** 空态主动作：多任务空了也要给一条出路，不能只剩页头返回键 */
+      goHome: '回到主屏',
+      empty: '没有可切换的应用',
       emptyHint: '回到主屏打开一个应用，它会出现在这里',
     },
     notify: {

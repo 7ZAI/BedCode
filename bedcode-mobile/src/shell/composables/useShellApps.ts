@@ -6,6 +6,10 @@
  *
  * 这样做的收益：数据源从插件系统换成 WASM 应用平台时，组件一行都不用改；
  * 动作的成功/失败口径也只有一份实现（状态回写 + 日志 + 错误暴露）。
+ *
+ * 停用 / 卸载成功后还会摘掉该应用的运行屏（closeAppRun）：运行面由应用注册，
+ * 应用一没注册就失效，运行屏留在栈里只会显示空态。收口在这一处而不是分散到各
+ * 屏的按钮，是为了「退出即离开运行面」这条不变量只有一个落点。
  */
 
 import { computed, ref, type Component, type ComputedRef, type Ref } from 'vue'
@@ -14,6 +18,7 @@ import { logger } from '@/utils/frontendLogger'
 import { getShellRegistry } from '../registry'
 import type { ShellApp, ShellAppSource } from '../types'
 import { pushRecent } from './useShellRecent'
+import { useShellNavigation } from './useShellNavigation'
 import { useShellNotifications } from './useShellNotifications'
 
 /** 生命周期通知图标（24×24 stroke 视框，与壳内其它 SVG 同规范） */
@@ -179,6 +184,10 @@ async function stop(appId: string): Promise<boolean> {
     lastError.value = null
     await refresh()
     notifyAppEvent('stopped', app)
+    // 停用即退出：运行面注册随前端模块一起被 dispose（pluginLoader.deactivate 走
+    // context._disposables），运行屏留在栈里就只剩「应用暂无可用界面」空态。这里摘掉
+    // 该应用的运行屏，退出动作才有落点；失败时不动栈（运行面多半还在，留用户看错误态）
+    useShellNavigation().closeAppRun(appId)
     return true
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
@@ -345,6 +354,8 @@ async function removeApp(appId: string): Promise<boolean> {
       await refresh()
       // 卸载通知需要应用名，但此时应用已从注册表移除——用移除前抓到的快照
       if (app) notifyAppEvent('uninstalled', app)
+      // 同停用：应用没了，它的运行屏不能留在栈里（否则返回时只剩「应用不存在」提示）
+      useShellNavigation().closeAppRun(appId)
     }
     return ok
   } catch (e) {

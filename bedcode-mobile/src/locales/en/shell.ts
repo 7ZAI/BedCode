@@ -97,12 +97,17 @@ export default {
       closeAll: 'Close all',
       closeCard: 'Close the card for {name}',
       dormant: 'Not running',
-      enter: 'Open',
-      launch: 'Start',
+      /** Accessible name of the whole-card tap target (tap card = open/start) */
+      enterApp: 'Open {name}',
+      launchApp: 'Start {name}',
       /** Deck navigation — keyboard/click alternative to dragging (WCAG 2.2) */
       prev: 'Previous app',
       next: 'Next app',
-      empty: 'No running apps',
+      /** Card position for screen readers (the dots themselves are decorative) */
+      position: 'Card {index} of {total}',
+      /** Empty-state primary action: recents is a dead end without a way out */
+      goHome: 'Back to home',
+      empty: 'Nothing to switch to',
       emptyHint: 'Open an app from the home screen and it will show up here',
     },
     notify: {

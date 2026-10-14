@@ -24,81 +24,81 @@
       />
     </header>
 
-    <!-- ==================== 卡片叠放（deck） ====================
-         固定宽高的卡片居中叠放（等差偏移 + 线性缩放）：前面的完整可操作，后面的
-         只露一道边。横向滑动切换、上滑关闭、点后层卡片提到前面。
-         预览位不伪造应用内截图——平台拿不到应用画面，放大应用图标即平台知道的
-         全部事实（AGENTS §5.1 B4）。 -->
+    <!-- ==================== 卡片轨道 ====================
+         卡片并排成一行，**不叠放**：同一时刻只有一张完整可见，其余在屏外；
+         屏宽放不下一张时才在边缘露出半张（那是被裁切，不是叠压）。
+         横向拖动切卡、上滑关闭、点卡片进入；预览位不伪造应用内截图——
+         平台拿不到应用画面，放大应用图标即平台知道的全部事实（AGENTS §5.1 B4）。 -->
     <template v-if="cards.length > 0">
       <div
+        ref="deckEl"
         class="shell-deck flex-1 min-h-0"
         :class="{ 'shell-deck--dragging': dragAxis !== null }"
         role="list"
         :aria-label="t('shell.switcher.title')"
-        style="touch-action: none"
+        style="touch-action: pan-x"
         @pointerdown="onPointerDown"
         @pointermove="onPointerMove"
         @pointerup="onPointerUp"
         @pointercancel="resetDrag"
       >
-        <article
-          v-for="(card, index) in cards"
-          :key="card.app.id"
-          class="shell-deck-card"
-          :style="cardStyle(index)"
-          :data-app-id="card.app.id"
-          :aria-current="index === activeIndex ? 'true' : undefined"
-          :aria-hidden="index === activeIndex ? undefined : 'true'"
-          role="listitem"
-          @click="onCardClick(index)"
-        >
-          <!-- 前层卡片：完整信息与操作 -->
-          <template v-if="index === activeIndex">
-            <div class="flex items-center gap-2.5 px-3.5 py-3 flex-shrink-0">
-              <ShellAppIcon :app="card.app" :size="34" />
-              <span class="flex-1 min-w-0">
-                <span class="block text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
-                  {{ card.app.name }}
-                </span>
-                <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
-                  {{ card.running ? t('shell.common.running') : t('shell.switcher.dormant') }}
-                </span>
-              </span>
-              <button
-                type="button"
-                class="flex items-center justify-center flex-shrink-0 rounded-[8px] w-9 h-9 transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
-                :aria-label="t('shell.switcher.closeCard', { name: card.app.name })"
-                @click.stop="dismiss(card.app.id)"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :style="{ color: 'var(--mobile-text-secondary)' }" aria-hidden="true">
-                  <path d="M6 6l12 12M18 6L6 18" />
-                </svg>
-              </button>
-            </div>
-
-            <div
-              class="flex-1 min-h-0 mx-3.5 mb-3 rounded-[14px] flex items-center justify-center"
-              :style="{ background: 'var(--mobile-bg-primary)' }"
-              aria-hidden="true"
-            >
-              <ShellAppIcon :app="card.app" :size="76" />
-            </div>
-
+        <div class="shell-deck-track" :style="trackStyle()">
+          <article
+            v-for="(card, index) in cards"
+            :key="card.app.id"
+            class="shell-deck-card"
+            :style="cardStyle(index)"
+            :data-app-id="card.app.id"
+            :aria-current="index === activeIndex ? 'true' : undefined"
+            role="listitem"
+          >
+            <!-- 每张卡片整块可点 = 进入 / 启动（Android recents 的同一交互）。
+                 内容放进一个铺满卡片的按钮，读屏与键盘拿到的是「进入 {应用名}」
+                 这个可访问名，而不是一整张读不出意图的图。 -->
             <button
               type="button"
-              class="mx-3.5 mb-3.5 flex-shrink-0 rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
-              :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
-              @click.stop="enter(card.app.id)"
+              class="flex flex-col flex-1 min-h-0 w-full text-left cursor-pointer transition-opacity duration-200 active:opacity-80"
+              :aria-label="t(card.running ? 'shell.switcher.enterApp' : 'shell.switcher.launchApp', { name: card.app.name })"
+              @click.stop="onCardClick(card)"
             >
-              {{ card.running ? t('shell.switcher.enter') : t('shell.switcher.launch') }}
-            </button>
-          </template>
+              <span class="flex items-center gap-2.5 px-3.5 py-3 flex-shrink-0">
+                <ShellAppIcon :app="card.app" :size="34" />
+                <span class="flex-1 min-w-0">
+                  <span class="block text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                    {{ card.app.name }}
+                  </span>
+                  <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                    {{ card.running ? t('shell.common.running') : t('shell.switcher.dormant') }}
+                  </span>
+                </span>
+              </span>
 
-          <!-- 后层卡片：只承担「叠放」的视觉，不承载信息与焦点（详细内容在前层） -->
-          <div v-else class="flex-1 flex items-center justify-center">
-            <ShellAppIcon :app="card.app" :size="56" tone="plain" />
-          </div>
-        </article>
+              <span
+                class="flex-1 min-h-0 mx-3.5 mb-3 rounded-[14px] flex items-center justify-center"
+                :style="{ background: 'var(--mobile-bg-primary)' }"
+                aria-hidden="true"
+              >
+                <ShellAppIcon :app="card.app" :size="76" />
+              </span>
+            </button>
+
+            <!-- 关闭：只挂在当前卡片上（Android recents 同款——焦点卡才有清除键），
+                 独立按钮压在整卡按钮之上（按钮不能嵌套），并标出
+                 data-deck-ignore-drag —— 从它起手不算轨道手势 -->
+            <button
+              v-if="index === activeIndex"
+              type="button"
+              data-deck-ignore-drag
+              class="absolute top-1.5 right-1.5 z-10 flex items-center justify-center rounded-[8px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+              :aria-label="t('shell.switcher.closeCard', { name: card.app.name })"
+              @click.stop="dismiss(card.app.id)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :style="{ color: 'var(--mobile-text-secondary)' }" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </article>
+        </div>
       </div>
 
       <!-- 显式导航 + 位置指示：拖拽**不是唯一路径**（WCAG 2.2 Dragging Movements），
@@ -126,6 +126,10 @@
               background: index === activeIndex ? 'var(--mobile-accent)' : 'var(--mobile-border-active)',
             }"
           />
+        </span>
+        <!-- 位置对读屏可见：圆点是纯视觉，切换后播报「第 N 张，共 M 张」 -->
+        <span class="sr-only" role="status" aria-live="polite">
+          {{ t('shell.switcher.position', { index: activeIndex + 1, total: cards.length }) }}
         </span>
         <button
           type="button"
@@ -159,30 +163,46 @@
       <p class="mt-1 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">
         {{ t('shell.switcher.emptyHint') }}
       </p>
+      <!-- 空态给主动作，不把用户堵在只有页头返回键的空屏里 -->
+      <button
+        type="button"
+        class="mt-5 flex items-center justify-center rounded-[10px] px-5 min-h-[var(--mobile-touch-target-min)] text-[var(--font-size-base)] font-medium transition-opacity duration-200 active:opacity-80"
+        :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+        @click="nav.goHome()"
+      >
+        {{ t('shell.switcher.goHome') }}
+      </button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 多任务（卡片叠放切换）
+ * 多任务（卡片轨道切换）
  * -----------------------------------------------------------------------------
- * 形态：固定宽高的卡片居中叠放（Android recents 的卡片语义 + iOS 叠放的秩序感）。
- * 前层卡片完整可操作，后层卡片等差错位，只露一道边提示「还有几张」。
+ * 形态：卡片**并排成一行**，不叠放（Android recents 的同一形态）：同一时刻一张完整
+ * 可见，其余在屏外；屏宽放不下一张整卡时才在边缘露出半张——那是被裁切，不是叠压。
+ * 轨道按「卡宽 + 间距」平移把当前卡片送到中间，几何真源在 `styles/shell.css`
+ * （--deck-card-w / --deck-gap / --deck-step），组件只给序号与手势位移。
  *
  * 三条硬约束：
  *   ① 预览位不伪造内容——平台不持有应用内部快照，放大应用图标 + 状态文字即
  *      平台掌握的全部事实（伪造截图属于 B4 业务投影越线）；
  *   ② 拖拽**不是唯一路径**（WCAG 2.2 Dragging Movements）：页头返回、底部
- *      上一个 / 下一个按钮、位置圆点、前层卡片的「进入」与 × 都是显式路径；
+ *      上一个 / 下一个按钮、位置圆点、整卡点击（= 进入）与 × 都是显式路径；
  *   ③ 手势不互相抢：pointermove 首次越过轴锁阈值即锁定本次手势方向——横向
- *      切卡、纵向上滑关闭，两者不在同一次拖拽里串味。
+ *      切卡、纵向上滑关闭，两者不在同一次拖拽里串味；贴屏幕左右边缘起手则
+ *      整段让位给系统返回手势，自定义手势不与系统手势抢同一条边。
+ *
+ * 卡片交互对齐 Android recents：**点哪张开哪张、上滑关哪张关哪张**；拖拽抬手后
+ * 浏览器补的那次 click 必须吞掉，否则上滑关闭会顺手把应用打开。
  *
  * 卡片集合 = 运行中应用（MRU 优先）+ 最近使用但未运行的应用。关闭运行中的卡片 =
  * 停用实例并移出最近列表（不然它会以「未运行」身份原地复活，看起来像关不掉）。
  */
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { logger } from '@/utils/frontendLogger'
 import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
 import { useShellOpen } from '../../composables/useShellOpen'
@@ -257,14 +277,7 @@ function step(delta: number): void {
   activate(activeIndex.value + delta)
 }
 
-// ==================== 叠放几何 ====================
-
-/** 相邻卡片错位量（px，等差）：偏移 = 序号差 × 该值 */
-const OFFSET_X = 20
-/** 越靠后越小，线性递减（等差而非等比，避免后排被压成一条线） */
-const SCALE_STEP = 0.04
-/** 最多呈现几张：再往后只留占位（visibility: hidden），不参与绘制与命中 */
-const MAX_DEPTH = 3
+// ==================== 轨道几何 ====================
 
 /** 轴锁阈值：小于该位移视为点击，避免手抖把点击判成拖拽 */
 const AXIS_LOCK = 10
@@ -272,43 +285,110 @@ const AXIS_LOCK = 10
 const SWIPE_STEP = 56
 /** 上滑关闭阈值（负值方向） */
 const DISMISS_THRESHOLD = 72
+/**
+ * 屏幕左右边缘让位带（px）
+ *
+ * ui-ux-pro-max `ux / Gesture Conflicts`：自定义手势不得覆盖系统手势。从这条带里
+ * 起手不接管轨道手势，交给系统的返回手势——否则贴着屏幕边缘划动会既切卡又返回。
+ */
+const EDGE_GUARD = 24
 
-const dragAxis = ref<'x' | 'y' | null>(null)
-const dragDx = ref(0)
-const dragDy = ref(0)
-let dragStart: { x: number; y: number; id: string } | null = null
-/** 本次手势是否已越过阈值（越过则抬手时的 click 不再触发「点卡片」） */
-let dragMoved = false
+const deckEl = ref<HTMLElement | null>(null)
 
-function cardStyle(index: number): Record<string, string> {
-  const depth = index - activeIndex.value
-  const absDepth = Math.abs(depth)
-  const dragging = dragAxis.value !== null
-  const offsetX = depth * OFFSET_X + (dragging && dragAxis.value === 'x' ? dragDx.value : 0)
-  const offsetY =
-    absDepth * 7 + (dragging && dragAxis.value === 'y' && depth === 0 ? dragDy.value : 0)
-  const hidden = absDepth > MAX_DEPTH
+/**
+ * 轨道平移：当前卡片居中，拖拽时跟手
+ *
+ * 步长（--deck-step = 卡宽 + 间距）与居中留白都在 `styles/shell.css` 里，JS 只
+ * 给「序号 + 手势位移」，不自己做布局计算——换卡宽 / 改间距不必回来改这里。
+ */
+function trackStyle(): Record<string, string> {
+  const drag = dragAxis.value === 'x' ? dragDx.value : 0
   return {
-    zIndex: String(40 - absDepth),
-    opacity: hidden ? '0' : String(Math.max(0.3, 1 - absDepth * 0.14)),
-    transform: `translate3d(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px), 0) scale(${
-      1 - absDepth * SCALE_STEP
-    })`,
-    visibility: hidden ? 'hidden' : 'visible',
-    pointerEvents: hidden ? 'none' : 'auto',
+    transform: `translate3d(calc(-1 * var(--deck-step) * ${activeIndex.value} + ${drag}px), 0, 0)`,
+  }
+}
+
+/** 卡片自身样式：只有上滑关闭时的跟手位移；相邻卡片按距离轻微压暗（不叠放、不缩放） */
+function cardStyle(index: number): Record<string, string> {
+  const depth = Math.abs(index - activeIndex.value)
+  const dragging = dragAxis.value === 'y' && cards.value[index]?.app.id === dragTargetId
+  const dy = dragging ? dragDy.value : 0
+  return {
+    opacity: dragging
+      ? String(Math.max(0.4, 1 + dy / 360))
+      : String(depth === 0 ? 1 : Math.max(0.65, 1 - depth * 0.12)),
+    transform: dy === 0 ? '' : `translate3d(0, ${dy}px, 0)`,
   }
 }
 
 // ==================== 手势（横向切卡 / 纵向上滑关闭） ====================
 
+const dragAxis = ref<'x' | 'y' | null>(null)
+const dragDx = ref(0)
+const dragDy = ref(0)
+/** 本次手势是否已越过阈值（越过则抬手后的 click 不再触发卡片动作） */
+let dragMoved = false
+/** 本次手势作用的卡片（并排布局下任意一张都可上滑关闭） */
+let dragTargetId: string | null = null
+/** 手势起点 */
+let dragOrigin: { x: number; y: number } | null = null
+/** 本次手势的指针 id（捕获指针时要用） */
+let lastPointerId: number | undefined
+/** 已 setPointerCapture 的指针（抬起 / 取消时释放） */
+let capturedPointerId: number | null = null
+
+/**
+ * 接管本次手势的后续事件
+ *
+ * 只在**越过轴锁、确认是拖拽之后**才捕获：简单点击不捕获，click 仍落在卡片上
+ * （「点卡片进入」依赖它）。捕获后手指滑出轨道区（快速上滑）仍能收到
+ * move/up，否则手势会停在偏移位上、卡片留在错位状态。
+ */
+function capturePointer(): void {
+  const el = deckEl.value
+  const id = lastPointerId
+  // 非 Tauri 运行时 / 老 WebView 可能没有该 API：缺了就退化到「不捕获」，功能不受影响
+  if (!el || id === undefined || typeof el.setPointerCapture !== 'function') return
+  try {
+    el.setPointerCapture(id)
+    capturedPointerId = id
+  } catch (e) {
+    capturedPointerId = null
+    // 捕获失败 → 快滑出界时手势收不到事件（卡片会停在偏移位），降级但要说出来
+    logger.warn('[ShellSwitcher] setPointerCapture failed; drag may end out of deck', e)
+  }
+}
+
+function releasePointer(): void {
+  const el = deckEl.value
+  const id = capturedPointerId
+  capturedPointerId = null
+  if (!el || id === null || typeof el.releasePointerCapture !== 'function') return
+  try {
+    el.releasePointerCapture(id)
+  } catch (e) {
+    // 指针已抬起 / 取消时释放会抛（该指针不再活跃），属清理路径，不影响交互
+    logger.debug('[ShellSwitcher] releasePointerCapture skipped (pointer no longer active)', e)
+  }
+}
+
 function onPointerDown(event: PointerEvent): void {
   // 只响应主指针；鼠标右键 / 中键不参与
   if (event.pointerType === 'mouse' && event.button !== 0) return
-  // 卡片上的按钮自己处理点击：从按钮上起手不做叠放手势，避免「点关闭」被判成滑动
-  if ((event.target as HTMLElement | null)?.closest('button')) return
-  const card = cards.value[activeIndex.value]
-  if (!card) return
-  dragStart = { x: event.clientX, y: event.clientY, id: card.app.id }
+  // 只把「关闭」按钮排除在轨道手势之外：卡片整块是「进入」按钮，从它上面起手
+  // 仍要能横滑切卡 / 上滑关闭，因此这里按标记排除而不是按 button 排除
+  if ((event.target as HTMLElement | null)?.closest('[data-deck-ignore-drag]')) return
+  // 贴边起手让位给系统返回手势（EDGE_GUARD）
+  if (event.clientX <= EDGE_GUARD || event.clientX >= window.innerWidth - EDGE_GUARD) return
+  // 命中测试取手指底下那张卡；落在卡片之间的空档（轨道两侧的居中留白很宽）时
+  // 退回当前卡片——用户看到的是当前卡片，跟手对象就该是它
+  const hitId =
+    (event.target as HTMLElement | null)?.closest('[data-app-id]')?.getAttribute('data-app-id') ??
+    cards.value[activeIndex.value]?.app.id
+  if (!hitId || !cards.value.some((c) => c.app.id === hitId)) return
+  dragTargetId = hitId
+  dragOrigin = { x: event.clientX, y: event.clientY }
+  lastPointerId = event.pointerId
   dragMoved = false
   dragAxis.value = null
   dragDx.value = 0
@@ -316,14 +396,16 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
-  if (!dragStart) return
-  const dx = event.clientX - dragStart.x
-  const dy = event.clientY - dragStart.y
+  if (!dragOrigin) return
+  const dx = event.clientX - dragOrigin.x
+  const dy = event.clientY - dragOrigin.y
   if (dragAxis.value === null) {
     if (Math.abs(dx) < AXIS_LOCK && Math.abs(dy) < AXIS_LOCK) return
     // 首次越过阈值即锁轴：横向归切卡、纵向归关闭，同一次手势内不再改判
     dragAxis.value = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
     dragMoved = true
+    // 确认是拖拽后才捕获指针：手指滑出轨道区仍能收尾
+    capturePointer()
   }
   if (dragAxis.value === 'x') {
     dragDx.value = dx
@@ -334,36 +416,50 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerUp(event: PointerEvent): void {
-  const start = dragStart
+  const origin = dragOrigin
+  const target = dragTargetId
   const axis = dragAxis.value
   const dx = dragDx.value
   resetDrag()
-  if (!start) return
+  if (!origin || !target) return
   if (axis === 'x') {
-    if (dx <= -SWIPE_STEP) activate(activeIndex.value + 1)
-    else if (dx >= SWIPE_STEP) activate(activeIndex.value - 1)
+    if (dx <= -SWIPE_STEP) step(1)
+    else if (dx >= SWIPE_STEP) step(-1)
     return
   }
   if (axis !== 'y') return
   // 以抬起位置为准（pointermove 可能因快速滑动而稀疏甚至缺失）
-  const offset = Math.min(0, event.clientY - start.y)
-  if (offset <= -DISMISS_THRESHOLD) void dismiss(start.id)
+  const offset = Math.min(0, event.clientY - origin.y)
+  if (offset <= -DISMISS_THRESHOLD) void dismiss(target)
 }
 
 function resetDrag(): void {
-  dragStart = null
+  releasePointer()
+  dragOrigin = null
+  dragTargetId = null
   dragAxis.value = null
   dragDx.value = 0
   dragDy.value = 0
 }
 
-/** 点后层卡片 = 提到前层（前层卡片上的按钮各自 @click.stop，不会走到这里） */
-function onCardClick(index: number): void {
-  if (dragMoved) {
-    dragMoved = false
-    return
-  }
-  if (index !== activeIndex.value) activate(index)
+/**
+ * 拖拽刚结束时吞掉随后的 click
+ *
+ * 一次拖拽抬手后浏览器仍会补一次 click（落在抬手处那个元素上）。不吞掉的话，
+ * 上滑关闭会顺手把应用打开、横滑切卡会连带进入——拖拽与点击必须分开判。
+ *
+ * @returns true = 这次 click 属于拖拽余波，调用方不要再执行动作
+ */
+function consumeDragClick(): boolean {
+  if (!dragMoved) return false
+  dragMoved = false
+  return true
+}
+
+/** 点卡片 = 进入 / 启动该应用（Android recents：点哪张开哪张） */
+function onCardClick(card: RecentCard): void {
+  if (consumeDragClick()) return
+  void enter(card.app.id)
 }
 
 // ==================== 动作 ====================

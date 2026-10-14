@@ -15,6 +15,9 @@
  * | C-A7 | stop 通知 | 停止成功 | 推「已停止」 |
  * | C-A8 | install 通知 | 返回安装 id / 用户取消（null） | 有 id 才推「已安装」 |
  * | C-A9 | remove 通知 | 卸载成功 | 推「已卸载」（应用名取自卸载前快照） |
+ * | C-A10 | stop 摘运行屏 | 停用成功且该应用运行屏在栈里 | 回落到该屏下面一屏（不留空态） |
+ * | C-A11 | stop 不误伤 | 停用的是别的应用 / 停用失败 | 栈不动（当前运行屏仍可用） |
+ * | C-A12 | remove 摘运行屏 | 卸载成功且该应用运行屏在栈里 | 回落到该屏下面一屏 |
  * | C-O1 | openShellApp 分支 | 待审批应用 | 进详情页，不调 launch |
  * | C-O2 | openShellApp 正路 | 可启动应用 | launch + 进运行面 |
  */
@@ -224,6 +227,68 @@ describe('C-A8/C-A9 安装 / 卸载通知', () => {
     )
     expect(removed, '卸载后注册表已无该应用：名字取卸载前快照').toBeTruthy()
     expect(removed!.title).toContain('AppA')
+  })
+})
+
+describe('C-A10..C-A12 停用 / 卸载后离开运行面', () => {
+  it('should_leaveRunScreen_when_stoppingAppShownInRunScreen', async () => {
+    shell.upsertApps(SOURCE_ID, [app('com.test.a', 'running', 'AppA')])
+    const nav = useShellNavigation()
+    nav.openApp('com.test.a')
+
+    const ok = await useShellApps().stop('com.test.a')
+
+    expect(ok).toBe(true)
+    // 运行面注册随停用被 dispose：留在运行屏只会看到「应用暂无可用界面」空态
+    expect(nav.current.value.id).toBe('home')
+  })
+
+  it('should_leaveRunScreenAndOverlays_when_stoppingFromDetailScreen', async () => {
+    shell.upsertApps(SOURCE_ID, [app('com.test.a', 'running', 'AppA')])
+    const nav = useShellNavigation()
+    nav.openApp('com.test.a')
+    nav.openDetail('com.test.a')
+
+    await useShellApps().stop('com.test.a')
+
+    expect(nav.current.value.id, '详情页盖在运行屏上：一起摘掉，别回落到已失效的运行面').toBe('home')
+  })
+
+  it('should_keepRunScreen_when_stoppingAnotherApp', async () => {
+    shell.upsertApps(SOURCE_ID, [
+      app('com.test.a', 'running', 'AppA'),
+      app('com.test.b', 'running', 'AppB'),
+    ])
+    const nav = useShellNavigation()
+    nav.openApp('com.test.a')
+
+    await useShellApps().stop('com.test.b')
+
+    expect(nav.current.value.id, '停用的是别的应用：当前运行屏不动').toBe('app-run')
+    expect(nav.params.value.appId).toBe('com.test.a')
+  })
+
+  it('should_keepRunScreen_when_stopFails', async () => {
+    shell.upsertApps(SOURCE_ID, [app('com.test.a', 'running', 'AppA')])
+    const nav = useShellNavigation()
+    nav.openApp('com.test.a')
+    source.stop.mockRejectedValueOnce(new Error('busy'))
+
+    const ok = await useShellApps().stop('com.test.a')
+
+    expect(ok).toBe(false)
+    expect(nav.current.value.id, '停用失败：运行面多半还在，留用户看错误态').toBe('app-run')
+  })
+
+  it('should_leaveRunScreen_when_removingAppShownInRunScreen', async () => {
+    shell.upsertApps(SOURCE_ID, [app('com.test.a', 'stopped', 'AppA')])
+    const nav = useShellNavigation()
+    nav.openApp('com.test.a')
+
+    const ok = await useShellApps().removeApp('com.test.a')
+
+    expect(ok).toBe(true)
+    expect(nav.current.value.id, '应用卸载后再返回只会剩「应用不存在」提示').toBe('home')
   })
 })
 

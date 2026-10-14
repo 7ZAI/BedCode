@@ -264,23 +264,38 @@ html:not(.dark) .shell-ui {
 }
 
 /* ============================================================================
-   多任务卡片叠放（deck）
+   多任务卡片轨道（deck track）
    ----------------------------------------------------------------------------
-   固定宽高居中 + 等差错位（错位量与缩放比由组件算好写在 inline style 里，
-   此处只定义尺寸、层叠上下文与过渡）。拖拽期间关掉过渡与开启 will-change，
-   抬起后交回 CSS 过渡——否则手指与卡片之问会慢半拍。
+   卡片**并排**成一行，不叠放：轨道整体平移，把当前卡片送到视口中间。轨道两端
+   的等量留白（padding-inline）让第一张 / 最后一张也能居中，于是「平移 = 序号 ×
+   步长」成立，卡宽与间距改这里即可，组件不必做布局计算。
+
+   视口比轨道窄时（多任务只剩这一屏的常态）相邻卡片在边缘被裁掉半张——那是裁切，
+   不是叠压：卡片之间永远不重叠。
    ============================================================================ */
 .shell-deck {
+  --deck-card-w: min(72vw, 300px);
+  --deck-gap: 12px;
+  /* 步长 = 卡宽 + 间距；轨道平移量 = 步长 × 序号（真源在组件的 trackStyle） */
+  --deck-step: calc(var(--deck-card-w) + var(--deck-gap));
   position: relative;
   overflow: hidden;
 }
+.shell-deck-track {
+  display: flex;
+  align-items: center;
+  gap: var(--deck-gap);
+  height: 100%;
+  /* 首尾卡也能居中：两端各留「半个视口 - 半个卡宽」 */
+  padding-inline: calc(50% - var(--deck-card-w) / 2);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
 .shell-deck-card {
-  position: absolute;
-  top: 50%;
-  left: 50%;
+  position: relative;
   display: flex;
   flex-direction: column;
-  width: min(78vw, 320px);
+  flex: 0 0 var(--deck-card-w);
+  width: var(--deck-card-w);
   height: min(calc(100% - 24px), 440px);
   border-radius: 18px;
   border: 1px solid var(--mobile-border);
@@ -291,6 +306,8 @@ html:not(.dark) .shell-ui {
     transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
     opacity 0.24s ease;
 }
+/* 拖拽期间关掉过渡并开启 will-change，抬起后交回 CSS 过渡——否则手指与卡片之间会慢半拍 */
+.shell-deck--dragging .shell-deck-track,
 .shell-deck--dragging .shell-deck-card {
   transition: none;
   will-change: transform;
@@ -308,6 +325,7 @@ html:not(.dark) .shell-ui {
   .shell-sheet-leave-active,
   .shell-shade-enter-active,
   .shell-shade-leave-active,
+  .shell-deck-track,
   .shell-deck-card {
     transition-duration: 0.01ms;
   }

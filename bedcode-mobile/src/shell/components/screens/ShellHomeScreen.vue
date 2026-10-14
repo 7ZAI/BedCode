@@ -52,7 +52,23 @@
     <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6">
       <!-- ======== 正在运行（MRU 卡片带，桌面同构） ======== -->
       <template v-if="runningOrdered.length > 0">
-        <ShellSection :title="t('shell.home.runningTitle')" />
+        <ShellSection :title="t('shell.home.runningTitle')">
+          <!-- 多任务入口：recents 在业界是全局可达的（Android / iOS 都能从任意屏进入），
+               底部系统条退役后这里补上，不至于只能从运行页胶囊绕进去 -->
+          <template #action>
+            <button
+              type="button"
+              class="shell-icon-action"
+              :aria-label="t('shell.switcher.title')"
+              @click="nav.openSwitcher()"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="3" width="14" height="14" rx="3" />
+                <path d="M3 7v10a4 4 0 004 4h10" />
+              </svg>
+            </button>
+          </template>
+        </ShellSection>
         <div class="px-4 flex gap-2.5 overflow-x-auto pb-1" role="list">
           <article
             v-for="app in runningOrdered"

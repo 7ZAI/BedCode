@@ -1,7 +1,7 @@
 /**
  * 宿主壳屏幕栈导航 行为契约测试
  *
- * 覆盖：压栈/回退/Tab 重置/同屏去重/参数携带/根屏保护/方向标记。
+ * 覆盖：压栈/回退/Tab 重置/同屏去重/参数携带/根屏保护/方向标记/停用后摘运行屏。
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useShellNavigation, resetShellNavigation } from '@/shell/composables/useShellNavigation'
@@ -109,5 +109,47 @@ describe('ShellNavigation 栈语义', () => {
     // 多任务是临时浮层：回退即消失，不留在历史里
     expect(nav.current.value.id).toBe('home')
     expect(nav.stack.value).toHaveLength(1)
+  })
+
+  it('should_dropRunScreenAndOverlays_when_closeAppRun', () => {
+    nav.openApp('app-1')
+    nav.openDetail('app-1')
+    nav.openSwitcher()
+
+    nav.closeAppRun('app-1')
+
+    // 应用停用后它的运行屏与叠在上面的浮层都不能留在栈里（否则只剩空态）
+    expect(nav.stack.value).toHaveLength(1)
+    expect(nav.current.value.id).toBe('home')
+    expect(nav.direction.value).toBe('backward')
+  })
+
+  it('should_keepStack_when_closeAppRunTargetsAnotherApp', () => {
+    nav.openApp('app-1')
+    nav.openApp('app-2')
+
+    nav.closeAppRun('app-1')
+
+    // 摘的是下层 app-1：其上 app-2 仍在运行，栈整体回落到 home 即可
+    expect(nav.current.value.id).toBe('home')
+  })
+
+  it('should_keepCurrentRunScreen_when_closeAppRunTargetsOtherApp', () => {
+    nav.openApp('app-1')
+
+    nav.closeAppRun('app-2')
+
+    // 停用的是别的应用：当前运行屏不动（这条最容易被误伤）
+    expect(nav.current.value.id).toBe('app-run')
+    expect(nav.params.value.appId).toBe('app-1')
+  })
+
+  it('should_beNoOp_when_closeAppRunCalledWithoutRunScreen', () => {
+    nav.navigate('apps')
+
+    nav.closeAppRun('app-1')
+
+    expect(nav.current.value.id).toBe('apps')
+    expect(nav.stack.value).toHaveLength(2)
   })
 })

@@ -15,6 +15,7 @@
  * | C-H8 | 管理入口 | 图标按钮 + 可访问名（不是文字 chip） | 点击 navigate('apps') |
  * | C-H9 | 文案纪律 | 不渲染方案期解释（由应用提供 / 平台自带 / 最近使用在前） | 三个退役 key 缺席 |
  * | C-H10 | 自定义壁纸 | custom 档 + 路径 → 壁纸层用 asset URL 铺底 | 图片层 style 含 URL |
+ * | C-H11 | 多任务入口 | 运行带分组头带多任务入口（recents 全局可达，不只运行页胶囊） | openSwitcher 被调用 |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -32,6 +33,7 @@ const mockOpen = vi.fn(async () => true)
 const mockToggleShade = vi.fn()
 const mockNavigate = vi.fn()
 const mockOpenPermissions = vi.fn()
+const mockOpenSwitcher = vi.fn()
 
 vi.mock('vue-i18n', () => ({
   // 回显 key + 参数：角标计数与可访问名称里的参数才可断言
@@ -54,7 +56,11 @@ vi.mock('@/shell/composables/useShellOverlays', () => ({
   useShellOverlays: () => ({ toggleShade: mockToggleShade }),
 }))
 vi.mock('@/shell/composables/useShellNavigation', () => ({
-  useShellNavigation: () => ({ navigate: mockNavigate, openPermissions: mockOpenPermissions }),
+  useShellNavigation: () => ({
+    navigate: mockNavigate,
+    openPermissions: mockOpenPermissions,
+    openSwitcher: mockOpenSwitcher,
+  }),
 }))
 vi.mock('@/plugin/assets', () => ({
   toFileAssetUrl: (path: string) => `asset://${path}`,
@@ -83,6 +89,7 @@ beforeEach(() => {
   mockToggleShade.mockClear()
   mockNavigate.mockClear()
   mockOpenPermissions.mockClear()
+  mockOpenSwitcher.mockClear()
   useShellPreferences().setWallpaper('aurora')
   useShellPreferences().setWallDim(30)
 })
@@ -285,5 +292,28 @@ describe('C-H10 自定义壁纸图片层', () => {
     expect(layer.attributes('style') ?? '').not.toContain('background-image')
     prefs.setWallpaperImage(null)
     prefs.setWallpaper('aurora')
+  })
+})
+
+describe('C-H11 多任务入口', () => {
+  it('should_openSwitcher_when_runningStripEntryTapped', async () => {
+    // recents 在业界是全局可达的：底部系统条退役后，主屏运行带要能进多任务
+    apps.value = [app('a', 'running', 'AppA')]
+    const wrapper = mount(ShellHomeScreen)
+
+    const entry = wrapper.find('button[aria-label="shell.switcher.title"]')
+    expect(entry.exists(), '入口应带可访问名（单图标按钮必须有）').toBe(true)
+
+    await entry.trigger('click')
+    expect(mockOpenSwitcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('should_notRenderEntry_when_noRunningApp', () => {
+    // 没有运行中应用时运行带整段不渲染，入口自然也不在场
+    apps.value = [app('a', 'stopped', 'AppA')]
+
+    expect(
+      mount(ShellHomeScreen).find('button[aria-label="shell.switcher.title"]').exists(),
+    ).toBe(false)
   })
 })
