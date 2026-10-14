@@ -101,10 +101,10 @@ async function launch(appId: string): Promise<boolean> {
     lastError.value = `unknown app: ${appId}`
     return false
   }
-  if (app.state === 'running') {
-    pushRecent(appId)
-    return true
-  }
+  // 不再对「已运行」早退（2026-10-14 修正）：后端实例跨 WebView 重载继续存活，
+  // 而插件的**前端模块是随页面加载的**——早退会让「重载后打开已运行应用」只看到运行面占位
+  // （实测：reload → 首页点 Terminal Session → 占位屏）。数据源的 launch 本身幂等
+  // （后端 activate 幂等早退 / loader 对已加载模块直接返回），重跑一遍的代价远小于缺模块。
 
   // 乐观置为运行中：启动是秒级操作，先动 UI 避免点击后无反馈
   registry.patchApp(appId, { state: 'running', error: undefined })

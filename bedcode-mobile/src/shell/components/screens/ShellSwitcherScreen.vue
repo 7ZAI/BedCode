@@ -38,14 +38,43 @@
         </div>
       </div>
 
-      <p
+      <div
         v-else
-        class="mt-6 rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-6 text-center text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]"
+        class="mt-10 flex flex-col items-center px-6 text-center"
       >
-        {{ t('shell.switcher.empty') }}
-      </p>
+        <!-- 空态给出「为什么空」+「下一步去哪」，而不是只丢一句「没有运行中的应用」：
+             多任务屏本身没有可操作对象，没有出口的空态会让人停在死路 -->
+        <span
+          class="flex items-center justify-center w-14 h-14 rounded-[18px]"
+          :style="{ background: 'var(--mobile-bg-elevated)', color: 'var(--mobile-text-secondary)' }"
+          aria-hidden="true"
+        >
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="3" />
+            <path d="M3 9h18" />
+          </svg>
+        </span>
+        <p class="mt-4 text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+          {{ t('shell.switcher.empty') }}
+        </p>
+        <p class="mt-1 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">
+          {{ t('shell.switcher.emptyHint') }}
+        </p>
+        <button
+          type="button"
+          class="mt-5 rounded-[10px] px-5 py-2.5 text-[var(--font-size-base)] transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+          :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+          @click="nav.goHome()"
+        >
+          {{ t('shell.switcher.backHome') }}
+        </button>
+      </div>
 
-      <p class="mt-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+      <!-- 手势提示只在真有卡片时出现：空态说「上滑卡片停止应用」是自相矛盾的文案 -->
+      <p
+        v-if="runningApps.length > 0"
+        class="mt-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+      >
         {{ t('shell.switcher.foot') }}
       </p>
     </div>

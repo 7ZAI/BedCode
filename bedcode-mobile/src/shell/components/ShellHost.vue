@@ -1,6 +1,6 @@
 <template>
-  <!-- 高度用 h-full 而非 100dvh：壳挂在 MobileLayout 的 flex-1 容器内，
-       容器已承担顶部安全区，再用 100dvh 会多出一段安全区高度的溢出 -->
+  <!-- 高度用 h-full 而非 100dvh：壳挂在 ShellView 的 100dvh 容器内（该容器已承担
+       顶部安全区），再用 100dvh 会多出一段安全区高度的溢出 -->
   <div
     class="shell-ui flex flex-col h-full overflow-hidden bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-primary)]"
   >

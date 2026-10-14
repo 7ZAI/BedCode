@@ -139,49 +139,10 @@ export interface LifecycleContribution {
 }
 
 // ==================== UI 描述符 ====================
-
-/** 工具箱页面描述符 */
-export interface ToolboxPageDescriptor {
-  id: string
-  title: string
-  /** 入口图标：emoji 或 SVG path d 字符串（Heroicons outline 风格，viewBox=0 0 24 24），缺省 🧩 */
-  icon?: string
-  component: any
-  /** 可选：插件自定义入口卡片组件（宿主 ToolboxView 在入口列表内联渲染，
-   *  需自带实时状态角标；缺省时宿主用统一卡片）。宿主经 PluginViewHost provide pluginContext。 */
-  entry?: any
-}
-
-/** 终端主视图描述符（票 15：终端 UI 域全部在插件内实现；宿主 /mobile/terminal/:id 壳渲染本组件） */
-export interface TerminalViewContribution {
-  /** 主视图组件；宿主壳可透传 props.sessionId（当前会话 id），缺省时组件自取宿主活动会话 */
-  component: any
-}
-
-/** 导航 Tab 描述符 */
-export interface NavTabDescriptor {
-  id: string
-  title: string
-  icon: string
-  component: any
-  order: number
-}
-
-/** 终端工具栏项描述符 */
-export interface TerminalToolbarItemDescriptor {
-  id: string
-  label: string
-  icon?: string
-  onClick?: () => void
-}
-
-/** 设置区域描述符 */
-export interface SettingsSectionDescriptor {
-  id: string
-  pluginId: string
-  section: string
-  component: any
-}
+//
+// 票 2026-10-10 批次 C2：`ToolboxPageDescriptor` / `TerminalViewContribution` /
+// `NavTabDescriptor` / `TerminalToolbarItemDescriptor` 及其对应注册方法已整面退役
+// （宿主壳只认 `registerSurface` 一种运行面形态）。保留位仅供旧版本插件对照报错。
 
 /** 插件路由描述符：整体路由由插件决定（openPage 跳转）；id 即路径段，可含 '/' 支持深路径 */
 export interface PluginRouteDescriptor {
@@ -194,6 +155,49 @@ export interface PluginRouteDescriptor {
   header?: boolean
 }
 
+// ==================== 宿主壳（Host Shell）贡献描述符 ====================
+// 契约形状与宿主 `src/shell/types.ts` 逐字段一致（插件侧不 import 宿主代码，
+// 数据经宿主壳 registry 双写投影）。appId 一律 = 插件 id，由宿主 context 代填。
+
+/** 宿主壳运行面：应用在壳（/mobile/shell）内被打开时挂载的整页界面 */
+export interface ShellSurfaceContribution {
+  /** 运行面组件；壳透传 { app } prop（应用元数据，可忽略） */
+  component: any
+  /** 应用自带主题色（仅作用于应用内部，绝不写回平台 token） */
+  accent?: string
+}
+
+/** 宿主壳首页快捷卡片（应用自持内容，如「N 个活跃会话」） */
+export interface ShellSlotContribution {
+  id: string
+  /** 卡片组件；壳透传 { app } prop */
+  component: any
+  /** 排序权重，小者靠前；缺省 100 */
+  order?: number
+}
+
+/** 宿主壳胶囊菜单附加项（平台项 order：权限 10 / 停用 30，应用用中间值插入） */
+export interface ShellCapsuleItem {
+  id: string
+  label: string
+  /** SVG path d（24×24 视框，stroke 风格）；缺省用平台通用图标 */
+  icon?: string
+  order?: number
+  onSelect?: (appId: string) => void | Promise<void>
+}
+
+/** 宿主壳平台设置入口 */
+export interface ShellSettingsEntry {
+  id: string
+  label: string
+  /** 右侧摘要文案 */
+  hint?: string
+  /** SVG path d（24×24 视框） */
+  icon?: string
+  order?: number
+  onSelect?: () => void | Promise<void>
+}
+
 /** 日志 API */
 export interface LoggerAPI {
   info(message: string): void
@@ -203,6 +207,57 @@ export interface LoggerAPI {
 }
 
 // ==================== 移动端宿主能力 ====================
+
+/** 连接引擎状态（与宿主 useMobileConnection ConnectionStatus 一一对应） */
+export type MobileConnectionStatus =
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'pairing'
+  | 'paired'
+  | 'error'
+
+/** 连接目标设备（最小形状；mobileApi.connectDevice 入参） */
+export interface MobileDeviceTarget {
+  address: string
+  port: number
+  name?: string
+}
+
+/** 连接历史条目（宿主连接域引擎事实） */
+export interface MobileConnectionHistoryItem {
+  address: string
+  name: string
+  /** ISO 时间字符串 */
+  lastConnected?: string
+}
+
+/** 连接生命周期事件（引擎事实面，与宿主 ws_reconnecting 等逐一对应） */
+export type MobileHostConnectionEvent =
+  | { type: 'reconnecting'; retry: number; maxRetry: number }
+  | { type: 'reconnected' }
+  | { type: 'unexpected_disconnect' }
+  | { type: 'reauth_rejected'; reason: string }
+  | { type: 'reconnect_failed'; reason: string }
+  | { type: 'event_channel_ready' }
+
+/** mDNS 发现到的服务（与宿主 useMdnsDiscovery DiscoveredService 同形状） */
+export interface MobileMdnsService {
+  instance_name: string
+  host_name: string
+  address: string
+  port: number
+  txt_records: Record<string, string>
+  platform: string
+  device_name: string
+}
+
+/** 生物凭证状态（与宿主 useMobileCommands BiometricKeyStatus 同形状） */
+export interface MobileBiometricKeyStatus {
+  deviceSupported: boolean
+  deviceReason: number
+  hasKey: boolean
+}
 
 /** HTTP API 结果（与宿主 useHttpApi 同构） */
 export interface MobileHttpResult<T = any> {
@@ -264,10 +319,59 @@ export interface MobileHostApi {
   openTerminalStream(sessionId: string, onBytes: (bytes: Uint8Array) => void): Promise<TerminalStreamHandle>
   /** 当前 App 是否深色（响应式 ref；终端主题解析依据） */
   isDark: import('vue').Ref<boolean>
-  /** 移动端本地设置只读投影（vibrate / maxOpenTerminals 等；由宿主设置页写入） */
-  mobileSettings: import('vue').Ref<Record<string, any>>
+  /** 移动端本地设置只读投影（vibrate / maxOpenTerminals 等；平台项由宿主设置页写入，
+   *  业务项由插件设置面经下方 KV 桥写入后反映到此） */
+  mobileSettings: import('vue').Ref<Record<string, unknown>>
+  /** 读全部设置键值（扁平表 `{ key: value }`；通用机制，插件自持哪些键是自己的设置项） */
+  readAllSettings(): Promise<Record<string, string>>
+  /** 写单个设置键（通用机制面：命中宿主已知键写穿其响应式单例，未命中直落 KV） */
+  writeSetting(key: string, value: string): Promise<void>
   /** 会话/连接生命周期事件（断线 / 会话状态 / 停止 / 移除）；Disposable.dispose = 取消订阅 */
   onSessionEvent(handler: (event: MobileHostSessionEvent) => void): Disposable
+  // ── 连接引擎面（票 2026-10-09：宿主页下沉 terminal-session，引擎事实与动作）──
+
+  /** 连接引擎状态（disconnected/connecting/connected/pairing/paired/error） */
+  connectionStatus: import('vue').Ref<MobileConnectionStatus>
+  /** 是否正在连接（连接中禁止重复点击） */
+  isConnecting: import('vue').Ref<boolean>
+  /** 当前连接目标设备 */
+  currentDevice: import('vue').Ref<MobileDeviceTarget | null>
+  /** 连接历史（此前尝试连接过的桌面端端点；宿主连接域引擎事实） */
+  connectionHistory: import('vue').Ref<MobileConnectionHistoryItem[]>
+  /** 建立到目标桌面的连接（HTTP base url 探测 + WS 事件通道建链；宿主引擎动作） */
+  connectDevice(device: MobileDeviceTarget): Promise<void>
+  /** 取消进行中的连接 */
+  cancelConnection(): Promise<void>
+  /** 断开当前连接 */
+  disconnect(): Promise<void>
+  /** 刷新连接历史（force=true 忽略已加载标记） */
+  loadConnectionHistory(force?: boolean): Promise<void>
+  /** 清空连接历史 */
+  clearConnectionHistory(): Promise<void>
+  /** 从连接历史移除单条 */
+  removeFromConnectionHistory(address: string): Promise<void>
+  /** 连接生命周期事件白名单（reconnecting/reconnected/unexpected_disconnect/reauth_rejected/reconnect_failed/event_channel_ready） */
+  onConnectionEvent(handler: (event: MobileHostConnectionEvent) => void): Disposable
+
+  // ── mDNS 主机发现引擎事实（原始发现事实投影；派生列表归插件自持）──
+
+  /** 已发现服务列表（响应式 ref） */
+  mdnsServices: import('vue').Ref<MobileMdnsService[]>
+  /** 是否扫描中（响应式 ref） */
+  mdnsScanning: import('vue').Ref<boolean>
+  /** 启动扫描（keepResults=true 保留既有列表续扫） */
+  mdnsStart(options?: { keepResults?: boolean }): Promise<void>
+  /** 停止扫描 */
+  mdnsStop(): Promise<void>
+  /** 重新拉取已发现服务 */
+  mdnsRefresh(): Promise<void>
+
+  // ── 生物凭证引擎面（C4 凭据零过境：只投状态与绑定动作，材料留宿主）──
+
+  getBiometricKeyStatus(): Promise<MobileBiometricKeyStatus>
+  bindBiometricCredential(): Promise<boolean>
+  unbindBiometricCredential(): Promise<boolean>
+
   /** DEV mock 会话 id（生产为 null；终端 UI 据此进入本地 mock 渲染） */
   mockSessionId: string | null
 }
@@ -405,15 +509,25 @@ export interface PluginDialogHandle {
   update(options: Partial<PluginDialogOptions>): void
 }
 
-/** UI 注册表 */
+/**
+ * UI 注册表
+ *
+ * 票 2026-10-10 批次 C2 整面退役：`registerToolboxPage` / `registerNavTab` /
+ * `registerTerminalToolbarItem` / `registerTerminalView` 及其描述符类型已删除。
+ * 应用在宿主壳内**只有一种运行面形态**——`registerSurface`；应用内页签与子页走本表
+ * 保留的 `registerRoute` + `openPage`，不占宿主导航形态。旧插件若仍调用已退役方法，
+ * 宿主在调用点显式抛错（fail-visible），不做「查不到就静默忽略」。
+ */
 export interface UIRegistry {
-  registerToolboxPage(page: ToolboxPageDescriptor): Disposable
-  registerNavTab(tab: NavTabDescriptor): Disposable
-  registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
-  /** 注册终端主视图（票 15：终端 UI 全部在插件内实现，宿主 /mobile/terminal/:id 壳只提供挂载点；
-   *  单实例语义——终端 app 只有一个运行面注册者） */
-  registerTerminalView(view: TerminalViewContribution): Disposable
-  registerSettingsSection(section: SettingsSectionDescriptor): Disposable
+  /** 宿主壳运行面（/mobile/shell 的应用运行屏；appId = 插件 id 由宿主代填）。
+   *  应用自持整个运行面——含底部导航与页签，壳不向其内加壳 chrome。 */
+  registerSurface(surface: ShellSurfaceContribution): Disposable
+  /** 宿主壳首页快捷卡片（应用自持内容；壳 Home 屏渲染，appId 由宿主代填） */
+  registerSlot(slot: ShellSlotContribution): Disposable
+  /** 宿主壳胶囊菜单附加项（appId 由宿主代填） */
+  registerCapsuleItem(item: ShellCapsuleItem): Disposable
+  /** 宿主壳平台设置入口（appId 由宿主代填） */
+  registerSettingsEntry(entry: ShellSettingsEntry): Disposable
   /** 动态注册插件路由（宿主 addRoute 至 /mobile/plugins/{pluginId}/{id}；Disposable.dispose = removeRoute 撤销） */
   registerRoute(route: PluginRouteDescriptor): Disposable
   /** 整体跳转到本插件已注册路由；返回入口页用 goBack 或宿主页头返回按钮 */

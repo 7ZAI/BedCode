@@ -13,8 +13,7 @@
       </button>
     </div>
     <!-- 页签内容区：data-swipe-zone 声明内部横滑区，区内左右滑切换页签；
-         边界状态经 data-zone-at-* 同步给宿主 MobileSwipeContainer——
-         已在边界页时继续同向滑动交外层翻主页面 -->
+         已在边界页时继续同向滑动经 delegateSwipe 上交外层页签容器翻主页面 -->
     <div
       ref="zoneRoot"
       class="att-tab-panels"
@@ -54,6 +53,7 @@ import TaskHistoryTab from './TaskHistoryTab.vue'
 import ScheduledJobsTab from './ScheduledJobsTab.vue'
 import { useTaskHistory } from '../composables/useTaskHistory'
 import { useScheduledJobs } from '../composables/useScheduledJobs'
+import { delegateSwipe } from '../../app/swipeArbitration'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string): string => context.i18n.t(key)
@@ -76,9 +76,9 @@ function panelClass(index: number): string {
 
 // ==================== 页签内容区横滑切换 ====================
 //
-// 区内水平主导滑动切换页签；已在边界页时继续同向滑动由宿主
-// MobileSwipeContainer 接管翻主页面（外层按 data-swipe-zone /
-// data-zone-at-* 仲裁，本组件无需感知）。
+// 区内水平主导滑动切换页签；已在边界页时继续同向滑动上交外层页签容器翻主页面。
+// 仲裁载体是 app 域的 delegateSwipe（原为宿主 MobileSwipeContainer，该容器已随
+// 票 2026-10-09 阶段 B 退役；data-zone-at-* 属性保留为无障碍/调试可读状态）。
 // 手势跳过：输入类控件内的触摸（定时任务表单，防文本选择拖动误触切页）、
 // 可横向滚动容器（任务记录状态筛选 chips 行，横滑语义是滚动自身）。
 
@@ -104,9 +104,13 @@ const {
   onTouchEnd: onZoneTouchEnd,
 } = useSwipeTabs(
   (dir) => {
-    // 步进切换；越界方向忽略（该手势已由外层容器接管翻主页面）
+    // 步进切换；越界方向上交外层页签容器翻主页面，外层不在场时忽略
     const next = activeTabIndex.value + (dir === 'left' ? 1 : -1)
-    if (next >= 0 && next < tabs.length) activeTab.value = tabs[next].key
+    if (next >= 0 && next < tabs.length) {
+      activeTab.value = tabs[next].key
+      return
+    }
+    delegateSwipe(dir)
   },
   {
     shouldSkip: (target) => {

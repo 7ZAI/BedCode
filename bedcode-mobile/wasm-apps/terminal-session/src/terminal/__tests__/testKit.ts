@@ -133,6 +133,10 @@ export interface MockMobileApiOptions {
     sessionId: string,
     onBytes: (bytes: Uint8Array) => void,
   ) => Promise<{ dispose(): void }>
+  /** 连接引擎动作替身（默认 no-op；用例可注入抛错以验证错误分类/日志） */
+  connectDevice?: (device: { address: string; port: number; name?: string }) => Promise<void>
+  /** mDNS 启动替身（默认 no-op；用例可注入抛错以验证降级日志） */
+  mdnsStart?: (options?: { keepResults?: boolean }) => Promise<void>
 }
 
 export interface MockMobileApi extends Record<string, any> {
@@ -158,6 +162,32 @@ export function installMockMobileApi(options: MockMobileApiOptions = {}): MockMo
     loadSessionConfigs: async () => {},
     openTerminalStream: options.openTerminalStream ?? (async () => ({ dispose() {} })),
     onSessionEvent: () => ({ dispose() {} }),
+    // 票 2026-10-09：宿主页下沉所需的连接引擎面投影（默认 no-op 替身，契约与宿主 mobileApi 一致）
+    connectionStatus: ref('disconnected'),
+    isConnecting: ref(false),
+    currentDevice: ref(null),
+    connectionHistory: ref([]),
+    connectDevice: options.connectDevice ?? (async () => {}),
+    async cancelConnection() {},
+    async disconnect() {},
+    async loadConnectionHistory() {},
+    async clearConnectionHistory() {},
+    async removeFromConnectionHistory() {},
+    onConnectionEvent: () => ({ dispose() {} }),
+    mdnsServices: ref([]),
+    mdnsScanning: ref(false),
+    mdnsStart: options.mdnsStart ?? (async () => {}),
+    async mdnsStop() {},
+    async mdnsRefresh() {},
+    async getBiometricKeyStatus() {
+      return { deviceSupported: false, deviceReason: 12, hasKey: false }
+    },
+    async bindBiometricCredential() {
+      return false
+    },
+    async unbindBiometricCredential() {
+      return false
+    },
     mockSessionId: options.mockSessionId ?? null,
   }
   const shared = ((window as any).__BEDCODE_SHARED__ ??= {})

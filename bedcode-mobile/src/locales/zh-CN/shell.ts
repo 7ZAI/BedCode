@@ -37,6 +37,9 @@ export default {
       providedBy: '由 {name} 提供',
       emptyApps: '尚未安装 WASM 应用',
       emptyAppsHint: '在「应用」里安装或启用后，入口会出现在这里',
+      /** 快捷卡片区的空态：应用装了但没在跑时，卡片区本来就应该是空的，
+       *  用「尚未安装应用」会与上方的应用宫格自相矛盾 */
+      slotsEmpty: '应用运行后会在此显示状态卡片',
       openApp: '打开应用',
     },
     apps: {
@@ -99,6 +102,7 @@ export default {
       title: '运行中的应用',
       backHome: '回首页',
       empty: '没有运行中的应用',
+      emptyHint: '回到首页打开一个应用，它会出现在这里',
       foot: '点击卡片进入 · 上滑卡片停止应用',
       stop: '停止',
     },
@@ -109,8 +113,21 @@ export default {
       appearanceHint: '主题与色板',
       permissions: '权限总览',
       permissionsHint: '按权限看应用',
-      notifications: '通知',
+      // 连接/认证/出站：壳内入口补齐（旧宿主的设置在退役前仍复用其实现页，功能不回归）
+      connection: '连接',
+      connectionHint: '端口与自动重连',
+      authentication: '认证',
+      authenticationHint: '配对与凭据',
+      egress: '出站策略',
+      egressHint: '安全出口档位',
       about: '关于 WasmApp',
+      // 票 2026-10-10：通知入口随业务设置下沉 terminal-session 退役；
+      // 「擦除本机数据」是设备生命周期动作（清理对象含入场凭据与宿主连接态），
+      // 按 §8 凭据零过境留壳，见 src/composables/useClearAllData.ts。
+      dangerZone: '危险操作',
+      clearAllData: '清除所有数据',
+      clearAllDataHint: '断开连接并清空预设任务、连接历史、配对设备、会话配置与本机缓存，无法撤销。',
+      clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
       appSettings: '应用设置',
       runtime: 'WasmApp Mobile {version}',
     },
@@ -136,6 +153,7 @@ export default {
       group: {
         terminal: '终端与会话',
         data: '文件与网络',
+        device: '设备与链路',
         interface: '界面与消息',
         other: '其他',
       },

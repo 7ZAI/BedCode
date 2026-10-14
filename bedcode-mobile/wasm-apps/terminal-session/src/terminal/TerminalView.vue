@@ -19,7 +19,7 @@
       :visible-items="visibleToolbarItems"
       :all-items="ALL_TOOLBAR_ITEMS"
       :show-sidebar="showSidebar"
-      @back="router.back()"
+      @back="handleBack"
       @action="handleToolbarAction"
     />
 
@@ -261,7 +261,13 @@ import { selectionFrameColor } from './config/themes'
 // ==================== Props & 会话选取 ====================
 
 /** 宿主壳透传的会话 id（`/mobile/terminal/:id` 薄壳与壳内运行面都经此进入） */
-const props = defineProps<{ sessionId?: string }>()
+const props = defineProps<{ sessionId?: string; back?: () => void }>()
+
+/** 返回：宿主页内嵌路径（票 2026-10-09）传 back 覆盖；缺省回退宿主路由 */
+const handleBack = () => {
+  if (props.back) props.back()
+  else router.back()
+}
 
 /** 宿主路由实例（插件不静态依赖 vue-router，经 SDK 共享模块取） */
 const router = getRouter()

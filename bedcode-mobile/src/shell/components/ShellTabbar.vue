@@ -15,7 +15,7 @@
         :aria-current="isActive(tab.id) ? 'page' : undefined"
         @click="nav.switchTab(tab.id)"
       >
-        <!-- 激活指示条：锚定按钮顶部居中（与既有 MobileNav 同一形态） -->
+        <!-- 激活指示条：锚定按钮顶部居中（沿用旧宿主底部导航的同一形态） -->
         <span
           v-if="isActive(tab.id)"
           class="absolute top-0 left-0 right-0 mx-auto w-6 h-[2px] rounded-full"

@@ -181,14 +181,20 @@ describe('结构锁：WS 帧级加密与 waiting_input 漂移零残留（票 06�
     }
   })
 
+  // 旧宿主 SessionsView / SessionCard 随阶段 B 退役：会话状态展示面已迁
+  // terminal-session 宿主页域（host/utils.ts 的状态键表 + host/components/SessionsSection.vue）
   it('会话状态比较统一到桌面 wire 字面量 waitingInput（snake_case 漂移零残留）', async () => {
-    const [mc, sv, card] = await Promise.all([
+    const [mc, utils, section] = await Promise.all([
       readFile('src/composables/useMobileConnection.ts', 'utf-8'),
-      readFile('src/views/SessionsView.vue', 'utf-8'),
-      readFile('src/components/SessionCard.vue', 'utf-8'),
+      readFile('wasm-apps/terminal-session/src/host/utils.ts', 'utf-8'),
+      readFile('wasm-apps/terminal-session/src/host/components/SessionsSection.vue', 'utf-8'),
     ])
-    for (const src of [mc, sv, card]) {
+    // 反例（三方一致）：任何一面都不允许出现已退役的 snake_case 字面量
+    for (const src of [mc, utils, section]) {
       expect(src).not.toContain("'waiting_input'")
+    }
+    // 正例：状态键真源（宿主连接域 + 插件宿主页域的键表）必须用 wire 字面量 waitingInput
+    for (const src of [mc, utils]) {
       expect(src).toContain('waitingInput')
     }
   })

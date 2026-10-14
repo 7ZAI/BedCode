@@ -21,21 +21,23 @@ import type {
   NotificationAPI,
   StatusAPI,
   SystemAPI,
-  ToolboxPageDescriptor,
-  NavTabDescriptor,
-  TerminalToolbarItemDescriptor,
-  SettingsSectionDescriptor,
   PluginRouteDescriptor,
-  TerminalViewContribution,
   PluginDialogOptions,
   PluginDialogHandle,
+  ShellSurfaceContribution,
+  ShellSlotContribution,
+  ShellCapsuleItem,
+  ShellSettingsEntry,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
+import { defineComponent, h } from 'vue'
 import { getPluginRegistry } from './registry'
+import PluginViewHost from './components/PluginViewHost.vue'
 import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
+import { getShellRegistry } from '@/shell/registry'
 import { invoke } from '@tauri-apps/api/core'
 // 全局弹窗控制器：必须经包说明符解析（与 App.vue 挂载的 PluginGlobalDialog.vue 同源）。
 // 移动端 file: 依赖是快照拷贝，若直连源码相对路径会与组件产生两个模块实例，
@@ -145,39 +147,47 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   }
 
   // ==================== UIRegistry ====================
+  //
+  // 票 2026-10-10 批次 C2：`registerToolboxPage` / `registerNavTab` /
+  // `registerTerminalToolbarItem` / `registerTerminalView` 四个旧嵌入扩展点整面退役
+  // （宿主壳只认 registerSurface 一种运行面形态）。退役清单的防回接锁见
+  // src/__tests__/shell/retiredHostUIRetirementLocks.test.ts（R4）。
   const ui: UIRegistry = {
-    registerToolboxPage(page: ToolboxPageDescriptor): Disposable {
-      requirePermission('ui.registerToolboxPage')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerToolboxPage(info.id, page)
+    registerSurface(surface: ShellSurfaceContribution): Disposable {
+      // 宿主壳运行面：应用自持 UI 的挂载位，无特权动作——不做 requirePermission
+      // 快速失败（真源仲裁仍在 Rust host 原语层；本面不触发任何宿主能力）。
+      // appId 一律 = 插件 id（壳内应用模型与该插件同 id）。
+      //
+      // 壳直渲染运行面（不经旧插件 UI 宿主路径），但插件组件靠 inject('pluginContext')
+      // 取上下文——在此套 PluginViewHost 包装补 provide；与 pluginAppSource.resolveSurface
+      // 的旧路径同款（插件形态细节收在插件系统内，壳不认识插件）。
+      const wrapped = defineComponent({
+        name: `ShellSurface-${info.id}`,
+        // 壳透传 { app } prop：声明吞掉，避免作为未知 attr 落到根节点
+        props: { app: { type: Object, default: null } },
+        setup() {
+          return () => h(PluginViewHost, { pluginId: info.id, component: surface.component })
+        },
+      })
+      const disposable = getShellRegistry().registerSurface(info.id, {
+        ...surface,
+        component: wrapped,
+      })
       disposables.push(disposable)
       return disposable
     },
-    registerNavTab(tab: NavTabDescriptor): Disposable {
-      requirePermission('ui.registerNavTab')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerNavTab(info.id, tab)
+    registerSlot(slot: ShellSlotContribution): Disposable {
+      const disposable = getShellRegistry().registerSlot(info.id, slot)
       disposables.push(disposable)
       return disposable
     },
-    registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable {
-      requirePermission('ui.registerTerminalToolbarItem')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerTerminalToolbarItem(info.id, item)
+    registerCapsuleItem(item: ShellCapsuleItem): Disposable {
+      const disposable = getShellRegistry().registerCapsuleItem(info.id, item)
       disposables.push(disposable)
       return disposable
     },
-    registerTerminalView(view: TerminalViewContribution): Disposable {
-      requirePermission('ui.registerTerminalView')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerTerminalView(info.id, view)
-      disposables.push(disposable)
-      return disposable
-    },
-    registerSettingsSection(section: SettingsSectionDescriptor): Disposable {
-      requirePermission('ui.registerSettingsSection')
-      const registry = getPluginRegistry()
-      const disposable = registry.registerSettingsSection(info.id, section)
+    registerSettingsEntry(entry: ShellSettingsEntry): Disposable {
+      const disposable = getShellRegistry().registerSettingsEntry(info.id, entry)
       disposables.push(disposable)
       return disposable
     },
@@ -216,6 +226,25 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       return openGlobalDialog({ ...options, pluginContext: context! })
     },
   }
+
+  // 已退役扩展点的显性抛错桩（§5.1.3 fail-visible 形态①：旧读路径不得静默降级）
+  //
+  // 为什么保留同名桩而不是直接删干净：旧插件调用时若拿到 undefined，
+  // 崩点会落在插件自己的调用处，报错只说「不是函数」，开发者会误判成自己写错。
+  // 这里当场抛出并指名扩展点 + 迁移出路，让断链可见、可定位。
+  // 桩不进 UIRegistry 类型——类型面必须让旧调用点**编译期**就红。
+  const retiredUi = (api: string): never => {
+    throw new Error(
+      `[plugin] ui.${api} 已于票 2026-10-10 整面退役：宿主壳只认 ui.registerSurface 一种运行面形态。` +
+        `请改用 registerSurface（应用自持整个运行面，含底部导航与页签），应用内子页用 registerRoute + openPage。`,
+    )
+  }
+  Object.assign(ui, {
+    registerToolboxPage: () => retiredUi('registerToolboxPage'),
+    registerNavTab: () => retiredUi('registerNavTab'),
+    registerTerminalToolbarItem: () => retiredUi('registerTerminalToolbarItem'),
+    registerTerminalView: () => retiredUi('registerTerminalView'),
+  })
 
   // ==================== EventAPI ====================
   const events: EventAPI = {
@@ -287,16 +316,38 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   }
 
   // ==================== I18nAPI ====================
+  /**
+   * 把插件的消息树展平为「完整点分 key → 叶子值」的一层表
+   *
+   * 为什么必须展平（2026-10-14 实测修正）：宿主取文案走 `t('<插件id>.<域>.<键>')`，
+   * vue-i18n 按点号逐段寻路径。插件若把消息写成嵌套对象（如 `{ app: { title: '远程终端' } }`），
+   * 前缀后得到的是**键名带点的对象**（`'com.x.app' → {title}`）——路径寻址在第二段就断了，
+   * 全部文案回退成 key 字面量（实测 terminal-session 整个运行面显示 `com.bedcode.terminal-session.app.title`）。
+   * 展平后每个键都是叶子，路径直达；数组与标量原样保留（vue-i18n 的列表/复数消息不能拆）。
+   */
+  function flattenMessages(
+    source: Record<string, unknown>,
+    prefix: string,
+    out: Record<string, unknown>,
+  ): void {
+    for (const [key, value] of Object.entries(source)) {
+      const fullKey = prefix ? `${prefix}.${key}` : key
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        flattenMessages(value as Record<string, unknown>, fullKey, out)
+      } else {
+        out[fullKey] = value
+      }
+    }
+  }
+
   const i18n: I18nAPI = {
     registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
       const prefixed: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(messages)) {
-        prefixed[`${info.id}.${key}`] = value
-      }
-      const existing = hostI18n.global.getLocaleMessage(locale)
-      hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
+      flattenMessages(messages, info.id, prefixed)
+      // 直接合并新消息，vue-i18n 会自动与现有消息深度合并
+      hostI18n.global.mergeLocaleMessage(locale, prefixed)
     },
     t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n

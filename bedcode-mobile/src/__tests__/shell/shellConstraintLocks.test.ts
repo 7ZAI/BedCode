@@ -199,7 +199,16 @@ describe('L7 壳内自足：不依赖旧界面目录 + 迁移面不得缩水', (
    * **先复制进 `src/shell/composables/**` 或 `src/shell/components/ui/**`**；确实无法
    * 复制（如需与旧线共用一个进程级单例）才允许桥接，并在本表登记具体模块路径 + 理由。
    */
-  const BRIDGE_ALLOWLIST: string[] = []
+  const BRIDGE_ALLOWLIST: string[] = [
+    // 票 2026-10-10：「清除所有数据」是**设备生命周期动作**，入口挂在壳的平台设置屏，
+    // 但实现必须落在宿主——它的清理对象包含设备入场凭据与宿主连接态，
+    // 按 §8「凭据零过境」+ ADR 0033，插件不得触碰（放进应用设置页即为越线）。
+    // 故壳单向调用宿主 composable，非反向依赖；该 composable 是宿主机制而非
+    // 「壳内复制面」，不会随旧 `src/composables/**` 迁移退役而断链——这是本条
+    // 与 L7 原始意图（防复制面断链）的区别，也是允许桥接的依据。
+    // 按**文件**登记（命中串被 scan 截断在 `@/composables/` 处，带不出模块名）
+    'src/shell/components/screens/ShellSettingsScreen.vue',
+  ]
 
   /** 公共组件库：迁移面清单——删文件即测红（防止用「删掉」绕过依赖锁） */
   const REQUIRED_UI_FILES = [

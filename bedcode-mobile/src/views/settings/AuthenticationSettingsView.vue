@@ -1,27 +1,9 @@
 <template>
   <SettingsSubPage :title="$t('settings.authentication.title')">
     <div class="px-4 py-4 space-y-5">
-      <!-- 优先认证方式 -->
-      <section class="space-y-2">
-        <h2 class="settings-section-title">{{ $t('settings.authentication.preferredMethod') }}</h2>
-        <div class="flex gap-2.5">
-          <button
-            v-for="method in authMethods"
-            :key="method.value"
-            class="flex-1 flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-sm font-medium transition-opacity duration-200 active:opacity-80"
-            :class="settings.preferredAuthMethod === method.value
-              ? 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] shadow-[0_1px_4px_color-mix(in_srgb,var(--mobile-accent)_40%,transparent)]'
-              : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] text-[var(--mobile-text-secondary)]'"
-            @click="settings.preferredAuthMethod = method.value"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="method.iconPath" />
-            </svg>
-            {{ $t(method.labelKey) }}
-          </button>
-        </div>
-        <p class="text-xs text-[var(--mobile-text-muted)]">{{ $t('settings.authentication.degradeHint') }}</p>
-      </section>
+      <!-- 票 2026-10-10 批次 C4：本页只保留**平台项**（生物凭证绑定，属安全闸门）。
+           「首选认证方式」是业务设置，真源与 UI 已下沉 terminal-session 的应用内
+           设置页（spec §2），此处删除以免两处实现漂移。 -->
 
       <!-- 生物认证密钥 -->
       <section class="settings-group p-4 space-y-3">
@@ -81,15 +63,18 @@
 
 <script setup lang="ts">
 /**
- * 认证设置二级页面 - 优先认证方式 + 生物凭证绑定/解绑
- * 优先认证方式存于 useMobileSettings（自动持久化）；
+ * 认证设置二级页面 - 生物凭证绑定 / 解绑
+ *
+ * 票 2026-10-10 批次 C4 起本页**只管平台项**：生物凭证是安全面（ADR 0033 认证中心
+ * 自持签发验签，宿主不持凭证材料），绑定/解绑动作属宿主机制面，故留壳。
+ * 原先同页的「首选认证方式」是业务设置，真源与 UI 已下沉 terminal-session。
+ *
  * 生物凭证状态来自 wsGetBiometricKeyStatus，绑定/解绑需已认证连接。
  */
 import { computed, onMounted, ref } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
-import { useMobileSettings } from '@/composables/useMobileSettings'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { useToast } from '@/composables/useToast'
 import {
@@ -99,30 +84,8 @@ import {
 } from '@/composables/useMobileCommands'
 
 const { t } = useI18n()
-const { settings } = useMobileSettings()
 const connection = useMobileConnection()
 const toast = useToast()
-
-// ==================== 优先认证方式 ====================
-
-interface AuthMethodOption {
-  value: 'pairing_code' | 'biometric'
-  labelKey: string
-  iconPath: string
-}
-
-const authMethods: AuthMethodOption[] = [
-  {
-    value: 'pairing_code',
-    labelKey: 'settings.authentication.pairingCode',
-    iconPath: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
-  },
-  {
-    value: 'biometric',
-    labelKey: 'settings.authentication.biometric',
-    iconPath: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z',
-  },
-]
 
 // ==================== 生物凭证状态 ====================
 

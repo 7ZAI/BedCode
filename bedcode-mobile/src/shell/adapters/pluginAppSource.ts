@@ -9,11 +9,8 @@
  * 明确返回 false（宿主据此置灰并说明原因），而不是假装开关生效。
  */
 
-import { defineComponent, h } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { logger } from '@/utils/frontendLogger'
-import PluginViewHost from '@/plugin/components/PluginViewHost.vue'
-import { hasPermissionForApi } from '@/plugin/permission'
 import {
   pluginActivate,
   pluginDeactivate,
@@ -24,7 +21,9 @@ import {
   pluginUninstall,
 } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
-import { getPluginRegistry } from '@/plugin/registry'
+import { toPluginAssetUrl } from '@/plugin/assets'
+import { getShellRegistry } from '@/shell/registry'
+import { iconKindOf } from '../utils'
 import type { PluginInfo } from '@/plugin/types'
 import type { ShellApp, ShellAppSource, ShellAppState, ShellPermissionGrant } from '../types'
 import { isLockedPermission } from '../permissions'
@@ -42,10 +41,6 @@ function isOfficial(info: PluginInfo): boolean {
  *
  * Degraded 归为 running：后端实例仍在、命令可用，只是带降级原因——把它显示成
  * 「已停止」会让用户误以为应用没起来。降级原因经 warn 落日志，不占用 UI 主信息位。
- *
- * 状态值真源 = 宿主 Rust `PluginState` serde camelCase（`types.rs`，
- * `#[serde(tag = "state", rename_all = "camelCase")]`），线上 payload 为小写；
- * 旧前端按 PascalCase 比较命中不了，表现为「应用明明在跑，壳里显示 0 个运行中」。
  */
 function mapState(info: PluginInfo): ShellAppState {
   switch (info.state.state) {
@@ -72,7 +67,7 @@ function mapState(info: PluginInfo): ShellAppState {
 /**
  * 权限清单 → 授予项
  *
- * granted 的口径是「清单声明且已通过审批」：needsApproval 表示尚未人工批准，
+ * granted 的口径是「清单声明且已通过审批」：NeedsApproval 表示尚未人工批准，
  * 其余状态表示审批已完成。这里不编造逐项授予状态——后端没有暴露它。
  */
 function mapPermissions(info: PluginInfo): ShellPermissionGrant[] {
@@ -93,6 +88,12 @@ export function toShellApp(info: PluginInfo): ShellApp {
     description: info.description,
     author: info.author,
     icon: info.icon,
+    // 图片图标：清单里的 icon 是相对插件目录的路径（icon.svg），壳不认识文件系统，
+    // 由本适配器（插件系统侧）解析成 asset protocol URL 后再交给壳
+    iconUrl:
+      iconKindOf(info.icon) === 'image' && info.extensionPath
+        ? toPluginAssetUrl(info.extensionPath, info.icon!.trim())
+        : undefined,
     official: isOfficial(info),
     state: mapState(info),
     permissions: mapPermissions(info),
@@ -177,57 +178,34 @@ export function createPluginAppSource(): ShellAppSource {
     },
 
     /**
-     * 延迟解析运行面：优先插件注册的工具箱页，其次导航 Tab，最后动态路由页。
-     * 插件未激活（未注册任何 UI）时返回 undefined，运行屏渲染空态。
+     * 延迟解析运行面：**只认** `ui.registerSurface` 一个扩展点。
      *
-     * 搬移既有「前端权限快速失败」（src/plugin/permission.ts）：拿到候选组件后，
-     * 先校验该插件是否声明了对应 UI 权限，没声明就不给入口。真源仲裁仍在 Rust 端，
-     * 这里只是前端快速失败——与宿主其它扩展点入口同一口径。
+     * 票 2026-10-10 批次 C1：这里原有 terminalView → toolbox → navTab → route
+     * 四级回退链，是「壳用旧宿主的插件形式加载页面」的实际代码。现已退役——
+     * 应用在壳内的运行面只有一个形态：由应用自持的 `registerSurface`。
      *
-     * 返回的组件经 PluginViewHost 包一层：插件组件靠 inject('pluginContext') 拿上下文，
-     * 直接渲染会拿到 undefined。包壳这件事属于「插件形态的细节」，因此收在适配器内，
-     * 不外泄到壳的通用渲染路径。
+     * 为什么必须删干净而不是降级为「优先 surface」：
+     * - 回退链让应用可以只注册一个内嵌片段就被壳当成整个应用的主面，
+     *   壳因此要认识 toolbox/navTab/terminalView/route 四种插件形态——正是本票要拆的耦合；
+     * - 且这四级各自带独立权限位，回退即等于「拿到最弱权限也能进主面」。
+     * 现改为 fail-visible：应用未注册 surface 就返回 undefined，运行屏渲染
+     * 「该应用尚未提供运行面」空态并写明原因，不静默找替代面（§5.1.3 形态 ①）。
+     *
+     * `registerSurface` 自身不带 requirePermission（context.ts 已注明：运行面不触发
+     * 任何宿主能力），因此本方法不再做权限预检——预检只属于已退役的旧扩展点。
      */
     resolveSurface(appId: string) {
-      const registry = getPluginRegistry()
-      const terminalView = registry.terminalView.value
-      const toolbox = registry.toolboxViews.value.find((v) => v.pluginId === appId)
-      const navTab = registry.navTabs.value.find((t) => t.pluginId === appId)
-      const route = registry.routes.value.find((r) => r.pluginId === appId)
-
-      const candidate =
-        terminalView && terminalView.pluginId === appId
-          ? { component: terminalView.component, api: 'ui.registerTerminalView', kind: 'terminalView' }
-          : toolbox
-            ? { component: toolbox.component, api: 'ui.registerToolboxPage', kind: 'toolbox' }
-            : navTab
-              ? { component: navTab.component, api: 'ui.registerNavTab', kind: 'navtab' }
-              : route
-                ? { component: route.component, api: 'ui.registerRoute', kind: 'route' }
-                : undefined
-      if (!candidate) return undefined
-
-      const manifest = pluginLoader.getActivePlugin(appId)?.manifest
-      if (manifest) {
-        if (!hasPermissionForApi(manifest.permissions, candidate.api)) {
-          logger.warn(
-            `[ShellAdapter] surface blocked by missing permission: appId=${appId} kind=${candidate.kind} permission=${candidate.api}`,
-          )
-          return undefined
-        }
-      } else {
-        // 取不到清单时不拦截：此时注册表多半也无该插件的注册项，本就会返回 undefined。
-        // 前端快速失败只是 UX，真源裁决在 Rust 端，不在这里制造假阴性。
-        logger.warn(`[ShellAdapter] no active manifest for ${appId}; skip permission precheck`)
+      // 运行面已由 context.ui.registerSurface 写进 ShellRegistry（含 PluginViewHost
+      // 包装），壳的 useShellApps.resolveSurface 会先读那份。此处是插件数据源的兜底：
+      // 仅当应用确实注册过 surface 才补解析，否则交回空态由运行屏显式提示。
+      const surface = getShellRegistry().getApp(appId)?.contributions.surface
+      if (!surface) {
+        logger.warn(
+          `[ShellAdapter] app has no surface registered: appId=${appId}（退役扩展点不再回退，运行屏显示空态）`,
+        )
+        return undefined
       }
-
-      const { component } = candidate
-      return defineComponent({
-        name: `ShellPluginSurface-${appId}`,
-        setup() {
-          return () => h(PluginViewHost, { pluginId: appId, component })
-        },
-      })
+      return surface.component
     },
   }
 }

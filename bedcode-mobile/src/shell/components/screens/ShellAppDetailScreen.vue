@@ -141,17 +141,20 @@
       </div>
 
       <!-- ==================== 操作 ==================== -->
+      <!-- 层级：演示（仅 dev）→ 停用（次要）→ 卸载（危险，描边而非淡粉底：淡粉底在浅色主题下
+           看起来像 disabled 按钮，反而弱化了危险性） -->
       <div class="px-4 pt-3 flex flex-col gap-2.5">
         <button
+          v-if="isDevBuild"
           type="button"
-          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+          class="w-full rounded-[10px] border border-dashed border-[var(--mobile-border-hover)] px-4 py-3 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
           @click="openDemoPrompt"
         >
           {{ t('shell.detail.demoPrompt') }}
         </button>
         <button
           type="button"
-          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
           @click="handleStop"
         >
           {{ t('shell.detail.disable') }}
@@ -159,8 +162,12 @@
         <button
           v-if="canRemove"
           type="button"
-          class="w-full rounded-[10px] px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
-          :style="{ background: 'var(--mobile-error-muted)', color: 'var(--mobile-error)' }"
+          class="w-full rounded-[10px] border px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+          :style="{
+            borderColor: 'var(--mobile-error)',
+            color: 'var(--mobile-error)',
+            background: 'transparent',
+          }"
           @click="confirmRemove = true"
         >
           {{ t('shell.detail.uninstall') }}
@@ -230,6 +237,9 @@ const {
 /** 应用 id 来自导航参数（壳内导航不落 URL） */
 const appId = computed(() => nav.params.value.appId ?? '')
 const app = computed(() => getApp(appId.value))
+
+/** 演示入口只在 dev 构建出现：它是开发期验证运行时授权弹窗的手动入口，不是产品功能 */
+const isDevBuild = import.meta.env.DEV
 
 const permissionControlEnabled = computed(() =>
   appId.value ? supportsPermissionControl(appId.value) : false,

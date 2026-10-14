@@ -78,23 +78,46 @@ describe('权限分组', () => {
 
   it('should_coverEveryDeclaredPermissionKey_when_groupDefinitionsComplete', () => {
     // 守卫：新增权限词若忘了归类，会静默掉进「其他」——这里把已归类集合显式钉住，
-    // 便于评审时发现「新词未归类」而不是上线后才发现
+    // 便于评审时发现「新词未归类」而不是上线后才发现。
+    // 词表口径（2026-10-14）：SDK 权限常量全集 + 内置应用清单已声明的权限。
     const covered = new Set(SHELL_PERMISSION_GROUPS.flatMap((g) => g.keys))
     expect([...covered].sort()).toEqual(
       [
+        'auth',
+        'broadcast',
         'bus',
+        'fileservice',
+        'fs:pick',
         'fs:read',
         'fs:write',
+        'mdns',
         'network:http',
+        'notify',
+        'peer',
         'session:read',
         'session:write',
         'storage',
+        'system:open',
         'terminal:output',
+        'transfer',
+        'ui:back',
+        'ui:dialog',
         'ui:input',
         'ui:navtab',
+        'ui:route',
         'ui:settings',
         'ui:toolbox',
+        'ws:client',
       ].sort(),
     )
+  })
+
+  it('should_resolveLocalizedTitleAndDesc_when_permissionIsInVocabulary', () => {
+    // 守卫：归了组但没接文案，界面会裸显英文 code（auth / mdns / ws:client 混排中文）。
+    // 每个已归类权限词都必须能取到 title/desc 的 i18n key。
+    const missing = SHELL_PERMISSION_GROUPS.flatMap((g) => g.keys).filter(
+      (key) => !permissionTitleKey(key) || !permissionDescKey(key),
+    )
+    expect(missing).toEqual([])
   })
 })

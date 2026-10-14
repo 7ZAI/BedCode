@@ -8,7 +8,7 @@
 
         <div v-if="plugins.length === 0" class="settings-group">
           <div class="settings-row justify-center">
-            <span class="settings-label text-[var(--mobile-text-muted)]">{{ $t('settings.egress.empty') }}</span>
+            <span class="settings-label text-[var(--mobile-text-muted)]">{{ $t('settings.egress.strategyEmpty') }}</span>
           </div>
         </div>
 
