@@ -7,7 +7,6 @@
 //! `seen_ids`，跨扫描去重缺失；本用例从宿主入口（`PluginHost::new`）锁住修复。
 
 use super::*;
-use std::sync::Mutex;
 
 
 /// 同 id 同时存在于内置与用户目录：内置条目必须胜出，且激活不得被审批门禁拒绝

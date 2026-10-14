@@ -119,6 +119,10 @@ pub(crate) const FORWARD_STORAGE: &str = "storage";
 /// host-storage / host-fs）+ 宿主面 7（host-events / host-config / host-log /
 /// host-timer / host-app / host-platform / host-crypto）+ 互调 2
 /// （host-bus / host-api-call）。**只减不加**。
+///
+/// 消费方在桌面装配面（`manager/host.rs` 注册表装配）；移动形态不消费，
+/// 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-storage",
     "host-database",
@@ -207,6 +211,10 @@ fn probe_only_capabilities() -> &'static [(&'static str, &'static [&'static str]
 // ==================== 能力注册表 ====================
 
 /// 能力提供者（二选一装配）
+///
+/// 消费方在桌面装配面（`manager/host.rs` 注册表装配）；移动形态不消费，
+/// 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 enum CapabilityProvider {
     /// 宿主 Rust 原语（桌面 `src-tauri/src/plugin/*`、移动 `host_domains/`
     /// 现状直连实现）
@@ -222,10 +230,15 @@ enum CapabilityProvider {
 ///
 /// std RwLock：临界区仅 map 读/写（不跨 await 持锁），wasm host 同步
 /// 调用栈内可直接读（宿主函数非 async）。
+///
+/// 消费方在桌面装配面（`manager/host.rs` 注册表装配）；移动形态不消费，
+/// 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub struct CapabilityRegistry {
     providers: RwLock<HashMap<String, CapabilityProvider>>,
 }
 
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 impl CapabilityRegistry {
     /// 创建并预登记全部宿主原语能力
     pub fn new() -> Self {
@@ -399,6 +412,10 @@ impl crate::host_api::context::CapabilityProvider for CapabilityRegistry {
 }
 
 /// 能力是否可路由（系统组件可接管）
+///
+/// 消费方在桌面装配面（`manager/host.rs` 依赖检查）；移动形态不消费，
+/// 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub(crate) fn is_routable(name: &str) -> bool {
     routable_capabilities().iter().any(|(cap, _, _)| *cap == name)
 }
@@ -482,6 +499,10 @@ pub(crate) fn forward_storage_delete(
 /// `capability` 由**调用方**（宿主 adapter）取自词汇真源
 /// （`bedcode_discovery_engine::routing::CAPABILITY`）——内核不自持该字面量
 /// （票 02 批次 03）。
+///
+/// 消费方在桌面装配面（`host_api.rs` mdns 再导出 → 桌面宿主 adapter）；移动形态
+/// 不消费（mdns 直连发现引擎），单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn forward_mdns_browse(
     cap: &dyn crate::host_api::context::CapabilityScope,
     capability: &str,
@@ -496,6 +517,7 @@ pub fn forward_mdns_browse(
 }
 
 /// `host-mdns.stop-browse` 路由（语义同 [`forward_mdns_browse`]）
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn forward_mdns_stop_browse(
     cap: &dyn crate::host_api::context::CapabilityScope,
     capability: &str,
@@ -510,6 +532,7 @@ pub fn forward_mdns_stop_browse(
 }
 
 /// `host-mdns.advertise` 路由（语义同 [`forward_mdns_browse`]）
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn forward_mdns_advertise(
     cap: &dyn crate::host_api::context::CapabilityScope,
     capability: &str,
@@ -524,6 +547,7 @@ pub fn forward_mdns_advertise(
 }
 
 /// `host-mdns.stop-advertise` 路由（语义同 [`forward_mdns_browse`]）
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn forward_mdns_stop_advertise(
     cap: &dyn crate::host_api::context::CapabilityScope,
     capability: &str,
@@ -538,6 +562,7 @@ pub fn forward_mdns_stop_advertise(
 }
 
 /// `host-mdns.is-advertising` 路由（语义同 [`forward_mdns_browse`]）
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn forward_mdns_is_advertising(
     cap: &dyn crate::host_api::context::CapabilityScope,
     capability: &str,

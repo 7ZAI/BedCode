@@ -176,12 +176,9 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 [dev-dependencies]
 tempfile = "3"
-# 测试 harness（§4.5）起 HTTP+WS 服务器（`host_harness`，`cfg(all(test,
-# desktop-assembly))`）——`network.port` 的 ServerSupervisor 读取已随端事实收口
-# 迁桌面宿主（`src-tauri/src/plugin/host_facts.rs`），本 crate 生产段不再需要
-# server-core（`crate_boundary_lock` 的必填边已同步摘除）。
-# dev-deps 无 optional 机制；依赖图门禁跑 `--edges no-dev` 口径（生产图不含）
-bedcode-server-core = { path = "../bedcode-server-core" }
+# 测试 harness（§4.5）宿主已随模块删除（host_harness.rs 真死，2026-10）——
+# 原 harness 起 HTTP+WS 服务器消费 bedcode-server-core；无消费方后该 dev-dep
+# 边摘除（依赖图门禁 `--edges no-dev` 口径不受影响）
 actix-web = "4"
 # 测试夹具构建器（manager/runtime/fixture_build.rs）
 flume = "0.12"

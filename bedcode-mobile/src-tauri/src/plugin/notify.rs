@@ -20,9 +20,7 @@
 use bedcode_host_kit::{HostModule, HostModuleDesc, ModuleEntry, WasmPluginState};
 use bedcode_plugin_api_mobile::permission::PERMISSION_NOTIFY;
 
-use crate::plugin::bindings::{bedcode, check_permission, guarded};
-use bedcode_wasm_core::host_api::ports::HostEnginePorts;
-use bedcode_wasm_core::runtime_util::block_on_async;
+use crate::plugin::bindings::{bedcode, check_permission};
 
 bedcode_host_kit::expect_host_module!(MODULE_NAME);
 

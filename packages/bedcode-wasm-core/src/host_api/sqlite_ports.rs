@@ -8,7 +8,6 @@
 //! | 方法 | 为什么需要它 |
 //! | --- | --- |
 //! | [`SqlitePorts::check_permission`] | 权限门（`storage`——主库位 `database:main` 已随 2026-10-09 host-database 退役）是**宿主安全闸门**（AGENTS §5.1.3 四类薄壳之二），判定与拒绝 `warn` 只在宿主一处 ⇒ 域只问结果 |
-//! | [`SqlitePorts::main_db`] | 主库共享句柄：内核与**全部**插件共用一条连接 + 一把全局 `Mutex`（慢查询会阻塞内核全部 DB 读写——这正是本域超时护栏存在的原因）。句柄形状由上下文持有，域只拿 `Arc` |
 //! | [`SqlitePorts::plugin_db`] | 插件私有库句柄（每插件独立库 / 独立连接，**懒创建**：目录根来自 `app_data_dir()/plugins/<id>` 或无头测试注入的根）。创建是 async 且属宿主策略，故经端口要 |
 //! | [`SqlitePorts::block_on_any`] | 同步↔异步桥：guest 侧 host function 是同步的，而取句柄/加锁是 async。**桥的实现在宿主**（`runtime_util::block_on_async`，wasmtime-wasi ambient runtime 与 actix `current_thread` 自锁规避是实测产物），本域不复制第二份 |
 //! | [`SqlitePorts::forward_storage_get`] / `_set` / `_delete` | 能力路由（core-plugin-manager）：`host-storage` 能力由系统组件提供时按调用方命名空间转发到它的同形导出，否则 `None` ⇒ 走宿主原语。**返回 `Option`** 是契约的一部分（`None` = 无提供者，不是错误） |
@@ -62,6 +61,8 @@ pub type PluginDbFuture<'a> =
 ///
 /// 实现方有二：生产适配器 [`super::sqlite::HostSqlitePorts`]（包宿主上下文）与测试
 /// 假端口 [`super::sqlite_scaffold::FakePorts`]。实现应尽量轻——每次原语调用都要经它。
+/// 主库句柄访问器已随 host-database 退役删除（主库由内核直接管理，不进端口面）；
+/// 本 trait 其余方法见文件头表格。
 pub trait SqlitePorts: Send + Sync {
     /// 权限判定（`storage`；主库位 `database:main` 已随 host-database 退役）
     ///
@@ -70,9 +71,6 @@ pub trait SqlitePorts: Send + Sync {
     /// 权限管理器时（无头 / 测试）**必须返回 false**（fail-safe，与既有
     /// `host_api::check_permission` 同向）。
     fn check_permission(&self, plugin_id: &str, permission: &str, api: &str) -> bool;
-
-    /// 主库共享句柄（内核 + 全部插件共用一条连接 + 一把全局锁）
-    fn main_db(&self) -> Arc<std::sync::Mutex<Database>>;
 
     /// 取（或懒创建）某插件的私有库句柄
     ///

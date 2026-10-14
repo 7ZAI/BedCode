@@ -172,7 +172,7 @@ fn register_async_host_probe(linker: &mut Linker<ProbeState>) {
         .expect("host-probe linker instance")
         .func_wrap_async(
             "invoke",
-            |mut store: StoreContextMut<'_, ProbeState>, (mode,): (String,)| {
+            |store: StoreContextMut<'_, ProbeState>, (mode,): (String,)| {
                 let control = store.data().control.clone();
                 Box::new(async move { Ok((invoke_mode(control, mode).await,)) })
                     as Box<dyn Future<Output = wasmtime::Result<(Result<String, String>,)>> + Send>

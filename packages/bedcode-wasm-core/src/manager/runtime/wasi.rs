@@ -178,6 +178,11 @@ pub(crate) fn build_ctx(
 /// 纯字符串处理（`${home}` 展开 + 剥尾部分隔符 + 滤空），不查授权、不依赖
 /// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
 /// （[`resolve_preopen_dirs`] 在此基础上再过滤未授权项）。
+///
+/// 消费方在桌面装配面（`manager/host/preauth.rs`：移动宿主不经 host.rs 的
+/// preauthorize 编排，files 授权直连 host_api/fs）；移动形态不消费，单形态
+/// 共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[WasiPreopenDir]) -> Vec<WasiPreopenDir> {
     expand_preopen_declarations_with_home(plugin_id, declared_dirs, None)
 }

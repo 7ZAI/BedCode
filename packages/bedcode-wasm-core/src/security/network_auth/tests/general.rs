@@ -1,6 +1,5 @@
 //! general — crate 内单元测试（自 bedcode-desktop/src-tauri/src/wasm_core/security/network_auth.rs 迁出）
 
-use super::scaffold::*;
 use super::*;
 
 /// C6 正例：`HTTPS://API.X.com:443/` 与 `https://api.x.com` 归一到同一条记录

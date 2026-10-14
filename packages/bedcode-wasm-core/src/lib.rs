@@ -73,11 +73,6 @@ pub mod config;
 pub mod contract;
 /// 引擎面：宿主主库（schema.sql 单一事实源，ADR 0036「机制与真源同侧」）
 pub mod db;
-/// 测试 harness（§4.5）：crate 内测试起 HTTP+WS 服务器的薄壳（lib 组合根不可引用）。
-/// 桌面专属装配面（`desktop-assembly`）：起服依赖 bedcode-server-core——移动形态
-/// 无 HTTP/WS 服务端测试 harness。
-#[cfg(all(test, feature = "desktop-assembly"))]
-pub(crate) mod host_harness;
 /// crate 边界锁共享面（票 05 落点）：拆分产物登记表 + 扫描根单一事源上提本 crate
 ///
 /// 常编译（非 `#[cfg(test)]`）：lib 侧 `server/crate_boundary_lock.rs` 在**非 test

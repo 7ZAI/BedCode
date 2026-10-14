@@ -50,7 +50,6 @@ pub use system::{AppConfig, AppContext, AppError, Result};
 use db::Database;
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::Mutex;
 
 /// 删除当天已存在的日志文件（仅 dev 构建调用）
 ///

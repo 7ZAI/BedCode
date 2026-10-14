@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Listener};
+use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::state::get_connection_manager;

@@ -543,6 +543,11 @@ pub(crate) fn trapped(
 ///
 /// 覆盖 `invoke`（返回 JSON 串）/ `manifest.get` / 可选导出的 TypedFunc 调用
 /// 等形状：只有「投递成功 / 调用级失败」两种结果。
+///
+/// 防回接锁保留（engine.rs 锁测试 NEEDLES 钉住 `fn settle_guest_event(` 源码
+/// 存在；settle / settle_guest 为同族结果判定机制一并保留，无运行时调用方）：
+/// 当前 engine 路径在调用点直接 match outcome，未挂靠这三个 helper。
+#[allow(dead_code)]
 pub(crate) fn settle<T>(
     store: &Store<WasmPluginState>,
     export: &str,
@@ -555,6 +560,7 @@ pub(crate) fn settle<T>(
 ///
 /// 宿主流程依赖该结果（activate / invoke / on_startup …）：guest 返回
 /// `Err(msg)` 即上抛，驱动插件 Degraded 状态机。
+#[allow(dead_code)]
 pub(crate) fn settle_guest<T>(
     store: &Store<WasmPluginState>,
     export: &str,
@@ -572,6 +578,7 @@ pub(crate) fn settle_guest<T>(
 /// 事件投递是 fire-and-forget：guest 报 `Err(msg)` 只记 warn 并返回 Ok——
 /// 否则一个处理失败的消息处理器会让整条事件分发链失败。调用级失败（外层 Err）
 /// 仍然上抛：那是 trap，属宿主侧问题。
+#[allow(dead_code)]
 pub(crate) fn settle_guest_event(
     store: &Store<WasmPluginState>,
     export: &str,

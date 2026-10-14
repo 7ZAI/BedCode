@@ -71,6 +71,8 @@ impl crate::conn::ChannelHandler for StubChannel {
 }
 
 /// 把条目列表转成测试用 HashMap
+/// 当前无调用者（scaffold 通用工具，供未来用例）；保持主题化：测试脚手架常驻
+#[allow(dead_code)]
 pub(super) fn entries_map(entries: Vec<(String, WsSessionEntry)>) -> HashMap<String, WsSessionEntry> {
     entries.into_iter().collect()
 }

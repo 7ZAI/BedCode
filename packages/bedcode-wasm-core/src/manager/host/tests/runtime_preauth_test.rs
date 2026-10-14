@@ -1,5 +1,6 @@
 //! 运行期错误通知节流 + 事件信封形状 + fs 预授权（preauth）用例。
 
+use crate::manifest::WasiPreopenDir;
 use super::super::errors::{
     runtime_error_code, runtime_error_envelope, self_check_envelope, PLUGIN_RECOVERY_FAILED_CODE,
     PLUGIN_SELF_CHECK_FAILED_CODE, PLUGIN_TRAP_CODE,

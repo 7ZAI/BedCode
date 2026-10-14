@@ -43,9 +43,13 @@ const CLOSE_AUTH_FAILED: u16 = 4001;
 const CLOSE_BACKPRESSURE: u16 = 1013;
 
 /// 插件端点首消息认证帧（D8：宿主自有的极小契约，不引入 `message.rs` 类型）
+///
+/// `frame_type` 字段仅测试读取（`auth_mode_follows_endpoint`），生产路径按
+/// 帧内容判别走 `token`；保留字段以承载 wire 上的 `type` 键（契约面）
 #[derive(Debug, serde::Deserialize)]
 struct AuthFrame {
     #[serde(rename = "type")]
+    #[allow(dead_code)] // wire 契约字段：反序列化必需，测试断言用
     frame_type: String,
     token: String,
 }

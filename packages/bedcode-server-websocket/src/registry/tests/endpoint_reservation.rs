@@ -1,6 +1,5 @@
 //! 端点域寻址 / 属主回收 / 按端点断开 — crate 内单元测试（自 packages/bedcode-server-websocket/src/registry.rs 迁出）
 
-use super::*;
 use super::scaffold::*;
 
 #[test]

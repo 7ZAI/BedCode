@@ -714,7 +714,6 @@ dependencies = [
  "bedcode-peer-net",
  "bedcode-plugin-api",
  "bedcode-server-base",
- "bedcode-server-core",
  "bedcode-server-http",
  "bedcode-server-peer-net",
  "bedcode-server-websocket",

@@ -16,7 +16,6 @@ use crate::system::constants::plugin::PLUGIN_DATA_DIR;
 use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::settings::SettingsManager;
 use crate::Result;
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;

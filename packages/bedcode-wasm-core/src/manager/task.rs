@@ -1116,7 +1116,7 @@ mod tests {
     /// 「remaining == 0 即覆写」⇒ 本条转红（Cancelled 被末单元翻回）。
     #[test]
     fn terminal_phase_only_transitions_from_running() {
-        let mut inner = |phase: JobPhase, remaining: usize, failed: usize| JobInner {
+        let inner = |phase: JobPhase, remaining: usize, failed: usize| JobInner {
             owner: "t".to_string(),
             units: vec![PlanUnit {
                 id: "u".to_string(),

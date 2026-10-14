@@ -26,7 +26,6 @@
 //! - `utils/session_gateway.rs`：会话互调窄转发的激活门（[`session_active`]）
 
 use crate::wasm_core::manager::host::PluginHost;
-use crate::wasm_core::manager::runtime::WasmHostContext;
 use crate::wasm_core::runtime_util::block_on_async;
 use bedcode_server_base::identity::AuthenticatedIdentity;
 

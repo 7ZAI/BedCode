@@ -15,12 +15,11 @@ use std::time::Duration;
 
 // ==================== 机制面 re-export（真源 = 共享核；tests 既有路径保符号面） ====================
 
-pub use bedcode_host_api_core::database::{
-    bind_json_params, column_to_json, execute_batch_on_conn, execute_with_params,
-    normalize_sql_token, parse_params_json, parse_sqls_json, push_row_capped, query_to_json,
-    query_with_params_to_json, reject_bare_transaction_control, with_statement_timeout,
-    PermissionGate,
-};
+// tests（`tests/db_guards.rs` / `tests/db_batch.rs`）经本模块路径消费的符号面；
+// 其余共享核符号生产路径一律走 `core_db::` 全限定，不在此 re-export。
+// 非 test 构建无消费者 → cfg_attr 豁免（t 与既有注释「tests 既有路径保符号面」一致）
+#[cfg_attr(not(test), allow(unused_imports))]
+pub use bedcode_host_api_core::database::{query_to_json, reject_bare_transaction_control, with_statement_timeout};
 
 // ==================== 逻辑层（Component Model 绑定调用） ====================
 

@@ -15,8 +15,9 @@
 
 // 中性词汇（票 02 M4）：清单统一取自 crate::manifest；`InstanceLifecycle` /
 // lifecycle 校验是桌面 manifest 专属面（移动 manifest 无 lifecycle 声明），
-// 该校验函数随桌面装配面门控（`desktop-assembly`，语义边界不变）
+// 该校验函数与 import 同随桌面装配面门控（`desktop-assembly`，语义边界不变）
 use crate::manifest::PluginManifest;
+#[cfg(feature = "desktop-assembly")]
 use crate::manifest::InstanceLifecycle;
 
 use crate::security::auth_policy::AuthStrategy;

@@ -37,9 +37,6 @@
 //! `BRIDGE_PUBLIC_SURFACE`。两者都是**显式登记表**，绕过它们直接写代码会让本文件转红，
 //! 这是刻意的：改动必须落在人可见的 diff 里。
 
-use super::scaffold::*;
-use super::*;
-
 /// 允许触碰 L2 桥接面（`utils::auth::auth_center`）的宿主模块 —— 约束①白名单
 ///
 /// 逐条理由：

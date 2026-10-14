@@ -2,9 +2,7 @@
 
 use super::*;
 
-use crate::endpoint::{register, EndpointAuth};
-use std::net::SocketAddr;
-use std::sync::Arc;
+use crate::endpoint::EndpointAuth;
 
 #[test]
 fn auth_mode_follows_endpoint_declaration() {

@@ -184,8 +184,9 @@ dbus = "0.9"
 # 的 =2.0.2 一致（tauri-runtime-wry → wry 传递依赖，声明为直接依赖不改变解析）
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
-# WDIO E2E 测试插件：仅 debug 构建编译/注册（release 不含测试插件，见 lib.rs 的 cfg(debug_assertions) 注册）
-[target.'cfg(debug_assertions)'.dependencies]
+# WDIO E2E 测试插件：注册仍由 lib.rs 的 cfg(debug_assertions) 门控（release 只编译不注册）。
+# 不置于 [target.'cfg(debug_assertions)'.dependencies]：cargo 不支持用 debug_assertions
+# 选择依赖（会产生 manifest warning 且不按预期工作），故放普通依赖 + 代码层门控。
 tauri-plugin-wdio = "1"
 
 [dev-dependencies]

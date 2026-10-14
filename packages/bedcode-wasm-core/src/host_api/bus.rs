@@ -147,6 +147,10 @@ pub(crate) fn bus_unsubscribe(bus: &dyn BusScope, plugin_id: &str, topic: &str) 
 /// 与共享核互调门读同一张注册表（`ApiCallAuthorizer` 的命中判定即
 /// `registry.contains`），故「门禁放行」与「取到属主」不会漂移。
 /// 回复道 / 公开 topic → `None`（无属主可校验）。
+///
+/// 消费方在桌面装配面（`host_api/api.rs`）；移动形态互调走宿主侧编排，
+/// 不消费——单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub(crate) fn api_gate_target_owner(reg: &dyn ApiRegistryScope, request_topic: &str) -> Option<String> {
     let api = request_topic.strip_prefix(core_bus::API_TOPIC_PREFIX)?;
     if api.starts_with("reply.") {

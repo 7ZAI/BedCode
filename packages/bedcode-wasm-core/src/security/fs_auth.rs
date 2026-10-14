@@ -1400,24 +1400,6 @@ mod tests {
         )
     }
 
-    /// 最近一次弹窗事件（无事件即 panic——用「弹过窗」当前置条件时必须显性失败）
-    fn last_prompt(log: &EmittedLog) -> serde_json::Value {
-        log.lock()
-            .expect("emit log poisoned")
-            .last()
-            .map(|(_, payload)| payload.clone())
-            .expect("no fs-auth prompt was emitted")
-    }
-
-    /// 最近一次弹窗的 request_id（用例据此应答）
-    fn last_request_id(log: &EmittedLog) -> String {
-        last_prompt(log)
-            .get("requestId")
-            .and_then(|v| v.as_str())
-            .expect("prompt payload carries requestId")
-            .to_string()
-    }
-
     /// 等弹窗 payload 出现（真实链路：判定 → emit → 待应答）
     async fn wait_for_prompt(log: &EmittedLog) -> serde_json::Value {
         for _ in 0..400 {

@@ -5,8 +5,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::system::constants::auth::MIN_PLUGIN_TOKEN_LEN;
-
 /// 全局配置单例
 static CONFIG_INSTANCE: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
@@ -297,11 +295,6 @@ impl AppConfig {
     /// 应在应用启动时调用，传入从文件加载的配置
     pub fn init(config: AppConfig) {
         let _ = CONFIG_INSTANCE.set(config);
-    }
-
-    /// 生成随机 token（UUID v4 去连字符，32 字符 hex）
-    fn generate_token() -> String {
-        uuid::Uuid::new_v4().to_string().replace('-', "")
     }
 
     /// 获取全局配置实例

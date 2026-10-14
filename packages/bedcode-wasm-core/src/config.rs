@@ -161,6 +161,9 @@ pub enum CallModel {
 
 impl CallModel {
     /// 诊断/日志用的稳定名字（与配置文件取值一致）
+    /// 消费方在桌面装配面（`manager/host/wasm.rs` 日志字段）；移动形态不消费
+    ///（移动 host 不经 host.rs 编排），单形态共享故保留 + 按形态豁免
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Mutex => "mutex",

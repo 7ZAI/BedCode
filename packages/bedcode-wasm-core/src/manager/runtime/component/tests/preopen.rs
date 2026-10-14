@@ -157,7 +157,7 @@ fn expand_preopen_declarations_expands_and_keeps_ungranted() {
 /// 只带路径不带档位时，只读声明会在到达 preopen 之前退化成可写
 #[test]
 fn expand_preopen_declarations_keeps_read_only_tier() {
-    let Some(home) = dirs::home_dir() else {
+    let Some(_home) = dirs::home_dir() else {
         return; // 无主目录环境跳过
     };
     let out = expand_preopen_declarations(

@@ -32,16 +32,6 @@ pub(crate) async fn cancel_peer_receiving(app: AppHandle, batch_id: String) -> c
     bedcode_server_peer_net::cancel_receiving_for_plugin(peer_ctx(&app), batch_id).await
 }
 
-/// 暂停接收批（对端数据供方门控推流；连接保持、断点不丢）
-pub(crate) async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    bedcode_server_peer_net::peer_engine_receive::pause_peer_receiving(peer_ctx(&app), batch_id).await
-}
-
-/// 恢复暂停的接收批（写 Resume 帧续流）
-pub(crate) async fn resume_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    bedcode_server_peer_net::peer_engine_receive::resume_peer_receiving(peer_ctx(&app), batch_id).await
-}
-
 /// 更新接收策略与询问超时（校验在能力域；运行中节点热生效）。
 /// 真入口 = host-peer `set-receive-policy`，设置真源在插件侧
 pub(crate) async fn set_peer_receive_policy(app: AppHandle, mode: String, timeout_secs: u64) -> crate::Result<()> {

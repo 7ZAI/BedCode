@@ -10,7 +10,6 @@ use crate::wasm_core::PluginHost;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
-use std::sync::Mutex;
 
 /// 桌面端全局服务容器
 ///

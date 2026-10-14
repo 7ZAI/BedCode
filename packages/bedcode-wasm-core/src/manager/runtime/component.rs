@@ -201,6 +201,10 @@ pub(crate) struct InstanceMeta {
 ///
 /// 与 store 内同一批句柄同源：`mutex` 模型在调用栈内直接读 store 数据，
 /// `event-loop` 模型在进入属主作用域前一次性取出（作用域内只能拿到 `&Accessor`）。
+///
+/// 消费方在桌面装配面（`manager/host` 属主路径）；移动形态不消费，
+/// 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub(crate) struct OptionalExports {
     pub(crate) on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
@@ -324,6 +328,10 @@ impl LoadedWasmPlugin {
     }
 
     /// 实例元数据引用（宿主侧只读投影；调用模型两侧共用）
+    ///
+    /// 消费方在桌面装配面（`manager/host` 属主路径）；移动形态不消费，
+    /// 单形态共享故保留 + 按形态豁免
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn meta(&self) -> &InstanceMeta {
         &self.meta
     }
@@ -335,21 +343,25 @@ impl LoadedWasmPlugin {
     // 燃料规格、可选导出句柄（Copy）。
 
     /// 组件实例句柄（Copy；`get_typed_func` / `start_call_concurrent` 用）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn instance_handle(&self) -> Instance {
         self.instance
     }
 
     /// Store 可变引用（属主任务以 `&mut store` 调 `run_concurrent`，常驻作用域）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn store_mut(&mut self) -> &mut Store<WasmPluginState> {
         &mut self.store
     }
 
     /// 插件指标句柄（调用计时 / 生命周期记账 / 燃料记账入口）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn metrics(&self) -> Arc<crate::monitor::PluginMetrics> {
         self.store.data().metrics.clone()
     }
 
     /// 燃料规格快照 `(enabled, budget)`（Store 内已固化，实例生命周期内不变）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn fuel_spec(&self) -> (bool, u64) {
         let state = self.store.data();
         (
@@ -361,6 +373,7 @@ impl LoadedWasmPlugin {
     }
 
     /// 可选导出句柄快照（v11 / v14 / v20 动态探测结果；未导出 → None）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn optional_exports(&self) -> OptionalExports {
         let state = self.store.data();
         OptionalExports {
@@ -891,6 +904,7 @@ impl LoadedWasmPlugin {
     /// 本 crate——燃料 / limiter 记账断言随用例迁宿主机后经
     /// `crate::test_support::plugin_raw_store` 转发消费（该模块是宿主测试的
     /// 唯一转发面，生产跨 crate 仍不可达：pub(crate)）。
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn raw_store(&mut self) -> (&mut Store<WasmPluginState>, &Instance) {
         (&mut self.store, &self.instance)
     }

@@ -78,6 +78,9 @@ pub use component::LoadedWasmPlugin;
 // （`src-tauri/tests/pty_wiring.rs` 的双向比对）必须用同一份合并结果，不得各拼一份。
 pub use component::host_module_whitelist;
 // 票 06：实例元数据与可选导出句柄快照（调用模型两侧共用的只读投影）
+// 消费方在桌面装配面（`manager/host.rs` / 属主路径）：移动形态经宿主侧装配，
+// 不消费本 re-export——单形态共享故保留 + 按形态豁免 unused
+#[cfg_attr(not(feature = "desktop-assembly"), allow(unused_imports))]
 pub(crate) use component::{InstanceMeta, OptionalExports};
 
 // ==================== 宿主上下文（票 04 迁移 host_api::context） ====================
@@ -92,8 +95,12 @@ pub use crate::host_api::context::{CapabilityProvider, PluginServices, ProcessRe
 pub use bedcode_host_kit::state::{StoreSpec, WasmPluginState};
 
 // 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
+// 消费方在桌面装配面（`manager/host/preauth.rs`）；移动形态不消费——按形态豁免 unused
+#[cfg_attr(not(feature = "desktop-assembly"), allow(unused_imports))]
 pub(crate) use crate::manager::runtime::wasi::expand_preopen_declarations;
 /// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
+/// 消费方同上（桌面装配面）；移动形态不消费——按形态豁免 unused
+#[cfg_attr(not(feature = "desktop-assembly"), allow(unused_imports))]
 pub(crate) use crate::manager::runtime::wasi::resolve_preopen_dirs;
 
 // ==================== 资源限制 & 中断 ====================
@@ -595,6 +602,10 @@ impl WasmRuntime {
     /// 本 crate，而引擎生效配置断言（逃生舱覆盖项）恰是迁宿主用例的组成部分——
     /// 经 `crate::test_support::runtime_engine` 转发消费（该模块是宿主测试的
     /// 唯一转发面，生产跨 crate 仍不可达：pub(crate)）。
+    ///
+    /// 移动形态（default-features=false）不编译 test_support 面故无消费；
+    /// 单形态共享故保留 + 按形态豁免（测试形态仍经转发面消费）
+    #[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
     pub(crate) fn engine(&self) -> &Engine {
         &self.engine
     }

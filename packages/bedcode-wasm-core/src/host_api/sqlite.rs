@@ -9,7 +9,7 @@
 //! | 端口方法 | 留在宿主的原因 |
 //! | --- | --- |
 //! | `check_permission` | 权限判定是**安全闸门**：同一份 `PermissionManager`、同一条拒绝 `warn` 路径（结构化字段 `plugin_id` / `permission` / `api`），不另起一套判定 |
-//! | `main_db` / `plugin_db` | 句柄的**持有与懒创建策略**：主库是内核与全部插件共用的单一连接；私有库的目录根来自 `app_data_dir()/plugins/<id>`（或无头测试注入的根），策略不进域 |
+//! | `main_db` / `plugin_db` | 句柄的**持有与懒创建策略**：主库由内核直接管理（`main_db` 句柄方法已随 host-database 退役删除，主库不进端口面）；私有库的目录根来自 `app_data_dir()/plugins/<id>`（或无头测试注入的根），策略不进域 |
 //! | `block_on_any` | 宿主那份唯一的同步↔异步桥（wasmtime-wasi ambient runtime + actix `current_thread` 自锁规避是实测产物），**不得复制第二份** |
 //! | `forward_storage_*` | 能力路由（core-plugin-manager 的系统组件实例寻址与 trap 隔离）属宿主机制 |
 //! | `storage_*` | 宿主 `PluginStorage` 是**宿主服务对象**（审批记录 / 预授权路径等 15 处消费方，且它带一条 `pub(crate)` 的裸主库句柄访问器纪律），不为三个原语把它交给域 |
@@ -27,9 +27,6 @@
 //! 回收的资源（插件私有库的连接与目录始终归宿主生命周期）。
 
 use std::any::Any;
-use std::sync::Arc;
-
-use crate::db::Database;
 use crate::host_api::context::{StorageScope, WasmHostContext};
 use crate::host_api::sqlite_ports::{BoxedBlocked, PluginDbFuture, SqlitePorts};
 use crate::manager::capability;
@@ -70,11 +67,7 @@ impl SqlitePorts for HostSqlitePorts<'_> {
         super::check_permission(self.ctx, plugin_id, permission, api)
     }
 
-    fn main_db(&self) -> Arc<std::sync::Mutex<Database>> {
-        self.ctx.database().clone()
-    }
-
-    fn plugin_db(&self, plugin_id: String) -> PluginDbFuture {
+    fn plugin_db(&self, plugin_id: String) -> PluginDbFuture<'_> {
         // 懒创建策略（目录根二选一 + 缓存登记）整段留在宿主：域只拿到句柄。
         // future 借用上下文（`'a` 生命周期由端口 trait 传递），无需克隆任何东西。
         let ctx = self.ctx;

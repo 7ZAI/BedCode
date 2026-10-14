@@ -16,7 +16,7 @@ use crate::manager::runtime::{InstanceMeta, LoadedWasmPlugin, WasmHostContext, W
 use crate::manager::types::{HostPluginInfo, LoadedPlugin, PluginSource};
 use crate::permission::PermissionManager;
 use crate::storage::PluginStorage;
-use crate::manifest::{PluginKind, PluginState, WasiPreopenDir, WsEndpointContribution};
+use crate::manifest::{PluginKind, PluginState};
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

@@ -31,6 +31,9 @@ const HEADLESS_NO_PLUGIN_DB: &str = "Plugin error: plugin database unavailable i
 /// 测试替身端口
 pub(super) struct FakePorts {
     /// 主库（内存库，`init_schema` 跑过 ⇒ 表结构与生产一致）
+    /// 随 host-database 退役（main_db 端口方法已删）字段只作 `new()` 表结构基建，
+    /// 无读取方——保留不删（表结构一致性是既有测试依赖的隐性前提）
+    #[allow(dead_code)]
     db: Arc<std::sync::Mutex<Database>>,
     /// 已授予的 (属主, 权限位)
     granted: StdMutex<HashSet<(String, String)>>,
@@ -142,10 +145,6 @@ impl SqlitePorts for FakePorts {
             .lock()
             .expect("granted lock")
             .contains(&(plugin_id.to_string(), permission.to_string()))
-    }
-
-    fn main_db(&self) -> Arc<std::sync::Mutex<Database>> {
-        Arc::clone(&self.db)
     }
 
     fn plugin_db<'a>(&'a self, plugin_id: String) -> PluginDbFuture<'a> {

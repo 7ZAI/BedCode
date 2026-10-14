@@ -8,7 +8,7 @@ use crate::host_api::context::WasmHostContext;
 use crate::host_api::unit_executor::UnitExecutor;
 use crate::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
 use crate::runtime_util::block_on_async;
-use crate::security::fs_auth::{FsOp, FsOps};
+use crate::security::fs_auth::FsOps;
 use std::sync::Arc;
 
 // ==================== 任务单元执行器（C4：core-task 经注册表分发到域实现） ====================
@@ -381,6 +381,11 @@ pub fn fs_read_dir(
 ///
 /// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file 控制器
 /// 同语义：canonicalize 后校验前缀在根目录内）。
+///
+/// 消费方在桌面装配面（`host_api.rs` 再导出 → 桌面宿主 `plugin/fs.rs`）；移动形态
+/// 经 fs_mobile 域直连实现，不消费本函数——单形态共享故保留 + 按形态豁免。
+/// 防回接锁（lib.rs 锁测试）钉住源码文本 `pub fn fs_canonicalize`，不得删除。
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub fn fs_canonicalize(
     sec: &dyn crate::host_api::context::SecurityScope,
     plugin_id: &str,

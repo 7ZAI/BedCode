@@ -197,6 +197,10 @@ where
 /// 直接嵌套 AMBIENT_RT.block_on 会得到 Tokio 难以阅读的
 /// "Cannot start a runtime from within a runtime"；这里显式 panic 并点名
 /// 约束（R-04）：此类重入是实施错误，不应静默发生。
+///
+/// 消费方在桌面装配面（`manager/host.rs` 属主路径）：移动形态不消费，
+/// wasm-core 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub(crate) fn block_on_ambient<F>(fut: F) -> F::Output
 where
     F: std::future::Future + Send,

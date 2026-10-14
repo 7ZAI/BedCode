@@ -346,7 +346,7 @@ pub(crate) fn process_run_sync(
     let timeout_ms = request.timeout_ms.max(1);
     let command = request.command.clone();
     let result = block_on_async(async move {
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| format!("process error: spawn '{}' failed: {}", command, e))?;
         // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）

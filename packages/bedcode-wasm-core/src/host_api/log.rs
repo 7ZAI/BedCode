@@ -9,6 +9,9 @@
 //! target 命名统一为共享核 `bedcode_host_api_core::plugin_log`（原桌面
 //! `bedcode_desktop_lib::wasm_core::plugin_log` 无过滤消费者，实测）。
 
-pub use bedcode_host_api_core::log::{
-    capture, log_debug, log_error, log_info, log_warn, plugin_log_metadata, LOG_TARGET,
-};
+pub use bedcode_host_api_core::log::{log_debug, log_error, log_info, log_warn};
+// `plugin_log_metadata` / `LOG_TARGET` 无任何消费者（含宿主），不再 re-export
+// `capture` 单独拆行：只被桌面装配面 / test-support 的测试基建（engine_config /
+// engine_limits 消费）引用——单形态共享故保留，按形态豁免 unused
+#[cfg_attr(not(any(feature = "desktop-assembly", feature = "test-support")), allow(unused_imports))]
+pub use bedcode_host_api_core::log::capture;

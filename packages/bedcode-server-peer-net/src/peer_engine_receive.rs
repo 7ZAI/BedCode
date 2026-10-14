@@ -82,12 +82,10 @@ impl PeerTransferSettings {
 
 /// 等待应答的询问条目：oneshot 回执 + 投影所需询问事实（纯引擎事实）
 pub(crate) struct PendingOffer {
-    pub node_id: NodeId,
     pub total_size: u64,
     pub ts_ms: u64,
     pub reply: tokio::sync::oneshot::Sender<bool>,
 }
-
 /// Tauri 托管的接收侧状态容器（票 3 终态：回执表 + 处理器句柄）
 ///
 /// - `pending`：等待宿主应答的询问回执（batch_id → 引擎 oneshot + 询问事实）；
@@ -112,12 +110,6 @@ fn current_settings(ctx: &PeerCtx) -> PeerTransferSettings {
     let state = &ctx.receive;
     let mut guard = state.settings.lock().expect("peer receive settings lock poisoned");
     guard.get_or_insert_with(PeerTransferSettings::default).clone()
-}
-
-/// 惰性加载本次节点生命周期的引擎配置（`register_handler` 装配基底用）。
-/// 业务设置由 file-transfer 插件私有库持有，宿主不再读取旧 transfer_settings.json。
-pub(crate) async fn ensure_settings_loaded(ctx: &PeerCtx) -> PeerTransferSettings {
-    current_settings(ctx)
 }
 
 /// 生效落点解析：覆盖值优先，否则桌面缺省 Downloads\BedCode\
@@ -253,7 +245,6 @@ async fn register_offer(
         .insert(
             batch_id.clone(),
             PendingOffer {
-                node_id: remote.clone(),
                 total_size,
                 ts_ms: super::event_now_ms(),
                 reply,
@@ -553,7 +544,6 @@ mod cancel_regression_tests {
         state.pending.lock().expect("lock").insert(
             "b1".to_string(),
             PendingOffer {
-                node_id: NodeId::parse(&format!("{:02x}{}", 1u8, "ab".repeat(31))).expect("node id"),
                 total_size: 1,
                 ts_ms: 1,
                 reply: tx,

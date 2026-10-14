@@ -392,7 +392,6 @@ fn drive_send_session(ctx: Arc<PeerCtx>, node: PeerNetNode, record: DiscoveredPe
         tracing::warn!(batch_id = %batch_id, "drive_send_session: handle not registered, aborted");
         return;
     };
-    drop(state);
 
     tokio::spawn(async move {
         let (events_tx, mut events_rx) = mpsc::channel::<TransferEvent>(256);

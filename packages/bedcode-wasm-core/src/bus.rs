@@ -541,10 +541,15 @@ impl HostBusPort {
 /// - [`HostBusPort`] 的帧回灌路径（`ws_ports()` 未注入时的兜底不存在——注入由构造方
 ///   提供；本类型是**内核侧构造方**用的那一份）；
 /// - `manager/host/register.rs` 的 WS 端点登记（需要 `bus_port()`）。
+///
+/// 消费方在桌面装配面（`manager/host/register.rs`）：移动形态不消费，
+/// wasm-core 单形态共享故保留 + 按形态豁免
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 pub(crate) struct BusBoundWsPorts {
     bus: Arc<MessageBus>,
 }
 
+#[cfg_attr(not(feature = "desktop-assembly"), allow(dead_code))]
 impl BusBoundWsPorts {
     /// 绑定到给定总线（窄端口：无宿主上下文 ⇒ 权限门恒拒）
     pub(crate) fn new(bus: Arc<MessageBus>) -> Self {

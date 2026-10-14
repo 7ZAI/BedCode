@@ -144,7 +144,8 @@ impl crate::conn::ChannelHandler for StubWsChannel {
 // ==================== 客户端域脚手架 ====================
 
 /// 伪造一条出站连接条目（不真连网络）：写任务持有永不消费的队列
-pub(super) fn fake_client(ports: &Arc<dyn WsPorts>, owner: &str, handle: &str, url: &str) {
+/// `ports` 暂未使用——作为插件的宿主端口句柄备用（签名保持会话构造的完整性）
+pub(super) fn fake_client(_ports: &Arc<dyn WsPorts>, owner: &str, handle: &str, url: &str) {
     let (tx, rx) = mpsc::channel(PLUGIN_WS_SEND_QUEUE_CAPACITY);
     // 队列接收端挂起任务持有，保证 try_send 非 Closed 语义
     let writer = spawn_with_error_boundary("ws_test_writer", async move {
