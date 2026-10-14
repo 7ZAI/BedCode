@@ -9,6 +9,18 @@
 
 ## [未发布]
 
+#### 移动端：前端切换回新壳（feature/mobile-shell-host）
+
+- 移动端前端回到新壳线：宿主前端（`bedcode-mobile/src/**`）、三个 wasm-app 前端
+  （terminal-session / ai-chatbox / file-transfer）与 SDK TS 契约
+  （`packages/plugin-sdk-mobile/src/{types,index}.ts`，`registerSurface` 族）自
+  `feature/mobile-shell-host` 整面恢复，仅属旧前端的 views/components 删除。在同一未发布周期内，
+  本条目取代下方「旧前端适配」条目。
+- 保留必要的适配：`useMobileSettings` 继续调用当前 `*_mobile` 数据库命令（后端旧名已退役）；
+  terminal-session `task/activate.ts` 补上分支中缺失声明的 `supportedAgents` 缓存（原为 WIP 编译错误）。
+- `dev-shell` 补齐宿主 `ShellApp.iconUrl` 契约（图片图标渲染），保持 SDK 契约漂移锁绿。
+- 未改动：Rust 后端（含 peer 收拢重构）、SDK rust 侧、WIT / ABI。
+
 #### 移动端：旧前端适配当前新后端（前端回退 92222e8b6，后端保持不变）
 
 - **背景**：移动端前端（宿主 UI + 三个 wasm-app 前端）已回退至 `92222e8b6`（旧宿主退役前最后完整态），

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: frontend switched back to the new shell (feature/mobile-shell-host)
+
+- The mobile frontend is back on the new-shell line: the host frontend (`bedcode-mobile/src/**`), the three
+  wasm-app frontends (`terminal-session` / `ai-chatbox` / `file-transfer`) and the SDK TypeScript contract
+  (`packages/plugin-sdk-mobile/src/{types,index}.ts`, the `registerSurface` family) are restored from
+  `feature/mobile-shell-host`; the old-shell-only views / components are removed. Within this same
+  unreleased cycle this supersedes the “legacy frontend adapted” entry below.
+- Kept from the adaptation: `useMobileSettings` calls the current `*_mobile` DB commands (the old names are
+  retired on the backend), and terminal-session `task/activate.ts` declares the `supportedAgents` cache the
+  branch referenced without a declaration (a WIP compile error).
+- `dev-shell` now mirrors the host `ShellApp.iconUrl` contract (image-icon rendering) so the SDK contract
+  drift lock stays green.
+- Unchanged: Rust backend (including the peer consolidation refactor), SDK rust side, WIT / ABI.
+
 #### Mobile: legacy frontend adapted to the current backend (frontend reverted to 92222e8b6, backend unchanged)
 
 - **Context**: the mobile frontend (host UI + the three wasm-app frontends) was reverted to `92222e8b6`
