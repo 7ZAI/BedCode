@@ -13,6 +13,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { logger } from '@/utils/frontendLogger'
 import {
   pluginActivate,
+  pluginApprove,
   pluginDeactivate,
   pluginGetInfo,
   pluginListLoaded,
@@ -41,6 +42,9 @@ function isOfficial(info: PluginInfo): boolean {
  *
  * Degraded 归为 running：后端实例仍在、命令可用，只是带降级原因——把它显示成
  * 「已停止」会让用户误以为应用没起来。降级原因经 warn 落日志，不占用 UI 主信息位。
+ *
+ * NeedsApproval 保留为独立档（2026-10-14 修正）：此前与 loaded 一起归为 stopped，
+ * 壳内丢失「待审批」事实——授权管理与通知栏的待处理区都依赖它，不能提前拍平。
  */
 function mapState(info: PluginInfo): ShellAppState {
   switch (info.state.state) {
@@ -50,7 +54,7 @@ function mapState(info: PluginInfo): ShellAppState {
       logger.warn(`[ShellAdapter] plugin degraded but alive: id=${info.id}`)
       return 'running'
     case 'needsApproval':
-      return 'disabled'
+      return 'approval'
     case 'error':
       return 'error'
     case 'activating':
@@ -146,23 +150,32 @@ export function createPluginAppSource(): ShellAppSource {
     /**
      * 安装本地应用包：复用插件包安装链路（zip），需经审批与哈希钉扎
      *
-     * 用户取消选包返回 false，不算失败——调用方据此不弹错误提示。
+     * 用户取消选包返回 null，不算失败——调用方据此不弹错误提示。
      */
-    async installFromLocalPackage(): Promise<boolean> {
+    async installFromLocalPackage(): Promise<string | null> {
       const selected = await open({
         multiple: false,
         directory: false,
         filters: [{ name: 'WasmApp', extensions: ['zip'] }],
       })
-      if (typeof selected !== 'string') return false
-      await pluginInstallFromFile(selected)
-      return true
+      if (typeof selected !== 'string') return null
+      return await pluginInstallFromFile(selected)
     },
 
     /** 卸载应用并删除数据（仅用户安装的包可卸载，内置插件由后端拒绝并抛错） */
     async remove(appId: string): Promise<boolean> {
       await pluginUninstall(appId)
       return true
+    },
+
+    /**
+     * 批准应用（整单：全部声明权限 + 内容哈希钉扎）
+     *
+     * 审批完成后不在此处自动启动：启动是调用方的下一步（详情页 / 授权管理页），
+     * 数据源只负责把「批准」这个后端事实落下去。
+     */
+    async approve(appId: string): Promise<void> {
+      await pluginApprove(appId)
     },
 
     /**

@@ -36,16 +36,6 @@
 
     <!-- ==================== 应用运行面 ==================== -->
     <ShellAppSurface :app-id="appId" />
-
-    <!-- ==================== Homebar：上滑并停顿呼出多任务 ==================== -->
-    <button
-      type="button"
-      class="flex items-center justify-center w-full py-2 min-h-[32px]"
-      :aria-label="t('shell.run.switcherHint')"
-      @click="nav.openSwitcher()"
-    >
-      <span class="block w-24 h-1 rounded-full" :style="{ background: 'var(--mobile-border-active)' }" aria-hidden="true" />
-    </button>
   </div>
 </template>
 
@@ -53,8 +43,11 @@
 /**
  * 应用运行屏
  *
- * 这一屏几乎不含平台自己的 UI：胶囊（平台叠加控制）+ homebar（呼出多任务）之外
- * 全是应用的运行面。壳不给应用加自己的标题栏/返回键，避免应用 UI 被平台框住。
+ * 这一屏几乎不含平台自己的 UI：胶囊（平台叠加控制）之外全是应用的运行面。
+ * 壳不给应用加自己的标题栏/返回键，避免应用 UI 被平台框住。
+ *
+ * 导航不再由本屏承担：底部系统条（返回 / 主屏 / 多任务）是壳级常驻面，
+ * 原先这里的 homebar 与之重复，已删除（重复入口会让手势判定与可访问名称两份漂移）。
  *
  * 「退出应用」只回首页，不停应用——移动端语义里退出界面 ≠ 停止后台，
  * 停止要经胶囊里的「停用此应用」或详情页操作。

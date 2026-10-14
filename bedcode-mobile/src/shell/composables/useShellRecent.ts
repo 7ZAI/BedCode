@@ -54,17 +54,32 @@ function clearRecent(): void {
   persist([])
 }
 
+/**
+ * 移除单条最近使用
+ *
+ * 多任务卡片「上滑关闭 / 点 ×」时需要：关闭一个应用后它的卡片不能换个身份
+ * （运行中 → 未运行）再回来——那在用户看来就是「关不掉」。
+ */
+function removeRecent(appId: string): void {
+  const next = recentIds.value.filter((id) => id !== appId)
+  if (next.length === recentIds.value.length) return
+  recentIds.value = next
+  persist(next)
+}
+
 /** 最近使用（新 → 旧） */
 export function useShellRecent(): {
   recentIds: ComputedRef<string[]>
   pushRecent: typeof pushRecent
+  removeRecent: typeof removeRecent
   clearRecent: typeof clearRecent
 } {
   return {
     recentIds: computed(() => recentIds.value),
     pushRecent,
+    removeRecent,
     clearRecent,
   }
 }
 
-export { pushRecent, clearRecent }
+export { pushRecent, removeRecent, clearRecent }

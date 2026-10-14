@@ -15,12 +15,14 @@
       </Transition>
     </div>
 
-    <!-- 应用运行面不显示平台 Tab：应用自带导航语义，再压一层会打架 -->
-    <ShellTabbar v-if="showTabbar" />
+    <!-- 底部系统条（Android 导航条语义：返回 / 主屏 / 多任务）。应用运行面同样显示——
+         平台导航是设备级事实，不随内容让位（旧底部页签已退役，见组件头注） -->
+    <ShellSystemBar />
 
     <!-- 平台级覆盖层：固定在壳根渲染，与当前屏幕无关 -->
     <ShellCapsuleMenu />
     <ShellPermissionPrompt />
+    <ShellNotificationShade />
   </div>
 </template>
 
@@ -28,7 +30,7 @@
 /**
  * 宿主壳根组件
  * -----------------------------------------------------------------------------
- * 职责：状态条 + 屏幕栈 + 底部导航 + 平台级覆盖层。就这些。
+ * 职责：状态条 + 屏幕栈 + 底部系统条 + 平台级覆盖层 + 宿主事件桥。就这些。
  *
  * 不含的东西（都是刻意的）：
  *   · 不含任何应用业务——应用界面由其 surface 组件自持（见 ShellAppSurface）
@@ -38,12 +40,15 @@
  * 屏幕表是「屏幕 id → 组件」的纯映射：新增一个屏只需在表里加一行，
  * 导航与过渡机制不动。
  */
-import { computed, type Component } from 'vue'
+import { computed, onMounted, onUnmounted, type Component } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useShellNavigation, type ShellScreenId } from '../composables/useShellNavigation'
+import { startShellHostEvents } from '../composables/useShellHostEvents'
 import ShellCapsuleMenu from './ShellCapsuleMenu.vue'
+import ShellNotificationShade from './ShellNotificationShade.vue'
 import ShellPermissionPrompt from './ShellPermissionPrompt.vue'
 import ShellStatusbar from './ShellStatusbar.vue'
-import ShellTabbar from './ShellTabbar.vue'
+import ShellSystemBar from './ShellSystemBar.vue'
 import ShellAppRunScreen from './screens/ShellAppRunScreen.vue'
 import ShellAppDetailScreen from './screens/ShellAppDetailScreen.vue'
 import ShellAppsScreen from './screens/ShellAppsScreen.vue'
@@ -68,9 +73,24 @@ const nav = useShellNavigation()
 const screenComponent = computed<Component>(() => SCREENS[nav.current.value.id] ?? ShellHomeScreen)
 const screenKey = computed(() => `${nav.current.value.id}:${nav.params.value.appId ?? ''}`)
 
-/** 只有平台自己的根屏显示底部导航 */
-const showTabbar = computed(() => {
-  const id = nav.current.value.id
-  return id === 'home' || id === 'apps' || id === 'settings'
+/**
+ * 宿主事件 → 通知栏桥
+ *
+ * 生命周期与壳同长：壳在则监听在，壳卸载则解绑（避免热重载 / 重复挂载后事件被处理多次）。
+ * 注册失败（浏览器预览等无事件总线环境）只记录，不影响壳启动。
+ */
+let stopHostEvents: (() => void) | null = null
+
+onMounted(async () => {
+  try {
+    stopHostEvents = await startShellHostEvents()
+  } catch (e) {
+    logger.warn('[Shell] host event bridge unavailable; notifications stay shell-local', e)
+  }
+})
+
+onUnmounted(() => {
+  stopHostEvents?.()
+  stopHostEvents = null
 })
 </script>

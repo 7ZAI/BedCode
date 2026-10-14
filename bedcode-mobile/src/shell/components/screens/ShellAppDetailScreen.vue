@@ -38,6 +38,29 @@
         </div>
       </div>
 
+      <!-- ==================== 待审批（需要用户动作：整单批准 + 哈希钉扎） ==================== -->
+      <div v-if="app.state === 'approval'" class="px-4 pb-1">
+        <div
+          class="rounded-[12px] border px-3 py-3"
+          :style="{
+            background: 'var(--mobile-warning-muted)',
+            borderColor: 'var(--mobile-warning)',
+          }"
+        >
+          <p class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+            {{ t('shell.detail.approvalDesc', { count: app.permissions.length }) }}
+          </p>
+          <button
+            type="button"
+            class="mt-2.5 w-full rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+            :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+            @click="handleApprove"
+          >
+            {{ t('shell.detail.approveStart') }}
+          </button>
+        </div>
+      </div>
+
       <!-- ==================== 连接 ==================== -->
       <ShellSection :title="t('shell.detail.connection')" :note="t('shell.detail.connectionNote')" />
       <div class="px-4 pb-1">
@@ -232,6 +255,8 @@ const {
   supportsRemove,
   removeApp,
   stop,
+  approveApp,
+  launch,
 } = useShellApps()
 
 /** 应用 id 来自导航参数（壳内导航不落 URL） */
@@ -268,6 +293,8 @@ const stateLabel = computed(() => {
   switch (app.value?.state) {
     case 'running':
       return t('shell.common.running')
+    case 'approval':
+      return t('shell.common.approval')
     case 'disabled':
       return t('shell.common.disabled')
     case 'error':
@@ -281,6 +308,8 @@ const stateTone = computed<'success' | 'warn' | 'danger' | 'neutral'>(() => {
   switch (app.value?.state) {
     case 'running':
       return 'success'
+    case 'approval':
+      return 'warn'
     case 'disabled':
       return 'warn'
     case 'error':
@@ -290,9 +319,18 @@ const stateTone = computed<'success' | 'warn' | 'danger' | 'neutral'>(() => {
   }
 })
 
-const stateDot = computed(() =>
-  app.value?.state === 'running' ? 'var(--mobile-success)' : 'var(--mobile-text-disabled)',
-)
+const stateDot = computed(() => {
+  switch (app.value?.state) {
+    case 'running':
+      return 'var(--mobile-success)'
+    case 'approval':
+      return 'var(--mobile-warning)'
+    case 'error':
+      return 'var(--mobile-error)'
+    default:
+      return 'var(--mobile-text-disabled)'
+  }
+})
 
 const toggleError = ref<string | null>(null)
 /** 卸载二次确认（复用平台 ConfirmDialog，见模板） */
@@ -323,6 +361,23 @@ function openDemoPrompt(): void {
 async function handleStop(): Promise<void> {
   if (!appId.value) return
   await stop(appId.value)
+}
+
+/**
+ * 批准并启动
+ *
+ * 审批是整单的（后端 plugin_approve：全部声明权限 + 内容哈希钉扎）；批准失败时
+ * 不继续启动——半途而废的「已批准」假象比直接报错更危险（权限是安全面）。
+ */
+async function handleApprove(): Promise<void> {
+  if (!app.value) return
+  const approved = await approveApp(app.value.id)
+  if (!approved) {
+    toggleError.value = t('shell.permissions.approveFailed')
+    return
+  }
+  const started = await launch(app.value.id)
+  if (started) nav.openApp(app.value.id)
 }
 
 async function handleRemove(): Promise<void> {

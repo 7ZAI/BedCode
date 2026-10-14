@@ -63,6 +63,19 @@ function templateBlocks(src: string): string[] {
   return blocks
 }
 
+/**
+ * 注释遮罩：把注释内容替换为空白但**保留换行**（行号不漂）
+ *
+ * L4 需要行号定位违规位置，不能像其它锁那样直接删注释（删块注释会把行号拉前）。
+ * 本文件头注承诺「扫描一律跳过注释行」，这里就是 L4 的实现口径。
+ */
+function maskComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:"'`])\/\/[^\n]*/g, (m, p1: string) => p1 + ' '.repeat(m.length - p1.length))
+}
+
 /** 违规详情：文件名 + 命中文本，失败信息能直接定位 */
 function scan(pattern: RegExp, files: string[], pick: (raw: string) => string): string[] {
   const hits: string[] = []
@@ -150,7 +163,8 @@ describe('L4 无静默 catch', () => {
   it('should_reportEveryCaughtError_when_shellSourceScanned', () => {
     const silent: string[] = []
     for (const file of SHELL_CODE_FILES) {
-      const lines = readFileSync(join(process.cwd(), file), 'utf8').split(/\r?\n/)
+      // 注释遮罩后按行扫：注释里出现 catch 字样（如「失败由 catch 抛出」）不应判违规
+      const lines = maskComments(readFileSync(join(process.cwd(), file), 'utf8')).split(/\r?\n/)
       lines.forEach((line, i) => {
         if (!/\bcatch\b/.test(line)) return
         // catch 后的小块内必须出现 logger. 或 toast.（错误要可观测，不能吞掉）

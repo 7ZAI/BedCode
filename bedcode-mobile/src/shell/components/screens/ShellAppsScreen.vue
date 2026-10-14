@@ -1,13 +1,25 @@
 <template>
   <div class="flex flex-col h-full min-h-0">
-    <!-- ==================== 页头 ==================== -->
-    <header class="px-4 pt-3 pb-2">
-      <h1 class="text-[var(--font-size-xl)] font-semibold text-[var(--mobile-text-primary)]">
-        {{ t('shell.apps.title') }}
-      </h1>
-      <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-        {{ t('shell.apps.subtitle', { installed: stats.installed, running: stats.running }) }}
-      </p>
+    <!-- ==================== 页头（带返回：系统宫格进入的屏，不是栈底） ==================== -->
+    <header class="flex items-center gap-2 px-2 pt-2 pb-1">
+      <button
+        type="button"
+        class="flex items-center justify-center rounded-[10px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+        :aria-label="t('shell.detail.back')"
+        @click="nav.back()"
+      >
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+      </button>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+          {{ t('shell.apps.title') }}
+        </h1>
+        <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+          {{ t('shell.apps.subtitle', { installed: stats.installed, running: stats.running }) }}
+        </p>
+      </div>
     </header>
 
     <div class="flex-1 min-h-0 overflow-y-auto pb-6">
@@ -168,9 +180,9 @@ function appMeta(app: ShellApp): string {
 async function handleInstall(): Promise<void> {
   installing.value = true
   try {
-    const ok = await installFromLocalPackage()
+    const installedId = await installFromLocalPackage()
     // 取消选包不是失败，不弹错误
-    if (ok) {
+    if (installedId !== null) {
       toast.success(t('shell.apps.installSuccess'))
       await refresh()
     }

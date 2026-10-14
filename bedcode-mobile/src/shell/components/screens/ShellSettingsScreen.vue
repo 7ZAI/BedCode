@@ -1,7 +1,18 @@
 <template>
   <div class="flex flex-col h-full min-h-0">
-    <header class="px-4 pt-3 pb-2">
-      <h1 class="text-[var(--font-size-xl)] font-semibold text-[var(--mobile-text-primary)]">
+    <!-- ==================== 页头（带返回：系统宫格进入的屏，不是栈底） ==================== -->
+    <header class="flex items-center gap-2 px-2 pt-2 pb-1">
+      <button
+        type="button"
+        class="flex items-center justify-center rounded-[10px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+        :aria-label="t('shell.detail.back')"
+        @click="nav.back()"
+      >
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+      </button>
+      <h1 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
         {{ t('shell.settings.title') }}
       </h1>
     </header>
@@ -23,6 +34,59 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- ==================== 背景（主屏壁纸） ==================== -->
+      <!-- 壁纸只落主屏：应用运行面保持纯色，业务内容可读性优先。
+           偏好是壳 UI 偏好（localStorage），不写宿主 AppConfig——引擎面不加壳词汇。 -->
+      <ShellSection :title="t('shell.settings.background')" :note="t('shell.settings.backgroundNote')" />
+      <div class="px-4 pb-1">
+        <ShellGroupCard>
+          <div class="px-3 py-3">
+            <div class="flex items-center gap-2.5">
+              <button
+                v-for="wall in wallpaperOptions"
+                :key="wall.id"
+                type="button"
+                class="relative flex-1 h-14 rounded-[10px] border overflow-hidden transition-colors duration-200 min-h-[var(--mobile-touch-target-min)]"
+                :class="[wall.swatchClass, wallpaper === wall.id ? 'border-[var(--mobile-accent)]' : 'border-[var(--mobile-border)]']"
+                :aria-label="wall.label"
+                :aria-pressed="wallpaper === wall.id"
+                @click="setWallpaper(wall.id)"
+              >
+                <span
+                  v-if="wallpaper === wall.id"
+                  class="absolute right-1 bottom-1 flex items-center justify-center w-4 h-4 rounded-full"
+                  :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+                  aria-hidden="true"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                </span>
+              </button>
+            </div>
+
+            <!-- 遮罩强度：越高越像纯色底，护文字对比度（壁纸上的文字必须能读） -->
+            <label class="block mt-3" :for="'shell-wall-dim'">
+              <span class="flex items-center justify-between text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+                <span>{{ t('shell.settings.wallDim') }}</span>
+                <span class="tabular-nums">{{ wallDim }}%</span>
+              </span>
+              <input
+                id="shell-wall-dim"
+                type="range"
+                min="0"
+                :max="WALL_DIM_MAX"
+                :value="wallDim"
+                class="w-full mt-1.5"
+                :style="{ accentColor: 'var(--mobile-accent)' }"
+                :aria-valuetext="`${wallDim}%`"
+                @input="onDimInput"
+              />
+            </label>
+          </div>
+        </ShellGroupCard>
       </div>
 
       <!-- ==================== 平台 ==================== -->
@@ -125,6 +189,11 @@ import { usePlatform } from '../../composables/usePlatform'
 import { useToast } from '../../composables/useToast'
 import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
+import {
+  WALL_DIM_MAX,
+  useShellPreferences,
+  type ShellWallpaper,
+} from '../../composables/useShellPreferences'
 import ShellBrandTile from '../ShellBrandTile.vue'
 import ShellGroupCard from '../ShellGroupCard.vue'
 import ShellSection from '../ShellSection.vue'
@@ -148,6 +217,28 @@ const toast = useToast()
 const nav = useShellNavigation()
 const { apps } = useShellApps()
 const { platformInfo } = usePlatform()
+const { wallpaper, wallDim, setWallpaper, setWallDim } = useShellPreferences()
+
+/**
+ * 壁纸档位（id + 预览类 + 本地化名）
+ *
+ * 预览色块复用主屏同一份 --wall-* 真源（shell.css）：两处各写一份渐变必然漂移。
+ * 「无」档不给 shell-wall 类，显示纯页面底色。
+ */
+const wallpaperOptions = computed<
+  Array<{ id: ShellWallpaper; label: string; swatchClass: string }>
+>(() => [
+  { id: 'none', label: t('shell.settings.wallNone'), swatchClass: 'bg-[var(--mobile-bg-primary)]' },
+  { id: 'aurora', label: t('shell.settings.wallAurora'), swatchClass: 'shell-wall wall-aurora shell-wall-swatch' },
+  { id: 'dune', label: t('shell.settings.wallDune'), swatchClass: 'shell-wall wall-dune shell-wall-swatch' },
+  { id: 'reef', label: t('shell.settings.wallReef'), swatchClass: 'shell-wall wall-reef shell-wall-swatch' },
+])
+
+/** 遮罩滑杆：原生 input 只给数值，钳制交给偏好模块（越界值不抛错） */
+function onDimInput(event: Event): void {
+  const target = event.target as HTMLInputElement
+  setWallDim(Number(target.value))
+}
 
 /** 版本号来自构建期注入（与设置页同源，不另立真源） */
 const appVersion = __APP_VERSION__

@@ -16,8 +16,10 @@
  *      TerminalView / registerSettingsSection）不得以词边界符号出现。
  *      —— 词边界保证不误伤仍在服役的合法面：`PluginViewHost` / `EgressSettingsView` /
  *      `registerTerminalView` / `TerminalViewContribution` 等均不含词边界匹配。
- *   R3 壳等价物正面在场（ShellView / ShellHost / ShellTabbar / ShellSettingsScreen + 路由
- *      mobile-shell）——防「把新面也删掉」绕过退役锁（删空则 R1/R2 恒真）。
+ *   R3 壳等价物正面在场（ShellView / ShellHost / ShellSystemBar / ShellNotificationShade /
+ *      ShellSettingsScreen + 路由 mobile-shell）——防「把新面也删掉」绕过退役锁（删空则 R1/R2 恒真）。
+ *      （2026-10-14 Android 平台化：旧底部页签 ShellTabbar 被底部系统条 ShellSystemBar 取代，
+ *      通知栏 ShellNotificationShade 为新增平台面；本清单随之更新，仍钉「新面不得被删空」。）
  *   R4 票 2026-10-10 批次 C1/C2/C4 退役面：旧嵌入扩展点（registerToolboxPage /
  *      registerNavTab / registerTerminalToolbarItem / registerTerminalView）及其
  *      宿主 UI 组件（PluginNavTabHost / PluginSettingsHost / PluginTerminalBar）与
@@ -145,7 +147,8 @@ const RETIRED_ORPHANS = [
 const REQUIRED_SHELL_FILES = [
   'src/shell/views/ShellView.vue',
   'src/shell/components/ShellHost.vue',
-  'src/shell/components/ShellTabbar.vue',
+  'src/shell/components/ShellSystemBar.vue',
+  'src/shell/components/ShellNotificationShade.vue',
   'src/shell/components/screens/ShellSettingsScreen.vue',
 ]
 

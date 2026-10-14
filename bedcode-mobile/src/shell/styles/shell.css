@@ -100,3 +100,125 @@ html:not(.dark) .shell-ui {
 .shell-avatar-g3 { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .shell-avatar-g4 { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
 .shell-avatar-g5 { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+
+/* ============================================================================
+   主屏壁纸（Android 平台化：主屏可换背景，应用运行面保持纯色保证可读性）
+   ----------------------------------------------------------------------------
+   渐变全部由 color-mix() 从既有 --mobile-* 语义 token 派生（零新 hex），
+   双主题与主色色板自动适配：default 色板下 accent 是象牙白/近黑，壁纸呈现
+   低饱和的纸感；forest/ocean/sunset/violet 色板下壁纸随主色偏色。
+   遮罩强度 --wall-dim（0–70，%）由壳偏好提供，用页面底色压住壁纸护文字对比度。
+   ============================================================================ */
+.shell-wall {
+  --wall-active: none;
+}
+.shell-wall.wall-aurora {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-accent) 26%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-success) 16%, var(--mobile-bg-primary)) 58%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+.shell-wall.wall-dune {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-warning) 24%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-accent) 12%, var(--mobile-bg-primary)) 55%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+.shell-wall.wall-reef {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-accent-secondary) 90%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-success) 10%, var(--mobile-bg-primary)) 62%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+
+/* 壁纸层：绝对定位铺满主屏根容器（不随内容滚动），遮罩由 ::after 叠加 */
+.shell-wallpaper {
+  position: absolute;
+  inset: 0;
+  background-image: var(--wall-active, none);
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+}
+.shell-wallpaper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* --wall-dim 为 0 时透明 = 壁纸全显；70 时页面色占 70% */
+  background: color-mix(in srgb, var(--mobile-bg-primary) calc(var(--wall-dim, 30) * 1%), transparent);
+}
+
+/* 设置页壁纸预览色块：与主屏同一份 --wall-* 真源，避免两处各写一份渐变 */
+.shell-wall-swatch {
+  background-image: var(--wall-active, none);
+  background-size: cover;
+  background-position: center;
+}
+
+/* ============================================================================
+   通知栏（Android 式独立覆盖层：自顶部滑下）
+   ============================================================================ */
+.shell-shade-enter-active,
+.shell-shade-leave-active {
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.2s ease;
+}
+.shell-shade-enter-from,
+.shell-shade-leave-to {
+  transform: translateY(-100%);
+  opacity: 0;
+}
+
+/* ============================================================================
+   多任务卡片（Android 卡片式切换）
+   ----------------------------------------------------------------------------
+   关闭动效只动 transform / opacity；列表移动由 TransitionGroup 的 move 类接管。
+   ============================================================================ */
+.shell-recent-card-enter-active,
+.shell-recent-card-leave-active,
+.shell-recent-card-move {
+  transition:
+    transform 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.24s ease;
+}
+.shell-recent-card-enter-from,
+.shell-recent-card-leave-to {
+  transform: scale(0.94) translateY(10px);
+  opacity: 0;
+}
+.shell-recent-card-leave-active {
+  /* 离场元素脱离文档流，其余卡片才能平滑上移（否则会先跳一下） */
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+/* ============================================================================
+   底部系统条（Android 导航条：返回 / 主屏 / 多任务）
+   ============================================================================ */
+.shell-system-bar {
+  background: color-mix(in srgb, var(--mobile-bg-primary) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--mobile-group-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-screen-enter-active,
+  .shell-screen-leave-active,
+  .shell-sheet-enter-active,
+  .shell-sheet-leave-active,
+  .shell-shade-enter-active,
+  .shell-shade-leave-active,
+  .shell-recent-card-enter-active,
+  .shell-recent-card-leave-active,
+  .shell-recent-card-move {
+    transition-duration: 0.01ms;
+  }
+}

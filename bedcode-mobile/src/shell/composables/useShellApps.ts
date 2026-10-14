@@ -9,10 +9,45 @@
  */
 
 import { computed, ref, type Component, type ComputedRef, type Ref } from 'vue'
+import i18n from '@/locales'
 import { logger } from '@/utils/frontendLogger'
 import { getShellRegistry } from '../registry'
 import type { ShellApp, ShellAppSource } from '../types'
 import { pushRecent } from './useShellRecent'
+import { useShellNotifications } from './useShellNotifications'
+
+/** 生命周期通知图标（24×24 stroke 视框，与壳内其它 SVG 同规范） */
+const APP_EVENT_ICONS = {
+  started: 'M6 4l14 8-14 8z',
+  stopped: 'M6 6h12v12H6z',
+  approved: 'M20 6L9 17l-5-5',
+  installed: 'M12 3v12 M7 10l5 5 5-5 M4 21h16',
+  uninstalled: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
+  failed: 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z M12 9v4 M12 17h.01',
+} as const
+
+/**
+ * 推送一条应用生命周期通知
+ *
+ * 归属（AGENTS §5.1 B6）：壳只对**自身动作的结果**落通知（启动/停止/审批/安装/卸载），
+ * 不解释插件业务事件；文案是平台自己的，应用名是注册表事实。
+ */
+function notifyAppEvent(
+  kind: keyof typeof APP_EVENT_ICONS,
+  app: ShellApp,
+  extra?: { body?: string; sticky?: boolean },
+): void {
+  const t = i18n.global.t
+  useShellNotifications().pushNotification({
+    kind: 'event',
+    icon: APP_EVENT_ICONS[kind],
+    source: t('shell.notify.source.shell'),
+    title: t(`shell.notify.app.${kind}.title`, { name: app.name }),
+    body: extra?.body ?? t(`shell.notify.app.${kind}.body`),
+    appId: app.id,
+    sticky: extra?.sticky ?? false,
+  })
+}
 
 /** 平台统计（应用管理页顶部） */
 export interface ShellStats {
@@ -107,18 +142,24 @@ async function launch(appId: string): Promise<boolean> {
   // （后端 activate 幂等早退 / loader 对已加载模块直接返回），重跑一遍的代价远小于缺模块。
 
   // 乐观置为运行中：启动是秒级操作，先动 UI 避免点击后无反馈
+  // 通知只在「本就没在跑」时落：重复点已运行的应用（壳允许，用于重挂前端模块）
+  // 不该每次都在通知栏叠一条「已启动」
+  const wasRunning = app.state === 'running'
   registry.patchApp(appId, { state: 'running', error: undefined })
   try {
     await source.launch(appId)
     pushRecent(appId)
     lastError.value = null
     await refresh()
+    if (!wasRunning) notifyAppEvent('started', app)
     return true
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     logger.error(`[Shell] launch failed: appId=${appId}`, e)
     registry.patchApp(appId, { state: 'error', error: message })
     lastError.value = message
+    // 失败原因来自后端，属于「来源方给出的正文」，壳原样呈现不加工
+    notifyAppEvent('failed', app, { body: message })
     return false
   }
 }
@@ -137,6 +178,7 @@ async function stop(appId: string): Promise<boolean> {
     await source.stop(appId)
     lastError.value = null
     await refresh()
+    notifyAppEvent('stopped', app)
     return true
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
@@ -145,6 +187,38 @@ async function stop(appId: string): Promise<boolean> {
     lastError.value = message
     return false
   }
+}
+
+/**
+ * 批准应用的权限申请（整单：全部声明权限 + 内容哈希钉扎）
+ *
+ * 与「逐项授权」不同：这是后端审批链的入口（`plugin_approve`），批准后应用才可启动。
+ * 数据源不支持审批时返回 false，UI 据此不渲染入口（能力诚实原则）。
+ */
+async function approveApp(appId: string): Promise<boolean> {
+  const app = registry.getApp(appId)
+  const source = registry.getSourceOf(appId)
+  if (!app || !source?.approve) {
+    logger.warn(`[Shell] approve unsupported: appId=${appId}`)
+    return false
+  }
+  try {
+    await source.approve(appId)
+    lastError.value = null
+    await refresh()
+    notifyAppEvent('approved', app)
+    return true
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    logger.error(`[Shell] approve failed: appId=${appId}`, e)
+    lastError.value = message
+    return false
+  }
+}
+
+/** 该应用是否可批准（取决于数据源能力，不是 UI 拍脑袋） */
+function supportsApprove(appId: string): boolean {
+  return typeof registry.getSourceOf(appId)?.approve === 'function'
 }
 
 /**
@@ -219,8 +293,13 @@ function supportsInstall(): boolean {
   return registry.listSources().some((s) => typeof s.installFromLocalPackage === 'function')
 }
 
-/** 安装本地应用包；返回 false 表示用户取消或安装失败（错误已由 refresh/lastError 暴露） */
-async function installFromLocalPackage(): Promise<boolean> {
+/**
+ * 安装本地应用包
+ *
+ * @returns 安装后的应用 id；null = 用户取消（调用方不弹错误）。
+ *          失败由 catch 抛出，错误已由 lastError 暴露。
+ */
+async function installFromLocalPackage(): Promise<string | null> {
   const source = registry
     .listSources()
     .find((s): s is ShellAppSource & Required<Pick<ShellAppSource, 'installFromLocalPackage'>> =>
@@ -228,16 +307,21 @@ async function installFromLocalPackage(): Promise<boolean> {
     )
   if (!source) {
     logger.warn('[Shell] install unsupported by every registered source')
-    return false
+    return null
   }
   try {
-    const ok = await source.installFromLocalPackage()
-    if (ok) await refresh()
-    return ok
+    const installedId = await source.installFromLocalPackage()
+    if (installedId !== null) {
+      await refresh()
+      // 安装成功的新应用名要到刷新后的清单里取（安装前注册表里还没有它）
+      const installed = registry.getApp(installedId)
+      if (installed) notifyAppEvent('installed', installed)
+    }
+    return installedId
   } catch (e) {
     logger.error('[Shell] install local package failed', e)
     lastError.value = e instanceof Error ? e.message : String(e)
-    return false
+    return null
   }
 }
 
@@ -249,6 +333,7 @@ function supportsRemove(appId: string): boolean {
 /** 卸载应用并删除数据 */
 async function removeApp(appId: string): Promise<boolean> {
   const source = registry.getSourceOf(appId)
+  const app = registry.getApp(appId)
   if (!source?.remove) {
     logger.warn(`[Shell] remove unsupported: appId=${appId}`)
     return false
@@ -258,6 +343,8 @@ async function removeApp(appId: string): Promise<boolean> {
     if (ok) {
       registry.clearApp(appId)
       await refresh()
+      // 卸载通知需要应用名，但此时应用已从注册表移除——用移除前抓到的快照
+      if (app) notifyAppEvent('uninstalled', app)
     }
     return ok
   } catch (e) {
@@ -279,6 +366,8 @@ export interface ShellApps {
   refresh: typeof refresh
   launch: typeof launch
   stop: typeof stop
+  approveApp: typeof approveApp
+  supportsApprove: typeof supportsApprove
   setPermissionGrant: typeof setPermissionGrant
   supportsPermissionControl: typeof supportsPermissionControl
   resolveSurface: typeof resolveSurface
@@ -302,6 +391,8 @@ export function useShellApps(): ShellApps {
     refresh,
     launch,
     stop,
+    approveApp,
+    supportsApprove,
     setPermissionGrant,
     supportsPermissionControl,
     resolveSurface,

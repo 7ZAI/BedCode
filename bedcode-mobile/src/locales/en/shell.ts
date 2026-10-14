@@ -2,6 +2,8 @@
  * Host Shell copy — English
  *
  * Keys mirror zh-CN/shell.ts one-to-one (i18n bilingual discipline).
+ * Grouping: home=home screen, switcher=recents, notify=notification shade,
+ * systemBar=bottom system bar, settings=platform settings, permissions=permission manager.
  */
 export default {
   shell: {
@@ -10,11 +12,6 @@ export default {
       title: 'WASM app platform (host shell)',
       subtitle: 'New platform shell · coexists with the current UI',
     },
-    nav: {
-      home: 'Home',
-      apps: 'Apps',
-      settings: 'Me',
-    },
     common: {
       loading: 'Loading…',
       retry: 'Retry',
@@ -22,23 +19,31 @@ export default {
       running: 'Running',
       stopped: 'Stopped',
       disabled: 'Disabled',
+      /** Pending approval: whole-manifest permission grant + content hash pinning */
+      approval: 'Pending approval',
       error: 'Failed to start',
       cancel: 'Cancel',
     },
     home: {
       localDevice: 'This device',
       appCount: '{count} apps',
+      runningTitle: 'Running',
+      runningNote: 'Most recent first',
+      switchTo: 'Switch to {name}',
+      stopInstance: 'Stop',
       slotsTitle: 'Quick cards',
       slotsNote: 'Provided by apps',
       appsTitle: 'My WASM apps',
+      appsNote: '{count} installed',
       manage: 'Manage',
-      recentTitle: 'Recently used',
-      more: 'More',
-      providedBy: 'By {name}',
+      appAria: '{name}, {state}',
       emptyApps: 'No WASM app installed',
-      emptyAppsHint: 'Install or enable an app in "Apps" and its entry shows up here',
-      slotsEmpty: 'Status cards show up here once an app is running',
-      openApp: 'Open app',
+      emptyAppsHint: 'Install or enable an app in "App manager" and its entry shows up here',
+      sysTitle: 'System',
+      sysNote: 'Built into the platform',
+      sysApps: 'App manager',
+      sysPermissions: 'Permissions',
+      sysSettings: 'Platform settings',
     },
     apps: {
       title: 'WASM apps',
@@ -55,7 +60,7 @@ export default {
       installLocalHint: 'Approval + hash pinning required',
       empty: 'No apps',
       permissionCount: '{count} permissions',
-      installSuccess: 'Installed — enable it from the list',
+      installSuccess: 'Installed — approve and start it from the list',
       installFailed: 'Install failed: {error}',
       uninstallConfirm: 'Uninstall "{name}" and delete its data? This cannot be undone.',
       uninstallSuccess: 'Uninstalled {name}',
@@ -65,6 +70,10 @@ export default {
       title: 'App details',
       back: 'Back',
       official: 'Official',
+      /** Approval is whole-manifest (all declared permissions + content hash pinning) */
+      approvalDesc:
+        'This app requests {count} permissions. Approve it before it can start — approving also pins the current file hashes.',
+      approveStart: 'Approve and start',
       connection: 'Connection',
       connectionNote: 'Owned by this app',
       permissions: 'Permissions',
@@ -96,18 +105,104 @@ export default {
         'This is the mount point for a future wasm-app. Once the app registers its surface, its UI renders here — the platform only owns mounting and lifecycle, never in-app pages.',
       reservedStatus: '{state} · {count} permissions · {id}',
       notFound: 'App not found or uninstalled',
-      switcherHint: 'Swipe up and hold to open the switcher',
     },
     switcher: {
-      title: 'Running apps',
+      title: 'Recents',
       backHome: 'Back home',
+      closeAll: 'Close all',
+      closeCard: 'Close the card for {name}',
+      dormant: 'Not running',
+      enter: 'Open',
+      launch: 'Start',
+      previewHint: 'The platform does not hold in-app frames',
+      previewMeta: '{count} permissions · {id}',
       empty: 'No running apps',
       emptyHint: 'Open an app from the home screen and it will show up here',
-      foot: 'Tap a card to enter · swipe a card up to stop it',
-      stop: 'Stop',
+      foot: 'Tap a card to open · swipe a card up to close it',
+    },
+    notify: {
+      title: 'Notifications',
+      count: '{count} items',
+      open: 'Open notifications ({count} items)',
+      close: 'Collapse notifications',
+      pending: 'Pending',
+      pendingNote: 'Waiting for your decision',
+      pendingBody: '{count} permissions awaiting approval',
+      pendingAction: 'Review',
+      list: 'Notifications',
+      listNote: '{count} items',
+      empty: 'No notifications',
+      emptyHint: 'App launches, connection state and pending approvals show up here',
+      clearAll: 'Clear all',
+      dismissOne: 'Dismiss notification: {title}',
+      openApp: 'Open',
+      justNow: 'Just now',
+      minutesAgo: '{count} min ago',
+      hoursAgo: '{count} h ago',
+      daysAgo: '{count} d ago',
+      source: {
+        shell: 'Platform',
+        host: 'Connection',
+      },
+      connected: {
+        title: 'Connected to desktop',
+        body: 'Connection established and authenticated',
+      },
+      reconnected: {
+        title: 'Connection restored',
+        body: 'Automatic reconnect succeeded',
+      },
+      disconnected: {
+        title: 'Connection lost',
+        body: 'The link to the desktop was interrupted',
+      },
+      reauthRejected: {
+        title: 'Re-pairing required',
+        body: 'Credentials were rejected; pair again to reconnect',
+      },
+      /** App lifecycle notifications (results of the shell's own actions) */
+      app: {
+        started: {
+          title: '{name} started',
+          body: 'The app is running in the background',
+        },
+        stopped: {
+          title: '{name} stopped',
+          body: 'The app stopped; its data is kept',
+        },
+        approved: {
+          title: '{name} approved',
+          body: 'Permissions approved and content hash pinned',
+        },
+        installed: {
+          title: '{name} installed',
+          body: 'Approve it to start',
+        },
+        uninstalled: {
+          title: '{name} uninstalled',
+          body: 'The app and its data were deleted',
+        },
+        failed: {
+          title: '{name} failed to start',
+          body: 'Check the app details and retry',
+        },
+      },
+    },
+    systemBar: {
+      label: 'System navigation',
+      back: 'Back',
+      home: 'Home',
+      recents: 'Recents',
     },
     settings: {
-      title: 'Me',
+      title: 'Platform settings',
+      background: 'Background',
+      backgroundNote: 'Home screen only',
+      wallNone: 'None',
+      wallAurora: 'Aurora',
+      wallDune: 'Dune',
+      wallReef: 'Reef',
+      wallDim: 'Dim strength',
       platform: 'Platform',
       appearance: 'Appearance',
       appearanceHint: 'Theme and palette',
@@ -133,6 +228,13 @@ export default {
       clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
       appSettings: 'App settings',
       runtime: 'WasmApp Mobile {version}',
+    },
+    permissions: {
+      pending: 'Pending approval',
+      pendingNote: 'Waiting for your decision',
+      pendingBody: '{count} permissions awaiting approval',
+      approveStart: 'Approve and start',
+      approveFailed: 'Approval failed; check the app details',
     },
     capsule: {
       title: 'App',

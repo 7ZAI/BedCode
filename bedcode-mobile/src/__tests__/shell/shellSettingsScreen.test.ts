@@ -20,6 +20,7 @@ import enShell from '@/locales/en/shell'
 
 const mockPush = vi.fn()
 const mockOpenPermissions = vi.fn()
+const mockNavBack = vi.fn()
 const mockConfirm = vi.fn(async () => true)
 const mockClearAllData = vi.fn(async () => ({ disconnected: true, completed: true }))
 const mockToastError = vi.fn()
@@ -31,7 +32,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: (...args: any[]) => mockPush(...args) }),
 }))
 vi.mock('@/shell/composables/useShellNavigation', () => ({
-  useShellNavigation: () => ({ openPermissions: mockOpenPermissions }),
+  useShellNavigation: () => ({ openPermissions: mockOpenPermissions, back: mockNavBack }),
 }))
 vi.mock('@/shell/composables/usePlatform', () => ({
   usePlatform: () => ({ platformInfo: ref({ platform: 'android', osType: 'android' }) }),
@@ -54,7 +55,17 @@ vi.mock('@/shell/composables/useToast', () => ({
 
 import ShellSettingsScreen from '@/shell/components/screens/ShellSettingsScreen.vue'
 
-/** 按文案定位平台设置按钮 */
+/**
+ * 按文案定位平台设置按钮
+ *
+ * 不按下标定位：本屏会继续新增分组（如「背景」的壁纸色块也是 button），
+ * 下标会随插入位置漂移，测试会以「点错按钮」的方式红掉而不是报出真实意图。
+ */
+function entryButton(wrapper: ReturnType<typeof mount>, key: string) {
+  return wrapper.findAll('button').find((b) => b.text().includes(key))
+}
+
+/** 全部按钮（退役路由反向断言用：要把每个可点入口都点一遍） */
 function entryButtons(wrapper: ReturnType<typeof mount>) {
   return wrapper.findAll('button')
 }
@@ -62,11 +73,14 @@ function entryButtons(wrapper: ReturnType<typeof mount>) {
 beforeEach(() => {
   mockPush.mockClear()
   mockOpenPermissions.mockClear()
+  mockNavBack.mockClear()
   mockConfirm.mockClear()
   mockConfirm.mockResolvedValue(true)
   mockClearAllData.mockClear()
   mockClearAllData.mockResolvedValue({ disconnected: true, completed: true })
   mockToastError.mockClear()
+  // 壁纸偏好是模块级单例（localStorage）：逐个用例复位，避免用例间串状态
+  localStorage.clear()
 })
 
 describe('C-ST1 平台设置门类齐全', () => {
@@ -115,12 +129,11 @@ describe('C-ST4 已下沉的业务设置入口不得回接（票 2026-10-10 C4�
 describe('C-ST2 新增三项（连接 / 认证 / 出站）入口', () => {
   it('should_pushLegacySettingsRoutes_when_connectionAuthenticationOrEgressTapped', async () => {
     const wrapper = mount(ShellSettingsScreen)
-    const buttons = entryButtons(wrapper)
 
-    // 文案键即渲染文本（useI18n 替身回显 key）：按下标定位前三项
-    await buttons[0].trigger('click')
-    await buttons[1].trigger('click')
-    await buttons[2].trigger('click')
+    // 文案键即渲染文本（useI18n 替身回显 key）：按 key 定位，不依赖按钮下标
+    await entryButton(wrapper, 'shell.settings.connection')!.trigger('click')
+    await entryButton(wrapper, 'shell.settings.authentication')!.trigger('click')
+    await entryButton(wrapper, 'shell.settings.egress')!.trigger('click')
 
     expect(mockPush.mock.calls.map((c) => (c[0] as { name: string }).name)).toEqual([
       'mobile-settings-connection',
@@ -134,18 +147,27 @@ describe('C-ST2 新增三项（连接 / 认证 / 出站）入口', () => {
 describe('C-ST3 既有项跳转口径不漂移', () => {
   it('should_keepPlatformRoutesAndShellPermissions_when_appearancePermissionsAboutTapped', async () => {
     const wrapper = mount(ShellSettingsScreen)
-    const buttons = entryButtons(wrapper)
 
-    // 票 2026-10-10 C4：通知入口退役后下标前移——3=外观 4=权限总览 5=关于
-    await buttons[3].trigger('click') // 外观
-    await buttons[4].trigger('click') // 权限总览 → 壳内屏
-    await buttons[5].trigger('click') // 关于
+    await entryButton(wrapper, 'shell.settings.appearance')!.trigger('click')
+    await entryButton(wrapper, 'shell.settings.permissions')!.trigger('click')
+    await entryButton(wrapper, 'shell.settings.about')!.trigger('click')
 
     expect(mockPush.mock.calls.map((c) => (c[0] as { name: string }).name)).toEqual([
       'mobile-settings-appearance',
       'mobile-settings-about',
     ])
     expect(mockOpenPermissions).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('should_callNavBack_when_backButtonTapped', async () => {
+    // 系统宫格进入本屏（不是栈底）：顶部返回是唯一的主屏之外退路。
+    // 返回键是图标按钮（无可读文本），按 aria-label 定位
+    const wrapper = mount(ShellSettingsScreen)
+    const back = wrapper.find('button[aria-label="shell.detail.back"]')
+    expect(back.exists(), '顶部返回按钮应在场').toBe(true)
+    await back.trigger('click')
+    expect(mockNavBack).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })
@@ -215,6 +237,61 @@ describe('C-ST5 危险区「清除所有数据」（票 2026-10-10 补回 spec �
 
     // 清理没做完就不能让用户以为已清干净（真源 composable 此时也不会 reload）
     expect(mockToastError, '失败必须可见').toHaveBeenCalledWith('shell.settings.clearAllDataFailed')
+    wrapper.unmount()
+  })
+})
+
+describe('C-ST6 背景（主屏壁纸）分组', () => {
+  /** 壁纸档位按钮：aria-label 即文案键（useI18n 替身回显 key） */
+  function wallButton(wrapper: ReturnType<typeof mount>, key: string) {
+    return wrapper.find(`button[aria-label="${key}"]`)
+  }
+
+  it('should_renderWallpaperOptionsAndDimSlider_when_mounted', () => {
+    const wrapper = mount(ShellSettingsScreen)
+
+    expect(wrapper.text(), '应有背景分组标题').toContain('shell.settings.background')
+    for (const key of [
+      'shell.settings.wallNone',
+      'shell.settings.wallAurora',
+      'shell.settings.wallDune',
+      'shell.settings.wallReef',
+    ]) {
+      expect(wallButton(wrapper, key).exists(), `缺少壁纸档位 ${key}`).toBe(true)
+    }
+    expect(wrapper.find('input[type="range"]').exists(), '应有遮罩强度滑杆').toBe(true)
+    wrapper.unmount()
+  })
+
+  it('should_updatePreference_when_wallpaperTapped', async () => {
+    const { useShellPreferences } = await import('@/shell/composables/useShellPreferences')
+    const prefs = useShellPreferences()
+    prefs.setWallpaper('aurora')
+    const wrapper = mount(ShellSettingsScreen)
+
+    await wallButton(wrapper, 'shell.settings.wallDune').trigger('click')
+
+    expect(prefs.wallpaper.value, '点选后偏好应切到该档').toBe('dune')
+    // 选中态是 aria-pressed（读屏可见），不是只靠描边颜色
+    expect(wallButton(wrapper, 'shell.settings.wallDune').attributes('aria-pressed')).toBe('true')
+    expect(wallButton(wrapper, 'shell.settings.wallAurora').attributes('aria-pressed')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('should_clampDim_when_sliderGoesBeyondRange', async () => {
+    const { useShellPreferences } = await import('@/shell/composables/useShellPreferences')
+    const prefs = useShellPreferences()
+    const wrapper = mount(ShellSettingsScreen)
+    const slider = wrapper.find('input[type="range"]')
+
+    // 越界值不抛错：钳制到 [0, 70]（滑杆理论上给不出 200，但偏好模块是公开 API）
+    ;(slider.element as HTMLInputElement).value = '200'
+    await slider.trigger('input')
+    expect(prefs.wallDim.value).toBe(70)
+
+    ;(slider.element as HTMLInputElement).value = '-5'
+    await slider.trigger('input')
+    expect(prefs.wallDim.value).toBe(0)
     wrapper.unmount()
   })
 })

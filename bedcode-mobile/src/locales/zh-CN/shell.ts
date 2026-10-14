@@ -1,7 +1,9 @@
 /**
- * 宿主壳（Host Shell）文案 —— 简体中文
+ * 宿主壳（Host Shell）文案 — 简体中文
  *
- * 新增/修改 key 必须同步 en/shell.ts（i18n 双语纪律）。
+ * 与 en/shell.ts 一一对应（i18n 双语纪律：新增/修改 key 必须两侧同步）。
+ * 分组口径：home=主屏、switcher=多任务、notify=通知栏、systemBar=底部系统条、
+ * settings=平台设置、permissions=权限管理。
  */
 export default {
   shell: {
@@ -10,11 +12,6 @@ export default {
       title: 'WASM 应用平台（宿主壳）',
       subtitle: '新版平台壳 · 与当前实现并存',
     },
-    nav: {
-      home: '首页',
-      apps: '应用',
-      settings: '我的',
-    },
     common: {
       loading: '加载中…',
       retry: '重试',
@@ -22,25 +19,31 @@ export default {
       running: '运行中',
       stopped: '未启动',
       disabled: '已停用',
+      /** 待审批：整单权限批准 + 内容哈希钉扎，批准前不可启动 */
+      approval: '待审批',
       error: '启动失败',
       cancel: '取消',
     },
     home: {
       localDevice: '本机',
       appCount: '{count} 个应用',
+      runningTitle: '正在运行',
+      runningNote: '最近使用在前',
+      switchTo: '切换到 {name}',
+      stopInstance: '停止',
       slotsTitle: '快捷卡片',
       slotsNote: '由应用提供',
       appsTitle: '我的 WASM 应用',
+      appsNote: '{count} 个已安装',
       manage: '管理',
-      recentTitle: '最近使用',
-      more: '更多',
-      providedBy: '由 {name} 提供',
+      appAria: '{name}，{state}',
       emptyApps: '尚未安装 WASM 应用',
-      emptyAppsHint: '在「应用」里安装或启用后，入口会出现在这里',
-      /** 快捷卡片区的空态：应用装了但没在跑时，卡片区本来就应该是空的，
-       *  用「尚未安装应用」会与上方的应用宫格自相矛盾 */
-      slotsEmpty: '应用运行后会在此显示状态卡片',
-      openApp: '打开应用',
+      emptyAppsHint: '在「应用管理」里安装或启用后，入口会出现在这里',
+      sysTitle: '系统',
+      sysNote: '平台自带',
+      sysApps: '应用管理',
+      sysPermissions: '权限管理',
+      sysSettings: '平台设置',
     },
     apps: {
       title: 'WASM 应用',
@@ -57,7 +60,7 @@ export default {
       installLocalHint: '需审批 + 哈希钉扎',
       empty: '暂无应用',
       permissionCount: '{count} 项权限',
-      installSuccess: '安装完成，可在列表中启用',
+      installSuccess: '安装完成，可在列表中批准并启动',
       installFailed: '安装失败：{error}',
       uninstallConfirm: '确定卸载「{name}」并删除其数据吗？此操作不可恢复。',
       uninstallSuccess: '已卸载 {name}',
@@ -67,6 +70,9 @@ export default {
       title: '应用详情',
       back: '返回',
       official: '官方',
+      /** 待审批说明：批准是整单的（全部声明权限 + 内容哈希钉扎），不做逐项勾选 */
+      approvalDesc: '该应用申请 {count} 项权限，批准后才能启动；批准会同时钉扎当前文件哈希。',
+      approveStart: '批准并启动',
       connection: '连接',
       connectionNote: '本应用独立持有',
       permissions: '权限',
@@ -96,18 +102,104 @@ export default {
       reservedHint: '这里是将来 wasm-app 的挂载点。应用注册运行面后，其界面会渲染在此处；平台只提供挂载与生命周期，不实现应用内页面。',
       reservedStatus: '{state} · {count} 项权限 · {id}',
       notFound: '应用不存在或已卸载',
-      switcherHint: '上滑并停顿呼出多任务',
     },
     switcher: {
-      title: '运行中的应用',
-      backHome: '回首页',
+      title: '多任务',
+      backHome: '回主屏',
+      closeAll: '全部关闭',
+      closeCard: '关闭 {name} 的卡片',
+      dormant: '未运行',
+      enter: '进入',
+      launch: '启动',
+      previewHint: '平台不持有应用内画面',
+      previewMeta: '{count} 项权限 · {id}',
       empty: '没有运行中的应用',
-      emptyHint: '回到首页打开一个应用，它会出现在这里',
-      foot: '点击卡片进入 · 上滑卡片停止应用',
-      stop: '停止',
+      emptyHint: '回到主屏打开一个应用，它会出现在这里',
+      foot: '点卡片进入 · 卡片上滑关闭',
+    },
+    notify: {
+      title: '通知栏',
+      count: '{count} 条',
+      open: '打开通知栏（{count} 条）',
+      close: '收起通知栏',
+      pending: '待处理',
+      pendingNote: '需要你决定',
+      pendingBody: '{count} 项权限待批准',
+      pendingAction: '去审批',
+      list: '通知',
+      listNote: '{count} 条',
+      empty: '暂无通知',
+      emptyHint: '应用启动、连接状态与待审批事项会出现在这里',
+      clearAll: '清除全部',
+      dismissOne: '关闭通知：{title}',
+      openApp: '打开',
+      justNow: '刚刚',
+      minutesAgo: '{count} 分钟前',
+      hoursAgo: '{count} 小时前',
+      daysAgo: '{count} 天前',
+      source: {
+        shell: '平台',
+        host: '连接',
+      },
+      connected: {
+        title: '已连接到桌面端',
+        body: '连接已建立并通过认证',
+      },
+      reconnected: {
+        title: '连接已恢复',
+        body: '断线后自动重连成功',
+      },
+      disconnected: {
+        title: '连接已断开',
+        body: '与桌面端的连接中断',
+      },
+      reauthRejected: {
+        title: '需要重新配对',
+        body: '凭据被拒绝，重新配对后才能连接',
+      },
+      /** 应用生命周期通知（壳自身动作的结果，文案由平台给出） */
+      app: {
+        started: {
+          title: '{name} 已启动',
+          body: '应用正在后台运行',
+        },
+        stopped: {
+          title: '{name} 已停止',
+          body: '应用已停止，数据保留',
+        },
+        approved: {
+          title: '{name} 已批准',
+          body: '权限申请已批准并完成内容钉扎',
+        },
+        installed: {
+          title: '{name} 已安装',
+          body: '批准后即可启动',
+        },
+        uninstalled: {
+          title: '{name} 已卸载',
+          body: '应用与其数据已删除',
+        },
+        failed: {
+          title: '{name} 启动失败',
+          body: '请查看应用详情后重试',
+        },
+      },
+    },
+    systemBar: {
+      label: '系统导航',
+      back: '返回',
+      home: '主屏',
+      recents: '多任务',
     },
     settings: {
-      title: '我的',
+      title: '平台设置',
+      background: '背景',
+      backgroundNote: '仅主屏',
+      wallNone: '无',
+      wallAurora: '极光',
+      wallDune: '沙丘',
+      wallReef: '礁湖',
+      wallDim: '遮罩强度',
       platform: '平台',
       appearance: '外观',
       appearanceHint: '主题与色板',
@@ -130,6 +222,13 @@ export default {
       clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
       appSettings: '应用设置',
       runtime: 'WasmApp Mobile {version}',
+    },
+    permissions: {
+      pending: '待审批',
+      pendingNote: '需要你决定',
+      pendingBody: '{count} 项权限待批准',
+      approveStart: '批准并启动',
+      approveFailed: '批准失败，请查看应用详情',
     },
     capsule: {
       title: '应用',

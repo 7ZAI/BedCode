@@ -17,6 +17,40 @@
     </div>
 
     <div class="flex-1 min-h-0 overflow-y-auto pb-6">
+      <!-- ==================== 待审批（需要用户动作，置顶） ==================== -->
+      <!-- 审批是整单的（后端 plugin_approve：全部声明权限 + 内容哈希钉扎），
+           因此这里不做逐项勾选；批不批是用户的判断，平台不替他预设 -->
+      <template v-if="pendingApps.length > 0">
+        <ShellSection :title="t('shell.permissions.pending')" :note="t('shell.permissions.pendingNote')" />
+        <div class="px-4 pb-1 flex flex-col gap-2">
+          <div
+            v-for="app in pendingApps"
+            :key="app.id"
+            class="flex items-center gap-3 rounded-[12px] border px-3 py-3"
+            :style="{
+              background: 'var(--mobile-warning-muted)',
+              borderColor: 'var(--mobile-warning)',
+            }"
+          >
+            <ShellAppIcon :app="app" :size="34" />
+            <div class="flex-1 min-w-0">
+              <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                {{ app.name }}
+              </div>
+              <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                {{ t('shell.permissions.pendingBody', { count: app.permissions.length }) }}
+              </div>
+            </div>
+            <ShellChip
+              :label="t('shell.permissions.approveStart')"
+              tone="accent"
+              clickable
+              @click="approveAndStart(app.id)"
+            />
+          </div>
+        </div>
+      </template>
+
       <template v-if="permissionRows.length > 0">
         <div v-for="row in permissionRows" :key="row.key">
           <ShellSection :title="row.title" :note="t('shell.apps.permissionCount', { count: row.apps.length })" />
@@ -57,14 +91,17 @@
  *
  * 与详情页的「按应用看权限」共用同一份权限授予真源，只是投影方向相反。
  * 不新增任何权限状态——反查视图如果自己维护一份状态，两处迟早不一致。
+ * 待审批区是新增的：审批是权限管理里唯一需要用户动作的事，必须置顶。
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useToast } from '../../composables/useToast'
 import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
 import { permissionTitleKey } from '../../permissions'
 import type { ShellApp } from '../../types'
 import ShellAppIcon from '../ShellAppIcon.vue'
+import ShellChip from '../ShellChip.vue'
 import ShellGroupCard from '../ShellGroupCard.vue'
 import ShellSection from '../ShellSection.vue'
 
@@ -75,8 +112,27 @@ interface PermissionRow {
 }
 
 const { t } = useI18n()
+const toast = useToast()
 const nav = useShellNavigation()
-const { apps } = useShellApps()
+const { apps, approveApp, launch } = useShellApps()
+
+/** 待审批应用：审批入口的置顶分区（批准后状态变化，卡片自然消失） */
+const pendingApps = computed(() => apps.value.filter((a) => a.state === 'approval'))
+
+/**
+ * 批准并启动
+ *
+ * 批准失败（后端拒绝）时不继续启动——半途而废的「已批准」假象比直接报错更危险。
+ */
+async function approveAndStart(appId: string): Promise<void> {
+  const approved = await approveApp(appId)
+  if (!approved) {
+    toast.error(t('shell.permissions.approveFailed'))
+    return
+  }
+  const started = await launch(appId)
+  if (started) nav.openApp(appId)
+}
 
 /** 权限 → 持有该权限的应用（按权限词聚合，应用按名称排序） */
 const permissionRows = computed<PermissionRow[]>(() => {

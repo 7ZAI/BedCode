@@ -12,6 +12,7 @@ vi.mock('@/plugin/commands', () => ({
   pluginListLoaded: vi.fn(async () => []),
   pluginGetInfo: vi.fn(async () => null),
   pluginPreauthorize: vi.fn(async () => {}),
+  pluginApprove: vi.fn(async () => {}),
   pluginActivate: vi.fn(async () => {}),
   pluginDeactivate: vi.fn(async () => {}),
   pluginInstallFromFile: vi.fn(async () => 'installed-id'),
@@ -78,8 +79,9 @@ describe('插件状态 → 壳运行态', () => {
     expect(toShellApp(info({ state: 'degraded', error: 'slow' })).state).toBe('running')
   })
 
-  it('should_beDisabled_when_pluginNeedsApproval', () => {
-    expect(toShellApp(info({ state: 'needsApproval' })).state).toBe('disabled')
+  it('should_beApproval_when_pluginNeedsApproval', () => {
+    // 待审批必须是独立档：提前拍平成「已停用」会让授权管理与通知栏的待处理区失去真源
+    expect(toShellApp(info({ state: 'needsApproval' })).state).toBe('approval')
   })
 
   it('should_beErrorWithReason_when_pluginErrored', () => {
@@ -194,11 +196,12 @@ describe('能力诚实口径', () => {
     await expect(source.setPermissionGrant?.('com.test.app', 'fs:read', true)).resolves.toBe(false)
   })
 
-  it('should_returnFalseWithoutInstalling_when_userCancelsFilePicker', async () => {
+  it('should_returnNullWithoutInstalling_when_userCancelsFilePicker', async () => {
     vi.mocked(dialogOpen).mockResolvedValueOnce(null as unknown as string)
     const source = createPluginAppSource()
 
-    await expect(source.installFromLocalPackage?.()).resolves.toBe(false)
+    // null = 用户取消（不是失败）：调用方据此不弹错误提示
+    await expect(source.installFromLocalPackage?.()).resolves.toBeNull()
     expect(cmds.pluginInstallFromFile).not.toHaveBeenCalled()
   })
 
@@ -206,8 +209,18 @@ describe('能力诚实口径', () => {
     vi.mocked(dialogOpen).mockResolvedValueOnce('/sdcard/app.zip')
     const source = createPluginAppSource()
 
-    await expect(source.installFromLocalPackage?.()).resolves.toBe(true)
+    // 返回安装后的应用 id：壳要用它把「已安装」通知挂到正确的应用上
+    await expect(source.installFromLocalPackage?.()).resolves.toBe('installed-id')
     expect(cmds.pluginInstallFromFile).toHaveBeenCalledWith('/sdcard/app.zip')
+  })
+
+  it('should_callApproveCommand_when_approvingApp', async () => {
+    const source = createPluginAppSource()
+
+    await source.approve?.('com.test.app')
+
+    // 审批是后端事实（整单权限 + 内容哈希钉扎），适配器只转发不自作主张
+    expect(cmds.pluginApprove).toHaveBeenCalledWith('com.test.app')
   })
 
   it('should_reportSourceId_when_created', () => {
