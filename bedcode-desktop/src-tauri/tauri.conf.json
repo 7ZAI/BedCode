@@ -1,7 +1,7 @@
 {
   "productName": "WasmApp",
   "identifier": "com.bedcode.app",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1420",

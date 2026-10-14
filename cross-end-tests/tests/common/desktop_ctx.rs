@@ -328,7 +328,7 @@ pub fn system_info() -> &'static bedcode_desktop_lib::system::info::SystemInfo {
 ///
 /// 坑：`AppContext::system_info().app_version` **不是**应用版本——`SystemInfo::collect()`
 /// 在 `bedcode-server-base` 里编译，取的是该**包的**版本（0.1.0）；而广播走端口
-/// （宿主壳实现 = 桌面 crate 的 `CARGO_PKG_VERSION` = 2.1.1）。断言必须对着端口。
+/// （宿主壳实现 = 桌面 crate 的 `CARGO_PKG_VERSION` = 3.0.0）。断言必须对着端口。
 pub fn advertised_app_version() -> String {
     use bedcode_server_base::ports::get as ports_get;
     ports_get().expect("server ports installed").system_info.app_version()
