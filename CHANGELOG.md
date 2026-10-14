@@ -31,6 +31,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mobile SDK `cargo test --features wasm` green, desktop `cargo check --all-targets` clean; 5 new
   permission / approval contract tests.
 
+#### Mobile: the terminal app is now named BedCode (directory `bedcode/`, icon switched to the released BedCode logo)
+
+- **Rename**: the mobile app directory `wasm-apps/terminal-session/` is now `wasm-apps/bedcode/`; the
+  manifest display name `Terminal Session` → `BedCode`; the package name
+  `@bedcode/plugin-terminal-session-mobile` → `@bedcode/plugin-bedcode-mobile`. The plugin id
+  (`com.bedcode.terminal-session`), the `terminal-session.*` command id family and the Rust crate name are
+  **unchanged** — the host addresses plugins by id, and changing it would ripple through the cross-end
+  protocol, `cross-end-tests` and both ends' WIT artifacts, well beyond this "display name + directory" scope.
+- **Icon**: switched to the released (master v2.1.1) BedCode logo shared by both ends (warm gradient
+  background + terminal `>_` mark, i.e. `bedcode-mobile/src-tauri/icons/icon.svg`); artifacts were rebuilt
+  via `pnpm run plugins:build --plugin com.bedcode.terminal-session` and the manifest name / icon verified.
+- **Reference sync**: root `scripts/plugin-package-list.json` (mobile list), the three CI plugin-install
+  lists (`test.yml`, `release.yml` ×2), the mobile `vitest.config.ts` include globs, the `scripts/dev-run.js`
+  watch entry, four retirement / re-wiring lock tests plus the `useLinkEncryption` and `panelDock`
+  source-scanning paths, the cross-end build path in `bedcode-wasm-core`'s `test_support/bare.rs`, and the
+  two ends' READMEs, code-maps and plugin-dev docs.
+- **Copy**: the connection-settings hint that points at "the … app's settings page" now uses the new display
+  name (zh + en in sync).
+- Verification: mobile frontend `pnpm run test:run` green (89 files / 1055 tests), root `pnpm exec eslint .`
+  with 0 errors, and the app's wasm + frontend build completed. After the in-flight plugin refactor
+  (permission desktop parity) landed, mobile `cargo test` (lib 239 + integration) and wasm-core
+  `cargo test` (578) both ran green.
 
 #### Mobile: stopping an app now disposes its run-scoped stores (fresh state on next launch)
 

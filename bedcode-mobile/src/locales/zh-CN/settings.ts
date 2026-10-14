@@ -57,7 +57,7 @@ export default {
       subtitle: '链路加密与传输安全',
       // 票 2026-10-10 C4：自动重连 / 保持连接 / 默认端口是业务项，已下沉
       // terminal-session 的应用内设置页；此处只留平台项（链路加密）。
-      businessElsewhere: '自动重连、保持连接与默认端口等连接设置已移至「终端会话」应用的设置页。',
+      businessElsewhere: '自动重连、保持连接与默认端口等连接设置已移至「BedCode」应用的设置页。',
       linkCryptoSection: '链路加密',
       linkCryptoMaster: '启用链路加密',
       linkEncryptHttp: '加密 HTTP 载荷',
@@ -149,7 +149,7 @@ export default {
       clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
     },
     // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
-    // 「重置设置」→ wasm-apps/terminal-session/src/settings/i18n.ts（重置业务设置项）；
+    // 「重置设置」→ wasm-apps/bedcode/src/settings/i18n.ts（重置业务设置项）；
     // 「清除所有数据」→ 本文件 about 组的 dangerZone 系列（设备级擦除，留宿主）。
     browser: {
       confirmOpen: '确定要在浏览器中打开此链接吗？',

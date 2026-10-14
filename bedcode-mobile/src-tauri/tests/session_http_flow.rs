@@ -11,7 +11,7 @@
 //! - 非 2xx 与业务码信封在执行器层的透出形态（`{status, body}`）
 //!
 //! 边界：插件侧的请求构造 / 响应分类纯函数锁在插件 crate
-//! （`wasm-apps/terminal-session/rust/src/session.rs` 单测）；jwtAuth 的
+//! （`wasm-apps/bedcode/rust/src/session.rs` 单测）；jwtAuth 的
 //! 「注入 / 未开不注入 / 缺 token 即拒」三向锁在能力域 crate
 //! （`bedcode-server-http` egress 用例组），移动 adapter 的 token 取值口径
 //! 见 `bedcode-wasm-core` 的 `bare/host_impl/http.rs`。

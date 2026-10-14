@@ -186,8 +186,8 @@ describe('结构锁：WS 帧级加密与 waiting_input 漂移零残留（票 06�
   it('会话状态比较统一到桌面 wire 字面量 waitingInput（snake_case 漂移零残留）', async () => {
     const [mc, utils, section] = await Promise.all([
       readFile('src/composables/useMobileConnection.ts', 'utf-8'),
-      readFile('wasm-apps/terminal-session/src/host/utils.ts', 'utf-8'),
-      readFile('wasm-apps/terminal-session/src/host/components/SessionsSection.vue', 'utf-8'),
+      readFile('wasm-apps/bedcode/src/host/utils.ts', 'utf-8'),
+      readFile('wasm-apps/bedcode/src/host/components/SessionsSection.vue', 'utf-8'),
     ])
     // 反例（三方一致）：任何一面都不允许出现已退役的 snake_case 字面量
     for (const src of [mc, utils, section]) {

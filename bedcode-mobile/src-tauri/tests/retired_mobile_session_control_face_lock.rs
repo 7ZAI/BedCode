@@ -139,13 +139,13 @@ const KEEP_HOST_FACE: [(&str, &str); 3] = [
 
 /// 插件会话控制域（同仓库 plugins/，相对 bedcode-mobile 根）
 const PLUGIN_SESSION_FACE: [(&str, &str); 7] = [
-    ("wasm-apps/terminal-session/rust/src/session.rs", "fn list_sessions("),
-    ("wasm-apps/terminal-session/rust/src/session.rs", "fn send_http_input("),
-    ("wasm-apps/terminal-session/rust/src/session.rs", "\"jwtAuth\": true"),
-    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.list-sessions\""),
-    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.send-http-input\""),
-    ("wasm-apps/terminal-session/plugin.json", "\"network:http\""),
-    ("wasm-apps/terminal-session/plugin.json", "\"terminal-session.start-session\""),
+    ("wasm-apps/bedcode/rust/src/session.rs", "fn list_sessions("),
+    ("wasm-apps/bedcode/rust/src/session.rs", "fn send_http_input("),
+    ("wasm-apps/bedcode/rust/src/session.rs", "\"jwtAuth\": true"),
+    ("wasm-apps/bedcode/rust/src/commands.rs", "\"terminal-session.list-sessions\""),
+    ("wasm-apps/bedcode/rust/src/commands.rs", "\"terminal-session.send-http-input\""),
+    ("wasm-apps/bedcode/plugin.json", "\"network:http\""),
+    ("wasm-apps/bedcode/plugin.json", "\"terminal-session.start-session\""),
 ];
 
 /// 宿主前端命令面封装必须仍在

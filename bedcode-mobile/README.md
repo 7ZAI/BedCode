@@ -85,7 +85,7 @@ bedcode-mobile/
 ├── packages/
 │   ├── plugin-sdk-mobile/  # 插件开发 SDK（TS + Rust，含 dev-shell 与模板）
 │   └── plugin-component-test/ # 测试用 WASM 插件 crate
-├── plugins/                # 官方插件（ai-chatbox / file-transfer / terminal-session）
+├── wasm-apps/              # 官方应用（ai-chatbox / bedcode / file-transfer）
 ├── scripts/                # 开发构建脚本（Android dev 日志落盘、插件构建等）
 └── docs/                   # 项目文档（code-map.md 等）
 ```

@@ -175,7 +175,7 @@ const PLUGIN_WATCH_CMDS = [
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
-    dir: 'wasm-apps/terminal-session',
+    dir: 'wasm-apps/bedcode',
     id: 'com.bedcode.terminal-session',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),

@@ -1,5 +1,5 @@
 {
-  "name": "@bedcode/plugin-terminal-session-mobile",
+  "name": "@bedcode/plugin-bedcode-mobile",
   "version": "1.0.0-beta",
   "private": true,
   "type": "module",

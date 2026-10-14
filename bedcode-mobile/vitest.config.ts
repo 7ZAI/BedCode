@@ -14,17 +14,17 @@ export default defineConfig({
     globals: true,
     // 全局装：Tauri core 的 Channel 替身（见 setup.ts 说明）
     setupFiles: ['src/__tests__/setup.ts'],
-    // 票 15：终端域测试随源码迁 `wasm-apps/terminal-session/src/terminal/__tests__/`
+    // 票 15：终端域测试随源码迁 `wasm-apps/bedcode/src/terminal/__tests__/`
     // （与宿主 src 同构组织；仍由本配置统一驱动，见 §测试纪律）
-    // 票 2026-10-09：宿主页域测试随源码迁 `wasm-apps/terminal-session/src/host/__tests__/`
-    // 票 2026-10-10：应用壳域（底部导航 + 页签容器）测试落 `wasm-apps/terminal-session/src/app/__tests__/`
+    // 票 2026-10-09：宿主页域测试随源码迁 `wasm-apps/bedcode/src/host/__tests__/`
+    // 票 2026-10-10：应用壳域（底部导航 + 页签容器）测试落 `wasm-apps/bedcode/src/app/__tests__/`
     include: [
       'src/__tests__/**/*.test.ts',
-      'wasm-apps/terminal-session/src/terminal/__tests__/**/*.test.ts',
-      'wasm-apps/terminal-session/src/host/__tests__/**/*.test.ts',
-      'wasm-apps/terminal-session/src/task/__tests__/**/*.test.ts',
-      'wasm-apps/terminal-session/src/app/__tests__/**/*.test.ts',
-      'wasm-apps/terminal-session/src/settings/__tests__/**/*.test.ts',
+      'wasm-apps/bedcode/src/terminal/__tests__/**/*.test.ts',
+      'wasm-apps/bedcode/src/host/__tests__/**/*.test.ts',
+      'wasm-apps/bedcode/src/task/__tests__/**/*.test.ts',
+      'wasm-apps/bedcode/src/app/__tests__/**/*.test.ts',
+      'wasm-apps/bedcode/src/settings/__tests__/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
     coverage: {

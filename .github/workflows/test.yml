@@ -234,7 +234,7 @@ jobs:
       # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox terminal-session file-transfer ocr; do
+          for p in ai-chatbox bedcode file-transfer ocr; do
             if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
               echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
               continue

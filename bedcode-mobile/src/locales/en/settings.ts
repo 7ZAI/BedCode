@@ -56,7 +56,7 @@ export default {
       // Ticket 2026-10-10 C4: autoReconnect / keepAlive / defaultPort are business
       // settings, now owned by the terminal-session app's settings page.
       businessElsewhere:
-        'Auto reconnect, keep-alive and default port now live in the Terminal Session app settings.',
+        'Auto reconnect, keep-alive and default port now live in the BedCode app settings.',
       linkCryptoSection: 'Link Encryption',
       linkCryptoMaster: 'Enable Link Encryption',
       linkEncryptHttp: 'Encrypt HTTP Payloads',

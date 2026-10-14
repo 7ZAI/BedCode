@@ -230,7 +230,7 @@ adb -s 192.168.1.23:5555 reverse --remove-all && adb -s 192.168.1.23:5555 revers
 
 ## 5. wasm 应用与插件
 
-桌面是 **`wasm-apps/<app-id>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`wasm-apps/<app-id>/`**（3 个：`ai-chatbox` / `file-transfer` / `terminal-session`）。插件 id 形如 `com.bedcode.<name>`。
+桌面是 **`wasm-apps/<app-dir>/`**（4 个：`agent-hub` / `ai-chatbox` / `file-transfer` / `terminal-session`），移动端是 **`wasm-apps/<app-dir>/`**（3 个：`ai-chatbox` / `bedcode` / `file-transfer`）。插件 id 形如 `com.bedcode.<name>`；目录名与 id 后缀解耦——移动端 `bedcode/` 的 id 仍是 `com.bedcode.terminal-session`（应用显示名 BedCode）。
 
 ### 5.1 工具链（桌面 wasm32-wasip3；file-transfer 例外）
 

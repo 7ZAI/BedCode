@@ -1,6 +1,6 @@
-# Terminal Session Plugin (Mobile)
+# BedCode Plugin (Mobile)
 
-移动端内置「远程终端控制端」wasm app：与桌面端 `com.bedcode.terminal-session` **同名但职责不同**（spec D6 选项 A）——桌面端是会话/任务/终端的**权威**（持有 PTY、WS 服务端、认证中心桥接），本端只做订阅消费、会话控制调用与任务面板的只读投影（ADR 0012「手机看、桌面管」）。两端契约独立（ADR 0018），不因同名互相约束。
+移动端内置「远程终端控制端」wasm app（应用显示名 **BedCode**，目录 / 包名 `bedcode`）：与桌面端 `com.bedcode.terminal-session` **同名但职责不同**（spec D6 选项 A）——桌面端是会话/任务/终端的**权威**（持有 PTY、WS 服务端、认证中心桥接），本端只做订阅消费、会话控制调用与任务面板的只读投影（ADR 0012「手机看、桌面管」）。两端契约独立（ADR 0018），不因同名互相约束。
 
 ## 域划分
 
@@ -22,7 +22,7 @@
 ## 目录结构
 
 ```
-terminal-session/
+bedcode/                 # 目录名与应用显示名解耦：显示名 BedCode，插件 id 仍是 com.bedcode.terminal-session
 ├── plugin.json          # 插件清单（权限并集：终端域 + 任务域）
 ├── src/
 │   ├── index.ts         # 插件入口：组合各域 activate/deactivate + devMock 导出

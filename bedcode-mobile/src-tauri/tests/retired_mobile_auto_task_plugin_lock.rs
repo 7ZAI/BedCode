@@ -3,7 +3,7 @@
 //! 票 16 把移动端 `com.bedcode.auto-task`（TS 面板 + 极简 rust 壳）**整体并入**
 //! `com.bedcode.terminal-session`（移动版 app，与桌面同名不同职责，C8）：
 //! 任务队列面板 / 工具箱「任务记录 + 定时任务」/ 桌面任务域 HTTP 客户端按域重组
-//! 进 `wasm-apps/terminal-session/src/task/`；旧 id / 视图 id `auto-task.toolbox` /
+//! 进 `wasm-apps/bedcode/src/task/`；旧 id / 视图 id `auto-task.toolbox` /
 //! 命令 id `auto-task.*` 与极简 rust 壳随合并退役（rust 壳 `invoke_command` 显式
 //! 全拒、TS 从未 invoke ⇒ 随迁即删，D6 强制①）。
 //!
@@ -15,7 +15,7 @@
 //! 只扫非注释行：模块头「为什么退役」的记账段落与本锁自身的说明不算回接。
 //!
 //! 合并后的正向面（反向断言钉住，防「顺手清光」）：
-//! - `wasm-apps/terminal-session/`：权限并集（auth/bus/session:read/storage/
+//! - `wasm-apps/bedcode/`：权限并集（auth/bus/session:read/storage/
 //!   terminal:output/ws:client）+ 任务域基址 + 任务路由
 //! - 宿主 fs_auth 白名单条目换为 `com.bedcode.terminal-session`
 //!
@@ -178,7 +178,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
         resource_dir.display()
     );
 
-    let manifest_path = repo.join("wasm-apps/terminal-session/plugin.json");
+    let manifest_path = repo.join("wasm-apps/bedcode/plugin.json");
     let manifest = std::fs::read_to_string(&manifest_path)
         .unwrap_or_else(|e| panic!("读取 {} 失败：{e}", manifest_path.display()));
     for needle in [
@@ -212,7 +212,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
         );
     }
 
-    let activate = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/activate.ts"))
+    let activate = std::fs::read_to_string(repo.join("wasm-apps/bedcode/src/task/activate.ts"))
         .expect("读取任务域 activate.ts 失败");
     // 只扫非注释行（本文件头注纪律：模块头「为什么退役」的记账段落不算回接）——
     // C2 的退役说明以「记名某 API 已退役」形式写在注释里，按全文 contains 会把
@@ -240,7 +240,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
         activate_violations.join("\n")
     );
 
-    let api = std::fs::read_to_string(repo.join("wasm-apps/terminal-session/src/task/api.ts"))
+    let api = std::fs::read_to_string(repo.join("wasm-apps/bedcode/src/task/api.ts"))
         .expect("读取任务域 api.ts 失败");
     assert!(
         api.contains("/api/plugin/com.bedcode.terminal-session"),
@@ -248,7 +248,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
     );
 
     // 插件侧源码零旧 id 字样（合并后的 app 自身不得再提旧 id）
-    let plugin_src = repo.join("wasm-apps/terminal-session/src");
+    let plugin_src = repo.join("wasm-apps/bedcode/src");
     let mut files: Vec<String> = Vec::new();
     collect_ext(&plugin_src, &plugin_src, &["ts", "vue"], &mut files);
     assert!(!files.is_empty(), "terminal-session 前端源码为空，扫描路径有误");

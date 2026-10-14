@@ -85,7 +85,7 @@ bedcode-mobile/
 ├── packages/
 │   ├── plugin-sdk-mobile/  # Plugin SDK (TS + Rust, incl. dev-shell and templates)
 │   └── plugin-component-test/ # Test WASM plugin crate
-├── plugins/                # Official plugins (ai-chatbox / file-transfer / terminal-session)
+├── wasm-apps/              # Official apps (ai-chatbox / bedcode / file-transfer)
 ├── scripts/                # Dev & build scripts (Android dev log capture, plugin build, etc.)
 └── docs/                   # Project docs (code-map.md, etc.)
 ```

@@ -22,8 +22,8 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 ├── packages/                         # 插件 SDK（plugin-sdk-mobile）+ 测试插件（plugin-component-test）
 ├── wasm-apps/                        # wasm 应用（业务主场；各独立 package）
 │   ├── ai-chatbox/                   # 多供应商 OpenAI 兼容聊天
-│   ├── file-transfer/                # 文件传输（双端单产物：wasm 产物源在桌面同一 crate，本目录只剩前端）
-│   └── terminal-session/             # 远程终端控制端（终端消费 UI + 订阅协议 + 任务域，与桌面同名不同职责）
+│   ├── bedcode/                      # BedCode 应用：远程终端控制端（终端消费 UI + 订阅协议 + 任务域，与桌面 terminal-session 同 id 不同职责）
+│   └── file-transfer/                # 文件传输（双端单产物：wasm 产物源在桌面同一 crate，本目录只剩前端）
 ├── src/                              # Vue 3 前端
 │   ├── components/ composables/      # UI 组件；业务 composable（连接/HTTP/mDNS/通知/前台服务…）
 │   ├── stores/ views/                # Pinia 状态；页面（设备/会话/设置/工具箱…）
@@ -72,7 +72,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 
 ### 终端链路（协议客户端与消费 UI 在插件 · 窄转发在宿主）
 
-**落点**：`wasm-apps/terminal-session/`（协议事实面 + 终端消费 UI）+ `src-tauri/src/plugin/terminal_stream.rs`（宿主窄转发）。
+**落点**：`wasm-apps/bedcode/`（协议事实面 + 终端消费 UI）+ `src-tauri/src/plugin/terminal_stream.rs`（宿主窄转发）。
 
 - **插件侧**：`rust/src/`（订阅状态机 / 帧构造与按键翻译 / 命令面 / 会话控制域）；终端 UI 在 `src/terminal/`（TerminalView / 渲染器 / 输入 / 滚动 / 主题）
 - **宿主侧（零解析窄转发，ADR 0022 薄壳④）**：`plugin/terminal_stream.rs`（页面 Channel 表 + `host-terminal-stream.forward-output` 裸字节转发）+ `plugin/connection.rs`（`host-connection.primary-target` 主连接目标事实）
@@ -120,7 +120,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 
 ### 前端终端链路（已迁插件，宿主只剩薄壳）
 
-- 终端消费 UI 与协议客户端已整体迁 `wasm-apps/terminal-session/src/terminal/`（AGENTS §6 壳 / 插件架构）
+- 终端消费 UI 与协议客户端已整体迁 `wasm-apps/bedcode/src/terminal/`（AGENTS §6 壳 / 插件架构）
 - 宿主侧只剩：`views/TerminalView.vue`（薄壳渲染插件注册的视图）+ `plugin/terminal-stream.ts`（页面字节通道）+ `plugin/host-events.ts`（会话事件白名单投影）
 
 **改前注意**：终端 buffer / 渲染 / 滚动 / 键盘避让在插件工程内；宿主不实现终端业务逻辑。
@@ -129,7 +129,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 
 桌面插件任务域 → WebSocket 事件 → 宿主事件桥 → 前端同步 UI / 系统通知；模式切换走 HTTP（JWT 认证）→ 广播回同步。
 
-**涉及目录**：`src/composables/`（useMobileConnection / useNotification / useHttpApi）+ `wasm-apps/terminal-session/src/task/`（任务面板，业务在插件工程）。
+**涉及目录**：`src/composables/`（useMobileConnection / useNotification / useHttpApi）+ `wasm-apps/bedcode/src/task/`（任务面板，业务在插件工程）。
 
 ---
 
@@ -140,7 +140,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | 功能 | 目录 |
 | --- | --- |
 | WebSocket 客户端 / 心跳 / 重连 | `src-tauri/src/connection/` |
-| 终端链路（协议 + UI 在插件，宿主窄转发） | `wasm-apps/terminal-session/` + `src-tauri/src/plugin/terminal_stream.rs` |
+| 终端链路（协议 + UI 在插件，宿主窄转发） | `wasm-apps/bedcode/` + `src-tauri/src/plugin/terminal_stream.rs` |
 | 消息路由 / WS 处理器 | `src-tauri/src/router/`、`src-tauri/src/handler/` |
 | 认证 | `src-tauri/src/auth/` |
 | mDNS 发现与广播 | `src-tauri/src/mdns/` |
@@ -178,7 +178,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | --- | --- |
 | 前端零资源访问（源码静态锁 + 运行期 ACL + 引擎级 CSP 三层） | 根 `eslint.config.js`（`bedcode/frontend-no-resource-access`）+ `src-tauri/capabilities/mobile.json` + `src-tauri/tauri.conf.json`（`security.csp`） |
 | 壳层约束 L1–L7（零资源访问 / 不裸 invoke / 平台弹窗 / 无静默 catch / i18n / 无硬编码色 / **壳内自足**） | `src/__tests__/shell/shellConstraintLocks.test.ts` |
-| 壳注册桥与插件域机制（运行面解析 / 设置门类 / 连接事件投影 / 业务设置域） | `src/__tests__/{plugin/pluginContextShell,shell/useShellAppsSurface,shell/shellSettingsScreen,plugin/connectionEvents}.test.ts` + `wasm-apps/terminal-session/src/{host,task,app,settings}/__tests__/**` |
+| 壳注册桥与插件域机制（运行面解析 / 设置门类 / 连接事件投影 / 业务设置域） | `src/__tests__/{plugin/pluginContextShell,shell/useShellAppsSurface,shell/shellSettingsScreen,plugin/connectionEvents}.test.ts` + `wasm-apps/bedcode/src/{host,task,app,settings}/__tests__/**` |
 | 旧宿主 UI 退役面不回接（R1–R5 退役路由 / 组件 / 扩展点；含壳内底部系统条 `ShellSystemBar` 退役，R3 新增「不得回到磁盘」正面钉） | `src/__tests__/shell/retiredHostUIRetirementLocks.test.ts` |
 | 发送 / 接收编排退役面（含 `src/peer_receive/tests/` 不得复活） | `src-tauri/tests/retired_mobile_send_orchestration_lock.rs`、`retired_mobile_receive_orchestration_lock.rs` |
 | 传输 / 远端浏览调度与设置命令面退役 | `src-tauri/tests/retired_mobile_peer_transfer_command_face_lock.rs` |

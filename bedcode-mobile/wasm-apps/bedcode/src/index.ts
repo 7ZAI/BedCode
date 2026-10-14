@@ -1,5 +1,8 @@
 /**
- * Terminal Session Plugin（移动版）— TS 前端入口（票 12 建壳，票 16 并入任务域，票 15 并入终端 UI 域）
+ * BedCode Plugin（移动版）— TS 前端入口（票 12 建壳，票 16 并入任务域，票 15 并入终端 UI 域）
+ *
+ * 应用显示名 BedCode、目录 `wasm-apps/bedcode/`，插件 id 仍是 `com.bedcode.terminal-session`
+ * （命令 id 族 `terminal-session.*` 同理不动，见 plugin.json）。
  *
  * 本插件是「远程终端控制端」（D6 选项 A：与桌面端同名但职责不同，契约独立，
  * 两端不因同名互相约束）。前端按域组织：

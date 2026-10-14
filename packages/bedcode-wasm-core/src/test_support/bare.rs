@@ -58,7 +58,7 @@ pub fn build_terminal_session_component() -> Vec<u8> {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // 票 06 批次 03：crate 迁根后路径改写（fork 时代 ../../wasm-apps = bedcode-mobile/
     // wasm-apps；根 crate 在 packages/ ⇒ 跨端相对路径 ../../bedcode-mobile/wasm-apps）
-    let plugin_dir = manifest_dir.join("../../bedcode-mobile/wasm-apps/terminal-session");
+    let plugin_dir = manifest_dir.join("../../bedcode-mobile/wasm-apps/bedcode");
     let target_dir = fixture_target_dir().to_str().unwrap().to_string();
     let manifest_path = plugin_dir
         .join("rust/Cargo.toml")

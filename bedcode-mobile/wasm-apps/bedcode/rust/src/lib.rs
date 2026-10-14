@@ -1,4 +1,7 @@
-//! Terminal Session Plugin (WASM, Mobile) — 远程终端控制端（票 12）
+//! BedCode Plugin (WASM, Mobile) — 远程终端控制端（票 12）
+//!
+//! 应用显示名 BedCode、目录 `wasm-apps/bedcode/`，插件 id 与 crate 名仍是
+//! `com.bedcode.terminal-session` / `bedcode_plugin_terminal_session`（宿主按 id 寻址，不受改名影响）。
 //!
 //! 终端订阅协议客户端从宿主 `terminal_link.rs`（1,363 行，已退役）整体迁入
 //! 本插件：subscribe / ack / ring_resync / special-key 翻译（keys.rs）/

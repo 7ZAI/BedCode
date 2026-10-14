@@ -16,7 +16,7 @@
 //! - **引擎**（C4）：`auth/manager.rs` 的 HTTP 认证方法与凭据落地；
 //! - **投影**：`host_impl/auth.rs` 的 `host-auth` 5 原语（凭据零过境）+
 //!   宿主窄读命令 `ws_get_auth_credentials`（前端持久化镜像唯一取数口）；
-//! - **插件编排域**：`wasm-apps/terminal-session` 的 `auth.rs` 流程编排 +
+//! - **插件编排域**：`wasm-apps/bedcode` 的 `auth.rs` 流程编排 +
 //!   命令分派 + manifest `auth` 权限位声明（权限门 fail-closed 的前提）。
 //!
 //! 只扫非注释行：模块头「为什么迁」的记账段落与本锁自身的说明不算回接。
@@ -70,11 +70,11 @@ const KEEP_FACE: [(&str, &str); 7] = [
 
 /// 插件编排域（同仓库 plugins/，相对 bedcode-mobile 根）
 const PLUGIN_AUTH_FACE: [(&str, &str); 5] = [
-    ("wasm-apps/terminal-session/rust/src/auth.rs", "fn request_pairing("),
-    ("wasm-apps/terminal-session/rust/src/auth.rs", "fn verify_pairing_code("),
-    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.verify-pairing-code\""),
-    ("wasm-apps/terminal-session/rust/src/commands.rs", "\"terminal-session.authenticate-with-biometric\""),
-    ("wasm-apps/terminal-session/plugin.json", "\"auth\""),
+    ("wasm-apps/bedcode/rust/src/auth.rs", "fn request_pairing("),
+    ("wasm-apps/bedcode/rust/src/auth.rs", "fn verify_pairing_code("),
+    ("wasm-apps/bedcode/rust/src/commands.rs", "\"terminal-session.verify-pairing-code\""),
+    ("wasm-apps/bedcode/rust/src/commands.rs", "\"terminal-session.authenticate-with-biometric\""),
+    ("wasm-apps/bedcode/plugin.json", "\"auth\""),
 ];
 
 fn mobile_root() -> PathBuf {

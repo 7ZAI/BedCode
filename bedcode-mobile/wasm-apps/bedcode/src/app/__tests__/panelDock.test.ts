@@ -112,9 +112,9 @@ describe('C-PD6/C-PD7 相邻页签与越界', () => {
 })
 
 describe('C-PD8/C-PD9 停靠形态锁（重叠回归防线）', () => {
-  const css = readFileSync(join(process.cwd(), 'src/../wasm-apps/terminal-session/src/app/app.css'), 'utf8')
+  const css = readFileSync(join(process.cwd(), 'src/../wasm-apps/bedcode/src/app/app.css'), 'utf8')
   const appRoot = readFileSync(
-    join(process.cwd(), 'src/../wasm-apps/terminal-session/src/app/AppRoot.vue'),
+    join(process.cwd(), 'src/../wasm-apps/bedcode/src/app/AppRoot.vue'),
     'utf8',
   )
 

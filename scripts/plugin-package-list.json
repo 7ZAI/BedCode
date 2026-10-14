@@ -7,7 +7,7 @@
   ],
   "mobile": [
     "ai-chatbox",
-    "file-transfer",
-    "terminal-session"
+    "bedcode",
+    "file-transfer"
   ]
 }

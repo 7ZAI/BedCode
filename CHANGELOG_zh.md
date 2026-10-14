@@ -28,6 +28,24 @@
 - 验证：移动宿主 `cargo test` 全绿（lib 239 + 集成全量）、内核 `cargo test` 578 全绿、移动 SDK
   `cargo test --features wasm` 全绿、桌面 `cargo check --all-targets` 通过；新增 5 条权限 / 审批契约用例。
 
+#### 移动端：终端应用改名 BedCode（目录 `bedcode/`，图标换成已发布的旧版 BedCode logo）
+
+- **改名**：移动端 `wasm-apps/terminal-session/` 目录改名 `wasm-apps/bedcode/`，manifest 显示名
+  `Terminal Session` → `BedCode`，包名 `@bedcode/plugin-terminal-session-mobile` →
+  `@bedcode/plugin-bedcode-mobile`。插件 id（`com.bedcode.terminal-session`）、命令 id 族
+  （`terminal-session.*`）与 rust crate 名**一律不动**——宿主按 id 寻址，改 id 会连带跨端协议、
+  cross-end-tests 与两端 WIT 产物，超出本次「显示名 + 目录名」范围。
+- **图标**：换成已发布版本（master v2.1.1）双端统一的 BedCode logo（暖色渐变底 + 终端 `>_` 标志，
+  即 `bedcode-mobile/src-tauri/icons/icon.svg`）；产物经 `pnpm run plugins:build --plugin
+  com.bedcode.terminal-session` 重建并核验清单 name 与 icon 一致。
+- **引用同步**：根 `scripts/plugin-package-list.json`（mobile 名单）、CI 三处插件安装列表
+  （`test.yml` / `release.yml` ×2）、移动 `vitest.config.ts` include、`scripts/dev-run.js` watch 项、
+  四把退役/回接锁与 `useLinkEncryption` / `panelDock` 的源码扫描路径、`bedcode-wasm-core`
+  `test_support/bare.rs` 的跨端构建路径、两端 README 与 code-map / plugin-dev 文档。
+- **文案**：连接设置页「已移至…应用的设置页」提示随显示名改口（中英同步）。
+- 验证：移动端前端 `pnpm run test:run` 89 文件 / 1055 用例全绿，根 `pnpm exec eslint .` 0 error，
+  该应用 wasm + 前端产物构建通过；在途插件重构（权限授权面桌面同构）落地后补跑移动端
+  `cargo test`（lib 239 + 集成全量）与 wasm-core `cargo test`（578）全绿。
 
 #### 移动端：停止应用即作废其运行期 store（再次启动为全新状态）
 
