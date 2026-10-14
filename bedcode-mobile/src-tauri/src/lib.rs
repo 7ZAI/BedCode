@@ -273,6 +273,8 @@ pub fn run() {
             system::commands::get_app_version,
             system::commands::get_system_info,
             system::commands::get_local_ip_addresses,
+            // 壳 UI 资产（选图 + 落 $APPDATA；前端零资源访问红线下由宿主代劳）
+            system::shell_ui::shell_import_image,
             // Android Specific
             commands::android::set_screen_orientation,
             commands::android::keep_screen_awake,
