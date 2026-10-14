@@ -191,6 +191,21 @@ const presetTasks = getPresetTasks()    // 宿主预设任务 composable
 const context = getPluginContext()      // 组件 setup 内从 inject 获取 PluginContext
 ```
 
+### 应用运行期与 store（Pinia）
+
+宿主按「一次运行期」隔离插件 store：**启动（activate）到停止（deactivate，含多任务上滑 / × /
+详情「停用」/ 卸载）之间的 store 属于该次运行期，停止即整体作废**——再次启动是全新 store
+（回到 setup 初始 state），不会读到上一次运行期残留。
+
+由此有两条契约：
+
+1. **store 定义写在模块顶层**（`const useX = defineStore(...)`）。宿主在装载模块时记录归属，
+   模块被 ESM 缓存、只求值一次也不影响下次运行期拿到新作用域；写在异步 chunk 里会回退宿主
+   Pinia 并打 warn（不保证随应用停止作废）。
+2. **模块级可变单例状态必须在 `deactivate` 里清空**（或挂到 `context` 的 disposable）。宿主
+   不会重新求值插件模块，跨 activate 保留的模块级状态属插件缺陷；需要跨运行期保留的数据
+   请走 storage / plugin-database。
+
 ## Vite 构建集成
 
 在插件 `vite.config.ts` 中引入 `bedcodePlugin()`，负责将共享模块标记为 external 并改写为全局变量读取：

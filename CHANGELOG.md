@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+#### Mobile: stopping an app now disposes its run-scoped stores (fresh state on next launch)
+
+- **Fix (host shell / plugin frontend)**: after stopping an app (swipe-away / × / "close all" /
+  "disable" in the app detail) and opening it again, its Pinia stores kept the previous run's state
+  (e.g. terminal-session stayed on the old session / old tab). Cause: plugin frontend modules are loaded
+  through a dynamic `import()` whose URL never changes, so the ESM cache short-circuits module evaluation
+  and the top-level `defineStore` runs only once; every `useStore()` then returned the same instance from
+  the host Pinia, while stopping only recycled registrations and backend subscriptions. Stores are now
+  scoped to an **app run** (`activate`..`deactivate`): `defineStore` is wrapped by the run scope, so
+  `useStore()` always resolves the Pinia of that plugin's current run; stopping the app calls `$dispose()`
+  on each store and drops the scope, and the next launch starts from the initial state. Scope isolation
+  also removes store-id collisions between plugins.
+- **Contract (plugin authors)**: define stores at the top level of the plugin module (an async chunk falls
+  back to the host Pinia with a warning); clear module-level mutable singletons in `deactivate` — the host
+  does not re-evaluate plugin modules (documented in the SDK README).
+- **Uninstall**: `removeApp` now ends the run (frontend teardown + backend deactivate) before deleting the
+  package, so no run surface or store is left behind until the next page reload.
+- Added 9 run-scope contract tests + 2 loader integration tests (covering "module cache hit still yields a
+  fresh store"); mobile suite: 89 files / 1055 tests green, `vue-tsc` and root ESLint with 0 errors.
+
 #### Mobile: run-surface page switching is now "one page per screen" (fully off-screen docking + enter transition)
 
 - **Fix (terminal-session run surface)**: switching between the four bottom-tab pages with the horizontal

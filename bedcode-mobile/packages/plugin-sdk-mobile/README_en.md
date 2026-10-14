@@ -192,6 +192,23 @@ const presetTasks = getPresetTasks()    // Host preset-tasks composable
 const context = getPluginContext()      // PluginContext via inject inside component setup
 ```
 
+### App run and stores (Pinia)
+
+The host scopes plugin stores to a single **app run**: everything between `activate` and `deactivate`
+(including swipe-away / × / "disable" in the app detail / uninstall) belongs to that run. **Stopping
+the app disposes every store created in it** — the next launch starts from the setup initial state and
+never sees leftovers from the previous run.
+
+Two contracts follow:
+
+1. **Define stores at the top level of your plugin module** (`const useX = defineStore(...)`). The host
+   records ownership while the module is loaded; because the module is cached and evaluated only once,
+   that is still enough for the next run to get a fresh scope. Stores defined in async chunks fall back
+   to the host Pinia with a warning (not guaranteed to be disposed on app stop).
+2. **Module-level mutable singletons must be cleared in `deactivate`** (or tied to a `context`
+   disposable). The host does not re-evaluate your module; state that survives across activations is a
+   plugin defect. Data that must outlive a run belongs in storage / plugin-database.
+
 ## Vite Build Integration
 
 Add `bedcodePlugin()` to the plugin's `vite.config.ts`; it marks shared modules as external and rewrites them to read from the host global:

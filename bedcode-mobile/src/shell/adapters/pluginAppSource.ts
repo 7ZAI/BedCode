@@ -164,6 +164,11 @@ export function createPluginAppSource(): ShellAppSource {
 
     /** 卸载应用并删除数据（仅用户安装的包可卸载，内置插件由后端拒绝并抛错） */
     async remove(appId: string): Promise<boolean> {
+      // 卸载即结束运行期：先走前端对称拆解（注册表 / 事件 / 运行期 store 作用域 +
+      // 后端停用），再让后端删包。后端 uninstall 内部也会 deactivate，但那只回收
+      // Rust 侧——前端模块与 store 若不在此时收掉，应用卸载后其运行面与状态会
+      // 残留在 WebView 里直到页面重载（与 stop 同口径：没有"卸载了但 store 还在跑"）
+      await pluginLoader.deactivate(appId)
       await pluginUninstall(appId)
       return true
     },

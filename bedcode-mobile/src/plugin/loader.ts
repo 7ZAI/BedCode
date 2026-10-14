@@ -6,12 +6,14 @@
  */
 
 import type { PluginInfo, PluginModule, PluginContext } from './types'
+import { nextTick } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import * as pluginCmds from './commands'
 import { toPluginAssetUrl } from './assets'
 import { createPluginContext } from './context'
 import { clearPluginEvents } from './events'
 import { getPluginRegistry } from './registry'
+import { disposeAppRunScope, loadPluginModuleScoped } from './app-run-scope'
 
 /** 已激活的插件实例 */
 interface ActivePlugin {
@@ -149,6 +151,10 @@ class PluginLoaderClass {
    * WASM 实例也可能因 plugin_activate 成功而存活（持有 mDNS browse 句柄等），
    * 必须通知后端停用，保证「前端注册表为空 ⇔ 后端非存活」。前端侧各步存在则
    * 执行、缺失则跳过；重复调用无副作用（后端对未激活/已停用状态幂等早退）。
+   *
+   * 除资源回收外还作废运行期 store 作用域（disposeAppRunScope）：停止应用 =
+   * store 停止运行，再次 activate 是全新 store；模块在内不在内都执行（无作用域时
+   * 为 no-op）。
    */
   async deactivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId)
@@ -192,6 +198,13 @@ class PluginLoaderClass {
       logger.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
     }
 
+    // 运行期 store 作用域作废：等一次 Vue flush 让运行面组件随注册表清理先卸载，
+    // 再 $dispose 本次运行期的全部 store——组件仍持有 store 时提前作废会把半死的
+    // store 留在渲染路径上（后端停用是 IPC 往返，回来时 flush 通常已跑完，此处兜底）。
+    // 作用域丢弃后，再次激活 useStore() 会新建 store（回到初始 state）
+    await nextTick()
+    disposeAppRunScope(pluginId)
+
     logger.log(`[PluginLoader] Plugin deactivated: ${pluginId}`)
   }
 
@@ -205,8 +218,12 @@ class PluginLoaderClass {
     try {
       // 经 Tauri asset protocol 从插件目录直读前端模块
       // Android 上自动变为 http://tauri.localhost/，与桌面端 convertFileSrc 方案一致
-      const module = await this.importWithTimeout(
-        toPluginAssetUrl(manifest.extensionPath, manifest.main),
+      //
+      // 装载走运行期作用域的「装载窗口」：窗口内插件顶层 defineStore 绑定到本插件，
+      // 之后每次 useStore 解析本插件当前运行期的 Pinia（停止即作废，见 app-run-scope.ts）。
+      // 窗口是全局标记，内部已串行化——并发装载不会让两个插件的 store 串绑
+      const module = await loadPluginModuleScoped(manifest.id, () =>
+        this.importWithTimeout(toPluginAssetUrl(manifest.extensionPath, manifest.main)),
       )
 
       const context = createPluginContext(manifest)
@@ -222,6 +239,8 @@ class PluginLoaderClass {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       // 激活失败：摘除激活期间可能残留的注册（含动态路由），避免半激活状态
       getPluginRegistry().clearPlugin(manifest.id)
+      // 装载失败可能已建过运行期作用域（模块求值到一半抛错）：一并作废，不留半截状态
+      disposeAppRunScope(manifest.id)
       // 对称拆解后端：plugin_activate 可能已成功（WASM 实例存活，状态
       // Activated/Degraded），必须先于 markError 停用——后端 deactivate 仅对
       // Activated/Degraded 生效，markError 置 Error 后实例将无法再拆解。

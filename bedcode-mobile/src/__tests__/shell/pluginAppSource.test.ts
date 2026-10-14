@@ -227,3 +227,19 @@ describe('能力诚实口径', () => {
     expect(createPluginAppSource().id).toBe(PLUGIN_APP_SOURCE_ID)
   })
 })
+
+describe('卸载（运行期收口）', () => {
+  it('should_endRunBeforeUninstall_when_removingApp', async () => {
+    const source = createPluginAppSource()
+
+    await source.remove?.('com.test.app')
+
+    // 卸载即结束运行期：前端对称拆解（注册表 / 事件 / 运行期 store 作用域 + 后端停用）
+    // 必须先于后端删包——否则应用卸载后其运行面与 store 会残留在 WebView 直到重载
+    expect(pluginLoader.deactivate).toHaveBeenCalledWith('com.test.app')
+    expect(cmds.pluginUninstall).toHaveBeenCalledWith('com.test.app')
+    const deactivateOrder = vi.mocked(pluginLoader.deactivate).mock.invocationCallOrder[0]
+    const uninstallOrder = vi.mocked(cmds.pluginUninstall).mock.invocationCallOrder[0]
+    expect(deactivateOrder).toBeLessThan(uninstallOrder)
+  })
+})
