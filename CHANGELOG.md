@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### Mobile: host-shell revision 2 (navigation / recents deck / settings ownership / custom wallpaper)
+
+- **Navigation**: the bottom system bar (`ShellSystemBar`) is retired outright — a permanent nav bar eats a
+  slice of every app's viewport and duplicates Android's own gesture bar. Navigation now lives in the screens
+  themselves: every non-root screen owns its back row, and the app run screen shows the app icon + name on the
+  left with a capsule on the right offering menu / recents / home (`···` / card / home icons; the old
+  "exit app" circle wording is gone).
+- **Home screen**: design-stage side notes ("built into the platform", "provided by apps", "most recent
+  first") are removed; quick cards became a horizontal scroll-snap track (fixed-width cards, one per swipe);
+  the app-manager entry changed from a text chip to a 44px icon button with an accessible name.
+- **Recents**: the card track became a centred fixed-size deck (arithmetic offsets + linear scale) where the
+  front card is fully interactive and the cards behind only peek out; horizontal swipes and prev/next buttons
+  change the front card (dragging is not the only path), tapping a back card promotes it, swipe-up dismisses,
+  and transitions collapse under reduced-motion.
+- **Settings ownership**: the danger zone (clear all data) moved from the top-level platform settings page
+  into "About WasmApp"; the "Connection" and "Authentication" entries were removed from platform settings
+  (connections and credentials belong to each app, not the host); settings sub-pages got top safe-area padding
+  (no more title bar glued to the status bar) and bottom navigation-bar padding; app-contributed settings
+  entries without a handler now open the app details instead of doing nothing.
+- **Custom wallpaper**: the Background group gained "Choose from gallery" — the host command
+  `shell_import_image` picks an image and copies it into `$APPDATA/shell-assets/<namespace>/` (single slot,
+  stale files cleaned up; Android `content://` URIs relay through SafIo), while the shell only stores the path
+  preference and renders it via the asset protocol; replace / remove fall back to the built-in gradients.
+- Tests: mobile frontend 85 files / 998 cases green (new suites for the run-screen capsule, deck switching and
+  wallpaper preferences); mobile host `cargo test` green (incl. 9 unit tests in `system/shell_ui.rs`);
+  root `eslint .` 0 errors; `vue-tsc` 0 errors.
+- Not run (manual / device): SAF wallpaper picker on a real device, full wasm build. No WIT / ABI changes.
+
 #### Mobile: host shell turned into an Android-style platform (home / recents / notification shade / wallpaper)
 
 - **Home screen** follows the desktop device-shell layout: wallpaper layer → running card strip (MRU, tap to
