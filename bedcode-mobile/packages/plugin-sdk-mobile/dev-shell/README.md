@@ -73,10 +73,11 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 | 手机框 | 390×844 手机尺寸（工作台右上角开关），关闭后全宽便于 DevTools 模拟 |
 | 壳 · 首页 | 品牌区 + 应用贡献的快捷卡片（`registerSlot`，未贡献则平台兜底卡）+ 应用宫格 + 最近使用 |
 | 壳 · 应用 | 内置应用与被调试插件并列；启动/停用、错误原因、权限项数、数据占用 |
-| 壳 · 应用详情 | Hero + 权限（按能力域分组，storage 锁定）+ 存储 + 运行时授权弹窗演示 + 停用 |
-| 壳 · 运行面 | 胶囊（权限设置 / 停用 / 应用贡献项）+ 应用自持界面 + homebar 呼出多任务；**未注册运行面时显式空态**，不回退其它形态 |
-| 壳 · 多任务 | 运行中应用列表：进入 / 停止 |
-| 壳 · 权限总览 | 按权限词反查持有它的应用 |
+| 壳 · 应用详情 | Hero + 状态 + 权限（按能力域分组，storage 锁定）+ 存储 + 授权记录空态 + 待审批（整单批准） + 停用/卸载 |
+| 壳 · 运行面 | 胶囊（菜单 / 多任务 / 回主屏）+ 应用自持界面；**未注册运行面时显式空态**，不回退其它形态 |
+| 壳 · 多任务 | 卡片轨道（Android recents 同形：并排不叠放，横向切卡 / 上滑关闭 / 点卡进入）+ 空态回主屏 |
+| 壳 · 权限总览 | 双视图：按应用（审计主视图）/ 按权限反查（徽章流带授予状态） |
+| 壳 · 通知栏 | 状态条 / 主屏铃铛入口；待审批（审批派生）+ 壳动作通知（启动/停止/审批/安装/卸载）+ 滑动删除 / 清除全部 |
 | 壳 · 我的 | 权限总览入口、调试对象概览、外观（主题三档）、语言、应用贡献的设置项、清理调试数据 |
 | 模拟终端（内置应用） | 输入发送（记录到会话输入行）、模拟输出（触发 `terminal:output` 事件，供 `openTerminalStream` mock 消费）、新建/停止会话、连接/断开、认证成功（触发对应 lifecycle）；底部展示 mobileApi 任务队列 mock；并贡献一张首页快捷卡片 |
 | 插件动态路由 | `registerRoute` + `openPage` 走 vue-router 整页跳转（`/plugin/{pluginId}/{id}`），页头由 `header` 描述符决定 |
@@ -104,7 +105,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 
 | 字段 | 消费方 | 插件 |
 |---|---|---|
-| `queueSeed` | `mobileApi` 初始任务队列（localStorage 无缓存时） | terminal-session（任务域） |
+| `queueSeed` | `mobileApi` 初始任务队列（localStorage 无缓存时） | bedcode（任务域） |
 | `safTree` | `fileService.saf.listTree` 目录树 | file-transfer |
 | `listDirEntries` | `fileService.listDir` 返回条目（uri 由 mock 宿主拼装） | file-transfer |
 
@@ -127,10 +128,10 @@ dev-shell/src/
     ├── types.ts            # 契约（贡献描述符复用 SDK types，不重定义）
     ├── registry.ts         # 应用清单 + 贡献合并 + 响应式发布
     ├── permissions.ts utils.ts logger.ts
-    ├── composables/        # useShellApps / Navigation / Overlays / Recent / Open / Toast
-    ├── components/         # ShellHost · Tabbar · Capsule · PermissionPrompt · 屏幕栈
+    ├── composables/        # useShellApps / Navigation / Overlays(含通知栏) / Recent / Open / Toast / Notifications / Preferences
+    ├── components/         # ShellHost · Statusbar · Capsule · PermissionPrompt · NotificationShade · 屏幕栈
     ├── adapters/           # devAppSource：调试记录 → 壳应用（数据源）
-    └── styles/shell.css
+    └── styles/shell.css    # 宿主 shell.css 逐字副本（visualParity 锁）
 ```
 
 ## 常见问题

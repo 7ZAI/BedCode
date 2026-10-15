@@ -19,6 +19,25 @@
   --shell-radius-card: 12px;
   --shell-radius-control: 10px;
   --shell-radius-pill: 999px;
+  --shell-radius-lg: 18px;   /* 多任务卡等大卡 */
+  --shell-radius-sheet: 16px; /* 底部抽屉面板 */
+  /* 应用图标规格（列表行 / 宫格运行卡 / 多任务预览位）：同一图标同一尺寸策略 */
+  --shell-icon-row: 32px;
+  --shell-icon-app: 44px;
+  --shell-icon-preview: 76px;
+  /* 系统宫格图标档案色（零新 hex：color-mix 从既有语义 token 派生）
+     应用管理=绿（内容活跃）、权限管理=琥珀（安全裁决需关注）、设置=暖橄榄派生（中性面，
+     不抢绿/琥珀语义）；与可点击控件一律中性色的纪律不冲突——这三格是平台自有面，
+     色相用来建立入口辨识而非表达危险等级 */
+  --shell-tile-apps-bg: color-mix(in srgb, var(--mobile-success) 15%, transparent);
+  --shell-tile-apps-color: color-mix(in srgb, var(--mobile-success) 78%, var(--mobile-bg-primary));
+  --shell-tile-apps-border: color-mix(in srgb, var(--mobile-success) 38%, transparent);
+  --shell-tile-perms-bg: color-mix(in srgb, var(--mobile-warning) 15%, transparent);
+  --shell-tile-perms-color: color-mix(in srgb, var(--mobile-warning) 78%, var(--mobile-bg-primary));
+  --shell-tile-perms-border: color-mix(in srgb, var(--mobile-warning) 38%, transparent);
+  --shell-tile-settings-bg: color-mix(in srgb, var(--mobile-warning) 24%, var(--mobile-success-muted));
+  --shell-tile-settings-color: color-mix(in srgb, var(--mobile-warning) 62%, var(--mobile-success) 38%);
+  --shell-tile-settings-border: color-mix(in srgb, var(--mobile-success) 28%, var(--mobile-warning) 34%, transparent);
   /* 快捷磁贴 hover 光晕：由强调色派生，随主题与色板变化（原为硬编码青色 rgba） */
   --shell-action-glow: 0 0 15px color-mix(in srgb, var(--mobile-accent) 12%, transparent);
 }
@@ -100,3 +119,297 @@ html:not(.dark) .shell-ui {
 .shell-avatar-g3 { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .shell-avatar-g4 { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
 .shell-avatar-g5 { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+
+/* ============================================================================
+   通知卡（滑动删除 + 点击打开 + 删除动画）
+   ----------------------------------------------------------------------------
+   拖动中不播过渡（跟手），松手播回弹/滑出。transition 只动 transform/opacity。
+   删除表达三层：滑动时卡下露红色删除层 → 松手滑出（淡出）→ 列表剩余项经
+   TransitionGroup 归位上移（.notify-list-move）。
+   ============================================================================ */
+.notify-card {
+  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+.notify-card--dragging {
+  transition: none;
+}
+/* 列表删除后的归位（TransitionGroup 只定义 move；enter/leave 走默认即无动画） */
+.notify-list-move {
+  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* X 按钮删除 / 取消时的离开动画：淡出 + 微缩（滑动删除的卡此时已在屏外，无感） */
+.notify-list-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.notify-list-leave-to {
+  opacity: 0;
+  transform: scale(0.97);
+}
+/* 全部删除级联：每张卡按 index 等差延迟（组件绑定 animation-delay），
+   依次加速向右飞出（cubic-bezier 末段加速 = 离手甩出的手感），飞出后淡出。
+   animation 的 transform 覆盖卡片拖动时的内联 transform（无拖动共存场景）。 */
+.notify-card--flee {
+  animation: notify-flee 0.34s cubic-bezier(0.5, 0, 1, 0.4) forwards;
+  pointer-events: none;
+}
+@keyframes notify-flee {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(120vw);
+    opacity: 0.25;
+  }
+}
+
+/* ============================================================================
+   破坏性动作工具类（平台统一危险样式）
+   ----------------------------------------------------------------------------
+   破坏性语义（卸载 / 停用 / 清除全部）必须视觉上可识别，不允许与普通行同权：
+   outline = 红描边红字（面板级整宽按钮）；text = 红字透明底（列表行 / 菜单项）。
+   颜色全部走 --mobile-error / --mobile-error-muted，随主题与色板自动翻转。
+   ============================================================================ */
+.shell-btn-danger-outline {
+  border: 1px solid color-mix(in srgb, var(--mobile-error) 55%, transparent);
+  color: var(--mobile-error);
+  transition: background-color 0.2s ease;
+}
+.shell-btn-danger-outline:active {
+  background: var(--mobile-error-muted);
+}
+.shell-btn-danger-text {
+  color: var(--mobile-error);
+  transition: background-color 0.2s ease;
+}
+.shell-btn-danger-text:active {
+  background: var(--mobile-error-muted);
+}
+
+/* ============================================================================
+   分段视图切换（权限总览：按应用 / 按权限）
+   ----------------------------------------------------------------------------
+   凸起式选中（raised）：选中项用底卡 + 投影浮起，未选中保持平面，
+   双主题都由 token 派生（零新 hex）。
+   ============================================================================ */
+.shell-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--shell-radius-control);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+}
+.shell-segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--mobile-touch-target-min) - 8px);
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-secondary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.shell-segmented button:active {
+  opacity: 0.85;
+}
+.shell-segmented button[aria-pressed='true'] {
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+  box-shadow: var(--mobile-card-shadow);
+}
+
+/* ============================================================================
+   内容入场（主屏分区淡入上移）
+   ----------------------------------------------------------------------------
+   只动 transform / opacity（compositor 友好）；一次性动画（both 保持终态），
+   不循环不常驻；prefers-reduced-motion 下整体关闭（见文末块）。
+   ============================================================================ */
+.shell-reveal {
+  animation: shell-reveal 0.3s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes shell-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================================
+   通知栏（Android 式独立覆盖层：自顶部滑下）
+   ============================================================================ */
+.shell-shade-enter-active,
+.shell-shade-leave-active {
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.2s ease;
+}
+.shell-shade-enter-from,
+.shell-shade-leave-to {
+  transform: translateY(-100%);
+  opacity: 0;
+}
+
+/* ============================================================================
+   分组标题行动作（图标按钮）
+   ----------------------------------------------------------------------------
+   分分组头右侧的动作位：单图标 + 可访问名（ui-ux-pro-max `--domain icons`：
+   图标控件必须有 accessible name）。44px 触控目标与壳内其它图标按钮同口径。
+   ============================================================================ */
+.shell-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--mobile-touch-target-min);
+  min-height: var(--mobile-touch-target-min);
+  border-radius: var(--shell-radius-control);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    opacity 0.2s ease;
+}
+.shell-icon-action:active {
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
+}
+.shell-icon-action:disabled {
+  opacity: 0.35;
+}
+
+/* ============================================================================
+   主屏快捷卡片轨道（横向轮播）
+   ----------------------------------------------------------------------------
+   定宽卡片 + 原生 scroll-snap：一次滑动定格一张，轨道自身滚动而不把页面
+   撑宽（组件内滚动，无页面级横向滚动条）。
+   ============================================================================ */
+.shell-slot-track {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 16px 6px;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 16px;
+  scrollbar-width: none;
+}
+.shell-slot-track::-webkit-scrollbar {
+  display: none;
+}
+.shell-slot-item {
+  flex: 0 0 min(76vw, 300px);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/* ============================================================================
+   应用运行页胶囊（菜单 / 多任务 / 回主屏）
+   ----------------------------------------------------------------------------
+   平台叠加在应用之上的控制项：半透明 + 毛玻璃，下丝 44px 触控目标。
+   ============================================================================ */
+.shell-capsule {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: var(--shell-radius-pill);
+  border: 1px solid var(--mobile-border);
+  background: color-mix(in srgb, var(--mobile-bg-card) 92%, transparent);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.shell-capsule-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
+  color: var(--mobile-text-primary);
+  transition: background-color 0.2s ease;
+}
+.shell-capsule-btn:active {
+  background: var(--mobile-accent-muted);
+}
+.shell-capsule-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--mobile-border);
+}
+
+/* ============================================================================
+   多任务卡片轨道（deck track）
+   ----------------------------------------------------------------------------
+   卡片**并排**成一行，不叠放：轨道整体平移，把当前卡片送到视口中间。轨道两端
+   的等量留白（padding-inline）让第一张 / 最后一张也能居中，于是「平移 = 序号 ×
+   步长」成立，卡宽与间距改这里即可，组件不必做布局计算。
+
+   视口比轨道窄时（多任务只剩这一屏的常态）相邻卡片在边缘被裁掉半张——那是裁切，
+   不是叠压：卡片之间永远不重叠。
+   ============================================================================ */
+.shell-deck {
+  --deck-card-w: min(72vw, 300px);
+  --deck-gap: 12px;
+  /* 步长 = 卡宽 + 间距；轨道平移量 = 步长 × 序号（真源在组件的 trackStyle） */
+  --deck-step: calc(var(--deck-card-w) + var(--deck-gap));
+  position: relative;
+  overflow: hidden;
+}
+.shell-deck-track {
+  display: flex;
+  align-items: center;
+  gap: var(--deck-gap);
+  height: 100%;
+  /* 首尾卡也能居中：两端各留「半个视口 - 半个卡宽」 */
+  padding-inline: calc(50% - var(--deck-card-w) / 2);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.shell-deck-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--deck-card-w);
+  width: var(--deck-card-w);
+  height: min(calc(100% - 24px), 440px);
+  border-radius: var(--shell-radius-lg);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-card);
+  box-shadow: var(--mobile-card-shadow);
+  overflow: hidden;
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.24s ease;
+}
+/* 拖拽期间关掉过渡并开启 will-change，抬起后交回 CSS 过渡——否则手指与卡片之间会慢半拍 */
+.shell-deck--dragging .shell-deck-track,
+.shell-deck--dragging .shell-deck-card {
+  transition: none;
+  will-change: transform;
+}
+
+/* ============================================================================
+   底部系统条已退役（2026-10-14）：常驻导航条占掉一截应用可视高度且与 Android
+   系统手势条重复。导航入口：各非根屏页头返回 + 应用运行页胶囊（多任务 / 回主屏）。
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-screen-enter-active,
+  .shell-screen-leave-active,
+  .shell-sheet-enter-active,
+  .shell-sheet-leave-active,
+  .shell-shade-enter-active,
+  .shell-shade-leave-active,
+  .shell-deck-track,
+  .shell-deck-card,
+  .shell-reveal,
+  .notify-card--flee {
+    transition-duration: 0.01ms;
+    animation: none;
+  }
+}

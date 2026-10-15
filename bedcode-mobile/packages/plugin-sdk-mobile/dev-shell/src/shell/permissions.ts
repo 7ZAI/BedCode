@@ -1,13 +1,16 @@
 /**
- * Dev Shell 权限展示元数据（与宿主 shell/permissions.ts 同构）
+ * Dev Shell 权限展示元数据（与宿主 shell/permissions.ts 逐字同构）
  * -----------------------------------------------------------------------------
- * 权限词汇的真源在插件 SDK（packages/plugin-sdk-mobile/rust/src/permission.rs），
- * 本文件不复制词表，只做展示层两件事：
+ * 权限词汇显示层两件事：
  *   1. 把权限词映射成 i18n 文案 key（dev-shell 自有 `shell.permission.*` 命名空间）
  *   2. 按能力域分组，让「应用详情 → 权限」是可读清单而不是一串冒号字符串
  *
- * 真源裁决提醒：宿主壳的分组表（bedcode-mobile/src/shell/permissions.ts）才是
- * 面向用户的口径；本表与它保持同构，dev-shell 上看到的分组应与真机一致。
+ * 授权裁决在插件侧 / 宿主后端执行，前端开关只是 UX（AGENTS.md §8）——因此这里
+ * 的分组与文案不参与任何安全判定。
+ *
+ * 同构纪律：词表与分组与宿主 `bedcode-mobile/src/shell/permissions.ts` 保持一致；
+ * 新增权限词时两端要同步补词表与双语 locale（缺一条的代价是「权限总览」页直接
+ * 裸显英文 code）。
  */
 
 import type { ShellPermissionGrant } from './types'
@@ -20,7 +23,8 @@ export interface ShellPermissionGroup {
   keys: string[]
 }
 
-/** 权限词 → 本地化文案 key 的后缀（前缀统一 shell.permission.perm.） */
+/** 权限词 → 本地化文案 key 的后缀（前缀统一 shell.permission.perm.；
+ *  terminal:input 已随票 15 阶段 B 整面退役，不在展示词表） */
 const PERMISSION_I18N_KEY: Record<string, string> = {
   storage: 'storage',
   'terminal:output': 'terminalOutput',
@@ -30,10 +34,23 @@ const PERMISSION_I18N_KEY: Record<string, string> = {
   'ui:navtab': 'uiNavtab',
   'ui:settings': 'uiSettings',
   'ui:input': 'uiInput',
+  'ui:route': 'uiRoute',
+  'ui:dialog': 'uiDialog',
+  'ui:back': 'uiBack',
   'network:http': 'networkHttp',
   'fs:read': 'fsRead',
   'fs:write': 'fsWrite',
+  'fs:pick': 'fsPick',
+  fileservice: 'fileservice',
+  'system:open': 'systemOpen',
   bus: 'bus',
+  broadcast: 'broadcast',
+  transfer: 'transfer',
+  mdns: 'mdns',
+  peer: 'peer',
+  'ws:client': 'wsClient',
+  auth: 'auth',
+  notify: 'notify',
 }
 
 /** 能力域分组：与移动端权限词汇的能力域划分一致 */
@@ -46,18 +63,34 @@ export const SHELL_PERMISSION_GROUPS: ShellPermissionGroup[] = [
   {
     id: 'data',
     titleKey: 'shell.permission.group.data',
-    keys: ['fs:read', 'fs:write', 'network:http'],
+    keys: ['fs:read', 'fs:write', 'fs:pick', 'fileservice', 'transfer', 'network:http'],
+  },
+  {
+    id: 'device',
+    titleKey: 'shell.permission.group.device',
+    keys: ['peer', 'mdns', 'ws:client', 'auth', 'notify'],
   },
   {
     id: 'interface',
     titleKey: 'shell.permission.group.interface',
-    keys: ['ui:toolbox', 'ui:navtab', 'ui:settings', 'ui:input', 'bus', 'storage'],
+    keys: [
+      'ui:toolbox',
+      'ui:navtab',
+      'ui:settings',
+      'ui:input',
+      'ui:route',
+      'ui:dialog',
+      'ui:back',
+      'bus',
+      'broadcast',
+      'system:open',
+      'storage',
+    ],
   },
 ]
 
 /**
- * 默认授予且不可关闭的权限
- *
+ * 默认授予且不可关闭的权限。
  * storage 是插件底座能力（私有库 / KV），关掉等于让应用无法工作，因此不给开关。
  */
 export const SHELL_LOCKED_PERMISSIONS: ReadonlySet<string> = new Set(['storage'])
@@ -76,8 +109,8 @@ export function isLockedPermission(key: string): boolean {
 /**
  * 按能力域分组权限授予项
  *
- * 分组外的权限（新增词表尚未归类）归入末尾的「其他」组，保证新权限不会因未归类
- * 而从 UI 上消失——消失比归类难看更危险。
+ * 分组外的权限（新增词表尚未归类）归入末尾的「其他」组，保证新权限不会因
+ * 未归类而从 UI 上消失——消失比归类难看更危险。
  */
 export function groupPermissions(
   grants: ShellPermissionGrant[],

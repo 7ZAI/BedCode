@@ -1,7 +1,18 @@
 <template>
   <div class="flex flex-col h-full min-h-0">
-    <header class="px-4 pt-3 pb-2">
-      <h1 class="text-[var(--font-size-xl)] font-semibold text-[var(--mobile-text-primary)]">
+    <!-- ==================== 页头（带返回：系统宫格进入的屏，不是栈底） ==================== -->
+    <header class="flex items-center gap-2 px-2 pt-2 pb-1 flex-shrink-0">
+      <button
+        type="button"
+        class="flex items-center justify-center rounded-[10px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+        :aria-label="t('shell.detail.back')"
+        @click="nav.back()"
+      >
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+      </button>
+      <h1 class="flex-1 min-w-0 text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
         {{ t('shell.settings.title') }}
       </h1>
     </header>
@@ -100,7 +111,7 @@
             :key="entry.key"
             type="button"
             class="flex items-center gap-3 w-full px-3 py-3 text-left transition-colors duration-200 active:bg-[var(--mobile-group-row-active)] min-h-[var(--mobile-touch-target-min)]"
-            @click="entry.entry.onSelect?.()"
+            @click="onAppEntrySelect(entry)"
           >
             <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: 'var(--mobile-text-secondary)' }">
               <path :d="entry.entry.icon ?? DEFAULT_ENTRY_ICON" />
@@ -226,15 +237,25 @@ function setLocale(next: DevLocale): void {
   saveLocale(next)
 }
 
-/** 应用贡献的设置入口（按应用顺序展开） */
+/** 应用贡献的设置入口（按应用顺序展开，带 appId 用于打断言） */
 const appEntries = computed(() =>
   apps.value.flatMap((app) =>
     (app.contributions.settingsEntries ?? []).map((entry) => ({
       key: `${app.id}:${entry.id}`,
+      appId: app.id,
       entry,
     })),
   ),
 )
+
+/** 选中应用设置项：有应用自己的入口就走它，否则落应用详情（不留点了没反应的死行） */
+function onAppEntrySelect(item: { appId: string; entry: { onSelect?: () => void | Promise<void> } }): void {
+  if (item.entry.onSelect) {
+    void item.entry.onSelect()
+    return
+  }
+  nav.openDetail(item.appId)
+}
 
 /**
  * 清理调试数据

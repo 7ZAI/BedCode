@@ -10,7 +10,6 @@
  */
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { createI18n } from 'vue-i18n'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import { initSharedRuntime } from './shared-runtime'
@@ -19,24 +18,17 @@ import { initTheme } from './theme'
 import { presetTasksApi } from './mock/preset-tasks'
 import { mobileApi } from './mock/mobile-api'
 import { dialogService } from './mock/dialog-service'
-import { zhCN, en } from './locales'
-import { readSavedLocale } from './locale'
+// i18n 单例：main.ts 装配 + 模块级代码（通知文案 / 相对时间）共用
+import { i18n } from './i18n'
 import './styles/main.css'
 // token 走单一真源：monorepo 内指向宿主 src/styles/mobile.css（见 vite.config.ts），
 // npm 包内回落到 dev-shell 自带副本
 import '@bedcode/mobile-styles/mobile.css'
+// 主屏壁纸样式（宿主 wall-* 真源的副本 / 别名接线，见 vite.config.ts）
+import '@bedcode/mobile-styles/wallpaper.css'
 
 const app = createApp(App)
 const pinia = createPinia()
-
-const i18n = createI18n({
-  legacy: false,
-  locale: readSavedLocale(),
-  fallbackLocale: 'en',
-  messages: { 'zh-CN': zhCN, en },
-  missingWarn: false,
-  fallbackWarn: false,
-})
 
 const router = createRouter({
   history: createWebHashHistory(),

@@ -1,53 +1,55 @@
 <template>
   <div class="flex flex-col h-full min-h-0">
-    <!-- ==================== 页头 ==================== -->
-    <header class="px-4 pt-3 pb-2">
-      <h1 class="text-[var(--font-size-xl)] font-semibold text-[var(--mobile-text-primary)]">
-        {{ t('shell.apps.title') }}
-      </h1>
-      <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-        {{ t('shell.apps.subtitle', { installed: stats.installed, running: stats.running }) }}
-      </p>
+    <!-- ==================== 页头（带返回：系统宫格进入的屏，不是栈底） ==================== -->
+    <header class="flex items-center gap-2 px-2 pt-2 pb-1">
+      <button
+        type="button"
+        class="flex items-center justify-center rounded-[10px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+        :aria-label="t('shell.detail.back')"
+        @click="nav.back()"
+      >
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 6l-6 6 6 6" />
+        </svg>
+      </button>
+      <div class="flex-1 min-w-0">
+        <h1 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+          {{ t('shell.apps.title') }}
+        </h1>
+        <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+          {{ t('shell.apps.subtitle', { installed: stats.installed, running: stats.running }) }}
+        </p>
+      </div>
     </header>
 
     <div class="flex-1 min-h-0 overflow-y-auto pb-6">
       <!-- ==================== 统计条 ==================== -->
+      <!-- 单行指标条而非三张等宽卡片：三项指标同质，拆成三栏只会拉长竖向空间并显得像模板；
+           零值不再用 success 色——「0 个运行中」是中性事实，染绿会被误读为健康指示灯 -->
       <div class="px-4 pb-1">
         <div
-          class="flex rounded-[12px] border border-[var(--mobile-group-border)] bg-[var(--mobile-bg-card)] py-3.5"
+          class="flex items-center gap-2 rounded-[12px] border border-[var(--mobile-group-border)] bg-[var(--mobile-bg-card)] px-3.5 py-3"
           :style="{ boxShadow: 'var(--mobile-card-shadow)' }"
         >
-          <div class="flex-1 text-center">
-            <div class="text-[var(--font-size-lg)] font-bold text-[var(--mobile-text-primary)]">
-              {{ stats.installed }}
-            </div>
-            <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-              {{ t('shell.apps.statInstalled') }}
-            </div>
-          </div>
-          <div
-            class="flex-1 text-center border-l border-r border-[var(--mobile-group-divider)]"
-          >
-            <div class="text-[var(--font-size-lg)] font-bold" :style="{ color: 'var(--mobile-success)' }">
-              {{ stats.running }}
-            </div>
-            <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-              {{ t('shell.apps.statRunning') }}
-            </div>
-          </div>
-          <div class="flex-1 text-center">
-            <div class="text-[var(--font-size-lg)] font-bold text-[var(--mobile-text-primary)]">
-              {{ totalSizeLabel }}
-            </div>
-            <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-              {{ t('shell.apps.statSize') }}
-            </div>
-          </div>
+          <template v-for="(metric, index) in metrics" :key="metric.label">
+            <span v-if="index > 0" class="text-[var(--font-size-xs)] text-[var(--mobile-text-muted)]" aria-hidden="true">·</span>
+            <span class="flex items-baseline gap-1.5 min-w-0">
+              <b
+                class="text-[var(--font-size-base)] font-semibold tabular-nums"
+                :style="{ color: metric.highlight ? 'var(--mobile-success)' : 'var(--mobile-text-primary)' }"
+              >
+                {{ metric.value }}
+              </b>
+              <span class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                {{ metric.label }}
+              </span>
+            </span>
+          </template>
         </div>
       </div>
 
       <!-- ==================== 已安装列表 ==================== -->
-      <ShellSection :title="t('shell.apps.installedTitle')" :note="t('shell.apps.installedNote')" />
+      <ShellSection :title="t('shell.apps.installedTitle')" />
       <div class="px-4 pb-1">
         <ShellGroupCard v-if="sortedApps.length > 0">
           <button
@@ -70,7 +72,7 @@
                 <ShellChip
                   v-else-if="app.state === 'disabled'"
                   :label="t('shell.common.disabled')"
-                  tone="warn"
+                  tone="neutral"
                 />
                 <ShellChip
                   v-else-if="app.state === 'error'"
@@ -160,6 +162,13 @@ const totalSizeLabel = computed(() =>
   stats.value.totalBytes === undefined ? t('shell.common.na') : formatBytes(stats.value.totalBytes),
 )
 
+/** 指标条数据项（单行展示，与顶部副标题不再重复计数——副标题只说“本机共几个”） */
+const metrics = computed(() => [
+  { value: String(stats.value.installed), label: t('shell.apps.statInstalled'), highlight: false },
+  { value: String(stats.value.running), label: t('shell.apps.statRunning'), highlight: stats.value.running > 0 },
+  { value: totalSizeLabel.value, label: t('shell.apps.statSize'), highlight: false },
+])
+
 /** 列表副标题：版本 · 权限项数 · 数据占用 */
 function appMeta(app: ShellApp): string {
   const parts = [app.version ? `v${app.version}` : '']
@@ -171,9 +180,9 @@ function appMeta(app: ShellApp): string {
 async function handleInstall(): Promise<void> {
   installing.value = true
   try {
-    const ok = await installFromLocalPackage()
+    const installedId = await installFromLocalPackage()
     // 取消选包不是失败，不弹错误
-    if (ok) {
+    if (installedId !== null) {
       toast.success(t('shell.apps.installSuccess'))
       await refresh()
     }

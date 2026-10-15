@@ -1,11 +1,12 @@
 /**
  * Dev Shell 宿主壳覆盖层状态（与宿主 shell/composables/useShellOverlays.ts 同构）
  * -----------------------------------------------------------------------------
- * 两类平台级覆盖层都由壳统一渲染，不由各应用自己弹：
+ * 三类平台级覆盖层都由壳统一渲染，不由各应用自己弹：
  *   ① 胶囊菜单：平台叠加在应用之上的控制项（与小程序胶囊同构）
  *   ② 运行时授权弹窗：应用临时申请权限时的统一裁决界面
+ *   ③ 通知栏（Android 式独立面）：自顶部滑下的平台通知中心
  *
- * 统一渲染的原因是这两类界面必须与平台视觉和安全口径一致（拒绝即不可用、
+ * 统一渲染的原因是这些界面必须与平台视觉和安全口径一致（拒绝即不可用、
  * fail-closed）。状态走模块级单例，任何屏幕都能打开，渲染位置固定在壳根。
  */
 
@@ -25,6 +26,7 @@ export interface ShellPermissionRequest {
 
 const capsuleAppId: Ref<string | null> = ref(null)
 const permissionRequest: Ref<ShellPermissionRequest | null> = ref(null)
+const shadeOpen: Ref<boolean> = ref(false)
 
 /** 打开胶囊菜单 */
 function openCapsule(appId: string): void {
@@ -51,14 +53,33 @@ function closePermissionRequest(): void {
   permissionRequest.value = null
 }
 
+/** 打开通知栏 */
+function openShade(): void {
+  shadeOpen.value = true
+}
+
+/** 关闭通知栏 */
+function closeShade(): void {
+  shadeOpen.value = false
+}
+
+/** 切换通知栏（状态条 / 铃铛入口用：同一个按钮开与关） */
+function toggleShade(): void {
+  shadeOpen.value = !shadeOpen.value
+}
+
 /** 宿主壳覆盖层句柄 */
 export interface ShellOverlays {
   capsuleAppId: ComputedRef<string | null>
   permissionRequest: ComputedRef<ShellPermissionRequest | null>
+  shadeOpen: ComputedRef<boolean>
   openCapsule: typeof openCapsule
   closeCapsule: typeof closeCapsule
   requestPermissions: typeof requestPermissions
   closePermissionRequest: typeof closePermissionRequest
+  openShade: typeof openShade
+  closeShade: typeof closeShade
+  toggleShade: typeof toggleShade
 }
 
 /** 获取宿主壳覆盖层句柄（单例） */
@@ -66,11 +87,15 @@ export function useShellOverlays(): ShellOverlays {
   return {
     capsuleAppId: computed(() => capsuleAppId.value),
     permissionRequest: computed(() => permissionRequest.value),
+    shadeOpen: computed(() => shadeOpen.value),
     openCapsule,
     closeCapsule,
     requestPermissions,
     closePermissionRequest,
+    openShade,
+    closeShade,
+    toggleShade,
   }
 }
 
-export { openCapsule, closeCapsule, requestPermissions, closePermissionRequest }
+export { openCapsule, closeCapsule, requestPermissions, closePermissionRequest, openShade, closeShade, toggleShade }

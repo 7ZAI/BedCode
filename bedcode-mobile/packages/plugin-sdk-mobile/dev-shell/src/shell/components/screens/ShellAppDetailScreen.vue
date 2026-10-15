@@ -38,8 +38,32 @@
         </div>
       </div>
 
-      <!-- ==================== 连接 ==================== -->
-      <ShellSection :title="t('shell.detail.connection')" :note="t('shell.detail.connectionNote')" />
+      <!-- ==================== 待审批（需要用户动作：整单批准 + 哈希钉扎） ==================== -->
+      <div v-if="app.state === 'approval'" class="px-4 pb-1">
+        <div
+          class="rounded-[12px] border px-3 py-3"
+          :style="{
+            background: 'var(--mobile-warning-muted)',
+            borderColor: 'var(--mobile-warning)',
+          }"
+        >
+          <p class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+            {{ t('shell.detail.approvalDesc', { count: app.permissions.length }) }}
+          </p>
+          <button
+            type="button"
+            class="mt-2.5 w-full rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+            :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
+            @click="handleApprove"
+          >
+            {{ t('shell.detail.approveStart') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- ==================== 运行状态 ==================== -->
+      <!-- 应用自持连接，平台不知道它的连接对端；这里只投影平台确实掌握的事实：运行态 -->
+      <ShellSection :title="t('shell.detail.state')" />
       <div class="px-4 pb-1">
         <ShellGroupCard>
           <div class="flex items-center gap-3 px-3 py-3">
@@ -47,9 +71,6 @@
             <div class="flex-1 min-w-0">
               <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
                 {{ app.name }}
-              </div>
-              <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-                {{ t('shell.detail.connectionNote') }}
               </div>
             </div>
             <ShellChip :label="stateLabel" :tone="stateTone" />
@@ -97,7 +118,7 @@
           v-else
           class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
         >
-          {{ t('shell.permissions.empty') }}
+          {{ t('mobile.plugin.noPermissions') }}
         </p>
         <!-- 能力缺失要显性说明：把开关置灰却不解释，用户会以为是应用的问题 -->
         <p
@@ -121,12 +142,7 @@
             </span>
             <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">{{ formatBytes(app.sizeBytes) }}</span>
           </div>
-          <div class="flex items-center px-3 py-3 min-h-[var(--mobile-touch-target-min)]">
-            <span class="flex-1 text-[var(--font-size-base)] text-[var(--mobile-text-primary)]">
-              {{ t('shell.detail.cache') }}
-            </span>
-            <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">{{ t('shell.common.na') }}</span>
-          </div>
+          <!-- 缓存行已删：后端没有缓存统计源，永远显示「—」的行属于空白项 -->
         </ShellGroupCard>
       </div>
 
@@ -141,17 +157,12 @@
       </div>
 
       <!-- ==================== 操作 ==================== -->
+      <!-- 层级：停用（次要）→ 卸载（危险，描边而非淡粉底：淡粉底在浅色主题下
+           看起来像 disabled 按钮，反而弱化了危险性 -->
       <div class="px-4 pt-3 flex flex-col gap-2.5">
         <button
           type="button"
-          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
-          @click="openDemoPrompt"
-        >
-          {{ t('shell.detail.demoPrompt') }}
-        </button>
-        <button
-          type="button"
-          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
           @click="handleStop"
         >
           {{ t('shell.detail.disable') }}
@@ -159,8 +170,12 @@
         <button
           v-if="canRemove"
           type="button"
-          class="w-full rounded-[10px] px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
-          :style="{ background: 'var(--mobile-error-muted)', color: 'var(--mobile-error)' }"
+          class="w-full rounded-[10px] border px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+          :style="{
+            borderColor: 'var(--mobile-error)',
+            color: 'var(--mobile-error)',
+            background: 'transparent',
+          }"
           @click="confirmRemove = true"
         >
           {{ t('shell.detail.uninstall') }}
@@ -206,7 +221,6 @@ import Toggle from '../ui/Toggle.vue'
 import { useToast } from '../../composables/useToast'
 import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
-import { useShellOverlays } from '../../composables/useShellOverlays'
 import { groupPermissions, permissionTitleKey } from '../../permissions'
 import { formatBytes } from '../../utils'
 import ShellAppIcon from '../ShellAppIcon.vue'
@@ -217,7 +231,6 @@ import ShellSection from '../ShellSection.vue'
 const { t } = useI18n()
 const toast = useToast()
 const nav = useShellNavigation()
-const overlays = useShellOverlays()
 const {
   getApp,
   supportsPermissionControl,
@@ -225,6 +238,8 @@ const {
   supportsRemove,
   removeApp,
   stop,
+  approveApp,
+  launch,
 } = useShellApps()
 
 /** 应用 id 来自导航参数（壳内导航不落 URL） */
@@ -258,6 +273,8 @@ const stateLabel = computed(() => {
   switch (app.value?.state) {
     case 'running':
       return t('shell.common.running')
+    case 'approval':
+      return t('shell.common.approval')
     case 'disabled':
       return t('shell.common.disabled')
     case 'error':
@@ -271,6 +288,8 @@ const stateTone = computed<'success' | 'warn' | 'danger' | 'neutral'>(() => {
   switch (app.value?.state) {
     case 'running':
       return 'success'
+    case 'approval':
+      return 'warn'
     case 'disabled':
       return 'warn'
     case 'error':
@@ -280,9 +299,18 @@ const stateTone = computed<'success' | 'warn' | 'danger' | 'neutral'>(() => {
   }
 })
 
-const stateDot = computed(() =>
-  app.value?.state === 'running' ? 'var(--mobile-success)' : 'var(--mobile-text-disabled)',
-)
+const stateDot = computed(() => {
+  switch (app.value?.state) {
+    case 'running':
+      return 'var(--mobile-success)'
+    case 'approval':
+      return 'var(--mobile-warning)'
+    case 'error':
+      return 'var(--mobile-error)'
+    default:
+      return 'var(--mobile-text-disabled)'
+  }
+})
 
 const toggleError = ref<string | null>(null)
 /** 卸载二次确认（复用平台 ConfirmDialog，见模板） */
@@ -302,17 +330,26 @@ async function handleToggle(key: string, next: boolean): Promise<void> {
   }
 }
 
-/** 演示：用应用真实的权限清单发起一次平台统一授权弹窗（不伪造用途） */
-function openDemoPrompt(): void {
-  if (!app.value) return
-  const keys = app.value.permissions.filter((p) => !p.locked).map((p) => p.key)
-  if (keys.length === 0) return
-  overlays.requestPermissions({ appId: app.value.id, keys })
-}
-
 async function handleStop(): Promise<void> {
   if (!appId.value) return
   await stop(appId.value)
+}
+
+/**
+ * 批准并启动
+ *
+ * 审批是整单的（后端 plugin_approve：全部声明权限 + 内容哈希钉扎）；批准失败时
+ * 不继续启动——半途而废的「已批准」假象比直接报错更危险（权限是安全面）。
+ */
+async function handleApprove(): Promise<void> {
+  if (!app.value) return
+  const approved = await approveApp(app.value.id)
+  if (!approved) {
+    toggleError.value = t('shell.permissions.approveFailed')
+    return
+  }
+  const started = await launch(app.value.id)
+  if (started) nav.openApp(app.value.id)
 }
 
 async function handleRemove(): Promise<void> {

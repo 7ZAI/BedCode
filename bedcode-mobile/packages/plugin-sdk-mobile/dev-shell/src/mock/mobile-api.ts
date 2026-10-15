@@ -122,7 +122,7 @@ function boolField(body: JsonBody, key: string): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined
 }
 
-/** 通用 HTTP 请求路由：按对端任务域（terminal-session app）端点路径模拟（dev-shell 宿主能力 mock） */
+/** 通用 HTTP 请求路由：按对端任务域（bedcode app）端点路径模拟（dev-shell 宿主能力 mock） */
 async function routeHttpRequest(
   path: string,
   method: string,

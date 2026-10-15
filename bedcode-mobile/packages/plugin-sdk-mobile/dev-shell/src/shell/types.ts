@@ -36,8 +36,18 @@ export interface Disposable {
   dispose(): void
 }
 
-/** 应用在壳内的运行态（壳语义） */
-export type ShellAppState = 'running' | 'stopped' | 'disabled' | 'error'
+/** 应用在壳内的运行态（壳语义，与宿主 union 逐字一致） */
+export type ShellAppState =
+  /** 前台/后台运行中 */
+  | 'running'
+  /** 已安装但未启动 */
+  | 'stopped'
+  /** 待人工审批（权限整单批准 + 内容哈希钉扎）：批准前不可启动 */
+  | 'approval'
+  /** 被用户或平台停用（启用后才可启动） */
+  | 'disabled'
+  /** 上次启动失败（保留数据，可重试） */
+  | 'error'
 
 /** 单条权限的授予情况 */
 export interface ShellPermissionGrant {
@@ -106,13 +116,20 @@ export interface ShellAppSource {
     permissionKey: string,
     granted: boolean,
   ): Promise<boolean>
+  /**
+   * 批准应用的权限申请（整单：批准全部声明权限 + 内容哈希钉扎）。
+   * 未实现时壳不渲染「批准」入口——不提供点了没反应的按钮。
+   */
+  approve?(appId: string): Promise<void>
   /** 延迟解析运行面组件；未实现时壳回退到应用自带的 contributions.surface */
   resolveSurface?(appId: string): Component | undefined
   /**
    * 安装本地应用包（数据源自行完成选包与校验）。
-   * 未实现时壳不渲染「安装本地包」入口——不提供点了没反应的按钮。
+   *
+   * @returns 安装后的应用 id；`null` = 用户取消选包（不是失败）。
+   *          未实现时壳不渲染「安装本地包」入口——不提供点了没反应的按钮。
    */
-  installFromLocalPackage?(): Promise<boolean>
+  installFromLocalPackage?(): Promise<string | null>
   /** 卸载应用并删除其数据；未实现时壳不渲染「卸载」入口 */
   remove?(appId: string): Promise<boolean>
 }

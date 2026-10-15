@@ -15,25 +15,30 @@
       </Transition>
     </div>
 
-    <!-- 应用运行面不显示平台 Tab：应用自带导航语义，再压一层会打架 -->
-    <ShellTabbar v-if="showTabbar" />
-
     <!-- 平台级覆盖层：固定在壳根渲染，与当前屏幕无关 -->
     <ShellCapsuleMenu />
     <ShellPermissionPrompt />
+    <ShellNotificationShade />
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 宿主壳根组件
+ * Dev Shell 宿主壳根组件（宿主 ShellHost.vue 的同形实现）
  * -----------------------------------------------------------------------------
- * 职责：状态条 + 屏幕栈 + 底部导航 + 平台级覆盖层。就这些。
+ * 职责：状态条 + 屏幕栈 + 平台级覆盖层。就这些。
+ *
+ * 底部系统条（返回 / 主屏 / 多任务）已于 2026-10-14 在宿主整条退役：常驻导航条
+ * 会永久占掉一截应用可视高度，且与 Android 系统手势条重复；导航入口改为
+ * ① 各非根屏页头自持返回键 ② 应用运行页胶囊里的多任务 / 回主屏。
+ * dev-shell 与宿主同形，不再画底部 Tab 条。
  *
  * 不含的东西（都是刻意的）：
  *   · 不含任何应用业务——应用界面由其 surface 组件自持（见 ShellAppSurface）
  *   · 不含应用清单的获取逻辑——由 ShellView 注册数据源后 refresh
  *   · 不含主题配置——沿用既有 --mobile-* token 与设置页
+ *   · 不含宿主事件桥（useShellHostEvents）：dev-shell 没有后端事件总线，
+ *     通知只来自壳动作结果（启动 / 停止 / 审批 / 安装 / 卸载）
  *
  * 屏幕表是「屏幕 id → 组件」的纯映射：新增一个屏只需在表里加一行，
  * 导航与过渡机制不动。
@@ -41,9 +46,9 @@
 import { computed, type Component } from 'vue'
 import { useShellNavigation, type ShellScreenId } from '../composables/useShellNavigation'
 import ShellCapsuleMenu from './ShellCapsuleMenu.vue'
+import ShellNotificationShade from './ShellNotificationShade.vue'
 import ShellPermissionPrompt from './ShellPermissionPrompt.vue'
 import ShellStatusbar from './ShellStatusbar.vue'
-import ShellTabbar from './ShellTabbar.vue'
 import ShellAppRunScreen from './screens/ShellAppRunScreen.vue'
 import ShellAppDetailScreen from './screens/ShellAppDetailScreen.vue'
 import ShellAppsScreen from './screens/ShellAppsScreen.vue'
@@ -67,10 +72,4 @@ const nav = useShellNavigation()
 
 const screenComponent = computed<Component>(() => SCREENS[nav.current.value.id] ?? ShellHomeScreen)
 const screenKey = computed(() => `${nav.current.value.id}:${nav.params.value.appId ?? ''}`)
-
-/** 只有平台自己的根屏显示底部导航 */
-const showTabbar = computed(() => {
-  const id = nav.current.value.id
-  return id === 'home' || id === 'apps' || id === 'settings'
-})
 </script>

@@ -171,18 +171,24 @@ describe('启动与停止', () => {
     expect(apps.lastError.value).toBe('unknown app: ghost')
   })
 
-  it('should_skipLaunch_when_appAlreadyRunning', async () => {
+  it('should_rerunLaunch_when_appAlreadyRunning', async () => {
+    // 2026-10-14 修正对齐宿主：不再对「已运行」早退——插件前端模块随页面加载，
+    // 重开已运行应用要重跑一遍 launch 才能把运行面/前端状态挂回来（后端实例跨
+    // WebView 重载继续存活，而前端模块不在了）。数据源的 launch 本身幂等，
+    // 重跑一遍的代价远小于缺模块。
     const id = nextSourceId()
-    const { src, state } = makeSource(id, [])
+    const running = app('a1', { state: 'running' })
+    const { src, state } = makeSource(id, [running])
     const launchSpy = vi.fn(async () => {})
     state.launchImpl = launchSpy
     addSource(src)
-    registry.upsertApps(id, [app('a1', { state: 'running' })])
+    registry.upsertApps(id, [running])
 
     const ok = await apps.launch('a1')
 
     expect(ok).toBe(true)
-    expect(launchSpy).not.toHaveBeenCalled()
+    expect(launchSpy).toHaveBeenCalledWith('a1')
+    expect(registry.getApp('a1')?.state).toBe('running')
   })
 
   it('should_reflectSourceTruthAfterRefresh_when_stopSucceeds', async () => {

@@ -6,8 +6,8 @@
     role="img"
     :aria-label="app.name"
   >
-    <!-- 图片图标：宿主给出的是 asset protocol URL；dev-shell 数据源读不到插件包资源，
-         该分支仅在数据源能产出 iconUrl 时命中；加载失败退回首字母，不留空白格 -->
+    <!-- 图片图标：清单里写的是相对插件目录的路径（icon.svg / icon.png …），
+         经 asset protocol 取图；加载失败退回首字母，不留空白格 -->
     <img
       v-if="kind === 'image' && app.iconUrl && !imageFailed"
       :src="app.iconUrl"
@@ -37,7 +37,7 @@
       aria-hidden="true"
       >{{ app.icon }}</span
     >
-    <!-- 无图标：首字母回退（中文名取首字比取不到拉丁字母更可读） -->
+    <!-- 无图标 / 图片加载失败：首字母回退（中文名取首字比取不到拉丁字母更可读） -->
     <span
       v-else
       :style="{ fontSize: `${Math.round(size * 0.42)}px`, fontWeight: 600 }"
@@ -74,7 +74,7 @@ const initial = computed(() => initialOf(props.app.name))
 /** 图形占盒子的比例：emoji 顶格显小，path 留白更协调 */
 const innerSize = computed(() => Math.round(props.size * (kind.value === 'emoji' ? 0.62 : 0.55)))
 
-/** 图片加载失败标记：数据源换图标/地址后重置，避免停在首字母回退 */
+/** 图片加载失败标记：插件换图标后重置，避免停在首字母回退 */
 const imageFailed = ref(false)
 watch(
   () => [props.app.icon, props.app.iconUrl],
@@ -83,10 +83,16 @@ watch(
   },
 )
 
+/** 圆角随尺寸线性放大并钳制：小盒（列表行）接近方形角，大可盒（预览位）过渡到拟 Windows/Android 大圆角，避免同一图标在 12/16 两档间跳变 */
+const borderRadius = computed(() => {
+  const r = Math.round(props.size * 0.25)
+  return `${Math.min(18, Math.max(10, r))}px`
+})
+
 const boxStyle = computed(() => ({
   width: `${props.size}px`,
   height: `${props.size}px`,
-  borderRadius: props.size >= 48 ? '16px' : '12px',
+  borderRadius: borderRadius.value,
 }))
 
 const toneClass = computed(() => {

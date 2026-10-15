@@ -12,7 +12,7 @@
     <Transition name="shell-sheet">
       <div
         v-if="open"
-        class="shell-ui fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-[16px] border-t border-[var(--mobile-border)] bg-[var(--mobile-bg-card)] px-4 pt-2 pb-4"
+        class="shell-ui fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-[var(--shell-radius-sheet)] border-t border-[var(--mobile-border)] bg-[var(--mobile-bg-card)] px-4 pt-2 pb-4"
         role="dialog"
         aria-modal="true"
         :aria-label="title"

@@ -106,6 +106,23 @@ function goHome(): void {
   switchTab('home')
 }
 
+/**
+ * 摘掉某应用的运行面（应用已被停用 / 卸载时用）
+ *
+ * 运行面由应用自己注册（`registerSurface`），应用一停用该注册即随前端模块的
+ * Disposable 一起被回收——运行屏若还留在栈里，用户「退出」之后看到的就是
+ * 「应用暂无可用界面」空态。因此这里把该应用的运行屏连同叠在它上面的浮层
+ * （详情 / 多任务）一起摘掉，回落到它下面那一屏；栈里没有该应用的运行屏时无操作
+ * （从主屏或多任务页停用走的就是这条）。
+ */
+function closeAppRun(appId: string): void {
+  const index = stack.value.findIndex((s) => s.id === 'app-run' && s.params.appId === appId)
+  if (index < 0) return
+  direction.value = 'backward'
+  // 命中必在 home 之后（app-run 只由 openApp 压入），slice 后至少留 home 一层
+  stack.value = stack.value.slice(0, index)
+}
+
 /** 打开应用运行面 */
 function openApp(appId: string): void {
   navigate('app-run', { appId })
@@ -148,6 +165,7 @@ export interface ShellNavigation {
   back: typeof back
   switchTab: typeof switchTab
   goHome: typeof goHome
+  closeAppRun: typeof closeAppRun
   openApp: typeof openApp
   openDetail: typeof openDetail
   openSwitcher: typeof openSwitcher
@@ -167,6 +185,7 @@ export function useShellNavigation(): ShellNavigation {
     back,
     switchTab,
     goHome,
+    closeAppRun,
     openApp,
     openDetail,
     openSwitcher,
