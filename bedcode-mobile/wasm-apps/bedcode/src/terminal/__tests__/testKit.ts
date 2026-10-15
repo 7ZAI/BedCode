@@ -126,7 +126,10 @@ export function uninstallFakeHost(): void {
 
 export interface MockMobileApiOptions {
   activeSessionId?: string | null
+  /** 传输层已连（connected/pairing/paired）；注意与 isPaired（已认证）区分 */
   isConnected?: boolean
+  /** 已认证（paired）：受保护端点可用的前提 */
+  isPaired?: boolean
   mockSessionId?: string | null
   httpRequest?: (path: string, options?: any) => Promise<any>
   openTerminalStream?: (
@@ -135,6 +138,8 @@ export interface MockMobileApiOptions {
   ) => Promise<{ dispose(): void }>
   /** 连接引擎动作替身（默认 no-op；用例可注入抛错以验证错误分类/日志） */
   connectDevice?: (device: { address: string; port: number; name?: string }) => Promise<void>
+  /** 静默换新 JWT 替身（默认：宿主无凭据 → false，由配对卡接管） */
+  authenticateWithStoredToken?: () => Promise<boolean>
   /** mDNS 启动替身（默认 no-op；用例可注入抛错以验证降级日志） */
   mdnsStart?: (options?: { keepResults?: boolean }) => Promise<void>
 }
@@ -144,6 +149,7 @@ export interface MockMobileApi extends Record<string, any> {
   activeSessions: Ref<any[]>
   sessionConfigs: Ref<any[]>
   isConnected: Ref<boolean>
+  isPaired: Ref<boolean>
   isDark: Ref<boolean>
   mobileSettings: Ref<Record<string, any>>
 }
@@ -155,8 +161,11 @@ export function installMockMobileApi(options: MockMobileApiOptions = {}): MockMo
     activeSessions: ref([]),
     sessionConfigs: ref([]),
     isConnected: ref(options.isConnected ?? false),
+    isPaired: ref(options.isPaired ?? false),
     isDark: ref(false),
     mobileSettings: ref({ vibrate: false }),
+    isLoadingConfigs: ref(false),
+    hasLoadedConfigs: ref(true),
     httpRequest: options.httpRequest ?? (async () => ({ code: 0, message: 'ok' })),
     loadActiveSessions: async () => {},
     loadSessionConfigs: async () => {},
@@ -168,11 +177,13 @@ export function installMockMobileApi(options: MockMobileApiOptions = {}): MockMo
     currentDevice: ref(null),
     connectionHistory: ref([]),
     connectDevice: options.connectDevice ?? (async () => {}),
+    authenticateWithStoredToken: options.authenticateWithStoredToken ?? (async () => false),
     async cancelConnection() {},
     async disconnect() {},
     async loadConnectionHistory() {},
     async clearConnectionHistory() {},
     async removeFromConnectionHistory() {},
+    async addToConnectionHistory() {},
     onConnectionEvent: () => ({ dispose() {} }),
     mdnsServices: ref([]),
     mdnsScanning: ref(false),

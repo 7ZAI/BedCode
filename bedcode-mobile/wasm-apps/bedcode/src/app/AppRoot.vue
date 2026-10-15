@@ -4,8 +4,10 @@
     <TerminalView v-if="terminalSession" :session-id="terminalSession.id" :back="closeTerminal" />
 
     <template v-else>
-      <!-- ==================== 头部：标题 + 连接状态 + 刷新 ==================== -->
-      <div class="flex items-center gap-2 px-4 pt-3 pb-2 flex-shrink-0">
+      <!-- ==================== 应用级头部（仅工具箱 / 设置页签；连接与会话页自带页头） ====================
+           旧宿主是「每页自带头部」形态：连接页「连接配对」+ 状态小字 + 雷达按钮，会话页「会话」+ 刷新。
+           本组件仅给尚未自持页头的页签（工具箱 / 设置）画应用级头部，避免两层头部叠在同一屏。 -->
+      <div v-if="showAppHeader" class="flex items-center gap-2 px-4 pt-3 pb-2 flex-shrink-0">
         <span class="text-base font-semibold" :style="{ color: 'var(--mobile-text-primary)' }">
           {{ t('app.title') }}
         </span>
@@ -51,13 +53,20 @@
           v-if="isVisited('connection')"
           :class="['app-tab-panel absolute inset-0 overflow-y-auto', panelClass('connection')]"
         >
-          <DevicesSection @open-sessions="onSelectTab('sessions')" />
+          <DevicesSection
+            :active="tabs.active.value === 'connection'"
+            @open-sessions="onSelectTab('sessions')"
+          />
         </div>
         <div
           v-if="isVisited('sessions')"
           :class="['app-tab-panel absolute inset-0 overflow-y-auto', panelClass('sessions')]"
         >
-          <SessionsSection @open-terminal="onOpenTerminal" />
+          <SessionsSection
+            :active="tabs.active.value === 'sessions'"
+            @open-terminal="onOpenTerminal"
+            @open-connection="onSelectTab('connection')"
+          />
         </div>
         <div
           v-if="isVisited('toolbox')"
@@ -124,6 +133,16 @@ const terminalSession = ref<{ id: string; name: string } | null>(null)
 
 const isAuthenticated = ctrl.isAuthenticated
 const reconnectBanner = ctrl.reconnectBanner
+
+/**
+ * 应用级头部是否渲染（仅工具箱 / 设置页签）
+ *
+ * 连接页与会话页自带 `page-header`（旧宿主形态），故这两页不再叠加应用级头部；
+ * 工具箱 / 设置尚未自持页头，仍由本组件统一标题 + 状态 + 刷新。
+ */
+const showAppHeader = computed(
+  () => tabs.active.value !== 'connection' && tabs.active.value !== 'sessions',
+)
 
 /** 连接状态 → 文案键（复用 host 域状态分类表，仅换 app.* 命名空间的落点） */
 const statusTextKey = computed(() => {

@@ -60,6 +60,9 @@ export async function initPluginSystem(
       activeSessions: connection.activeSessions,
       sessionConfigs: connection.sessionConfigs,
       isConnected: connection.isConnected,
+      // 认证态（paired）与传输层已连（isConnected）是两个事实：插件发受保护请求
+      // （带 JWT 的端点）前必须先判 isPaired，否则桌面端 401
+      isPaired: connection.isPaired,
       httpRequest,
       loadActiveSessions: connection.loadActiveSessions,
       loadSessionConfigs: connection.loadSessionConfigs,
@@ -82,10 +85,13 @@ export async function initPluginSystem(
       connectionHistory: connection.connectionHistory,
       connectDevice: connection.connect,
       cancelConnection: connection.cancelConnection,
+      // 静默换新 JWT（宿主凭据不出宿主；无凭据 / 被拒 → false 由配对流程接管）
+      authenticateWithStoredToken: connection.authenticate,
       disconnect: connection.disconnect,
       loadConnectionHistory: connection.loadConnectionHistory,
       clearConnectionHistory: connection.clearConnectionHistory,
       removeFromConnectionHistory: connection.removeFromConnectionHistory,
+      addToConnectionHistory: connection.addToConnectionHistory,
       onConnectionEvent: subscribeConnectionEvents,
       // ── mDNS 主机发现引擎事实（原始发现事实投影，派生列表归插件自持）──
       mdnsServices: mdns.discoveredServices,

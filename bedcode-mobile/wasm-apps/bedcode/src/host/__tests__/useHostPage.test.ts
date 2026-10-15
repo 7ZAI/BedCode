@@ -229,3 +229,112 @@ describe('连接引擎失败的机制落点（错误分类 + 日志）', () => {
     expect(String(ctx.logger.warn.mock.calls[0][0])).toContain('keystore unavailable')
   })
 })
+
+describe('连接后静默换新 JWT（返回用户免配对）', () => {
+  it('thost_authenticatesSilently_when_connectSucceedsWithStoredCredentials', async () => {
+    const api = installMockMobileApi({
+      connectDevice: async () => {},
+      authenticateWithStoredToken: async () => {
+        api.isPaired.value = true
+        api.connectionStatus.value = 'paired'
+        return true
+      },
+    })
+    const host = makeHost()
+
+    await host.connectDevice({ address: '10.0.0.4', port: 8765 })
+
+    expect(host.isAuthenticated.value).toBe(true)
+    expect(host.needsAuth.value).toBe(false)
+  })
+
+  it('thost_keepsConnectedStateForPairing_when_noStoredCredentials', async () => {
+    const api = installMockMobileApi({
+      connectDevice: async () => {},
+      authenticateWithStoredToken: async () => false,
+    })
+    api.connectionStatus.value = 'connected'
+    const host = makeHost()
+
+    await host.connectDevice({ address: '10.0.0.5', port: 8765 })
+
+    expect(host.isAuthenticated.value).toBe(false)
+    expect(host.needsAuth.value).toBe(true)
+  })
+
+  it('thost_skipsSilentAuth_when_disabledForQrFlow（扫码自带一次性 token）', async () => {
+    let called = 0
+    const api = installMockMobileApi({
+      connectDevice: async () => {},
+      authenticateWithStoredToken: async () => {
+        called += 1
+        return false
+      },
+    })
+    api.connectionStatus.value = 'connected'
+    const host = makeHost()
+
+    await host.connectDevice({ address: '10.0.0.6', port: 8765 }, { silentAuth: false })
+
+    expect(called).toBe(0)
+  })
+})
+
+describe('取消连接', () => {
+  it('thost_forwardsCancelToEngine_and_swallowsFailure', async () => {
+    const api = installMockMobileApi({})
+    api.cancelConnection = async () => {
+      throw new Error('no active connection')
+    }
+    const host = makeHost()
+
+    await expect(host.cancelConnect()).resolves.toBeUndefined()
+    expect(String(ctx.logger.warn.mock.calls[0][0])).toContain('no active connection')
+  })
+})
+describe('连接历史写入 / 移除（认证成功后记一笔）', () => {
+  it('addHistory：转发宿主域并带设备名', async () => {
+    const api = installMockMobileApi({})
+    const add = vi.fn(async () => {})
+    api.addToConnectionHistory = add
+    const host = makeHost()
+
+    await host.addHistory('10.0.0.9:8765', 'desk-9')
+
+    expect(add).toHaveBeenCalledWith('10.0.0.9:8765', 'desk-9')
+  })
+
+  it('addHistory 失败：落 warn 且不上抛（不能因记历史失败让连接变红）', async () => {
+    const api = installMockMobileApi({})
+    api.addToConnectionHistory = async () => {
+      throw new Error('kv write failed')
+    }
+    const host = makeHost()
+
+    await expect(host.addHistory('10.0.0.9:8765', 'desk-9')).resolves.toBeUndefined()
+    expect(String(ctx.logger.warn.mock.calls[0][0])).toContain('kv write failed')
+  })
+
+  it('removeHistory：转发宿主域（行内 × 按钮）', async () => {
+    const api = installMockMobileApi({})
+    const remove = vi.fn(async () => {})
+    api.removeFromConnectionHistory = remove
+    const host = makeHost()
+
+    await host.removeHistory('10.0.0.9:8765')
+
+    expect(remove).toHaveBeenCalledWith('10.0.0.9:8765')
+  })
+})
+
+describe('宿主机设置投影（首选认证方式 / 默认端口 / 终端上限）', () => {
+  it('mobileSettings 直接透传宿主单例（连接页与会话页据此还原旧行为）', () => {
+    const api = installMockMobileApi({})
+    api.mobileSettings.value = { preferredAuthMethod: 'biometric', defaultPort: 9000, maxOpenTerminals: 3 }
+    const host = makeHost()
+
+    expect(host.mobileSettings.value.preferredAuthMethod).toBe('biometric')
+    expect(host.mobileSettings.value.defaultPort).toBe(9000)
+    expect(host.mobileSettings.value.maxOpenTerminals).toBe(3)
+  })
+})

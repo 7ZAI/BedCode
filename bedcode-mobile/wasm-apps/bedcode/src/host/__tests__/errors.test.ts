@@ -109,9 +109,8 @@ describe('C-ERR-5/C-ERR-6 命令失败路径', () => {
 describe('C-ERR-7 机制引用的 key 双语在场', () => {
   const MECHANISM_KEYS = [
     ...Object.values(CONNECTION_ERROR_KEYS),
-    // useHostPage / 组件层错误槽位与兜底 key
+    // useHostPage / errors 机制引用的错误槽位与兜底 key
     'hub.connectFailed',
-    'hub.unreachable',
     'hub.pairingFailed',
     'hub.loadFailed',
     'hub.startFailed',
@@ -119,23 +118,83 @@ describe('C-ERR-7 机制引用的 key 双语在场', () => {
     'hub.removeFailed',
     'hub.manualInvalid',
     'hub.historyClearFailed',
-    'hub.biometricBindFailed',
-    'hub.biometricUnbindFailed',
-    // 扫码配对（QrScanner / DevicesSection 引用）
-    'hub.qrConnect',
-    'hub.qrScanHint',
-    'hub.qrInvalid',
-    'hub.qrInvalidData',
-    'hub.qrCameraFailed',
-    'hub.qrCameraPermissionHint',
-    'hub.qrRescan',
-    'hub.qrBack',
-    'hub.qrTorch',
-    'hub.qrAlbum',
-    'hub.qrAlbumNoQr',
-    'hub.qrTorchUnsupported',
     'hub.qrFailed',
-    'hub.dismiss',
+    // 连接页流程（DevicesSection：状态小字 / 配对与扫码失败文案）
+    'hub.connectionStatus.connecting',
+    'hub.connectionStatus.connectingPlain',
+    'hub.connectionStatus.connected',
+    'hub.connectionStatus.pairing',
+    'hub.connectionStatus.paired',
+    'hub.connectionStatus.disconnected',
+    'hub.pairingTimeout',
+    'hub.userCancelled',
+    'hub.codeVerifyFailed',
+    'hub.scanQrExpired',
+    'hub.scanTimeout',
+    'hub.biometricNotBoundOnDesktop',
+    // 配对码 / 生物认证弹窗
+    'hub.pairingCodeTitle',
+    'hub.pairingCodeHint',
+    'hub.pairingClear',
+    'hub.pairingConfirm',
+    'hub.pairingVerifying',
+    'hub.pairingRequesting',
+    'hub.switchToBiometric',
+    'hub.switchToPairing',
+    'hub.biometricNotBound',
+    'hub.authBiometric',
+    'hub.authBiometricDesc',
+    'hub.biometricVerify',
+    'hub.biometricAuthenticating',
+    'hub.biometricFailed',
+    // 扫码面板（ScanPanel）
+    'hub.scanHint',
+    'hub.scanFailedTitle',
+    'hub.scanBack',
+    'hub.scanRescan',
+    'hub.scanTorch',
+    'hub.scanAlbum',
+    'hub.scanCameraFailed',
+    'hub.scanCameraPermissionHint',
+    'hub.scanTorchUnsupported',
+    'hub.scanAlbumNoQr',
+    'hub.scanInvalid',
+    'hub.scanInvalidData',
+    // mDNS 发现面板
+    'hub.discoverScanning',
+    'hub.discoverNoDevices',
+    'hub.discoverNoDevicesHint',
+    'hub.discoverDeviceFound',
+    'hub.discoverConnectToDevice',
+    'hub.discoverConnected',
+    'hub.discoverStopScan',
+    'hub.discoverRestartScan',
+    // 连接历史（确认 + 相对时间）
+    'hub.historyClearConfirm',
+    'hub.timeJustNow',
+    'hub.timeMinutesAgo',
+    'hub.timeHoursAgo',
+    'hub.timeDaysAgo',
+    // 会话页（区块 / 二次确认 / 准备中）
+    'hub.sessionTitle',
+    'hub.refreshConfig',
+    'hub.refreshSessions',
+    'hub.maxReached',
+    'hub.confirmStop',
+    'hub.confirmStopMsg',
+    'hub.confirmDelete',
+    'hub.confirmDeleteMsg',
+    'hub.startFailedNoId',
+    'hub.preparingTerminal',
+    'hub.stopSession',
+    'hub.deleteSession',
+    'hub.configProjectDir',
+    'hub.configCommand',
+    'hub.noSessionsHint',
+    // 自持弹窗按钮（不依宿主 common.* 命名空间）
+    'hub.actionCancel',
+    'hub.actionConfirm',
+    'hub.actionClose',
   ]
 
   it('should_resolveEveryMechanismKeyInBothLocales_when_localesLoaded', () => {
@@ -151,11 +210,23 @@ describe('C-ERR-7 机制引用的 key 双语在场', () => {
 
   it('should_keepParamPlaceholderIdenticalAcrossLocales_when_keyTakesParams', () => {
     // 带插值的 key 双语文案必须含同一占位符（漏写 = 用户看到未替换花括号）
-    for (const key of ['hub.connectFailedToast', 'hub.startFailed']) {
+    const paramKeys: [string, string][] = [
+      ['hub.connectFailedToast', '{error}'],
+      ['hub.startFailed', '{error}'],
+      ['hub.connectionStatus.connecting', '{name}'],
+      ['hub.discoverDeviceFound', '{count}'],
+      ['hub.timeMinutesAgo', '{count}'],
+      ['hub.timeHoursAgo', '{count}'],
+      ['hub.timeDaysAgo', '{count}'],
+      ['hub.confirmStopMsg', '{name}'],
+      ['hub.confirmDeleteMsg', '{name}'],
+      ['hub.maxReached', '{max}'],
+    ]
+    for (const [key, placeholder] of paramKeys) {
       const zh = String(hubValue(messagesZhCN as unknown as Record<string, unknown>, key) ?? '')
       const en = String(hubValue(messagesEn as unknown as Record<string, unknown>, key) ?? '')
-      expect(zh).toContain('{error}')
-      expect(en).toContain('{error}')
+      expect(zh, `zh-CN ${key} 缺占位符`).toContain(placeholder)
+      expect(en, `en ${key} 缺占位符`).toContain(placeholder)
     }
   })
 })

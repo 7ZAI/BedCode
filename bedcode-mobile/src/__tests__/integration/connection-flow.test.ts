@@ -176,6 +176,9 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     await flushAsync()
     expect(conn.connectionStatus.value).toBe('connected')
     expect(conn.isConnected.value).toBe(true)
+    // 建连动作随即结束：认证是后续独立阶段（connected → paired）。不复位则
+    // 「已连上但未配对」的设备会让连接页永远停在「正在连接…」且按钮全被禁用。
+    expect(conn.isConnecting.value).toBe(false)
     // 连接建立 → 10 后输出经终端 socket 直连，不再注册全局 ws_output 监听
     expect(eventHandlers['ws_output']).toBeUndefined()
 
@@ -348,9 +351,11 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
   })
 
   it('Rust 端重连成功事件链：ws_reconnecting → ws_reconnected → JWT 认证 → ws_paired', async () => {
-    // 预置凭据（Rust 端重连成功后的重新认证依赖已存 JWT）
+    // 预置凭据（Rust 端重连成功后的重新认证依赖已存 JWT）。
+    // 故意与融合 mock 回读的 token（test-jwt-token）不同：认证成功后镜像必须被
+    // 回读覆盖为宿主换新的那份，而不是恰好相等无法分辨。
     await freshConnection(() => {
-      const creds = makeAuthCredentials()
+      const creds = makeAuthCredentials({ sessionToken: 'stale-jwt-token' })
       localStorage.setItem('auth_pairing_id', creds.pairingId)
       localStorage.setItem('auth_fingerprint', creds.fingerprint)
       localStorage.setItem('auth_session_token', creds.sessionToken)
@@ -365,10 +370,14 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     vi.mocked(toast.success).mockClear()
     await emit('ws_reconnected')
     await flushAsync()
-    expect(invokeCalls('ws_authenticate')).toEqual([[{ sessionToken: 'test-jwt-token' }]])
+    expect(invokeCalls('ws_authenticate')).toEqual([[{ sessionToken: 'stale-jwt-token' }]])
     expect(conn.connectionStatus.value).toBe('connected')
     expect(conn.isConnecting.value).toBe(true)
     expect(vi.mocked(toast.success).mock.calls.at(-1)?.[0]).toBe('连接已恢复')
+    // 换新后的 JWT 必须回读到本地镜像（宿主持新 token，镜像是重启后 wsSetToken 的源；
+    // 不同步则下次重启会把已换下的旧 token 推回宿主）
+    expect(invokeCalls('ws_get_auth_credentials')).toHaveLength(1)
+    expect(localStorage.getItem('auth_session_token')).toBe('test-jwt-token')
 
     // 认证成功 → ws_paired → 状态 paired（重连闭环完成）
     await emit('ws_paired')

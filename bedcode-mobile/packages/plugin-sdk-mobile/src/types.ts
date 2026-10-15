@@ -302,8 +302,16 @@ export interface MobileHostApi {
   activeSessions: import('vue').Ref<any[]>
   /** 会话配置列表（响应式 ref） */
   sessionConfigs: import('vue').Ref<any[]>
-  /** 是否已连接对端桌面端（响应式 ref，可 watch / computed） */
+  /** 是否已连接对端桌面端（响应式 ref，可 watch / computed）
+   *
+   * 注意语义边界：**只表示传输层已连**（connected/pairing/paired）。未认证的连接不能
+   * 访问需要 JWT 的端点（会话 / 任务等），凡是要发受保护请求前先判 {@link isPaired}。 */
   isConnected: import('vue').Ref<boolean>
+  /** 是否已完成对端认证（paired，即持有可用的 JWT；响应式 ref）
+   *
+   * 与 `isConnected` 的区别：连上传输层 ≠ 已认证。用宿主持有的凭据静默换新 JWT 后、
+   * 或配对 / QR / 生物认证成功后置 true。 */
+  isPaired: import('vue').Ref<boolean>
   /** 通用对端 REST 请求；返回 { code, message, data } 形状 */
   httpRequest<T = any>(path: string, options?: MobileHttpRequestOptions): Promise<MobileHttpResult<T>>
   /** 拉取/刷新活跃会话列表（宿主连接域机制；结果写入 activeSessions ref） */
@@ -342,6 +350,11 @@ export interface MobileHostApi {
   connectDevice(device: MobileDeviceTarget): Promise<void>
   /** 取消进行中的连接 */
   cancelConnection(): Promise<void>
+  /** 用宿主持有的凭据静默换新 JWT（返回用户免配对；凭据零过境，插件拿不到 token）
+   *
+   * - 宿主无凭据 / 桌面端拒绝 → false（由配对流程接管）
+   * - 成功 → `isPaired` 翻转 true，宿主广播 ws_paired */
+  authenticateWithStoredToken(): Promise<boolean>
   /** 断开当前连接 */
   disconnect(): Promise<void>
   /** 刷新连接历史（force=true 忽略已加载标记） */
@@ -350,6 +363,8 @@ export interface MobileHostApi {
   clearConnectionHistory(): Promise<void>
   /** 从连接历史移除单条 */
   removeFromConnectionHistory(address: string): Promise<void>
+  /** 写入/更新一条连接历史（去重后置顶，宿主域上限 10 条；认证成功时由连接页调用） */
+  addToConnectionHistory(address: string, name?: string): Promise<void>
   /** 连接生命周期事件白名单（reconnecting/reconnected/unexpected_disconnect/reauth_rejected/reconnect_failed/event_channel_ready） */
   onConnectionEvent(handler: (event: MobileHostConnectionEvent) => void): Disposable
 

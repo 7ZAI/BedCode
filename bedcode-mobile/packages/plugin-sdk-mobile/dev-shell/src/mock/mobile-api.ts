@@ -275,6 +275,8 @@ export const mobileApi: MobileHostApi = {
     sessions.value.map((s) => ({ session_id: s.id, agent: s.agent, status: s.status })),
   ),
   isConnected: connected,
+  // dev-shell 无真实认证阶段：演示环境视为已认证（会话/任务端点可直接响应）
+  isPaired: connected,
 
   httpRequest<T = any>(path: string, options: MobileHttpRequestOptions = {}) {
     return routeHttpRequest(path, options.method || 'GET', parseBody(options.body)) as Promise<
@@ -317,18 +319,29 @@ export const mobileApi: MobileHostApi = {
     }
   },
   // ── 连接引擎面（票 2026-10-09：宿主页下沉；dev-shell 提供静默 no-op 替身）──
-  connectionStatus: ref<MobileConnectionStatus>('disconnected'),
+  // 演示环境已是可用的「已认证」连接（与上方 isConnected / isPaired 同口径，
+  // 否则宿主页头部显示「未连接」而认证卡片已渲染，前后矛盾）
+  connectionStatus: ref<MobileConnectionStatus>('paired'),
   isConnecting: ref(false),
   currentDevice: ref<MobileDeviceTarget | null>(null),
   connectionHistory,
   async connectDevice() {},
   async cancelConnection() {},
+  async authenticateWithStoredToken() {
+    return true
+  },
   async disconnect() {},
   async loadConnectionHistory() {},
   async clearConnectionHistory() {
     connectionHistory.value = []
   },
   async removeFromConnectionHistory() {},
+  async addToConnectionHistory(address: string, name?: string) {
+    // dev-shell：内存历史去重置顶（与宿主域上限 10 条同口径）
+    const list = connectionHistory.value.filter((item) => item.address !== address)
+    list.unshift({ address, name: name || address.split(':')[0] })
+    connectionHistory.value = list.slice(0, 10)
+  },
   onConnectionEvent() {
     return { dispose() {} }
   },

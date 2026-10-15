@@ -57,18 +57,44 @@ export function useHostPage(provided?: PluginContext) {
   const connectionStatus = api.connectionStatus
   const currentDevice = api.currentDevice
   const isConnecting = api.isConnecting
-  const isAuthenticated = computed(() => api.isConnected.value)
+
+  /** 已认证（paired）：传输层连上只算 connected，未认证时受保护端点一律 401 */
+  const isAuthenticated = computed(() => api.isPaired.value)
+
+  /** 已连上但尚未认证（等待配对 / 请求配对中）：连接页据此露出认证入口 */
+  const needsAuth = computed(
+    () =>
+      !isAuthenticated.value &&
+      (connectionStatus.value === 'connected' || connectionStatus.value === 'pairing'),
+  )
+
   const connectionError = ref('')
   const reconnectBanner = ref('')
   const connectingName = ref('')
   const deviceError = ref('')
 
-  /** 连接目标设备：探测 + 建 WS 事件通道（引擎动作）。失败按 errors.ts 分类表落 i18n key */
-  async function connectDevice(device: HostDeviceTarget): Promise<void> {
+  /**
+   * 连接目标设备：探测 + 建 WS 事件通道（引擎动作）。失败按 errors.ts 分类表落 i18n key。
+   *
+   * 默认在连上后尝试「用宿主持有的凭据静默换新 JWT」——重启后宿主只有恢复的 global
+   * token，不换新则永远停在 connected（事件通道建不起来、受保护端点 401），返回用户
+   * 还得重新配对。`silentAuth=false` 跳过：扫码连接自带一次性 token，先试旧凭据只会
+   * 多跑一次注定被拒的请求。
+   */
+  async function connectDevice(
+    device: HostDeviceTarget,
+    options: { silentAuth?: boolean } = {},
+  ): Promise<void> {
     deviceError.value = ''
     connectingName.value = device.name || device.address
     try {
       await api.connectDevice(device)
+      if (options.silentAuth !== false && !api.isPaired.value) {
+        const ok = await api.authenticateWithStoredToken()
+        if (!ok) {
+          logger.info(`[host] stored credentials unusable, pairing required: ${device.address}`)
+        }
+      }
     } catch (e) {
       deviceError.value = connectionErrorKey(errText(e))
       logger.error(
@@ -77,6 +103,15 @@ export function useHostPage(provided?: PluginContext) {
       throw e
     } finally {
       connectingName.value = ''
+    }
+  }
+
+  /** 取消进行中的连接（引擎取消动作；失败只记日志，UI 由状态事件收敛） */
+  async function cancelConnect(): Promise<void> {
+    try {
+      await api.cancelConnection()
+    } catch (e) {
+      logger.warn(`[host] cancel connection failed: ${errText(e)}`)
     }
   }
 
@@ -112,6 +147,36 @@ export function useHostPage(provided?: PluginContext) {
   async function clearHistory(): Promise<void> {
     await api.clearConnectionHistory()
   }
+  /**
+   * 写入/更新一条连接历史（旧 DevicesView 在认证成功后调用）
+   *
+   * 去重置顶与上限由宿主域（`useMobileConnection.addToConnectionHistory`）决定，
+   * 插件只负责「何时记一笔」——认证成功。失败只记日志：历史是锦上添花，
+   * 不能因为写历史失败而让一次成功的连接变红。
+   */
+  async function addHistory(address: string, name?: string): Promise<void> {
+    try {
+      await api.addToConnectionHistory(address, name)
+    } catch (e) {
+      logger.warn(`[host] add connection history failed: ${errText(e)}`)
+    }
+  }
+  /** 从连接历史移除单条（旧连接历史行上的 × 按钮） */
+  async function removeHistory(address: string): Promise<void> {
+    try {
+      await api.removeFromConnectionHistory(address)
+    } catch (e) {
+      logger.warn(`[host] remove connection history failed: ${errText(e)}`)
+    }
+  }
+
+  /**
+   * 宿主机设置只读投影（旧 DevicesView 读 `useMobileSettings().settings` 的同源面）
+   *
+   * 连接页据此取「首选认证方式 / 默认端口」，会话页取「终端上限」——设置页经
+   * KV 桥写同名键时宿主会写穿该单例，故这里的读与设置页的写同源、不回退到默认值。
+   */
+  const mobileSettings = api.mobileSettings
 
   // ── 配对编排（插件命令面；事件驱动进度） ──
   const pairingStage = ref<PairingStage>('idle')
@@ -293,6 +358,7 @@ export function useHostPage(provided?: PluginContext) {
     // state
     connectionStatus,
     isAuthenticated,
+    needsAuth,
     currentDevice,
     isConnecting,
     connectionError,
@@ -303,6 +369,7 @@ export function useHostPage(provided?: PluginContext) {
     mdnsServices,
     mdnsScanning,
     connectionHistory,
+    mobileSettings,
     sessions,
     sessionConfigs,
     pairingStage,
@@ -311,11 +378,14 @@ export function useHostPage(provided?: PluginContext) {
     biometric,
     // actions
     connectDevice,
+    cancelConnect,
     disconnect,
     startScan,
     stopScan,
     loadHistory,
     clearHistory,
+    addHistory,
+    removeHistory,
     requestPairing,
     verifyPairingCode,
     authenticateWithQr,

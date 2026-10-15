@@ -68,7 +68,8 @@
               :key="opt.value"
               type="button"
               class="min-h-[32px] px-3 rounded-lg text-xs transition-colors"
-              :style="segmentStyle(item.key === opt.value)"
+              :aria-pressed="ctrl.values[item.key] === opt.value"
+              :style="segmentStyle(ctrl.values[item.key] === opt.value)"
               :disabled="ctrl.saving.value"
               @click="onSelect(item.key, opt.value)"
             >

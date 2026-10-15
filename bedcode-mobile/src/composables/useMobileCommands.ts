@@ -119,6 +119,15 @@ export async function wsAuthenticate(sessionToken: string): Promise<boolean> {
 }
 
 /**
+ * 读取宿主持有的认证凭据（宿主引擎窄读口；未持有 → null）
+ *
+ * C4：凭据持有与读取都在宿主，前端只拿窄投影做持久化镜像
+ */
+export async function wsGetAuthCredentials(): Promise<AuthCredentials | null> {
+  return await invoke('ws_get_auth_credentials')
+}
+
+/**
  * 请求配对（桌面端生成一次性配对码并展示）
  */
 export async function wsRequestPairing(): Promise<void> {

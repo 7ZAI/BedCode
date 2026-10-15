@@ -15,6 +15,7 @@ import {
   wsIsConnected,
   setAutoReconnect,
   wsAuthenticate,
+  wsGetAuthCredentials,
   wsAuthenticateWithBiometric,
   wsRequestPairing,
   wsVerifyPairingCode,
@@ -128,6 +129,26 @@ export const isPaired = computed(() =>
 let initialized = false
 
 /**
+ * 把宿主换新后的凭据回读进本地镜像
+ *
+ * 认证成功时 JWT 只在宿主侧换新（apply_auth_success），本地 localStorage 镜像
+ * 不会自动更新；不回落则下次启动 `init()` 会把已换下的旧 token 推回宿主
+ * （wsSetToken），换新白做（若桌面端作废旧 token，下次静默认证必失败）。
+ * 镜像同步失败不影响本次认证结果（宿主真源已换新），但必须可观测。
+ */
+async function refreshCredentialMirror(): Promise<void> {
+  try {
+    const creds = await wsGetAuthCredentials()
+    if (creds) {
+      saveCredentials(creds)
+      authCredentials.value = creds
+    }
+  } catch (e) {
+    logger.warn('[MobileConnection] credential mirror refresh failed:', e)
+  }
+}
+
+/**
  * 初始化事件监听和凭据（全局单例，仅执行一次）
  * 模块加载时立即执行，确保事件监听在用户操作前注册完毕
  * Tauri 事件不会缓冲，监听器必须在事件触发前注册
@@ -185,6 +206,11 @@ async function init() {
       clearConnectionTimeout()
       connectionStatus.value = 'connected'
       connectionError.value = null
+      // 建连动作到此结束：isConnecting 必须复位。认证是后续独立阶段（connected →
+      // paired），不复位则「已连上但未认证」（无凭据 / 需配对）的设备会让
+      // isConnecting 永久为 true——连接页永远显示「正在连接…」且按钮全被禁用。
+      // 重连路径不经本回调（ws_reconnected 自己置 true，直到认证完成）。
+      isConnecting.value = false
       // 连接成功建立：复位过期事件标记。connect()/disconnect() 置位的 aborted
       // 只用于丢弃上一代连接的 ws_reconnecting / ws_reconnected；不复位则连接
       // 稳定后再次意外断开时，本代真实重连事件会被当成过期的丢掉。
@@ -488,6 +514,8 @@ async function init() {
         const authSuccess = await wsAuthenticate(creds.sessionToken)
         if (authSuccess) {
           logger.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
+          // 换新后的 JWT 回读进本地镜像（重启后 wsSetToken 的源）
+          await refreshCredentialMirror()
           toast.success(i18n.global.t('common.notification.reconnected'), 3000)
         } else {
           logger.warn('[MobileConnection] Re-auth failed, need to pair again')
@@ -780,8 +808,12 @@ export async function authenticate(): Promise<boolean> {
       // 服务端明确拒绝（JWT 过期或无效），清除凭据需要重新配对
       clearAuthCredentials()
       authCredentials.value = null
+      return false
     }
-    return result
+    // 换新后的 JWT 只落宿主机（apply_auth_success）：重读窄读口同步本地镜像，
+    // 否则下次重启会把已换下的旧 token 推回宿主（wsSetToken），换新白做
+    await refreshCredentialMirror()
+    return true
   } catch (error) {
     // 网络错误/超时，不删除 token — Rust 端有 30 秒超时兜底
     // 下次重连仍可复用，避免因临时网络问题导致必须重新配对
