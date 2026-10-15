@@ -110,7 +110,39 @@ impl WsReconnectPolicyPort for ReconnectPolicyBridge {
 // ==================== 主端口实现 ====================
 
 /// 宿主引擎端口（装配于 `PluginManager::init_wasm_runtime_with`）
-pub struct HostPorts;
+///
+/// 下载目录是**宿主端事实**（`resolve_app_downloads_dir` 为 async，而
+/// `host-config.app.downloads_dir` 端口方法必须同步），故在装配时固化成快照：
+/// [`HostPorts::new`] 读运行时预热缓存，[`HostPorts::with_downloads_dir`] 供
+/// 无 `AppHandle` 的测试直接注入。
+pub struct HostPorts {
+    /// `host-config.app.downloads_dir` 投影值；`None` = 未预热 / 解析失败
+    /// （内核 config 域转显性错误，fail-visible）
+    downloads_dir: Option<String>,
+}
+
+impl HostPorts {
+    /// 生产装配：读 peer 平台缝预热的进程内缓存
+    ///
+    /// 调用点必须保证预热先行（`PluginManager::init_wasm_runtime_with` 在
+    /// 构造本结构前 `prewarm_downloads_dir`）——插件 `activate()` 期就可能读该键。
+    pub fn new() -> Self {
+        Self {
+            downloads_dir: crate::peer::ports::downloads_dir_cache(),
+        }
+    }
+
+    /// 测试装配：直接注入下载目录端事实（无 `AppHandle` 下驱动依赖该键的插件）
+    pub fn with_downloads_dir(dir: Option<String>) -> Self {
+        Self { downloads_dir: dir }
+    }
+}
+
+impl Default for HostPorts {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// 宿主端事实（平台标识 / 入站服务器端口）——wasm-core 单形态收口后从内核迁出的
 /// 端差异实现（内核只持 `HostFactsPort` 端口词汇，零端 `#[cfg]` 分支）。
@@ -358,6 +390,16 @@ impl HostEnginePorts for HostPorts {
             .ok_or_else(|| crate::AppError::Internal("downloads dir not available".to_string()))
     }
 
+    /// `host-config.app.downloads_dir` 的移动端事实投影（装配期由
+    /// [`HostPorts::new`] 固化的快照）。
+    ///
+    /// 缺失（未预热 / 解析失败）返回 `None`：内核 `host_api::config` 会转成显性错误
+    /// （fail-visible），不是静默空值——该 impl 曾整体缺失，导致 ai-chatbox 在
+    /// `activate()` 读配置即失败（2026-10-15 真机）。
+    fn app_downloads_dir(&self) -> Option<String> {
+        self.downloads_dir.clone()
+    }
+
     async fn delete_file_android(&self, path: String) -> bedcode_wasm_core::Result<()> {
         crate::plugin::android_plugins::delete_file(&path).await
     }
@@ -514,4 +556,33 @@ struct SharedRootSeed {
     id: String,
     name: String,
     saf_tree_uri: String,
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::HostPorts;
+    use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+
+    /// 回归锁（2026-10-15 真机）：生产装配 [`HostPorts::new`] 必须回读运行时
+    /// 预热缓存——此前 `impl HostEnginePorts for HostPorts` 漏了
+    /// `app_downloads_dir`，落到 trait 缺省 `None`，内核 `host_api::config`
+    /// fail-visible 报「host injected no downloads dir」⇒ ai-chatbox
+    /// `activate()` 读数据目录基址即失败。
+    #[test]
+    fn host_ports_new_projects_prewarmed_downloads_dir() {
+        crate::peer::ports::set_downloads_dir_for_test(Some("/test/Download".to_string()));
+        assert_eq!(
+            HostPorts::new().app_downloads_dir().as_deref(),
+            Some("/test/Download"),
+            "生产端口必须回读预热的下载目录（缺省 None = 插件激活读配置失败）"
+        );
+    }
+
+    /// 未预热 / 解析失败时投影 `None`（内核转显性错误，不是静默空串）
+    #[test]
+    fn host_ports_app_downloads_dir_defaults_to_none() {
+        assert_eq!(HostPorts::with_downloads_dir(None).app_downloads_dir(), None);
+    }
 }

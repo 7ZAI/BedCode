@@ -44,7 +44,7 @@ use wasmtime::component::Component;
 /// `UnimplementedHostFacts` 返回契约外 `"unknown"`，guest 侧显性拒绝（激活失败）。
 fn build_host_ctx() -> Arc<bedcode_wasm_core::host_api::WasmHostContext> {
     let ctx = build_bare_host_ctx();
-    ctx.set_host_facts(Arc::new(bedcode_mobile_lib::plugin::host_ports::HostPorts));
+    ctx.set_host_facts(Arc::new(bedcode_mobile_lib::plugin::host_ports::HostPorts::default()));
     ctx
 }
 

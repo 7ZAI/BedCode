@@ -119,3 +119,38 @@ trap 表坐标（`text_offset=0xc40a8` 未注册 / `0xd40a8` 注册为 code 9，
 
 另注：**在装 release 包内的 ai-chatbox 插件仍带 `data_dir must be initialized during plugin activate`**
 （`unzip` 出 asset 逐字确认）⇒ 在宿主修复装进去之前，该安装仍会复现同类崩溃。
+
+## 7. 追加修复（2026-10-15 第二轮真机复验）：生产端口漏 `app.downloads_dir`
+
+刀 1（宿主装配注册 fs 仲裁器）与刀 2（关信号式 trap）之后，真机打开 AI Chatbox 不再 SIGILL，
+但**激活仍失败**：
+
+```
+E bedcode_server_base::error: Plugin error: WASM activate() failed: host error -1:
+  config_get: app.downloads_dir unavailable: host injected no downloads dir (plugin com.bedcode.ai-chatbox)
+W [ShellAdapter] app has no surface registered: appId=com.bedcode.ai-chatbox（退役扩展点不再回退，运行屏显示空态）
+```
+
+**真因**：`impl HostEnginePorts for HostPorts`（移动 `src/plugin/host_ports.rs`）**整体漏了
+`app_downloads_dir`**，落到 trait 缺省 `None`。`host_api::config` 对 `ConfigKey::AppDownloadsDir`
+的 `None` 按设计 fail-visible 报错 ⇒ ai-chatbox `activate()` 读数据目录基址即失败（宿主壳随之
+无 surface，显示空态）。
+
+**为何上一轮没测到**：§4 的 e2e 用 `MockPorts::with_app_downloads_dir(...)`（夹具替身自带该键）
+——**端装配缺陷被夹具替身遮住**。同时 `prewarm_platform`（下载目录进进程内缓存的唯一路径）只由
+文件传输插件节点启动驱动，晚于插件激活。
+
+**修复**：
+1. 生产端口补上投影：`HostPorts` 持 `downloads_dir: Option<String>` 快照，`new()` 读
+   `peer::ports::downloads_dir_cache()`，`with_downloads_dir()` 供测试注入。
+2. 预热提前：`PluginManager::init_wasm_runtime_with` 在构造端口前
+   `prewarm_downloads_dir(app)`（新函数，`prewarm_platform` 复用同一实现；不再依赖节点启动）。
+
+**回归锁（均已跑 + 变异自检）**：
+- 单测 `plugin/host_ports.rs::tests::host_ports_new_projects_prewarmed_downloads_dir`
+  （变异：删 `app_downloads_dir` impl → 红）。
+- e2e `tests/mobile_plugin_activate_fs_e2e.rs` 夹具改用**生产 `HostPorts`**（不再 MockPorts）：
+  删 impl 即复现真机原始报错文案（逐字）。
+- `bedcode-mobile/src-tauri` 全量 393 ✓（37 套件）；新增代码 fmt / clippy 干净。
+
+**未跑**：真机复验（需按 §6 出路重装）。桌面端不受影响（桌面插件不用该键）。

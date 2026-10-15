@@ -69,7 +69,7 @@ impl HttpPorts for HostLevelPorts {
     /// token 与生产同源：读宿主全局态（`HostPorts::global_token`），
     /// 空 = 未认证 ⇒ 显错（fail-visible，与生产 adapter 同文案）
     fn jwt_auth_token(&self, _plugin_id: &str) -> Result<Option<String>, String> {
-        let token = bedcode_mobile_lib::plugin::host_ports::HostPorts.global_token();
+        let token = bedcode_mobile_lib::plugin::host_ports::HostPorts::default().global_token();
         if token.is_empty() {
             Err("jwtAuth requested but no global token available (not authenticated)".to_string())
         } else {

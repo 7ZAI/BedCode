@@ -30,20 +30,47 @@ const SYSTEM_INFO_WAIT_ATTEMPTS: u32 = 30;
 /// 与集中化前「解析失败回退」语义一致）
 static DOWNLOADS_DIR: OnceLock<Option<String>> = OnceLock::new();
 
+/// 单测覆写槽：优先进程内预热缓存，使同步端口投影能在无 `AppHandle` 的单测里
+/// 注入确定值（`#[cfg(test)]` 专用，生产不编译）
+#[cfg(test)]
+static TEST_DOWNLOADS_DIR: OnceLock<Option<String>> = OnceLock::new();
+
 /// 已预热的 app 私有下载目录（未预热 / 解析失败返回 None，调用方自行回退）；
-/// 平台缝（`peer::seam`）与路径端口共用同一份缓存
+/// 平台缝（`peer::seam`）、路径端口与 `host-config.app.downloads_dir` 端口
+/// （`plugin::host_ports::HostPorts::app_downloads_dir`）共用同一份缓存
 pub(crate) fn downloads_dir_cache() -> Option<String> {
+    #[cfg(test)]
+    if let Some(v) = TEST_DOWNLOADS_DIR.get() {
+        return v.clone();
+    }
     DOWNLOADS_DIR.get().cloned().flatten()
 }
 
-/// 预热平台资源：设备名就绪等待 + 下载目录解析（幂等；节点启动与平台缝装配共用）
-pub(crate) async fn prewarm_platform(app: &AppHandle) {
-    prewarm_device_name().await;
+/// 单测注入下载目录（`#[cfg(test)]` 专用；见 [`TEST_DOWNLOADS_DIR`]）
+#[cfg(test)]
+pub(crate) fn set_downloads_dir_for_test(dir: Option<String>) {
+    let _ = TEST_DOWNLOADS_DIR.set(dir);
+}
+
+/// 只预热 app 下载目录（不等设备名）
+///
+/// 除 peer 平台缝外，`host-config.app.downloads_dir` 的同步端口也读这份缓存，
+/// 而插件 `activate()` 期就可能读该键——节点启动预热（[`prewarm_platform`]，由
+/// 文件传输插件驱动）晚于插件激活，故宿主 WASM 运行时装配时必须单独预热一次，
+/// 否则在 activate 读目录的插件（ai-chatbox）会拿到「host injected no downloads
+/// dir」而激活失败。
+pub(crate) async fn prewarm_downloads_dir(app: &AppHandle) {
     if DOWNLOADS_DIR.get().is_none() {
         let resolved = crate::plugin::android_plugins::resolve_app_downloads_dir(app).await;
         // 竞态下重复 set 被忽略（首次解析胜出）
         let _ = DOWNLOADS_DIR.set(resolved);
     }
+}
+
+/// 预热平台资源：设备名就绪等待 + 下载目录解析（幂等；节点启动与平台缝装配共用）
+pub(crate) async fn prewarm_platform(app: &AppHandle) {
+    prewarm_device_name().await;
+    prewarm_downloads_dir(app).await;
 }
 
 /// 设备名就绪等待：SystemInfo 由 setup 后台任务异步采集，此处轮询等待其就绪；

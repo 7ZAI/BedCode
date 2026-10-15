@@ -22,13 +22,14 @@ use std::sync::Arc;
 
 use bedcode_mobile_lib as _;
 use bedcode_mobile_lib::plugin::guest_events::MobileGuestEvents;
+use bedcode_mobile_lib::plugin::host_ports::HostPorts;
 use bedcode_mobile_lib::plugin::manager::mobile_core_config;
 use bedcode_wasm_core::manager::runtime::AbiPolicy;
 use bedcode_wasm_core::permission::{
     PERMISSION_FS_READ, PERMISSION_FS_WRITE, PERMISSION_NETWORK_HTTP, PERMISSION_STORAGE,
 };
 use bedcode_wasm_core::test_support::{
-    build_host_ctx_with, runtime_engine, setup_headless_runtime_with_config, MockPorts,
+    build_host_ctx_with, runtime_engine, setup_headless_runtime_with_config,
 };
 use wasmtime::component::Component;
 
@@ -66,7 +67,11 @@ impl Fixture {
         let data_dir = downloads.join("ai-chatbox");
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-        let ports = MockPorts::new().with_app_downloads_dir(&downloads.to_string_lossy());
+        // 用**生产端口实现**（`plugin::host_ports::HostPorts`）而非 MockPorts：
+        // 夹具替身自带 `app_downloads_dir`，会把「生产 impl 缺失」这类端装配缺陷
+        // 挡在盲区（2026-10-15 真机 ai-chatbox 激活失败即此路径）——真链路必须
+        // 跑真端口。
+        let ports = HostPorts::with_downloads_dir(Some(downloads.to_string_lossy().into_owned()));
         let host_ctx = build_host_ctx_with(ports);
         host_ctx.grant_permissions(
             PLUGIN_ID,
