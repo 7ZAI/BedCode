@@ -21,6 +21,10 @@
   "contributes": {
     "commands": [
       {
+        "id": "terminal-session.prewarm",
+        "title": "Prewarm Session Terminal Link"
+      },
+      {
         "id": "terminal-session.subscribe",
         "title": "Subscribe Session Terminal"
       },

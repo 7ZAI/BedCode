@@ -95,6 +95,10 @@ export function createWriteCoalescer(
   // write 触发的新 flush 直接返回——当前 flush 的 while 轮次会继续消费新入队
   // 数据，避免双写与数据滞留
   let flushing = false
+  // 写入世代：`dispose()`（清屏/重锚路径）后旧世代的**在飞**分块写必须中止——
+  // 否则 `terminal.clear()` 之后旧内容仍会继续写入 xterm（清屏白做、与新一代
+  // 重放交错）。每次 dispose 递增，让出点醒来时比对，失配即停
+  let epoch = 0
 
   // 链路调试统计（字节对账）：入队/合并 flush/兜底 flush/拆块/让出，
   // 与 terminalBuffer bytesRendered 对账可验证渲染管线无滞留丢字节
@@ -132,12 +136,17 @@ export function createWriteCoalescer(
 
   /** 分片写入：按 MAX_WRITE_CHUNK 拆块写，每累积 WRITE_YIELD_THRESHOLD 让出
    * 主线程一次（宏任务），使触摸/渲染能在输出风暴期间插入，防 UI 冻结
-   * （对齐桌面端 TerminalPreview.writeInChunks；阈值按弱 CPU 减半） */
-  async function writeInChunks(buf: Uint8Array) {
+   * （对齐桌面端 TerminalPreview.writeInChunks；阈值按弱 CPU 减半）
+   *
+   * `writeEpoch` = 本次 flush 启动时的世代：让出点醒来后世代已变（dispose
+   * 清屏/重锚）即中止剩余分块——旧世代内容不得写进已清空的屏幕 */
+  async function writeInChunks(buf: Uint8Array, writeEpoch: number) {
     let written = 0
     statsSplits++
     for (let i = 0; i < buf.length; i += MAX_WRITE_CHUNK) {
-      // terminal 可能已 dispose（页面切换/会话关闭）：让出点期间也可能销毁
+      // 世代已作废（dispose 清屏/重锚）、或 terminal 已 dispose（页面切换/
+      // 会话关闭）：让出点期间两种失效都要拦
+      if (writeEpoch !== epoch) return
       if (!terminal.element) return
       terminal.write(buf.subarray(i, i + MAX_WRITE_CHUNK))
       written += MAX_WRITE_CHUNK
@@ -186,22 +195,28 @@ export function createWriteCoalescer(
     if (pending.length === 0) return
     if (flushing) return
     flushing = true
+    const flushEpoch = epoch
     try {
       let combined: Uint8Array | null
       // while 轮次：flush 在让出点 await 期间新入队的数据也由本次消费，
       // 直到 pending 清空（无滞留、无双写）。小数据路径全同步（flushPendingSync
-      // 无 await），仅大数据分块路径在让出点 await——与测试/桌面端语义一致
-      while ((combined = flushPendingSync()) !== null) {
+      // 无 await），仅大数据分块路径在让出点 await——与测试/桌面端语义一致。
+      // `flushEpoch !== epoch` = 期间发生 dispose（清屏/重锚）：本次 flush 立即收尾
+      while (flushEpoch === epoch && (combined = flushPendingSync()) !== null) {
         statsFlushes++
         statsFlushBytes += combined.byteLength
         if (combined.byteLength <= MAX_WRITE_CHUNK) {
           terminal.write(combined)
         } else {
-          await writeInChunks(combined)
+          await writeInChunks(combined, flushEpoch)
         }
       }
     } finally {
       flushing = false
+      // 本 flush 因世代作废（dispose）提前收尾时，让出期间新入队的数据不能滞留：
+      // 期间 `write()` 调 scheduleFlush 被 flushing 守卫挡掉（不重复调度），
+      // 收尾后必须补一次调度，否则新世代首批数据要等到下一次 write 才上屏
+      if (pending.length > 0) scheduleFlush()
     }
   }
 
@@ -275,9 +290,11 @@ export function createWriteCoalescer(
     )
     pending = []
     totalBytes = 0
-    // in-flight flush 的让出点醒来后由 terminal.element 守卫拦截（dispose 后
-    // 通常伴随 terminal 销毁/换终端的 element 失效）；此处不置永久禁用标志——
-    // 测试断言 dispose 后 coalescer 可复用，且会话切换场景会重建实例
+    // 世代递增：中止在飞分块写的剩余块（清屏后旧内容不得再上屏）；
+    // in-flight flush 的让出点醒来后由 writeEpoch 失配拦截，其 finally 会补调度
+    // dispose 后新入队的数据。此处不置永久禁用标志——测试断言 dispose 后
+    // coalescer 可复用，且会话切换场景会重建实例
+    epoch += 1
   }
 
   return Object.assign(write, { dispose }) as WriteCoalescer

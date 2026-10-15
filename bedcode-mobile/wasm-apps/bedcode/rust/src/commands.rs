@@ -41,6 +41,14 @@ pub(crate) fn dispatch(name: &str, args: &serde_json::Value) -> anyhow::Result<s
             let accepted = auth::authenticate_with_biometric(&h)?;
             Ok(serde_json::json!({ "accepted": accepted }))
         }
+        // 预热链路（进终端页前只预热传输面）：建连但不发 subscribe 帧——
+        // 桌面端每次 subscribe 都整段重放环窗口，预热期页面通道未登记，
+        // 走 subscribe 预热等于白传一遍（长会话可达数 MB）。失败不阻塞跳转
+        "terminal-session.prewarm" => {
+            let session_id = require_str(args, "sessionId")?;
+            LinkManager::prewarm(&h, &session_id)?;
+            Ok(serde_json::json!({ "ok": true }))
+        }
         // 订阅会话（进入终端页 / 预加载；fresh subscribe 语义——已运行链路
         // 重订阅回放环窗口）。幂等由 LinkManager 守卫
         "terminal-session.subscribe" => {

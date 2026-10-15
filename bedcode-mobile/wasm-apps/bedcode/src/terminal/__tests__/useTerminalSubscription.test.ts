@@ -172,6 +172,9 @@ describe('useTerminalSubscription（票 05：subscribed 门控 + 超时兜底 + 
   describe('订阅重试（subscribeWithRetry）', () => {
     it('订阅失败：首次 toast + 定时重试；成功收敛后停止', async () => {
       vi.useFakeTimers()
+      // beforeEach 的在途订阅先复位（模拟链路已断、信念回落），否则一页一代
+      // 去重会把下面的首次 invoke 当成重复意图跳过
+      emitState({ session_id: 's1', phase: 'idle', detail: 'unsubscribed' })
       // 首次 invoke 失败（Rust 侧错误）
       cmd.terminalSubscribe.mockRejectedValueOnce(new Error('link error'))
 

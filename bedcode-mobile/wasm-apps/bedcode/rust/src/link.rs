@@ -1,23 +1,34 @@
-//! 终端链路状态机（票 12，自宿主 `terminal_link.rs` 等价迁移）
+//! # 终端链路状态机（票 12，自宿主 `terminal_link.rs` 等价迁移）
 //!
 //! 每会话一条链路（session_id → LinkState）；驱动源三类：
-//! 1. **命令**（subscribe / unsubscribe / send-input / ack-rendered，前端触发）
+//! 1. **命令**（prewarm / subscribe / unsubscribe / send-input / ack-rendered，前端触发）
 //! 2. **连接事实**（ws:open / ws:close / ws:reconnect-scheduled，宿主传输面）
 //! 3. **下行帧**（ws:message 二进制信封：控制帧 JSON + 输出帧裸字节）
+//!
+//! ## 生命周期（进/出终端页）
+//!
+//! - 进页前 `prewarm`：只建连（宿主代发 auth），**不发 subscribe 帧**——桌面端每次
+//!   subscribe 都从环窗口起点整段重放，预热时页面通道尚未登记，走 subscribe 预热
+//!   等于白传一遍（长会话可达数 MB）。
+//! - 进页 `subscribe`（fresh subscribe 语义）：发 subscribe 帧 → 桌面端回 `subscribed`
+//!   → 整段重放环窗口。**重放前是否清屏**由本状态机按「页面是否已收到过该会话输出」
+//!   （`LinkManager.page_content`）判定并发 `terminal-resync{reason:"replay"}`——重订阅、
+//!   断线重连、会话重启三条路径都会重放，不先清屏就是两代内容叠加（重复显示）。
+//! - 离开终端页 `unsubscribe`：显式 close（同时取消宿主 auto-reconnect）。
 //!
 //! ## 与退役前实现的差异（行为等价性见票 12 §6.3/§9）
 //!
 //! - 重连退避由宿主 auto-reconnect 承担（`ReconnectManager` 全局单一事实源）：
 //!   断开 → 宿主退避重建 → `ws:open`（新句柄 + `reconnectedFrom` 旧句柄）→
-//!   本状态机重新订阅；`session_missing` 重试复用同一循环（主动 close → 宿主
-//!   退避 → 重连重订阅），节流语义与原 TCP 重建一致。
+//!   本状态机重新订阅（prewarm 未订阅过的链路不重订阅——无订阅可恢复）；
+//!   `session_missing` 重试复用同一循环（主动 close → 宿主退避 → 重连重订阅）。
 //! - ack 空闲兜底（250ms 轮询）退役：前端 onWriteParsed/rAF 持续推进 ack，
 //!   64KB 阈值节流保留。
 //! - 「页面订阅门控」（段2 frontend_subscribed）由宿主窄转发层承载：
 //!   `terminal_stream_forward_output` 对未订阅页面返回 Err，字节就地丢弃
 //!   （与原门控丢弃语义一致，重进页面经重订阅回放补齐）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use bedcode_plugin_api_mobile::host::ws::WS_FRAME_KIND_TEXT;
@@ -35,7 +46,7 @@ use crate::{read_primary_target, PLUGIN_ID};
 /// 状态变更事件（phase / detail / retry_in_ms）
 pub(crate) static EVENT_TERMINAL_STATE: LazyLock<String> =
     LazyLock::new(|| format!("plugin:{PLUGIN_ID}:terminal-state"));
-/// 重锚事件（ring_resync / 重订阅回包：前端清屏 + 本地计数归零 + 一次性提示）
+/// 重锚事件（重放世代切换 / 环淘汰：前端清屏 + 本地计数归零 + 一次性提示）
 pub(crate) static EVENT_TERMINAL_RESYNC: LazyLock<String> =
     LazyLock::new(|| format!("plugin:{PLUGIN_ID}:terminal-resync"));
 
@@ -93,6 +104,10 @@ pub(crate) struct LinkState {
     pending_resync: bool,
     /// 断开等待宿主重连中（close 事实已到、open 尚未到）
     waiting_reconnect: bool,
+    /// 只建连未订阅（`prewarm`）：恢复路径不发 subscribe 帧（无订阅可恢复，
+    /// 且预热期的重放注定被丢弃——页面通道尚未登记）；真正的订阅由页面挂载
+    /// 后的 `subscribe` 发出（它会把本标志清掉）
+    prewarmed: bool,
 }
 
 impl LinkState {
@@ -110,6 +125,7 @@ impl LinkState {
             session_missing: 0,
             pending_resync: false,
             waiting_reconnect: false,
+            prewarmed: false,
         }
     }
 
@@ -124,23 +140,56 @@ impl LinkState {
 
 // ==================== 全局管理器 ====================
 
+/// 建连（宿主代发 auth）——`subscribe` / `prewarm` 共用，避免两条建连路径漂移。
+///
+/// 目标 = 主连接桌面（host-connection 原语）；`jwtAuth` = 宿主代发首消息认证
+/// （token 不落插件，C4）；`autoReconnect` = 宿主退避重建（本插件无时钟）。
+/// 失败（桌面未连 / 无目标）上抛给调用方。
+fn connect_link(h: &WasmHost) -> anyhow::Result<String> {
+    let target = read_primary_target()?;
+    let config = serde_json::json!({
+        "url": format!("ws://{}:{}{}", target.address, target.port, crate::TERMINAL_WS_PATH),
+        "jwtAuth": true,
+        "autoReconnect": serde_json::from_str::<serde_json::Value>(AUTO_RECONNECT_CONFIG).expect("static json"),
+    });
+    h.ws_connect(config.to_string().as_str())
+        .map_err(|e| anyhow::anyhow!("terminal ws connect failed: {e}"))
+}
+
 /// 全局链路管理器（WASM 单线程环境；lib.rs 经 `LINK_MANAGER` 访问）
-pub(crate) static LINK_MANAGER: LazyLock<Mutex<LinkManager>> =
-    LazyLock::new(|| Mutex::new(LinkManager { links: HashMap::new() }));
+pub(crate) static LINK_MANAGER: LazyLock<Mutex<LinkManager>> = LazyLock::new(|| {
+    Mutex::new(LinkManager {
+        links: HashMap::new(),
+        page_content: HashSet::new(),
+    })
+});
 
 /// 终端链路管理器
 #[derive(Default)]
 pub(crate) struct LinkManager {
     links: HashMap<String, LinkState>,
+    /// 已向页面转发过输出的会话 = **页面在屏内容事实**。
+    ///
+    /// 用途：`subscribed` = 桌面端即将（或正在）从环窗口起点**整段重放**；若页面
+    /// 已有上一代内容（重订阅 / 断线重连 / 会话重启），必须随之发 `terminal-resync`
+    /// 让前端先清屏，否则两代内容叠加 = 重复显示。
+    ///
+    /// 键是 session id（跨链路实例保留：会话重启后页面仍显示旧终屏内容，新链路
+    /// 同样需要清屏）。页面离开后不清理：多一次空清屏（前端 `hasRenderedContent`
+    /// 会跳过）比漏清（重放叠加渲染）安全得多；会话删除时才随链路一并清理。
+    page_content: HashSet<String>,
 }
 
 impl LinkManager {
     // ==================== 命令面（前端触发） ====================
 
     /// 订阅会话（fresh subscribe 语义）：
-    /// - 链路运行中 → 重发 subscribe 帧（插件游标归零重播环窗口）；已 live
-    ///   则标记重锚（重播与在屏内容不重叠）
+    /// - 链路运行中 → 重发 subscribe 帧（桌面端游标归零、**整段重播环窗口**）
     /// - 已停止 / 不存在 → 建连（宿主代发 auth）→ 发 subscribe 帧
+    ///
+    /// 每次调用都是一次完整重放（桌面端 fresh subscribe 语义），所以前端**一页
+    /// 一代只应调用一次**：重复订阅 = 重复传输 + 多一次清屏重绘。重放前的清屏由
+    /// `subscribed` 处理按「页面是否已有内容」判定并发 `terminal-resync`。
     ///
     /// 连接失败（桌面未连 / 无目标）→ Err 上抛，由前端既有订阅重试路径
     /// （3s 定时）驱动重试；成功路径的确认经状态事件异步到达。
@@ -153,10 +202,9 @@ impl LinkManager {
         if let Some(link) = mgr.links.get_mut(session_id) {
             if !link.stopped {
                 if let Some(handle) = link.handle.clone() {
-                    // 链路已在运行：fresh subscribe（重播环窗口）
-                    if link.phase == LinkPhase::Live {
-                        link.pending_resync = true;
-                    }
+                    // 链路已在运行：fresh subscribe（桌面端重播环窗口）；
+                    // 端口标志清掉——从此刻起断线重连需恢复订阅
+                    link.prewarmed = false;
                     h.ws_send_text(&handle, &frame)
                         .map_err(|e| anyhow::anyhow!("resubscribe send failed: {}", e.message))?;
                     h.log_debug(&format!("terminal fresh subscribe frame sent (session {session_id})"));
@@ -171,18 +219,7 @@ impl LinkManager {
             mgr.links.remove(session_id);
         }
 
-        // 建连：目标 = 主连接桌面（host-connection 原语）；jwt-auth = 宿主代发
-        // 首消息认证（token 不落插件，C4）；auto-reconnect = 宿主退避重建
-        let target = read_primary_target()?;
-        let config = serde_json::json!({
-            "url": format!("ws://{}:{}{}", target.address, target.port, crate::TERMINAL_WS_PATH),
-            "jwtAuth": true,
-            "autoReconnect": serde_json::from_str::<serde_json::Value>(AUTO_RECONNECT_CONFIG).expect("static json"),
-        });
-        let handle = h
-            .ws_connect(config.to_string().as_str())
-            .map_err(|e| anyhow::anyhow!("terminal ws connect failed: {e}"))?;
-
+        let handle = connect_link(h)?;
         let mut link = LinkState::new(session_id.to_string());
         link.handle = Some(handle.clone());
         link.last_handle = Some(handle.clone());
@@ -192,6 +229,43 @@ impl LinkManager {
             .map_err(|e| anyhow::anyhow!("subscribe send failed: {}", e.message))?;
         mgr.links.insert(session_id.to_string(), link);
         emit_state(h, session_id, LinkPhase::Auth, 0, "subscribed_sent");
+        Ok(())
+    }
+
+    /// 预热链路（进终端页前只预热**传输面**）：建连（宿主代发 auth），
+    /// **不发 subscribe 帧**。
+    ///
+    /// 为什么不能直接用 `subscribe` 预热：桌面端每次 subscribe 都从环窗口起点
+    /// 整段重放，而预热时页面通道尚未登记——那笔重放注定被丢弃（白传一遍，
+    /// 长会话可达数 MB）。页面挂载后的 `subscribe` 复用这条已认证连接，
+    /// 全程只发生一次重放。
+    ///
+    /// 幂等：链路已在运行（有句柄且未停止）直接返回；已停止/断开的旧条目按
+    /// `subscribe` 同款重建。失败（桌面未连 / 无目标）→ Err 上抛给调用方留痕，
+    /// 不阻塞页面跳转。
+    pub(crate) fn prewarm(h: &WasmHost, session_id: &str) -> anyhow::Result<()> {
+        if session_id.is_empty() {
+            return Ok(());
+        }
+        let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
+        if let Some(link) = mgr.links.get_mut(session_id) {
+            if !link.stopped && link.handle.is_some() {
+                return Ok(());
+            }
+            if let Some(old) = link.handle.take() {
+                let _ = h.ws_close(&old, "{}");
+            }
+            mgr.links.remove(session_id);
+        }
+        let handle = connect_link(h)?;
+        let mut link = LinkState::new(session_id.to_string());
+        link.handle = Some(handle.clone());
+        link.last_handle = Some(handle);
+        link.prewarmed = true;
+        mgr.links.insert(session_id.to_string(), link);
+        // phase=connecting + detail=prewarmed：前端只会看到「未订阅但已建连」，
+        // 真正的 subscribed 由页面挂载后的 subscribe 回包提供
+        emit_state(h, session_id, LinkPhase::Connecting, 0, "prewarmed");
         Ok(())
     }
 
@@ -233,7 +307,10 @@ impl LinkManager {
     /// 会话删除：清链路（订阅态与推送通道在宿主 gateway 由命令层同步清理）
     pub(crate) fn remove(h: &WasmHost, session_id: &str) {
         Self::unsubscribe(h, session_id);
-        LINK_MANAGER.lock().expect("link manager lock").links.remove(session_id);
+        let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
+        mgr.links.remove(session_id);
+        // 会话已删除：在屏内容事实随之失效（同 id 重建的会话必须从头重放）
+        mgr.page_content.remove(session_id);
     }
 
     /// 发送终端输入（文本 + 特殊键共存，帧序即写入序；投递失败上抛——
@@ -326,20 +403,31 @@ impl LinkManager {
                     link.waiting_reconnect = false;
                     link.phase = LinkPhase::Auth;
                     link.reset_subscription_base();
-                    Some(link.session_id.clone())
+                    // 预热链路（尚未订阅过）没有订阅可恢复：只接管句柄、不发
+                    // subscribe 帧——预热期的重放同样注定被丢弃（页面通道未
+                    // 登记），真正的重放入口只有页面挂载后的 subscribe
+                    let need_subscribe = !link.prewarmed;
+                    if !need_subscribe {
+                        link.phase = LinkPhase::Connecting;
+                    }
+                    Some((link.session_id.clone(), need_subscribe))
                 }
                 None => None,
             }
         };
         match resumed {
-            Some(session_id) => {
-                // 重新订阅（无续传语义；环淘汰由 ring_resync 如实告知）
+            Some((session_id, true)) => {
+                // 重新订阅（无续传语义；环淘汰由 ring_resync 如实告知）。
+                // 重放前的清屏由 `subscribed` 按「页面是否已有内容」判定并发 resync
                 if let Err(e) = h.ws_send_text(handle, &build_subscribe_frame(&session_id)) {
                     h.log_warn(&format!("resubscribe after reconnect failed (session {session_id}): {}", e.message));
                     return;
                 }
                 emit_state(h, &session_id, LinkPhase::Auth, 0, "subscribed_sent");
             }
+            // 预热链路（无订阅可恢复）：句柄接管已在上面完成，无需再发帧、
+            // 也不打扰前端（页面尚未挂载）
+            Some((_session_id, false)) => {}
             // 孤儿连接：显式关闭（close 即取消其重连会话）
             None => {
                 h.log_warn(&format!("closing orphan reconnected ws handle {handle}"));
@@ -433,7 +521,7 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
         // 本地基准归零。重订阅（重连/停止后重建/已 live 再 subscribe）时
         // 发 terminal-resync 让前端清屏 + 归零
         Some("subscribed") => {
-            let pending_resync = {
+            {
                 let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
                 let Some(link) = mgr.links.get_mut(session_id) else {
                     return;
@@ -444,17 +532,23 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
                 link.cursor = 0;
                 link.frontend_rendered = 0;
                 link.pending_ack = 0;
-                let was = link.pending_resync;
-                link.pending_resync = false;
-                was
-            };
+                link.prewarmed = false;
+            }
+            // 重放世代判定：页面已收到过该会话的输出 ⇒ 桌面端这轮从环窗口起点
+            // 的重放会与在屏内容叠加渲染（重订阅/重连/会话重启）⇒ 必须先清屏。
+            // 判据用「页面内容事实」而不是订阅相位：两条重放路径（重订阅竞态、
+            // 重连）都不保证订阅时相位已是 live。
+            let page_has_content = LINK_MANAGER
+                .lock()
+                .expect("link manager lock")
+                .page_content
+                .contains(session_id);
             emit_state(h, session_id, LinkPhase::Live, 0, "subscribed");
-            if pending_resync {
-                // 重订阅/重连/停止后重建：前端可能已有在屏内容 → 清屏 + 基准重置
-                emit_resync(h, session_id, 0);
+            if page_has_content {
+                emit_resync(h, session_id, 0, "replay");
             }
         }
-        // 环淘汰重锚（唯一重锚信号）：清屏 + 本地计数基准重置。
+        // 环淘汰重锚（唯一截断信号）：清屏 + 本地计数基准重置。
         // 本端不发送 resync 帧（协议保留能力）
         Some("ring_resync") => {
             let offset = msg.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -469,7 +563,7 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
             h.log_warn(&format!(
                 "terminal resync (session {session_id}): ring_offset={offset}, clear screen and re-anchor"
             ));
-            emit_resync(h, session_id, offset);
+            emit_resync(h, session_id, offset, "truncated");
         }
         // 停止帧：尾帧已先于本帧按序到达并被消费（帧序保证）→ 本端关闭连接
         //（显式 close = 取消宿主自动重连，不再复活）
@@ -555,17 +649,24 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
 fn ingest_output(h: &WasmHost, session_id: &str, data: &[u8]) {
     let len = data.len() as u64;
     let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
-    let Some(link) = mgr.links.get_mut(session_id) else {
-        return;
+    let forwarded = {
+        let Some(link) = mgr.links.get_mut(session_id) else {
+            return;
+        };
+        if !link.subscribe_ack {
+            return; // fresh subscribe 前的旧流残留
+        }
+        link.cursor += len;
+        link.pending_ack += len;
+        h.terminal_stream_forward_output(session_id, data).is_ok()
     };
-    if !link.subscribe_ack {
-        return; // fresh subscribe 前的旧流残留
+    if forwarded {
+        // 页面真的收到了字节 = 在屏内容事实（`subscribed` 时据此决定重放前清屏）
+        mgr.page_content.insert(session_id.to_string());
     }
-    link.cursor += len;
-    link.pending_ack += len;
-    let _ = h.terminal_stream_forward_output(session_id, data);
     // 转发失败（页面未订阅 / 通道已释放）：字节丢弃（无缓存），游标照记——
-    // 重进页面时 fresh subscribe 重播环窗口补齐，与退役前门控丢弃语义一致
+    // 重进页面时 fresh subscribe 重播环窗口补齐，与退役前门控丢弃语义一致。
+    // 不计入 page_content：页面本就没内容，重放无需清屏
 }
 
 // ==================== 状态事件发射 ====================
@@ -607,12 +708,19 @@ fn emit_state_with_retry(
 
 /// 重锚事件（`ring_resync` 或重订阅回包）：前端清屏 + 本地计数归零 +
 /// 一次性提示。`offset` 为桌面插件环偏移（诊断用），本地计数基准一律归零
-fn emit_resync(h: &WasmHost, session_id: &str, offset: u64) {
+/// 重锚事件（重放世代切换 / 环淘汰）：前端清屏 + 本地计数归零。
+///
+/// `reason`：`"truncated"`（环淘汰，数据有缺口）/ `"replay"`（重放世代切换，
+/// 无数据丢失）——前端据此区分是否上报「历史截断」（重放重锚不是截断）。
+/// `offset` 为桌面插件环偏移（诊断用），本地计数基准一律归零。
+/// 旧客户端忽略未知字段 `reason`（默认按 truncated 处理，行为不回归）。
+fn emit_resync(h: &WasmHost, session_id: &str, offset: u64, reason: &str) {
     h.emit_event(
         &EVENT_TERMINAL_RESYNC,
         &serde_json::json!({
             "session_id": session_id,
             "offset": offset,
+            "reason": reason,
         }),
     );
     emit_state(h, session_id, LinkPhase::Live, 0, "resync");

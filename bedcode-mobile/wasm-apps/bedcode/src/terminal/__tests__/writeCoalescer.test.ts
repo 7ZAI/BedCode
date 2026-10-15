@@ -321,4 +321,43 @@ describe('createWriteCoalescer', () => {
     rafCallbacks[1](0)
     expect(term.write).toHaveBeenCalledTimes(1)
   })
+
+  it('dispose 中止在飞分块写：清屏后旧世代剩余分块不得再写入（残影/交错根因）', async () => {
+    const term = makeMockTerminal()
+    const coalescer = makeCoalescer(term, { enableRafCoalesce: true })
+
+    // 500KB = 8 块；128KB 阈值 → 写 2 块后进入让出点（flush 在 await 中挂起）
+    coalescer(new Uint8Array(500 * 1024).fill(3))
+    rafCallbacks[0](0)
+    const beforeDispose = term.write.mock.calls.length
+    expect(beforeDispose).toBe(WRITE_YIELD_THRESHOLD / MAX_WRITE_CHUNK)
+
+    // 重锚/重放世代切换的清屏路径 = writeCoalescer.dispose() + terminal.clear()：
+    // 让出点醒来后剩余 6 块不得再写进已清空的屏幕
+    coalescer.dispose()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(term.write.mock.calls.length).toBe(beforeDispose)
+  })
+
+  it('dispose 中止在飞 flush 后，新世代数据仍被调度上屏（不滞留）', async () => {
+    const term = makeMockTerminal()
+    const coalescer = makeCoalescer(term, { enableRafCoalesce: true })
+
+    coalescer(new Uint8Array(500 * 1024).fill(3))
+    rafCallbacks[0](0)
+    coalescer.dispose()
+
+    // 清屏后的新世代重放：旧 flush 仍在让出点挂起（flushing=true）⇒ write() 不
+    // 重复调度，由旧 flush 收尾时的尾随调度补上（否则首批数据要等下一次 write）
+    const before = rafCallbacks.length
+    coalescer(new Uint8Array([9, 9, 9]))
+    const deadline = Date.now() + 2000
+    while (rafCallbacks.length === before) {
+      if (Date.now() > deadline) throw new Error('timeout: 尾随调度未注册 rAF')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    rafCallbacks[rafCallbacks.length - 1](0)
+    await waitForWrites(term, 3)
+    expectRaw(term.write, [9, 9, 9])
+  })
 })

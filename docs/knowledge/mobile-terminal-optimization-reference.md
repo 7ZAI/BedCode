@@ -1,5 +1,15 @@
 # 移动端终端优化参考：桌面端输出管线优化全景 + 30ms 合并问题
 
+> ⚠️ **【2026-10-15 历史化】本文描述的架构已于 2026-09 退役**：TB v3 字节 offset 真源
+> （`start_offset/end_offset`/`acked_offset`）、每订阅者合帧窗口、**宿主** `terminal_link.rs`、
+> 移动端两段订阅/两段背压（`SEG2_*`）都已不复存在。当前链路：桌面插件 `ws_terminal.rs`
+> （每连接游标 + ring-fetch + 裸字节二进制帧）↔ 移动插件 `link.rs`（门控 + 重锚 + 裸字节窄转发）
+> → 前端 store/xterm。**当前协议与不变量真源**：
+> [`pty-output-pipeline.md`](./pty-output-pipeline.md)；移动端台账见
+> `bedcode-mobile/docs/terminal-output-pipeline-optimization.md`。
+> 本文保留的仍有价值部分：**优化措施、参数与问题教训**（rAF 合并、背压滞回、让出阈值、
+> 残影根因——均不受帧格式影响）。
+>
 > ⚠️ **【2026-09-12 部分过时】**本文档主体写于 TB v2 时代（seq 真源 / TB v2 帧 /
 > 128 事件上限 / `min_seq > last_rendered+1`）。桌面端与移动端均已迁 **TB v3 字节
 > offset**（`start_offset/end_offset`、`acked_offset`、`min_offset > lastRenderedOffset`）。

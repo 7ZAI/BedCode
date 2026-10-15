@@ -93,6 +93,16 @@ export interface SessionBuffer {
   reconnectReceivedAt: number | null
   /** 本次页面生命周期内是否渲染过内容（resync 清屏/提示门控） */
   hasRenderedContent: boolean
+  /**
+   * 本次页面生命周期内已见过的重放世代数（每个 `subscribed` 一代）
+   *
+   * **为什么需要**：桌面插件每次 subscribe 都从环窗口起点重放（fresh subscribe 语义），
+   * 而页面进入/断线重连/会话重启都会触发重放。第 2 代及以后开重放前若屏幕上
+   * 已有上一代内容，必须先清屏，否则两代内容叠加渲染（重复显示）。
+   * 首代是本代屏幕的建立点（不能清，详见 onStateEvent 注释）。
+   * `registerRealtimeHandler`（页面挂载）归零。
+   */
+  replayGenerations: number
   /** 截断通知已派发（每会话一次；仅后台日志，防重复刷屏） */
   truncatedNotified: boolean
 }
@@ -237,25 +247,44 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
    * 无在屏内容（首次挂载空屏 / 空终端）时跳过清屏与提示（清屏无意义；
    * 有内容时**必须**清屏——重播与已在屏内容重叠即画面错乱）
    */
-  function onResyncEvent(payload: { session_id: string; offset: number }) {
+  function onResyncEvent(payload: { session_id: string; offset: number; reason?: string }) {
     const buffer = buffers.get(payload.session_id)
     if (!buffer || buffer.sessionStopped) return
-    const handler = realtimeHandlers.get(payload.session_id)
     const hadContent = buffer.hasRenderedContent
-    buffer.hasRenderedContent = false
-    buffer.lastRenderedOffset = null
+    if (hadContent) {
+      clearForNewStream(payload.session_id)
+    } else {
+      // 无在屏内容：不清屏（无意义），但基准重置是协议语义，与清屏无关
+      buffer.lastRenderedOffset = null
+    }
     knownPhases.set(payload.session_id, 'live')
     if (PHASE_RANK[buffer.phase] < PHASE_RANK.live) buffer.phase = 'live'
     buffer.subscribed = true
     if (!hadContent) return
+    // reason：truncated = 环淘汰（数据真有缺口，需上报）/ replay = 重放世代切换
+    // （重订阅/重连/会话重启，无丢失）。旧插件不带该字段 → 按 truncated 处理
+    const reason = payload.reason ?? 'truncated'
     logger.warn(
-      `[terminalBuffer] resync (${payload.session_id}): re-anchor at offset=${payload.offset}, clear + anchored replay`,
+      `[terminalBuffer] resync (${payload.session_id}): reason=${reason} offset=${payload.offset}, clear + anchored replay`,
     )
-    handler?.onClear?.()
-    if (!buffer.truncatedNotified) {
+    if (reason === 'truncated' && !buffer.truncatedNotified) {
       buffer.truncatedNotified = true
-      handler?.onTruncated?.(payload.offset)
+      realtimeHandlers.get(payload.session_id)?.onTruncated?.(payload.offset)
     }
+  }
+
+  /**
+   * 清屏 + 本地计数基准归零（重放世代切换 / 重锚共用）。
+   *
+   * **调用方先行判「在屏有内容」**：无内容时清屏无意义，而且 `onClear` 会连带
+   * 丢弃 writeCoalescer 中尚未 flush 的合法在途字节（丢头脏屏）。
+   */
+  function clearForNewStream(sessionId: string) {
+    const buffer = buffers.get(sessionId)
+    if (!buffer) return
+    buffer.hasRenderedContent = false
+    buffer.lastRenderedOffset = null
+    realtimeHandlers.get(sessionId)?.onClear?.()
   }
 
   // ==================== 段2 Channel 帧入口（裸字节） ====================
@@ -307,6 +336,23 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (statePhase) knownPhases.set(payload.session_id, statePhase)
     const buffer = buffers.get(payload.session_id)
     if (!buffer) return
+    // 重放世代切换：每个 `subscribed` 之后都跟着一段「从环窗口起点」的重放
+    // （桌面插件 fresh subscribe 语义）。屏幕已有上一代内容时必须先清屏，
+    // 否则整段重放叠加渲染 = 重复显示——会话启动竞态（前端 onMounted 与
+    // isSessionActive watcher 双订阅）、断线重连、会话重启三条路径都会重放。
+    //
+    // 首个 subscribed 是本代屏幕的建立点：即便状态事件晚于重放字节到达
+    // （事件与页面 Channel 是两条投递通道），也**绝不清屏**——否则吞掉重放
+    // 头部（缺头脏屏）；判断依据就是本页面生命周期内的世代计数。
+    if (payload.detail === 'subscribed') {
+      buffer.replayGenerations += 1
+      if (buffer.replayGenerations > 1 && buffer.hasRenderedContent) {
+        logger.debug(
+          `[terminalBuffer] replay generation #${buffer.replayGenerations} (${payload.session_id}): clear stale screen before anchored replay`,
+        )
+        clearForNewStream(payload.session_id)
+      }
+    }
     const phase = PHASE_MAP[payload.phase ?? ''] ?? buffer.phase
     if (phase !== buffer.phase) {
       logger.debug(
@@ -381,6 +427,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         reconnectInMs: null,
         reconnectReceivedAt: null,
         hasRenderedContent: false,
+        replayGenerations: 0,
         truncatedNotified: false,
       }
       buffers.set(sessionId, buffer)
@@ -454,6 +501,26 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       ensureEventListeners()
     } catch (e) {
       logger.warn('[terminalBuffer] event listener init failed:', e)
+    }
+
+    // 订阅意图去重（一页一代只回放一次）。桌面插件每次 subscribe 都从环窗口
+    // 起点**整段重放**（fresh subscribe 语义），所以重复调用不是幂等：
+    // 重复传输 + 触发一次清屏重绘（闪烁）。三条跳过依据：
+    // ① `subscribing`——本端已发出 subscribe 且链路未落定（插件自带退避重试）；
+    // ② `reconnecting`——断线重连中，插件在 ws:open 后自行重订阅（含清屏重放）；
+    // ③ `subscribed && hasRenderedContent`——本代屏幕已拿到该会话输出。
+    // 页面挂载路径**不会**被 ③ 误跳：`registerRealtimeHandler` 已把
+    // hasRenderedContent 复位；会话重启/停止后重新订阅时 subscribed 也为假。
+    if (
+      buffer.subscribing ||
+      buffer.reconnecting ||
+      (buffer.subscribed && buffer.hasRenderedContent)
+    ) {
+      logger.debug(
+        `[terminalBuffer] subscribe skipped (${sessionId}): subscribing=${buffer.subscribing} ` +
+          `reconnecting=${buffer.reconnecting} hasContent=${buffer.hasRenderedContent}`,
+      )
+      return null
     }
 
     buffer.subscribing = true
@@ -636,8 +703,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function registerRealtimeHandler(sessionId: string, handler: RealtimeHandler) {
     const buffer = ensureBuffer(sessionId)
     realtimeHandlers.set(sessionId, handler)
-    // 新页面生命周期：无在屏内容（重锚提示/清屏门控复位）
+    // 新页面生命周期：无在屏内容（重锚提示/清屏门控复位）+ 重放世代计数归零
+    // （首个 subscribed = 本代屏幕建立点，不得清屏）
     buffer.hasRenderedContent = false
+    buffer.replayGenerations = 0
     markPageEntered(sessionId)
     try {
       ensureEventListeners()

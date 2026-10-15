@@ -166,8 +166,11 @@ export function useTerminalSubscription(ctx: TerminalKernelContext, deps: Termin
   async function subscribeWithRetry() {
     const sid = ctx.getSessionId()
     if (!sid || isMockSession(sid)) return
-    // fresh subscribe（重播回放）：无论信念如何都触发一次；已订阅时 Rust
-    // 重播后事件/对账收敛，未订阅时可立即建立链路
+    // 断线重连中：插件在 ws:open 后自行重订阅（含清屏重放），本端再发一次
+    // subscribe 只会多一轮整段重放（多余传输 + 一次闪烁）
+    if (bufferStore.getBuffer(sid)?.reconnecting) return
+    // 订阅入口可重入（onMounted / isSessionActive / isConnected 三条路径）：
+    // store 侧按「一页一代一次」去重，跳过时不改变信念，也不会误报失败
     await subscribeSession(sid)
     const buffer = bufferStore.getBuffer(sid)
 
