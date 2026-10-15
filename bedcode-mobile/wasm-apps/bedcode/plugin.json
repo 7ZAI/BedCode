@@ -15,6 +15,7 @@
     "session:read",
     "storage",
     "terminal:output",
+    "ui:back",
     "ui:route",
     "ws:client"
   ],

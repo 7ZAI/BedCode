@@ -250,6 +250,12 @@ async function askDelete(p: ApiProvider): Promise<void> {
   })
   if (ok) emit('remove', p.id)
 }
+
+/**
+ * 暴露给 ChatView：ChatView 的应用层返回处理经此逐级后退（表单/模板 → 列表 → 聊天页），
+ * 与页头返回按钮走同一条路径（goBack）。
+ */
+defineExpose({ goBack })
 </script>
 
 <style scoped>

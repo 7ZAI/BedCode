@@ -549,10 +549,16 @@ export interface UIRegistry {
   openPage(routeId: string): void
   /** 返回上一页（router.back） */
   goBack(): void
-  /** 监听 Android 系统返回键（仅 Android 真机触发；注册后系统返回不再执行默认的 webview 后退/退出，改由回调接管）。
-   *  回调需自行决定行为：目录栈内返回上级，栈顶时可用 payload.canGoBack 恢复默认后退（如 history.back()）。
-   *  非 Android（dev-shell / iOS）静默降级为永不触发；Disposable.dispose = 取消监听并恢复默认行为。 */
-  onBackPressed(handler: (payload: { canGoBack: boolean }) => void): Disposable
+  /** 监听 Android 系统返回键（仅 Android 真机触发；有订阅者时系统返回不再执行默认的
+   *  webview 后退/退出，改由回调接管）。
+   *  回调自行决定行为：应用自持的二级页 / 浮层在这里逐级收掉（回到应用主页面后不再
+   *  消费，交平台兜底）；**返回 true 表示本次已消费**——不消费
+   *  （返回 undefined / false）时返回会交给平台兜底（宿主壳回退到上一屏，主屏无兜底
+   *  则退出应用），因此应用在「自己已到头」的分支上不要返回 true，否则用户按返回无反应。
+   *  载荷 canGoBack = webview 自身是否有历史（需要时可用它恢复默认后退）。
+   *  非 Android（dev-shell / iOS）静默降级为永不触发；Disposable.dispose = 取消监听，
+   *  最后一个订阅者取消后恢复系统默认返回行为。 */
+  onBackPressed(handler: (payload: { canGoBack: boolean }) => boolean | void): Disposable
   /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
   showDialog(options: PluginDialogOptions): PluginDialogHandle
 }

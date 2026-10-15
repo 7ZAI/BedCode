@@ -1,10 +1,11 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="relative h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- 配置页 / 聊天区切换（淡入淡出 + 轻微位移，避免闪现） -->
     <Transition name="page-fade" mode="out-in">
       <ProviderConfigPage
         v-if="showConfigPage"
         key="config"
+        ref="configPageRef"
         class="w-full h-full"
         :providers="providers"
         :active-provider-id="activeProviderId"
@@ -183,29 +184,32 @@
           />
         </div>
       </template>
+      </div>
+    </Transition>
 
-      <!-- 对话列表面板（左侧抽屉，DeepSeek 式滑入） -->
-      <Teleport to="body">
-        <Transition name="drawer">
-          <div v-if="showConversationDrawer" class="fixed inset-0 z-50">
-            <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationDrawer = false"></div>
-            <!-- 抽屉面板贴边全高，内容须避开状态栏/导航栏：用宿主 JS 安全区值（inject safeArea）做内边距——
-            Android WebView 不支持 CSS env(safe-area-inset-*)，CSS 变量类在真机无效；背景铺满屏幕边缘保持一体 -->
-            <div class="drawer-panel absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]" :style="drawerPanelStyle">
-              <ConversationList
-                :conversations="conversations"
-                :current-id="currentConvId"
-                :loading="loadingHistory"
-                @select="onSelectConversation"
-                @new="onNewConversation"
-                @close="showConversationDrawer = false"
-                @rename="onRenameConversation"
-                @delete="onDeleteConversation"
-              />
-            </div>
-          </div>
-        </Transition>
-      </Teleport>
+    <!-- 对话列表面板（应用容器内左侧贴边面板，DeepSeek 式滑入）
+         设计口径：不 Teleport 不悬浮——面板是应用整体 div 之内的布局层，贴着应用区域
+         左缘全高（类似桌面端工程目录侧边栏），遮罩同样只盖应用区域。应用区域本身已在
+         壳的安全区之内（壳补了顶部状态栏，应用从壳顶栏之下开始），面板不再自行计算
+         安全区；底部内容避让系统导航栏（应用区域一直铺到屏幕底，见 drawerPanelStyle） -->
+    <Transition name="drawer">
+      <div v-if="showConversationDrawer" class="absolute inset-0">
+        <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationDrawer = false"></div>
+        <div
+          class="drawer-panel absolute inset-y-0 left-0 flex flex-col overflow-hidden w-[82vw] max-w-[320px] bg-[var(--mobile-bg-card)] border-r border-[var(--mobile-border)]"
+          :style="drawerPanelStyle"
+        >
+          <ConversationList
+            :conversations="conversations"
+            :current-id="currentConvId"
+            :loading="loadingHistory"
+            @select="onSelectConversation"
+            @new="onNewConversation"
+            @close="showConversationDrawer = false"
+            @rename="onRenameConversation"
+            @delete="onDeleteConversation"
+          />
+        </div>
       </div>
     </Transition>
 
@@ -221,9 +225,15 @@
 
 <script setup lang="ts">
 /**
- * AI Chatbox 面板（移动端 navtab）— 消息流 + 输入区 + 对话列表抽屉 + 供应商配置
+ * AI Chatbox 面板（宿主壳应用运行面）— 消息流 + 输入区 + 对话列表抽屉 + 供应商配置
+ *
+ * 对话列表为应用容器内左侧贴边面板（应用整体 div 之内，不 Teleport 不悬浮）：
+ * 应用区域已在壳的安全区之内（壳补了顶部状态栏），面板只须在底部避让系统导航栏。
+ *
+ * 系统返回键：应用层接管（插件设置弹层 → 对话列表抽屉 → 供应商配置页逐级后退），
+ * 回到聊天主页面后不再消费，交宿主壳兜底（见 ../utils/appBack.ts）。
  */
-import { ref, computed, watch, nextTick, onMounted, inject } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted, inject } from 'vue'
 import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChatMessage from './ChatMessage.vue'
@@ -234,8 +244,9 @@ import PluginSettingsSheet from './PluginSettingsSheet.vue'
 import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
-import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
+import { registerAppBack } from '../utils/appBack'
 
 const { t } = useI18n()
 
@@ -288,14 +299,25 @@ const showConversationDrawer = ref(false)
 const showSettingsSheet = ref(false)
 const dismissedError = ref('')
 
+/** 供应商配置页暴露的返回入口（ProviderConfigPage 的 defineExpose.goBack：内部视图逐级后退） */
+const configPageRef = ref<{ goBack(): void } | null>(null)
+
+/** 应用层返回接管句柄（onUnmounted 摘除） */
+let disposeBackPress: Disposable | null = null
+
 // 宿主注入的安全区 JS 值（App.vue useEdgeToEdge provide）：Android WebView 不支持
 // CSS env(safe-area-inset-*)，CSS 变量类（mobile-header-safe 等）在真机拿到 0；
 // dev-shell/桌面无 provide 时为 undefined → 回退 0（桌面无安全区）
 const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number }>>('safeArea')
 const safeAreaTop = computed(() => safeArea?.value?.top || 0)
 const safeAreaBottom = computed(() => safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0)
+
+/**
+ * 对话列表面板底部内边距：应用区域一直铺到屏幕底，面板内容须避让系统导航栏
+ * （Android WebView 不支持 env(safe-area-inset-*)，只能消费宿主 JS 值）。
+ * 顶部无需处理——面板在应用容器内，起点已在壳补的状态栏安全区之下。
+ */
 const drawerPanelStyle = computed(() => ({
-  paddingTop: `${safeAreaTop.value}px`,
   paddingBottom: `${safeAreaBottom.value}px`,
 }))
 
@@ -407,9 +429,40 @@ watch(() => messages.value.length + (chat.streamingContent.value?.length || 0) +
 })
 
 onMounted(async () => {
+  // 应用层返回处理（系统返回键）：二级页/浮层逐级收掉，回到聊天主页面；已在主页面时
+  // 回调返回 false，交宿主壳兜底（退平台屏栈 / 在主屏则由系统退出应用）
+  disposeBackPress = registerAppBack(context, [
+    // 优先级：插件设置弹层 → 对话列表抽屉 → 供应商配置页（内部视图再逐级后退）
+    {
+      canGoBack: () => showSettingsSheet.value,
+      goBack: () => {
+        showSettingsSheet.value = false
+      },
+    },
+    {
+      canGoBack: () => showConversationDrawer.value,
+      goBack: () => {
+        showConversationDrawer.value = false
+      },
+    },
+    {
+      canGoBack: () => showConfigPage.value,
+      goBack: () => {
+        // 配置页在场时由它自己逐级后退（列表根再退 = emit('back') → 关闭本页）
+        if (configPageRef.value) configPageRef.value.goBack()
+        else showConfigPage.value = false
+      },
+    },
+  ])
   await loadConfig()
   // 插件配置与对话列表并行加载（缺失时 usePluginConfig 内部已回退默认值）
   await Promise.all([pluginConfig.loadConfig(), loadConversations()])
+})
+
+onUnmounted(() => {
+  // 离开运行面即取消返回接管：否则回调残留，返回会被已关闭的应用吞掉
+  disposeBackPress?.dispose()
+  disposeBackPress = null
 })
 </script>
 

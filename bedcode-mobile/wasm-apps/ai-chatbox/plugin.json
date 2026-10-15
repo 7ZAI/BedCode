@@ -16,7 +16,7 @@
     "https://api.anthropic.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
-  "permissions": ["fs:read", "fs:write", "network:http", "storage"],
+  "permissions": ["fs:read", "fs:write", "network:http", "storage", "ui:back"],
   "contributes": {
     "commands": [
       {

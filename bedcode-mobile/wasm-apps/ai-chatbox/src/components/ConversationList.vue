@@ -1,12 +1,12 @@
 <template>
   <div class="flex flex-col h-full bg-[var(--mobile-bg-card)]">
-    <!-- 头部：标题 + 关闭（左侧抽屉） -->
-    <div class="flex items-center justify-between px-3 pt-2 pb-1 border-b border-[var(--mobile-border)]">
-      <span class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] pl-1">
+    <!-- 头部：标题 + 关闭（左侧贴边抽屉） -->
+    <div class="flex items-center justify-between pl-4 pr-2 pt-2 pb-1.5 border-b border-[var(--mobile-border)]">
+      <span class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
         {{ t('mobile.plugin.aiChatbox.conversations') }}
       </span>
       <button
-        class="w-11 h-11 -mr-2 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-lg transition-opacity"
+        class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-lg transition-opacity"
         :title="t('mobile.plugin.aiChatbox.close')"
         @click="$emit('close')"
       >
@@ -29,12 +29,12 @@
       </button>
     </div>
 
-    <!-- 列表 -->
-    <div class="flex-1 overflow-y-auto pt-1 pb-2 flex flex-col">
+    <!-- 列表：overscroll-contain 防滚动链把下层聊天页一起带走 -->
+    <div class="flex-1 overflow-y-auto overscroll-contain pt-1 pb-2 flex flex-col">
       <div
         v-for="conv in conversations"
         :key="conv.id"
-        class="flex items-center gap-1 px-2.5 py-2 min-h-[52px] rounded-xl mx-2 cursor-pointer transition-colors"
+        class="flex items-center gap-1 px-2 py-1.5 min-h-[56px] rounded-xl mx-2 cursor-pointer transition-colors"
         :class="conv.id === currentId
           ? 'bg-[var(--mobile-accent-muted)]'
           : 'active:bg-[var(--mobile-bg-tertiary)]'"
@@ -56,17 +56,17 @@
           <input
             :ref="el => { if (el) renameInputRef = el as HTMLInputElement }"
             v-model="renameDraft"
-            class="flex-1 min-w-0 px-2.5 h-10 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-focus)] rounded-lg focus:outline-none"
+            class="flex-1 min-w-0 px-2.5 h-11 text-[var(--font-size-base)] bg-[var(--mobile-input-bg)] text-[var(--mobile-text-primary)] border border-[var(--mobile-input-focus)] rounded-lg focus:outline-none"
             @keydown.enter="commitRename(conv)"
             @keydown.esc="editingId = null"
             @click.stop
           />
         </template>
 
-        <!-- 操作（常显：移动端无 hover） -->
+        <!-- 操作（常显：移动端无 hover；44px 触摸目标） -->
         <span class="flex items-center flex-shrink-0">
           <button
-            class="w-10 h-10 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80 rounded-lg"
+            class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80 rounded-lg"
             :title="t('mobile.plugin.aiChatbox.rename')"
             @click.stop="startRename(conv)"
           >
@@ -75,7 +75,7 @@
             </svg>
           </button>
           <button
-            class="w-10 h-10 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80 rounded-lg"
+            class="w-11 h-11 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80 rounded-lg"
             :title="t('mobile.plugin.aiChatbox.delete')"
             @click.stop="$emit('delete', conv)"
           >
@@ -86,7 +86,7 @@
         </span>
       </div>
 
-      <div v-if="!loading && conversations.length === 0" class="flex-1 flex flex-col items-center justify-center px-4 text-center">
+      <div v-if="!loading && conversations.length === 0" class="flex-1 flex flex-col items-center justify-center px-6 text-center">
         <div class="w-12 h-12 rounded-xl bg-[var(--mobile-bg-tertiary)] flex items-center justify-center mb-3 text-[var(--mobile-text-muted)]">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
             <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
@@ -101,10 +101,12 @@
 
 <script setup lang="ts">
 /**
- * ConversationList — 对话列表面板（移动端左侧抽屉内使用，DeepSeek 式）
+ * ConversationList — 对话列表面板（ChatView 左侧抽屉内使用，DeepSeek 式）
  *
- * 标题 + 关闭 + 醒目新对话按钮 + 列表；项支持重命名、删除，
+ * 只负责面板内容：标题 + 关闭 + 醒目新对话按钮 + 列表；项支持重命名、删除，
  * 副行显示相对时间（updatedAt）；标题为新对话占位文案时显示默认文案。
+ * 面板的定位 / 安全区避让由 ChatView 的抽屉容器负责（应用容器内左侧贴边全高），
+ * 本组件不感知。
  */
 import { ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
