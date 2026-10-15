@@ -7,7 +7,7 @@
               <div class="flex items-center gap-2">
                 <span
                   class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
-                  >WasmApp</span
+                  >BedCode</span
                 >
                 <span class="wb-mono text-[var(--text-secondary)]">v{{ appVersion || '—' }}</span>
               </div>

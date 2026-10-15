@@ -12,12 +12,12 @@
           <path d="M15 6l-6 6 6 6" />
         </svg>
       </button>
-      <h1 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+      <h1 class="shell-type-display truncate">
         {{ t('shell.settings.title') }}
       </h1>
     </header>
 
-    <div class="flex-1 min-h-0 overflow-y-auto pb-6">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ==================== 本机 ==================== -->
       <div class="px-4 pb-1">
         <div
@@ -26,10 +26,10 @@
         >
           <ShellBrandTile :size="48" />
           <div class="flex-1 min-w-0">
-            <b class="block text-[var(--font-size-lg)] text-[var(--mobile-text-primary)] truncate">
+            <b class="block shell-type-title text-[var(--mobile-text-primary)] truncate">
               {{ deviceLabel }}
             </b>
-            <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+            <div class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
               {{ t('shell.settings.runtime', { version: appVersion }) }}
             </div>
           </div>
@@ -50,10 +50,10 @@
             <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: 'var(--mobile-text-secondary)' }">
               <path :d="entry.icon" />
             </svg>
-            <span class="flex-1 min-w-0 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] truncate">
+            <span class="flex-1 min-w-0 shell-type-label text-[var(--mobile-text-primary)] truncate">
               {{ entry.label }}
             </span>
-            <span v-if="entry.hint" class="flex-shrink-0 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] truncate">
+            <span v-if="entry.hint" class="flex-shrink-0 shell-type-caption text-[var(--mobile-text-secondary)] truncate">
               {{ entry.hint }}
             </span>
           </button>
@@ -74,10 +74,10 @@
             <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: 'var(--mobile-text-secondary)' }">
               <path :d="entry.entry.icon ?? DEFAULT_ENTRY_ICON" />
             </svg>
-            <span class="flex-1 min-w-0 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] truncate">
+            <span class="flex-1 min-w-0 shell-type-label text-[var(--mobile-text-primary)] truncate">
               {{ entry.entry.label }}
             </span>
-            <span v-if="entry.entry.hint" class="flex-shrink-0 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] truncate">
+            <span v-if="entry.entry.hint" class="flex-shrink-0 shell-type-caption text-[var(--mobile-text-secondary)] truncate">
               {{ entry.entry.hint }}
             </span>
           </button>
@@ -97,7 +97,7 @@
  *
  * 三条 2026-10-14 修订：
  *   ① 「连接」「认证」入口从这里删除——连接与凭据归各应用自持，不是宿主面；
- *   ② 「危险操作（清除所有数据）」迁入「关于 WasmApp」——它是设备生命周期动作，
+ *   ② 「危险操作（清除所有数据）」迁入「关于 BedCode」——它是设备生命周期动作，
  *      与版本/更新同属「关于本机」，一级设置页不再摆一排红按钮；
  *   ③ 应用贡献的设置项没给 onSelect 时落到该应用详情页——不留点了没反应的死行。
  *

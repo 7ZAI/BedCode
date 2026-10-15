@@ -43,7 +43,7 @@ export default {
     },
     apps: {
       title: 'WASM apps',
-      subtitle: '{installed} installed · {running} running',
+      subtitle: 'Installed on this device',
       statInstalled: 'Installed',
       statRunning: 'Running',
       statSize: 'Total size',
@@ -189,9 +189,9 @@ export default {
       // settings — they are not host-owned (connections and credentials belong to each
       // app). 2026-10-15: the egress policy entry was removed too (user request; legacy
       // page and route stay until retired, see revision-2.md R11).
-      about: 'About WasmApp',
+      about: 'About BedCode',
       appSettings: 'App settings',
-      runtime: 'WasmApp Mobile {version}',
+      runtime: 'BedCode Mobile {version}',
     },
     permissions: {
       pending: 'Pending approval',

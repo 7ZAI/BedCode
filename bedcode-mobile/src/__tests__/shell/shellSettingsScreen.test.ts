@@ -10,7 +10,7 @@
  * |---|---|---|---|
  * | C-ST1 | platformEntries | 平台项 = 外观 / 权限 / 关于；出站·背景·连接·认证不在宿主 | 文案键在场 + 缺席键不出现 |
  * | C-ST2 | 入口跳转 | 三项走既有设置页路由，权限走壳内屏，返回走 nav.back | push / openPermissions / back |
- * | C-ST3 | 危险区归属 | 擦除入口已迁「关于 WasmApp」，一级页不得再有 | 文案键缺席 |
+ * | C-ST3 | 危险区归属 | 擦除入口已迁「关于 BedCode」，一级页不得再有 | 文案键缺席 |
  * | C-ST6 | 应用设置项兜底 | 应用没给 onSelect 时落应用详情 | nav.openDetail |
  * | C-ST7 | 双语 | 平台项与背景档文案键在 zh-CN / en 都在场 | 两棵树都能解析 |
  */
@@ -95,7 +95,7 @@ describe('C-ST1 平台设置门类', () => {
   })
 
   it('should_notRenderDangerZone_when_mounted', () => {
-    // 危险区整段迁入「关于 WasmApp」（AboutSettingsView），一级页不再出现
+    // 危险区整段迁入「关于 BedCode」（AboutSettingsView），一级页不再出现
     const wrapper = mount(ShellSettingsScreen)
 
     expect(wrapper.text()).not.toContain('shell.settings.dangerZone')

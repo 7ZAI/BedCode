@@ -43,7 +43,7 @@ export default {
     },
     apps: {
       title: 'WASM 应用',
-      subtitle: '{installed} 个已安装 · {running} 个运行中',
+      subtitle: '本机已装',
       statInstalled: '已安装',
       statRunning: '运行中',
       statSize: '总占用',
@@ -187,9 +187,9 @@ export default {
       // 2026-10-14：连接 / 认证两项从平台设置删除——它们不是宿主面（连接与凭据归
       // 各应用自持）；2026-10-15：出站策略入口一并移除（用户指令，旧实现页与路由暂留，
       // 见 revision-2.md R11）。
-      about: '关于 WasmApp',
+      about: '关于 BedCode',
       appSettings: '应用设置',
-      runtime: 'WasmApp Mobile {version}',
+      runtime: 'BedCode Mobile {version}',
     },
     permissions: {
       pending: '待审批',

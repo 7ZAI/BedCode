@@ -214,7 +214,7 @@ describe('L7 壳内自足：不依赖旧界面目录 + 迁移面不得缩水', (
    * 复制（如需与旧线共用一个进程级单例）才允许桥接，并在本表登记具体模块路径 + 理由。
    *
    * 历史：票 2026-10-10 曾登记 `ShellSettingsScreen.vue`（设备级擦除 `clearAllData`
-   * 桥接）。2026-10-14 危险区迁入「关于 WasmApp」二级页后，壳内已无 `@/composables`
+   * 桥接）。2026-10-14 危险区迁入「关于 BedCode」二级页后，壳内已无 `@/composables`
    * 引用，白名单清空——新桥接必须重新登记并写明理由。
    */
   const BRIDGE_ALLOWLIST: string[] = []

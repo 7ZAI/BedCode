@@ -21,7 +21,7 @@
 
 | 图 | 类型 | 主题 | IR 源 |
 | --- | --- | --- | --- |
-| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 沙箱 · wasm-core 微内核与能力域 crate 家族（ADR 0037 整核抽出 + ADR 0035/0039 能力域 crate 化 + ADR 0031/0033 认证中心 fail-closed · ABI desktop v34 / mobile v16） | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
+| [bedcode-overall-architecture.html](./bedcode-overall-architecture.html) | architecture | 桌面主机 · 移动端远程 · WASM 沙箱 · wasm-core 微内核与能力域 crate 家族（ADR 0037 整核抽出 + ADR 0035/0039/0044/0050 能力域 crate 化 + ADR 0031/0033 认证中心 fail-closed · 契约包版本 bedcode:plugin@0.2.0，整数 ABI 已退役 ADR 0051） | [bedcode-overall-architecture.json](./bedcode-overall-architecture.json) |
 
 静态预览：[bedcode-overall-architecture.png](./bedcode-overall-architecture.png)
 

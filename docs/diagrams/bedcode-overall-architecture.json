@@ -4,13 +4,13 @@
   "meta": {
     "title": "BedCode 微内核 · 业务插件真源架构",
     "locale": "zh-CN",
-    "subtitle": "ADR 0037 整核抽出 · ADR 0035/0039 能力域 crate 化 · ADR 0031/0033 认证中心 · ABI desktop v34 / mobile v16",
+    "subtitle": "ADR 0037 整核抽出 · ADR 0035/0039/0044/0050 能力域 crate 化 · ADR 0051 契约包版本 semver · ADR 0031/0033 认证中心 · bedcode:plugin@0.2.0",
     "output": "docs/diagrams/bedcode-overall-architecture.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/7ZAI/BedCode",
       "provider": "github",
-      "revision": "1de69c697e4a56edca1f7a2277c368b9ef477b44"
+      "revision": "f197eb3fff9f4ec62e02f9bd2f343f9c9fcabbe7"
     }
   },
   "components": [
@@ -69,22 +69,22 @@
       "pos": [40, 416],
       "size": [420, 76],
       "sources": [
-        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/manager/host.rs", "label": "插件宿主" },
-        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/manager/runtime/component.rs", "label": "wasmtime Component" }
+        { "path": "packages/bedcode-wasm-core/src/manager/host.rs", "label": "插件宿主" },
+        { "path": "packages/bedcode-wasm-core/src/manager/runtime/component.rs", "label": "wasmtime Component" }
       ]
     },
     {
       "id": "wc_host_api",
       "type": "backend",
       "label": "wasm-core · host_api",
-      "sublabel": "host-* 原语面 20+ 组 · 权限仲裁 · bus · monitor",
-      "tag": "WIT 契约 · ABI desktop v34",
+      "sublabel": "host-* 原语面 · 权限仲裁 · bus · monitor",
+      "tag": "WIT 契约 · 包版本 bedcode:plugin@0.2.0",
       "pos": [40, 536],
       "size": [420, 76],
       "sources": [
-        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api.rs", "label": "宿主能力面" },
-        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/security/framework.rs", "label": "授权框架" },
-        { "path": "bedcode-desktop/packages/plugin-sdk-desktop/rust/src/abi.rs", "label": "ABI v34" }
+        { "path": "packages/bedcode-wasm-core/src/host_api.rs", "label": "宿主能力面" },
+        { "path": "packages/bedcode-wasm-core/src/security/framework.rs", "label": "授权框架" },
+        { "path": "contracts/bedcode-plugin-package.rs", "label": "契约包版本 0.2.0" }
       ]
     },
     {
@@ -92,7 +92,7 @@
       "type": "backend",
       "label": "能力域 crate 家族",
       "sublabel": "pty · discovery · crypto · server-* · link-crypto · peer-net · host-kit",
-      "tag": "ADR 0035/0039 · Ports 端口下发",
+      "tag": "ADR 0035/0039/0044/0050 · Ports 端口下发",
       "pos": [560, 416],
       "size": [480, 160],
       "sources": [
@@ -104,7 +104,7 @@
       "id": "m_remote",
       "type": "frontend",
       "label": "Mobile remote",
-      "sublabel": "Vue 3 / Android · WS · HTTP · Kotlin 原生 · 移动 ABI v16",
+      "sublabel": "Vue 3 / Android · WS · HTTP · Kotlin 原生 · bedcode:plugin@0.2.0",
       "pos": [560, 56],
       "size": [480, 76],
       "sources": [
@@ -129,12 +129,13 @@
       "id": "m_wasm_apps",
       "type": "cloud",
       "label": "Mobile wasm 插件",
-      "sublabel": "auto-task · file-transfer · ai-chatbox (移动契约 ADR 0018)",
+      "sublabel": "bedcode · file-transfer · ai-chatbox (移动契约 ADR 0018)",
       "pos": [560, 296],
       "size": [480, 76],
       "sources": [
-        { "path": "bedcode-mobile/plugins/auto-task/plugin.json", "label": "移动 auto-task" },
-        { "path": "bedcode-mobile/plugins/file-transfer/plugin.json", "label": "移动 file-transfer" }
+        { "path": "bedcode-mobile/wasm-apps/bedcode/plugin.json", "label": "移动 bedcode 终端" },
+        { "path": "bedcode-mobile/wasm-apps/file-transfer/plugin.json", "label": "移动 file-transfer" },
+        { "path": "bedcode-mobile/wasm-apps/ai-chatbox/plugin.json", "label": "移动 ai-chatbox" }
       ]
     },
     {
@@ -169,7 +170,7 @@
     {
       "kind": "region",
       "label": "Desktop host (Tauri 宿主进程)",
-      "wraps": ["d_ui", "d_api", "gateway", "auth_bridge", "wc_manager", "wc_host_api", "cap_crates"]
+      "wraps": ["d_ui", "d_api", "gateway", "auth_bridge", "wc_manager", "wc_host_api"]
     },
     {
       "kind": "region",
@@ -248,7 +249,7 @@
       "id": "api-session",
       "from": "wc_host_api",
       "to": "wasm_session",
-      "label": "host-pty · host-session · host-auth",
+      "label": "host-pty · host-auth · host-fs",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top"
@@ -310,7 +311,7 @@
       "dot": "cyan",
       "title": "WASM 沙箱与 ABI",
       "items": [
-        "wasmtime 48 Component Model · 目标 wasm32-wasip3 · 桌面 ABI v34 / 移动 ABI v16 (ADR 0019)",
+        "wasmtime 48 Component Model · 目标 wasm32-wasip3 · 契约包版本 bedcode:plugin@0.2.0，整数 ABI 已退役 (ADR 0051/0019)",
         "会话创建经 host-pty.spawn 自产 id 并注入 BEDCODE_SESSION_ID；ptyQuota 加载期区间仲裁",
         "每插件实例同刻仅一个 guest 调用在执行；跨实例经 core-bus 属主命名空间隔离 (ADR 0029)"
       ]
@@ -328,9 +329,9 @@
       "dot": "violet",
       "title": "wasm-core 整核与能力域 crate",
       "items": [
-        "ADR 0037 整核抽出：wasm_core / db / enums / host_api / manager / security 全部搬到 packages/bedcode-wasm-core",
+        "ADR 0037 整核抽出：wasm_core / db / host_api / manager / security 全部搬到 packages/bedcode-wasm-core",
         "ADR 0038/0039 引擎面迁出：pty-engine 承接 host-pty WIT 接线；session_gateway 与 auth_center 桥接回宿主 lib",
-        "ADR 0035 能力域 crate 化：pty-engine · discovery-engine · crypto-engine · server-* · link-crypto · peer-net · 双端共享锚点 host-kit"
+        "ADR 0035/0044/0050 能力域 crate 化：pty-engine · discovery-engine · crypto-engine · ws-client-engine · notify-engine · server-* · link-crypto · peer-net · file-transfer-core · 双端共享锚点 host-kit"
       ]
     }
   ]
