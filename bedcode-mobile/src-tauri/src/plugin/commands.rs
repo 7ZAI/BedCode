@@ -312,7 +312,7 @@ pub async fn plugin_open_download_dir(plugin_id: String) -> Result<()> {
 
 // ==================== 终端输出流窄转发登记（票 12 · 批次 2b 命令薄壳） ====================
 //
-// 表本体已随批次 1b 迁 fork crate（`terminal_stream_gateway`，纯机制）；
+// 表本体就在同仓 `plugin/terminal_stream.rs`（[`TerminalStreamGateway`]，纯机制）；
 // Channel 是 Tauri IPC 机制，WASM 插件无法持有——命令薄壳留宿主，转调 crate
 // 全局单例（与 WIT `host-terminal-stream.forward-output` 共用同一张表）。
 
