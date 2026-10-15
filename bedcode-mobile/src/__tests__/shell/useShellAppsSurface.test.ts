@@ -77,4 +77,14 @@ describe('useShellApps.resolveSurface 优先级', () => {
     const { resolveSurface } = useShellApps()
     expect(resolveSurface('com.test.unknown-app')).toBeUndefined()
   })
+
+  // 回归锁（2026-10-15 真机：壳卸载重挂后运行中的应用只剩空态）：壳卸载会清数据源
+  // 写入的清单记录，但**运行面贡献不随源清空**——重挂重拉清单后必须还能解析出运行面。
+  it('should_stillResolveOwnSurface_when_sourceClearedAndAppListReloaded', () => {
+    shell.clearSource(SOURCE_ID)
+    shell.upsertApps(SOURCE_ID, [app(APP_WITH_OWN_SURFACE)])
+
+    const { resolveSurface } = useShellApps()
+    expect(resolveSurface(APP_WITH_OWN_SURFACE)).toBe(ownSurface)
+  })
 })

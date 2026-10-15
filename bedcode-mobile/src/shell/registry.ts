@@ -109,13 +109,18 @@ class ShellRegistryClass {
     this.publish()
   }
 
-  /** 清理某数据源写入的全部应用 */
+  /**
+   * 清理某数据源写入的全部应用清单
+   *
+   * 只清**清单记录**，不动界面贡献：贡献由应用运行时注册（`registerSurface` 等）
+   * 并随其 Disposable 回收，生命周期跟应用存活走，而不是跟「壳这一次挂载」走。
+   * 此前连贡献一起清，导致壳卸载即丢掉运行面：从壳进插件整页路由再回来（或任何
+   * 导致壳重挂的路径）后，正在运行的应用点开只剩「应用尚未提供运行面」空态——
+   * 而应用的 Disposable 还在，重新 activate 又会因模块已加载而幂等早退，永不自愈。
+   */
   clearSource(sourceId: string): void {
     for (const [id, rec] of [...this.apps.entries()]) {
-      if (rec.sourceId === sourceId) {
-        this.apps.delete(id)
-        this.contributions.delete(id)
-      }
+      if (rec.sourceId === sourceId) this.apps.delete(id)
     }
     this.publish()
   }

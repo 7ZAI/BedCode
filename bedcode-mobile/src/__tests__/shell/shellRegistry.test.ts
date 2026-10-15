@@ -48,7 +48,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // 清单记录按源回收；**运行时贡献不归源管**（见「clearSource 保留贡献」契约），
+  // 故测试自己注册过贡献的 id 必须显式 clearApp，否则会污染下一个用例
   registry.clearSource(sourceId)
+  for (const id of ['a1', 'a2', 'b1']) registry.clearApp(id)
 })
 
 describe('ShellRegistry 应用清单', () => {
@@ -153,6 +156,35 @@ describe('ShellRegistry 界面贡献', () => {
     registry.clearSource(sourceId)
     expect(registry.appsRef.value.map((a) => a.id)).toEqual(['b1'])
     registry.clearSource('src-keep')
+  })
+
+  // 回归锁（2026-10-15 真机：从壳进插件整页路由再回来 → 运行中的应用点开只剩
+  // 「应用尚未提供运行面」空态）：贡献由应用运行时注册、随应用 Disposable 回收，
+  // 不能跟着「壳这一次挂载用的数据源」一起被清掉。
+  it('should_keepRuntimeContributions_when_clearSourceCalled', async () => {
+    registry.upsertApps(sourceId, [app('a1')])
+    registry.registerSurface('a1', { component: comp('Surface') })
+    registry.registerSlot('a1', { id: 's1', component: comp('S1') })
+
+    registry.clearSource(sourceId)
+
+    // 清单没了（重挂时由 refresh 重拉），但贡献还在：重挂 upsert 同一应用即恢复运行面
+    expect(registry.getApp('a1')).toBeUndefined()
+    registry.upsertApps(sourceId, [app('a1')])
+    expect(registry.getApp('a1')?.contributions.surface).toBeDefined()
+    expect(registry.getApp('a1')?.contributions.slots?.map((s) => s.id)).toEqual(['s1'])
+  })
+
+  it('should_keepContributionsAcrossUnmountRemount_when_shellReloadsAppList', async () => {
+    // 壳未挂载期间贡献不能丢：与上一用例合起来钉住「卸载→重挂」的完整路径
+    registry.upsertApps(sourceId, [app('a1')])
+    const surface = comp('Surface')
+    registry.registerSurface('a1', { component: surface })
+
+    registry.clearSource(sourceId)
+    registry.upsertApps(sourceId, [app('a1')])
+
+    expect(registry.getApp('a1')?.contributions.surface?.component).toBe(surface)
   })
 
   it('should_notWrapComponentInReactiveProxy_when_componentRegistered', async () => {

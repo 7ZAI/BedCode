@@ -43,27 +43,12 @@ import { invoke } from '@tauri-apps/api/core'
 // 移动端 file: 依赖是快照拷贝，若直连源码相对路径会与组件产生两个模块实例，
 // openGlobalDialog 的广播到不了组件（弹窗静默不渲染）；包说明符保证同一拷贝文件。
 import { openGlobalDialog } from '@binblink/bedcode-plugin-sdk-mobile/global-dialog'
+import { subscribeAppBackPressed } from './back-button'
 
 // ==================== Android 系统返回键（跨插件共享单例） ====================
-// Tauri AppPlugin 的行为：只要 JS 侧存在 back-button listener，系统返回一律转发到 JS，
-// 不再执行默认的 webview 后退/退出。故宿主只需注册一个原生 listener，向所有订阅者分发；
-// 最后一个订阅者取消时摘除原生监听，恢复默认返回行为。
-const backButtonSubscribers = new Set<(payload: { canGoBack: boolean }) => void>()
-let backButtonUnregister: (() => Promise<void>) | null = null
-
-async function ensureBackButtonListener(): Promise<void> {
-  if (backButtonUnregister) return
-  try {
-    const { onBackButtonPress } = await import('@tauri-apps/api/app')
-    const listener = await onBackButtonPress((payload) => {
-      for (const fn of backButtonSubscribers) fn(payload)
-    })
-    backButtonUnregister = () => listener.unregister()
-  } catch {
-    // 非 Tauri 环境（dev-shell 浏览器 / 单元测试）：静默降级，回调永不触发
-    backButtonUnregister = null
-  }
-}
+// 原生 listener 与分发顺序（应用层 → 平台层兜底）收敛在 `./back-button`：多消费者
+// 共享同一条原生监听，处理器返回 true 表示已消费（详见该文件头注）。
+// 这里只做「插件 API → 分发层」的接线。
 
 /**
  * 提取 Tauri invoke 拒绝值的可读信息
@@ -205,19 +190,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.goBack')
       getSharedModule('router').back()
     },
-    onBackPressed(handler: (payload: { canGoBack: boolean }) => void): Disposable {
+    onBackPressed(handler: (payload: { canGoBack: boolean }) => boolean | void): Disposable {
       requirePermission('ui.onBackPressed')
-      backButtonSubscribers.add(handler)
-      void ensureBackButtonListener()
-      const disposable = {
-        dispose() {
-          backButtonSubscribers.delete(handler)
-          if (backButtonSubscribers.size === 0 && backButtonUnregister) {
-            backButtonUnregister()
-            backButtonUnregister = null
-          }
-        },
-      }
+      const unsubscribe = subscribeAppBackPressed(handler)
+      const disposable = { dispose: unsubscribe }
       disposables.push(disposable)
       return disposable
     },
