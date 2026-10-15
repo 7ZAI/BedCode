@@ -558,6 +558,22 @@ impl WasmHostContext {
             ports.clone(),
             app_handle.clone(),
         ));
+        // 统一授权框架：**必须注册仲裁器**——`Framework::authorize` 对未注册资源
+        // 直接 `Deny`（fail-closed），未注册即有 fs 原语全被拒的静默断链（
+        // `host_api::fs` 的每条原语都经 `authorize_fs` 走本框架）。本构造器是
+        // 移动装配面（生产 `PluginManager::init_wasm_runtime` 与 `new_headless`
+        // 都经它），托盘 = `WasmHostContext::new`（桌面装配面）——两处注册同一批
+        // 仲裁器，漏一处就是端间行为分叉。
+        let permission = Arc::new(crate::permission::PermissionManager::new());
+        let api_registry = Arc::new(crate::security::api_registry::ApiRegistry::new());
+        let security = Arc::new(crate::security::SecurityFramework::new());
+        security.register(Arc::new(crate::security::framework::FsAuthorizer::new(
+            permission.clone(),
+            fs_auth.clone(),
+        )));
+        security.register(Arc::new(crate::security::framework::ApiCallAuthorizer::new(
+            api_registry.clone(),
+        )));
         Self {
             db,
             plugin_dbs: Arc::new(Mutex::new(HashMap::new())),
@@ -565,15 +581,15 @@ impl WasmHostContext {
             secrets_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             app_handle,
             plugin_db_root: Arc::new(std::sync::RwLock::new(None)),
-            permission: Arc::new(crate::permission::PermissionManager::new()),
+            permission,
             fs_auth,
             net_auth,
             message_bus,
             plugin_services: Arc::new(RwLock::new(None)),
             task_engine: Arc::new(RwLock::new(None)),
             process_registry: Arc::new(ProcessRegistry::new()),
-            api_registry: Arc::new(crate::security::api_registry::ApiRegistry::new()),
-            security: Arc::new(crate::security::SecurityFramework::new()),
+            api_registry,
+            security,
             capabilities: Arc::new(NoopCapabilityProvider),
             domain_ports: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             peer_ctx_provider: Arc::new(std::sync::RwLock::new(None)),

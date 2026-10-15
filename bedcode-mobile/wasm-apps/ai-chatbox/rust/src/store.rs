@@ -360,6 +360,15 @@ mod tests {
             // 对话日志不写 MediaStore，stub 直接成功（满足 trait 最小实现）
             Ok(())
         }
+        fn fs_save_to_document(
+            &self,
+            _src_path: &str,
+            _suggested_name: &str,
+            _mime_type: &str,
+        ) -> Result<(), bedcode_plugin_api_mobile::host::HostError> {
+            // 「保存到…」是宿主弹系统对话框的原语，内存 mock 无 UI（满足 trait 最小实现）
+            Ok(())
+        }
     }
 
     impl HostLog for MockHost {

@@ -45,7 +45,7 @@ pub fn fetch_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
 /// 列出所有对话（index.jsonl，按 updatedAt DESC）
 pub fn list_conversations(_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let conversations = store::list_conversations(&host(), &data_dir())?;
+    let conversations = store::list_conversations(&host(), &data_dir()?)?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
@@ -56,7 +56,7 @@ pub fn get_messages(args: serde_json::Value) -> anyhow::Result<serde_json::Value
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("get_messages: missing conversationId"))?;
 
-    let messages = store::get_messages(&host(), &data_dir(), &conversation_id)?;
+    let messages = store::get_messages(&host(), &data_dir()?, &conversation_id)?;
     Ok(serde_json::json!({ "messages": messages }))
 }
 
@@ -69,7 +69,7 @@ pub fn save_conversation(args: serde_json::Value) -> anyhow::Result<serde_json::
     )
     .map_err(|e| anyhow::anyhow!("save_conversation: invalid conversation: {}", e))?;
 
-    store::save_conversation(&host(), &data_dir(), &conv)?;
+    store::save_conversation(&host(), &data_dir()?, &conv)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
@@ -99,7 +99,7 @@ pub fn save_message(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
     store::save_message(
         &host(),
-        &data_dir(),
+        &data_dir()?,
         &conversation_id,
         &msg,
         args.bool_or("replaceLastAssistant", false),
@@ -114,15 +114,63 @@ pub fn delete_conversation(args: serde_json::Value) -> anyhow::Result<serde_json
         .str("conversationId")
         .ok_or_else(|| anyhow::anyhow!("delete_conversation: missing conversationId"))?;
 
-    store::delete_conversation(&host(), &data_dir(), &conversation_id)?;
+    store::delete_conversation(&host(), &data_dir()?, &conversation_id)?;
     Ok(serde_json::json!({ "success": true }))
 }
 
 /// 数据目录（activate 时初始化）
-fn data_dir() -> String {
+///
+/// 未初始化时返回**错误而不是 panic**：宿主可能因目录授权被拒 / 激活失败而未
+/// 调 activate，而插件前端仍会发命令（实测真机：activate 失败 + 前端
+/// `list-conversations` → 旧实现的 `expect` panic → wasm `unreachable` trap →
+/// 真机 trap 未被处理 → 进程 SIGILL 崩溃）。错误文案带操作上下文，便于在宿主
+/// 日志里一眼看出是「插件未激活」而不是业务失败。
+fn data_dir() -> anyhow::Result<String> {
     DATA_DIR
         .read()
-        .expect("data_dir lock poisoned")
+        .map_err(|e| anyhow::anyhow!("data_dir: lock poisoned: {}", e))?
         .clone()
-        .expect("data_dir must be initialized during plugin activate")
+        .ok_or_else(|| anyhow::anyhow!("data_dir: plugin not activated (activate must succeed first)"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 未激活（DATA_DIR 未初始化）时命令面返回 Err，**不得 panic**
+    ///
+    /// 真机链路（2026-10-15 SIGILL）：activate 失败后插件前端仍发命令，旧实现的
+    /// `expect("data_dir must be initialized during plugin activate")` 即 panic →
+    /// wasm `unreachable` → 真机 trap 未被处理 → 进程退出。
+    #[test]
+    fn commands_before_activate_return_error_not_panic() {
+        *crate::DATA_DIR.write().expect("data_dir write lock") = None;
+
+        let err = list_conversations(serde_json::json!({})).expect_err("未激活时 list 应 Err");
+        assert!(
+            err.to_string().contains("not activated"),
+            "错误文案需点名未激活，便于宿主排障: {err}"
+        );
+        let err = get_messages(serde_json::json!({ "conversationId": "c1" })).expect_err("未激活时 get 应 Err");
+        assert!(err.to_string().contains("not activated"), "got: {err}");
+        // save/delete：参数先过校验、再取数据目录（字段名 camelCase 同 ConversationMeta）
+        let conv = serde_json::json!({
+            "id": "c1",
+            "title": "t",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "providerId": "p1",
+            "providerName": "P",
+            "model": "m",
+        });
+        let err = save_conversation(serde_json::json!({ "conversation": conv }))
+            .expect_err("未激活时 save 应 Err");
+        assert!(err.to_string().contains("not activated"), "got: {err}");
+        let err = save_message(serde_json::json!({ "conversationId": "c1", "role": "user" }))
+            .expect_err("未激活时 save_message 应 Err");
+        assert!(err.to_string().contains("not activated"), "got: {err}");
+        let err = delete_conversation(serde_json::json!({ "conversationId": "c1" }))
+            .expect_err("未激活时 delete 应 Err");
+        assert!(err.to_string().contains("not activated"), "got: {err}");
+    }
 }

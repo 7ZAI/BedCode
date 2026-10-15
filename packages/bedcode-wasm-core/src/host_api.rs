@@ -280,6 +280,31 @@ pub(crate) mod tests {
         ))
     }
 
+    /// 构造**端口装配面**（`new_headless` → `new_with_ports`）的全内存无头上下文——
+    /// 移动宿主的 `PluginManager` 与无头夹具都走这条构造链
+    ///
+    /// 与 [`build_host_ctx`]（桌面装配面 `WasmHostContext::new`）**成对存在**：
+    /// 两个构造器必须注册同一批安全仲裁器——真机实证（2026-08 起的 mobile
+    /// fs 恒拒、2026-10-15 ai-chatbox SIGILL 崩溃链）就是漏了 `new_with_ports`
+    /// 一侧的注册；缺本夹具时那条路径在 wasm-core 自身测试里无人看守。
+    pub(crate) fn build_ports_host_ctx() -> Arc<WasmHostContext> {
+        let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
+        db.init_schema().expect("init schema");
+        let db = Arc::new(Mutex::new(db));
+        let storage = Arc::new(PluginStorage::new(db.clone()));
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None, Vec::new()));
+        let message_bus = Arc::new(MessageBus::new());
+        let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(|_, _| {});
+        Arc::new(WasmHostContext::new_headless(
+            db,
+            storage,
+            None,
+            fs_auth,
+            message_bus,
+            status_reporter,
+        ))
+    }
+
     /// 权限五同步点的②③：打包 CLI 与前端**生成物**必须认识该权限
     ///
     /// 票 01 起两份列表都是 SDK 真源的生成物（不再有手抄清单可比字面量）：

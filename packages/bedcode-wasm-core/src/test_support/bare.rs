@@ -337,6 +337,10 @@ pub struct MockPorts {
     auth: Option<Arc<dyn AuthEnginePort>>,
     egress_allow: bool,
     reconnect: Option<Arc<dyn Fn(u32, u64, u64) -> Box<dyn WsReconnectPolicyPort> + Send + Sync>>,
+    /// `host-config app.downloads_dir` 端事实（移动端专属键）：`Some` = 注入本端
+    /// 下载目录（宿主集成测试要在无头上下文里驱动依赖该键的插件 activate 路径，
+    /// 如 ai-chatbox 数据目录 `{downloads}/ai-chatbox`），`None` = 缺省 fail-visible
+    app_downloads_dir: Option<String>,
     base: UnimplementedPorts,
 }
 
@@ -354,8 +358,15 @@ impl MockPorts {
             auth: None,
             egress_allow: false,
             reconnect: None,
+            app_downloads_dir: None,
             base: UnimplementedPorts,
         }
+    }
+
+    /// 注入 `app.downloads_dir` 端事实（`host-config` 移动端专属键；见字段注释）
+    pub fn with_app_downloads_dir(mut self, dir: &str) -> Self {
+        self.app_downloads_dir = Some(dir.to_string());
+        self
     }
 
     pub fn with_token(mut self, token: &str) -> Self {
@@ -435,6 +446,10 @@ impl HostEnginePorts for MockPorts {
 
     fn reconnect_bounds(&self) -> (u64, u64) {
         (1000, 60_000)
+    }
+
+    fn app_downloads_dir(&self) -> Option<String> {
+        self.app_downloads_dir.clone()
     }
 
     fn current_node_id(&self, _app: &tauri::AppHandle) -> Option<String> {

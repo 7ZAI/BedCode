@@ -953,6 +953,22 @@ impl PluginManager {
     ///
     /// 取实例句柄后 drop map 守卫，命令执行期间仅持单插件实例锁
     pub async fn invoke_command(&self, plugin_id: &str, command_name: &str, args_json: &str) -> Result<String> {
+        // 状态门禁（与桌面 `PluginHost::invoke_rust_command` 同一道闸）：
+        // 插件 guest 侧 activate 未成功时，实例已存在但插件自持状态未初始化，
+        // 命令进 guest 就是「拿未初始化状态做 expect」——真机实证（2026-10-15
+        // ai-chatbox：activate 在 store::init 失败后前端仍调 list-conversations
+        // → guest panic → wasm trap → 进程 SIGILL）。
+        //
+        // 判据取「实例活着」而非严格 Activated：Degraded（activate 成功、on_startup
+        // 失败）实例是活的、状态已初始化，与移动自身派发面（`dispatch_lifecycle_event`
+        // / `dispatch_to_wasm` 的 `Activated | Degraded`）同口径；桌面那道闸更严
+        // （只 Activated），此处保留移动现有语义，不把一般不涉及的降级插件一并禁掉。
+        if !self.is_running(plugin_id).await {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin {} is not running (command {}); activate must succeed first",
+                plugin_id, command_name
+            )));
+        }
         let wasm_plugin = {
             let wasm_plugins = self.wasm_plugins.read().await;
             wasm_plugins.get(plugin_id).cloned()
@@ -983,6 +999,19 @@ impl PluginManager {
         plugins
             .get(plugin_id)
             .map(|p| p.state == PluginState::Activated)
+            .unwrap_or(false)
+    }
+
+    /// 插件实例是否在运行（`Activated` / `Degraded`）
+    ///
+    /// 与 [`Self::is_activated`] 的区别：Degraded（activate 成功、on_startup 失败）
+    /// 实例是活的，guest 侧自持状态（如 ai-chatbox 的 DATA_DIR）已初始化；
+    /// 命令派发 / 事件派发这类「进 guest」的门禁都取本判据。
+    pub async fn is_running(&self, plugin_id: &str) -> bool {
+        let plugins = self.plugins.read().await;
+        plugins
+            .get(plugin_id)
+            .map(|p| matches!(p.state, PluginState::Activated | PluginState::Degraded { .. }))
             .unwrap_or(false)
     }
 
@@ -1511,6 +1540,37 @@ mod tests {
             PluginState::Deactivated,
             "Degraded 停用应干净回落 Deactivated"
         );
+    }
+
+    /// 命令面状态门禁：guest activate 未成功（Loaded / Error / Deactivated）时不得进 guest
+    ///
+    /// 真机实证（2026-10-15 ai-chatbox SIGILL）：activate 失败后插件前端照常发命令，
+    /// 命令进 guest 就是「拿未初始化状态做 expect」→ panic → wasm trap → 进程退出。
+    /// 与桌面 `PluginHost::invoke_rust_command` 同一道闸；判据取「实例活着」
+    /// （Activated | Degraded），与 `dispatch_lifecycle_event` 同口径。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invoke_command_rejected_before_activate() {
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-command-gate";
+        seed_plugin(&manager, pid, PluginState::Loaded).await;
+        attach_wasm(&manager, pid, &[]).await;
+
+        let err = manager
+            .invoke_command(pid, "test.echo", "{}")
+            .await
+            .expect_err("未激活时命令必须被拒");
+        assert!(
+            err.to_string().contains("not running"),
+            "错误需点名未运行态，实际: {err}"
+        );
+
+        // 反向：激活成功后同一命令放行（门禁不能把正常路径一并拒掉）
+        manager.activate(pid).await.expect("activate");
+        let out = manager
+            .invoke_command(pid, "test.echo", r#"{"hello":"gate"}"#)
+            .await
+            .expect("激活后命令应放行");
+        assert!(out.contains("test.echo"), "放行后应拿到 guest 返回值: {out}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

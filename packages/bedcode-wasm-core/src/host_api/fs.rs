@@ -173,11 +173,16 @@ fn authorize_fs(
         operation,
         target: path,
     };
-    if sec.security().authorize(&req) != crate::security::AuthDecision::Allow {
+    let decision = sec.security().authorize(&req);
+    if decision != crate::security::AuthDecision::Allow {
+        // 拒绝原因结构化落日志：`AuthDecision::Deny` 带具体阶段原因（含「资源未注册
+        // 仲裁器」这类装配漏配），只有笼统的 "permission denied" 文案会让真机排障
+        // 卡在「到底哪一层拒的」上（2026-10-15 移动 fs 恒拒即此类）。
         tracing::warn!(
             plugin_id = %plugin_id,
             path = %path,
             operation = %operation,
+            decision = ?decision,
             "fs: access denied by security framework"
         );
         return Err("permission denied".to_string());
@@ -607,6 +612,27 @@ mod tests {
         let ctx = build_host_ctx();
         let err = fs_exists(ctx.as_ref(), PLUGIN, "/tmp/x").unwrap_err();
         assert_eq!(err, "permission denied");
+    }
+
+    /// **移动装配面回归锁**：`new_headless`（= 移动 `PluginManager` 用的 `new_with_ports`）
+    /// 必须和桌面构造器一样注册 fs 仲裁器
+    ///
+    /// 真机链路（2026-10-15 ai-chatbox SIGILL 崩溃）：移动上下文漏注册 ⇒
+    /// `authorize_fs` 归到「资源 Fs 未注册仲裁器，默认拒绝」⇒ host-fs 全部原语恒拒
+    /// ⇒插件 activate 在 `store::init` 失败 ⇒ 插件前端照常加载并调命令 ⇒
+    /// guest 状态未初始化即 panic ⇒ 真机 trap 未被处理 ⇒ 进程 SIGILL。
+    /// 授权面已预置（grant + 旧式前缀记录）——本用例只盯「仲裁器在不在」。
+    #[test]
+    fn ports_host_ctx_registers_fs_authorizer() {
+        let ctx = crate::host_api::tests::build_ports_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let (_dir, root) = granted_temp_root("ports-ctx-fs", &ctx);
+        let probe = root.join("probe.txt");
+        // 未预先创建：存在性检查应得 Ok(false)，而不是「permission denied」
+        assert!(
+            !fs_exists(ctx.as_ref(), PLUGIN, probe.to_str().unwrap()).unwrap(),
+            "移动装配面 fs 原语不得被拒（仲裁器未注册即恒拒）"
+        );
     }
 
     /// fs_copy 需要读+写双权限：只授 fs:read 时在写校验处被拒绝
