@@ -124,18 +124,24 @@ pub fn run() {
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
             let db_path = app_data_dir.join("bedcode_plugins.db");
-            // 批次 2b：连接所有权移交 fork crate Database wrapper（schema 真源
-            // 仍在宿主 db_schema.rs；crate Database 只持连接）
+            // 连接所有权交 wasm-core `Database`；**建表与迁移的真源也在 crate 内**
+            // （`init_schema` → `packages/bedcode-wasm-core/src/db/schema.sql`，单一
+            // 事实源，AGENTS §9）：宿主不自持 DDL 副本——曾自持的那份与内核
+            // 真源漂移出旧形状 `plugin_auth_records`（缺 id），使 fs 授权记录读写
+            // 全失败（2026-10-14 设备实证 `no such column: id`）。已装设备的旧形状
+            // 库由内核侧对账迁移（`Database::init_schema` 内），宿主不再知表形状。
             let plugin_db = Arc::new(std::sync::Mutex::new(
                 bedcode_wasm_core::db::Database::from_connection(
                     rusqlite::Connection::open(&db_path)
                         .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
                 ),
             ));
-            // 主库 schema 幂等建表（票 05：settings / plugin_storage / plugin_secrets /
-            // plugin_auth_policies / plugin_auth_records——宿主机制数据 + 插件数据入库，
-            // 与桌面 wasm-core db/schema.sql 同构；见 plugin/db_schema.rs）
-            crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("plugin db lock poisoned").conn())
+            // 主库 schema 幂等初始化（settings / plugin_storage / plugin_secrets /
+            // plugin_auth_policies / plugin_auth_records + 版本迁移，全部由内核真源定义）
+            plugin_db
+                .lock()
+                .expect("plugin db lock poisoned")
+                .init_schema()
                 .map_err(|e| anyhow::anyhow!("Failed to init plugin DB schema: {}", e))?;
 
             // 票 05b：旧文件落盘 KV（plugins/*.json）→ 主库 plugin_storage 表一次性迁移；

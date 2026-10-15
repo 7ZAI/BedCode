@@ -10,6 +10,55 @@ pub struct Database {
     conn: Connection,
 }
 
+/// 旧形状 `plugin_auth_records` 让路时的临时表名（事务内改名，提交前删除）
+const LEGACY_AUTH_RECORDS_TABLE: &str = "plugin_auth_records__legacy_shape";
+
+/// 库内 `plugin_auth_records` 的实际形状（[`Database::init_schema`] 的对账判据）
+///
+/// 只认「规范」与「已知旧形状」两类；其余一律 `Unrecognized` 交给调用点显性报错，
+/// 不猜列映射（猜错 = 把用户裁决写成无意义行）。
+enum AuthRecordsShape {
+    /// 表不存在（新库 / 刚建过）
+    Missing,
+    /// 规范形状：含 `id`（`db/schema.sql` 建出的形状）
+    Canonical,
+    /// 往届宿主自持 schema 副本建出的旧形状：无 `id`、有 `decision`
+    Legacy,
+    /// 其它任何形状（附实际列名，供错误文案点名）
+    Unrecognized(Vec<String>),
+}
+
+/// 列出一张表上的**显式**索引名（`CREATE INDEX` 产物）
+///
+/// 表级约束（PRIMARY KEY / UNIQUE）生成的自动索引（`origin` = `pk` / `u`）不可删、
+/// 也不需要删（随表一起消失），故只收 `origin = 'c'`。
+///
+/// `table` 直接拼进 PRAGMA 语句：调用点只传本模块的常量表名，不接外部输入。
+fn explicit_indexes(conn: &Connection, table: &str) -> crate::Result<Vec<String>> {
+    let list_err = |e: rusqlite::Error| {
+        crate::AppError::Internal(format!("list indexes of {table}: {e}"))
+    };
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA index_list({table})"))
+        .map_err(list_err)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?, // name
+                row.get::<_, String>(3)?, // origin
+            ))
+        })
+        .map_err(list_err)?;
+    let mut names = Vec::new();
+    for row in rows {
+        let (name, origin) = row.map_err(list_err)?;
+        if origin == "c" {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
 impl Database {
     /// Create a new database connection
     pub fn new(path: &Path) -> crate::Result<Self> {
@@ -17,18 +66,120 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// 从既有连接构造（常编译，票 02 M9 单形态化）：宿主主库连接已由宿主侧
-    /// 打开并跑过 schema 初始化，本 crate 只接管所有权——schema 真源仍在
-    /// 宿主 db_schema.rs。移动 host_domains/db 域消费；桌面宿主按需复用。
+    /// 从既有连接构造（常编译，票 02 M9 单形态化）：宿主主库连接由宿主侧打开
+    /// （路径与锁归宿主），**建表与迁移真源在本 crate**——调用方开库后必须调
+    /// [`Database::init_schema`]。宿主持有独立 DDL 副本会与 `db/schema.sql` 漂移：
+    /// 2026-10-14 实证：宿主自持副本建出的旧 `plugin_auth_records` 缺 `id`，
+    /// `security::fs_auth` 每次读取都报 `no such column: id`（按未命中处理 ⇒
+    /// 授权记录面恒失败）。移动 host_domains/db 域消费；桌面宿主按需复用。
     pub fn from_connection(conn: Connection) -> Self {
         Self { conn }
     }
 
-    /// Initialize database schema
+    /// Initialize database schema（单一事实源 = `db/schema.sql` + [`Self::run_migrations`]，幂等）
+    ///
+    /// 建表**之前**先做旧形状对账（[`Self::auth_records_shape`]）：`schema.sql` 的
+    /// `CREATE TABLE IF NOT EXISTS` 对**已存在**的表零效果——若库里留着旧形状的
+    /// `plugin_auth_records`（往届宿主自持 schema 副本建出的形状：无 `id` /
+    /// `effect` / `ops` / `prefix_match` / `source` / `created_at`），不先让路就会
+    /// 一直缺列，`security::fs_auth` 与 `security::auth_policy` 的读写全部失败。
+    ///
+    /// 对账 = 改名让路 → 由 `schema.sql` 建规范表 → 旧行按列语义搬回（`decision` →
+    /// `effect`，来源标 `legacy`，`ops` / `prefix_match` 取规范缺省）→ 删让路表。
+    /// 全程单事务：中途失败回滚，不留「旧表已改名、新表没行」的半迁移状态。
+    /// 规范形状与新库零操作；无法识别的形状**显性报错**，不静默重建（会丢用户裁决）。
     pub fn init_schema(&self) -> crate::Result<()> {
-        self.conn.execute_batch(include_str!("schema.sql"))?;
-        self.run_migrations()?;
-        Ok(())
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| crate::AppError::Internal(format!("begin schema transaction: {e}")))?;
+
+        let legacy_set_aside = match self.auth_records_shape()? {
+            AuthRecordsShape::Legacy => {
+                tx.execute(
+                    &format!(
+                        "ALTER TABLE plugin_auth_records RENAME TO {LEGACY_AUTH_RECORDS_TABLE}"
+                    ),
+                    [],
+                )
+                .map_err(|e| {
+                    crate::AppError::Internal(format!(
+                        "set aside legacy-shaped plugin_auth_records: {e}"
+                    ))
+                })?;
+                // 先摘掉挂在让路表上的**显式**索引：SQLite 改名会保留索引归属与名字，
+                // 若库里已存在同名 `idx_auth_records_lookup`（旧表已被跑过一次内核
+                // 初始化的状态——「拿旧库直接调 init_schema」就会留下它），`schema.sql`
+                // 的 `CREATE INDEX IF NOT EXISTS` 会因同名索引仍在而跳过，随后
+                // `DROP TABLE` 让路表又把索引一并带走 ⇒ 规范表永久缺查表索引
+                // （静默降级：判定链能跑，只是每次查表都退化成全表扫）。
+                for index in explicit_indexes(&tx, LEGACY_AUTH_RECORDS_TABLE)? {
+                    tx.execute(&format!("DROP INDEX IF EXISTS \"{index}\""), [])
+                        .map_err(|e| {
+                            crate::AppError::Internal(format!(
+                                "drop index {index} carried over by legacy plugin_auth_records: {e}"
+                            ))
+                        })?;
+                }
+                true
+            }
+            AuthRecordsShape::Unrecognized(cols) => {
+                return Err(crate::AppError::Internal(format!(
+                    "plugin_auth_records 形状无法识别（实际列：{cols:?}）：既非规范形状（含 id），\
+                     也非旧宿主自持副本形状（无 id 但有 decision）。本表是授权记录真源，静默重建会丢\
+                     用户已作出的允许/拒绝裁决——请人工迁移该表，或删除该库后重启以重建\
+                     （重建后所有目标都会重新询问）"
+                )));
+            }
+            AuthRecordsShape::Missing | AuthRecordsShape::Canonical => false,
+        };
+
+        tx.execute_batch(include_str!("schema.sql"))
+            .map_err(|e| crate::AppError::Internal(format!("apply db/schema.sql: {e}")))?;
+
+        if legacy_set_aside {
+            tx.execute_batch(&format!(
+                "INSERT INTO plugin_auth_records \
+                   (plugin_id, resource, target, effect, ops, prefix_match, source, created_at) \
+                 SELECT plugin_id, resource, target, decision, '[]', 0, 'legacy', updated_at \
+                   FROM {LEGACY_AUTH_RECORDS_TABLE}; \
+                 DROP TABLE {LEGACY_AUTH_RECORDS_TABLE};"
+            ))
+            .map_err(|e| {
+                crate::AppError::Internal(format!(
+                    "migrate legacy-shaped plugin_auth_records rows: {e}"
+                ))
+            })?;
+        }
+
+        tx.commit()
+            .map_err(|e| crate::AppError::Internal(format!("commit schema transaction: {e}")))?;
+        self.run_migrations()
+    }
+
+    /// 读库内 `plugin_auth_records` 的实际形状（对账判据；表不存在 = 空列集）
+    fn auth_records_shape(&self) -> crate::Result<AuthRecordsShape> {
+        let mut stmt = self
+            .conn
+            .prepare("PRAGMA table_info(plugin_auth_records)")
+            .map_err(|e| {
+                crate::AppError::Internal(format!("read plugin_auth_records shape: {e}"))
+            })?;
+        let cols = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<String>>>())
+            .map_err(|e| {
+                crate::AppError::Internal(format!("read plugin_auth_records shape: {e}"))
+            })?;
+        Ok(if cols.is_empty() {
+            AuthRecordsShape::Missing
+        } else if cols.iter().any(|c| c == "id") {
+            AuthRecordsShape::Canonical
+        } else if cols.iter().any(|c| c == "decision") {
+            AuthRecordsShape::Legacy
+        } else {
+            AuthRecordsShape::Unrecognized(cols)
+        })
     }
 
     /// Apply schema migrations for columns added after initial schema
@@ -211,6 +362,233 @@ mod tests {
         assert_eq!(
             legacy, "[\"/legacy/dir\"]",
             "旧授权记录不得被迁移或清理（读路径回退才认它）"
+        );
+    }
+
+    /// 往届宿主自持 schema 副本的旧 `plugin_auth_records` DDL（历史夹具，冻结不改）
+    ///
+    /// 生产代码已无这份 DDL（单一真源 = `db/schema.sql`），但已装设备上仍可能有
+    /// 由它建出的表，故必须能在测试里原样重现。**只作为迁移输入**——改它等于把
+    /// 迁移测试改成恒真。（源副本 2026-10-14 已随「宿主 schema 归位内核真源」整面退役。）
+    const LEGACY_AUTH_RECORDS_DDL: &str = "\
+CREATE TABLE plugin_auth_records (\n    plugin_id   TEXT NOT NULL,\n    target      TEXT NOT NULL,\n    resource    TEXT NOT NULL,\n    decision    TEXT NOT NULL,\n    updated_at  INTEGER NOT NULL,\n    PRIMARY KEY (plugin_id, target, resource)\n);";
+
+    /// 建一张旧形状授权记录表并播种两条（fs allow / network deny）
+    fn open_legacy_auth_records_db() -> Database {
+        let db = Database::new(Path::new(":memory:")).expect("open in-memory db");
+        db.conn()
+            .execute_batch(LEGACY_AUTH_RECORDS_DDL)
+            .expect("create legacy-shaped plugin_auth_records");
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_auth_records (plugin_id, target, resource, decision, updated_at) \
+                 VALUES ('com.bedcode.test', '/tmp/authed', 'fs', 'allow', 111), \
+                        ('com.bedcode.test', 'https://example.com', 'network', 'deny', 222)",
+                [],
+            )
+            .expect("seed legacy rows");
+        db
+    }
+
+    /// 全量授权记录快照（列序固定，便于整表比较）
+    #[allow(
+        clippy::type_complexity,
+        reason = "测试内整表快照，内联元组比新建具名类型更直观"
+    )]
+    fn auth_record_rows(
+        db: &Database,
+    ) -> Vec<(String, String, String, String, String, i64, String, i64)> {
+        let mut stmt = db
+            .conn()
+            .prepare(
+                "SELECT plugin_id, resource, target, effect, ops, prefix_match, source, created_at \
+                   FROM plugin_auth_records ORDER BY plugin_id, resource, target",
+            )
+            .expect("prepare auth records");
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            })
+            .expect("query auth records");
+        rows.map(|r| r.expect("row")).collect()
+    }
+
+    /// 旧形状授权记录（往届宿主自持副本建出的形状）对账到规范形状
+    ///
+    /// 判据：① 列补齐（`id` 在册）；② **行不丢且列语义映射正确**（`decision` →
+    /// `effect`，`updated_at` → `created_at`，来源标 `legacy`，`ops` / `prefix_match`
+    /// 取规范缺省）；③ 让路表不残留；④ 查表索引建出（判定链读模型依赖它）。
+    #[test]
+    fn legacy_shaped_auth_records_are_migrated() {
+        let db = open_legacy_auth_records_db();
+
+        db.init_schema().expect("init schema over legacy shape");
+
+        let cols: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare("PRAGMA table_info(plugin_auth_records)")
+                .expect("prepare table_info");
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .expect("query table_info");
+            rows.map(|r| r.expect("row")).collect()
+        };
+        assert!(
+            cols.iter().any(|c| c == "id"),
+            "对账后必须是规范形状: {cols:?}"
+        );
+
+        assert_eq!(
+            auth_record_rows(&db),
+            vec![
+                (
+                    "com.bedcode.test".into(),
+                    "fs".into(),
+                    "/tmp/authed".into(),
+                    "allow".into(),
+                    "[]".into(),
+                    0,
+                    "legacy".into(),
+                    111,
+                ),
+                (
+                    "com.bedcode.test".into(),
+                    "network".into(),
+                    "https://example.com".into(),
+                    "deny".into(),
+                    "[]".into(),
+                    0,
+                    "legacy".into(),
+                    222,
+                ),
+            ],
+            "旧行必须按列语义搬进规范表（决策保留、来源标 legacy）"
+        );
+        assert_eq!(
+            master_count(&db, "table", LEGACY_AUTH_RECORDS_TABLE),
+            0,
+            "让路表必须删除"
+        );
+        assert_eq!(
+            master_count(&db, "index", "idx_auth_records_lookup"),
+            1,
+            "查表索引必须建出"
+        );
+    }
+
+    /// 对账幂等：连跑两次 `init_schema` 结果一致（不多行、不重复改名、不报错）
+    #[test]
+    fn legacy_auth_records_migration_is_idempotent() {
+        let db = open_legacy_auth_records_db();
+        db.init_schema().expect("first init");
+        let first = auth_record_rows(&db);
+        assert_eq!(first.len(), 2, "首次对账必须搬回两行");
+
+        db.init_schema().expect("second init (idempotent)");
+
+        assert_eq!(auth_record_rows(&db), first, "重复初始化不得再迁移或丢行");
+        assert_eq!(master_count(&db, "table", LEGACY_AUTH_RECORDS_TABLE), 0);
+    }
+
+    /// 让路前的陈旧索引清理：旧表上已挂着同名查表索引时（旧库被直接跑过一次内核
+    /// 初始化的状态），对账后规范表必须仍拿到索引——否则 `CREATE INDEX IF NOT
+    /// EXISTS` 被同名索引挡掉、`DROP TABLE` 让路表时又把索引一并带走，留下
+    /// 「能跑但每次查表都全表扫」的静默降级。
+    #[test]
+    fn legacy_migration_rebuilds_lookup_index_when_name_is_taken() {
+        let db = open_legacy_auth_records_db();
+        db.conn()
+            .execute_batch(
+                "CREATE INDEX idx_auth_records_lookup \
+                   ON plugin_auth_records(plugin_id, resource, target);",
+            )
+            .expect("plant stale lookup index on legacy table");
+
+        db.init_schema()
+            .expect("init schema over legacy shape carrying a stale index");
+
+        assert_eq!(
+            master_count(&db, "index", "idx_auth_records_lookup"),
+            1,
+            "规范表必须拿到查表索引（不得被让路表的同名索引挡掉）"
+        );
+        let indexed_cols: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_info('idx_auth_records_lookup')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("index column count");
+        assert_eq!(indexed_cols, 3, "索引必须建在 (plugin_id, resource, target)");
+        assert_eq!(master_count(&db, "table", LEGACY_AUTH_RECORDS_TABLE), 0);
+    }
+
+    /// 反例（非恒真）：已是规范形状的库不被对账改写——`source` 保持 `user`，
+    /// 已播种行不重复不重写（防对账条件写宽成「每次重建」）
+    #[test]
+    fn canonical_auth_records_are_left_untouched() {
+        let db = open_in_memory_and_init();
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_auth_records \
+                 (plugin_id, resource, target, effect, ops, prefix_match, source, created_at) \
+                 VALUES ('com.bedcode.test', 'fs', '/tmp/authed', 'allow', '[\"read\"]', 1, 'user', 7)",
+                [],
+            )
+            .expect("seed canonical row");
+
+        db.init_schema().expect("re-init over canonical shape");
+
+        assert_eq!(
+            auth_record_rows(&db),
+            vec![(
+                "com.bedcode.test".into(),
+                "fs".into(),
+                "/tmp/authed".into(),
+                "allow".into(),
+                "[\"read\"]".into(),
+                1,
+                "user".into(),
+                7,
+            )],
+            "规范数据必须原样保留（不改 source / ops / prefix_match）"
+        );
+        assert_eq!(
+            master_count(&db, "table", LEGACY_AUTH_RECORDS_TABLE),
+            0,
+            "规范形状不得凭空让路"
+        );
+    }
+
+    /// 未知形状 fail-visible：既不迁也不重建，报错点名表与实际列
+    /// （静默重建 = 悄悄丢掉用户已作出的允许/拒绝裁决）
+    #[test]
+    fn unrecognized_auth_records_shape_fails_visible() {
+        let db = Database::new(Path::new(":memory:")).expect("open in-memory db");
+        db.conn()
+            .execute_batch("CREATE TABLE plugin_auth_records (mystery_column TEXT NOT NULL);")
+            .expect("create unrecognized-shaped table");
+
+        let err = db
+            .init_schema()
+            .expect_err("未知形状必须报错，不得静默重建");
+
+        let msg = format!("{err}");
+        assert!(msg.contains("plugin_auth_records"), "错误必须点名表: {msg}");
+        assert!(
+            msg.contains("mystery_column"),
+            "错误必须给出实际列名: {msg}"
         );
     }
 

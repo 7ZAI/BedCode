@@ -187,6 +187,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | 终端订阅协议客户端退役 / host-terminal·terminal-hooks 整面退役 | `src-tauri/tests/retired_mobile_terminal_link_lock.rs`、`retired_mobile_host_terminal_hooks_lock.rs` |
 | auto-task 独立插件退役 / 本地配对码编排退役 / 认证编排命令面退役 / 会话控制客户端退役 | `src-tauri/tests/retired_mobile_{auto_task_plugin,local_pairing_code_face,auth_orchestration_command_face,session_control_face}_lock.rs` |
 | 插件 KV 真源 = 主库 `plugin_storage` 表 | `src-tauri/tests/plugin_storage_db_backed_lock.rs` |
+| **主库 schema 单真源 = 内核 `db/schema.sql`（宿主不自持 DDL / 退役 `db_schema` 副本不回接 / 真源接线在场）** | `src-tauri/tests/kernel_schema_single_truth_lock.rs` |
 | host-websocket 客户端子集域边界 | `src-tauri/tests/mobile_host_websocket_client_domain_lock.rs` |
 | egress 三档策略架构不变量 | `src-tauri/tests/egress_tier_mapping_single_point_lock.rs` |
 | 移动 fork crate 退役面（第二份 wasm-core 织体，5 判据） | `src-tauri/tests/retired_mobile_wasm_core_fork_lock.rs` |

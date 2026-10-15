@@ -10,7 +10,7 @@
 //! `bedcode-wasm-core-mobile` 只是 package rename 别名，fork crate 已退役）
 //! ——本模块对 `crate::plugin::*` 的历史路径做
 //! 转发垫片（76+ 处宿主引用零改动）；宿主自持面（android_plugins / saf_io /
-//! saf_path / commands / db_schema / loader / manager / registry / approval /
+//! saf_path / commands / loader / manager / registry / approval /
 //! types / host_ports / peer_ports / bindings / 移动独有域 adapter
 //! （notify / fs_mobile / terminal_stream / connection / auth））仍在宿主。
 //! `fs_auth` 宿主自实现已退役（用户裁决 2026-10-11「fs 授权统一到桌面判定链」）
@@ -23,7 +23,6 @@ pub mod auth;
 pub mod bindings;
 pub mod commands;
 pub mod connection;
-pub mod db_schema;
 // 桌面兼容面桩（file-transfer 双端单产物：host-api-call / host-platform-desktop
 // 的 fail-visible unsupported 实现，绑桌面 wit 的 desktop-compat world）
 pub mod desktop_compat;

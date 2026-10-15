@@ -1390,9 +1390,12 @@ mod tests {
         let plugin_db = StdArc::new(std::sync::Mutex::new(Database::from_connection(
             rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
         )));
-        // 票 05b：镜像生产启动顺序——DB 开库后 init_schema（plugin_storage 表；
-        // schema 真源在宿主 db_schema.rs，Database 只接管连接所有权）
-        crate::plugin::db_schema::init_schema(&plugin_db.lock().expect("schema lock").conn())
+        // 票 05b：镜像生产启动顺序——DB 开库后跑内核 schema 初始化
+        // （单一真源 = wasm-core `db/schema.sql`；宿主不自持 DDL 副本）
+        plugin_db
+            .lock()
+            .expect("schema lock")
+            .init_schema()
             .expect("init plugin db schema");
 
         let manager = PluginManager::new(
