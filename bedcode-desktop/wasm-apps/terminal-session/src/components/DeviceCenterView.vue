@@ -711,8 +711,16 @@ function cancelPairing() {
   void clearCode()
 }
 
-/** 刷新设备列表（保留在线集合，仅重取配对记录） */
+/** 刷新：网络信息 + 设备列表 + 就位状态一并取最新 */
 async function refreshAll() {
+  // 本机地址会随换网络 / DHCP 续租变化，服务器端口也可能已重启换过（与 ServerView 的
+  // 「保存端口 → 立即重启」配套）：刷新必须重读网络信息，否则工具栏与二维码继续挂旧地址
+  await loadNetwork()
+  // 已挂出二维码时按新地址重组载荷（token 不变、不重新签发）：地址已变却还挂着旧 IP 的码，
+  // 扫出来照样连不上
+  if (hasQr.value) {
+    await restoreQr(selectedHost.value || undefined)
+  }
   await loadDevices()
   // 顺带重读就位状态：用户「停用并重新启用插件」后的第一手反馈就来自这次点击，
   // 不必等重启页面（横幅正是为「修完立刻看到好了」而存在的）

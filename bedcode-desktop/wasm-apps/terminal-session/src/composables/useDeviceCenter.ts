@@ -129,7 +129,16 @@ export function useDeviceCenter(context: PluginContext) {
 
   /**
    * 读取网络信息：端口取内核运行端口，地址列表取宿主网卡枚举；
-   * 用户选择的 host 落插件存储（缺省自动选第一个可用 IPv4，与宿主原行为一致）
+   * 用户选择的 host 落插件存储（缺省自动选第一个可用 IPv4，与宿主原行为一致）。
+   *
+   * **存储值只是候选、不是事实**：本机 IPv4 会随 DHCP 续租 / 换网卡 / 换网络整体变化，
+   * 上一次写下的选择今天可能已是死地址。若直接采信它，工具栏会显示连不上的 IP，
+   * 而该 host 又会被塞进 QR 载荷 → 手机扫码必失败（2026-10-15 现场：存储里是旧网段
+   * `192.168.1.5`，当前网卡只有 `10.62.87.120`，页面却一直显示 `192.168.1.5:8767`）。
+   * 因此每次读取（启动 / 切回页面 / 刷新）都用当次枚举结果校正：
+   * - 存储值仍在当前枚举内 → 保留（多网卡下尊重用户手选，且该值本身就是当前可用地址）
+   * - 已不在枚举内 → 回落当前首个可用地址并覆写存储
+   * - 一个可用地址都没有 → 置空（页面显示「未选择」）并清掉存储里的死值
    */
   async function loadNetwork(): Promise<void> {
     const info = (await context.commands.execute('session.network.info', {})) as
@@ -139,11 +148,15 @@ export function useDeviceCenter(context: PluginContext) {
     addresses.value = Array.isArray(info?.addresses) ? info.addresses : []
 
     const stored = await context.storage.get<string>(QR_HOST_STORAGE_KEY)
-    if (stored) {
+    if (stored && addresses.value.includes(stored)) {
       selectedHost.value = stored
-    } else if (addresses.value.length > 0) {
-      selectedHost.value = addresses.value[0]
+      return
+    }
+    selectedHost.value = addresses.value[0] ?? null
+    if (selectedHost.value) {
       await context.storage.set(QR_HOST_STORAGE_KEY, selectedHost.value)
+    } else if (stored !== undefined) {
+      await context.storage.delete(QR_HOST_STORAGE_KEY)
     }
   }
 

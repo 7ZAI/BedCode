@@ -100,6 +100,7 @@ const eventDispose = vi.fn()
 
 const storageGet = vi.fn(async () => undefined as unknown)
 const storageSet = vi.fn(async () => {})
+const storageDelete = vi.fn(async () => {})
 
 function makeContext(): PluginContext {
   return {
@@ -110,7 +111,7 @@ function makeContext(): PluginContext {
       registerMessages: vi.fn(),
     },
     commands: { execute },
-    storage: { get: storageGet, set: storageSet },
+    storage: { get: storageGet, set: storageSet, delete: storageDelete },
     events: {
       on: (event: string, handler: (payload: unknown) => void) => {
         eventHandlers[event] = eventHandlers[event] ?? []
@@ -650,5 +651,70 @@ describe('DeviceCenterView（设备与配对页面）', () => {
 
     expect(commandsTo('session.auth.center-status')).toHaveLength(2)
     expect(wrapper.text()).not.toContain('pairing.center.notReadyTitle')
+  })
+
+  it('C23 存储的 host 已不在当前网卡列表（换网络 / DHCP 变更）：显示回落首个可用地址并覆写存储', async () => {
+    // 存储里是上一张网卡/上一个网络写下的地址，当前枚举里没有它
+    storageGet.mockResolvedValue('192.168.9.99')
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 死地址既不能显示，也不能留给下一次启动
+    expect(wrapper.text()).not.toContain('192.168.9.99')
+    expect(wrapper.text()).toContain(`${seed.network.addresses[0]}:${seed.network.port}`)
+    expect(storageSet).toHaveBeenCalledWith('pairing.qrHost', seed.network.addresses[0])
+  })
+
+  it('C24 存储的 host 仍在当前列表（多网卡手选非首个地址）：保留用户选择，不覆写', async () => {
+    const manual = seed.network.addresses[1]
+    storageGet.mockResolvedValue(manual)
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(`${manual}:${seed.network.port}`)
+    // 值本身已是最新（仍在枚举内），不得被首选项覆盖掉用户手选
+    expect(storageSet).not.toHaveBeenCalled()
+  })
+
+  it('C25 当前无可用 IPv4：不显示陈旧地址，显示「未选择」并清掉存储里的死值', async () => {
+    storageGet.mockResolvedValue('192.168.9.99')
+    execute.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'session.network.info') return { port: 9000, addresses: [] }
+      return defaultExecute(command, args)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('192.168.9.99')
+    expect(wrapper.text()).toContain('pairing.network.notSelected:9000')
+    expect(storageDelete).toHaveBeenCalledWith('pairing.qrHost')
+    expect(storageSet).not.toHaveBeenCalled()
+  })
+
+  it('C26 点刷新：重读网络信息（地址变了即显示最新）并重组活跃二维码载荷', async () => {
+    // 首次进入：无存储值 → 自动选首个地址；同时恢复一个活跃二维码（host 为旧地址）
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.qr.info') return { ...seed.qr, host: seed.network.addresses[0] }
+      return defaultExecute(command)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    expect(commandsTo('session.network.info')).toHaveLength(1)
+    expect(wrapper.text()).toContain(`${seed.network.addresses[0]}:${seed.network.port}`)
+
+    // 期间换网：本机只剩 10.9.9.9
+    execute.mockImplementation(async (command: string) => {
+      if (command === 'session.network.info') return { port: 9000, addresses: ['10.9.9.9'] }
+      if (command === 'session.qr.info') return { ...seed.qr, host: '10.9.9.9' }
+      return defaultExecute(command)
+    })
+    await findButton(wrapper, 'pairing.button.refresh')!.trigger('click')
+    await flushPromises()
+
+    expect(commandsTo('session.network.info')).toHaveLength(2)
+    expect(wrapper.text()).toContain('10.9.9.9:9000')
+    expect(wrapper.text()).not.toContain(`${seed.network.addresses[0]}:${seed.network.port}`)
+    // 二维码载荷随新地址重组（token 不变）
+    expect(commandsTo('session.qr.info').at(-1)![1]).toEqual({ host: '10.9.9.9' })
   })
 })
