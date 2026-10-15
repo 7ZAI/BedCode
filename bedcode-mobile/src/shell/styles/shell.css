@@ -1,20 +1,22 @@
 /* ============================================================================
    宿主壳（Host Shell）层样式
    ----------------------------------------------------------------------------
-   纪律：本文件**不新增任何颜色**。除品牌层（固定琥珀，不随用户色板变化）外，
+   纪律：本文件**不新增任何颜色**。除品牌层（固定暖炭 + 白，不随用户色板变化）外，
    所有视觉值都引用 --mobile-* token，主题切换由既有 token 负责。
 
-   品牌层真源：.scratch/2026-10-07-wasmapp-brand/brand-spec-mobile.md §2.1
-     · ember     #FF9E2C —— 深底唯一彩色（bg-card 上 8.41:1）
-     · ember-700 #9F621B —— 浅底品牌色（bg-card 上 4.83:1）
-     · ember 绝不出现在浅底上（1.87:1，不可见）
-   品牌琥珀只出现在品牌位（标志 / 品牌名 / 品牌说明），不用于任何可点击控件。
+   品牌层真源：应用图标 bedcode-mobile/src-tauri/icons/icon.svg
+     （BedCode 标志 = 暖炭斜向渐变底 #2E2A22 → #0A0907 + 白色 `>` 终端提示符）
+     · 品牌位恒为深底，图形是白字——浅色主题下也不翻转（翻成浅底白字即不可见）
+     · 品牌底与图形都不跟 --mobile-accent / data-palette 走
+   品牌层只服务品牌标志，不用于任何可点击控件。
    ============================================================================ */
 
 .shell-ui {
-  --shell-brand-ember: #ff9e2c;
-  /* 品牌深底恒定：标志底板不随主题翻转，否则浅色主题下琥珀落在浅底上（1.87:1 不可见） */
-  --shell-brand-ink: #08090b;
+  /* 品牌暖炭底恒定（斜向渐变亮端 / 暗端）：标志底板不随主题翻转 */
+  --shell-brand-ink: #2e2a22;
+  --shell-brand-ink-deep: #0a0907;
+  /* 品牌图形恒为白：`>` 提示符在暖炭底上 11.4:1，SVG fill 走它（L6 禁壳内硬编码色值） */
+  --shell-brand-glyph: #ffffff;
   /* 壳内结构 token：只定义与平台 token 无关的几何量，避免各处硬编码同一数值 */
   --shell-radius-card: 12px;
   --shell-radius-control: 10px;
@@ -25,6 +27,21 @@
   --shell-icon-row: 32px;
   --shell-icon-app: 44px;
   --shell-icon-preview: 76px;
+
+  /* ==========================================================================
+     动效时长与缓动（按角色取，不逐处写死数值）
+     --------------------------------------------------------------------------
+     时长分三档，缓动分三类——入场减速 / 退场加速 / 位置对调用标准：
+     ui-ux-pro-max `--domain ux / Easing Functions` 明确把
+     「ease-in-out for every motion」列为反模式，这里把缓动绑到角色意图上，
+     避免全壳共用一个值。匀速旋转（spinner）例外，用 linear。
+     ========================================================================== */
+  --shell-dur-fast: 150ms;   /* 按压反馈、色值切换等即时响应 */
+  --shell-dur-base: 240ms;   /* 屏幕栈 / 抽屉 / 覆盖层等空间位移 */
+  --shell-dur-slow: 320ms;   /* 大件入场、内容展开 */
+  --shell-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --shell-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --shell-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   /* 系统宫格图标档案色（零新 hex：color-mix 从既有语义 token 派生）
      应用管理=绿（内容活跃）、权限管理=琥珀（安全裁决需关注）、设置=暖橄榄派生（中性面，
      不抢绿/琥珀语义）；与可点击控件一律中性色的纪律不冲突——这三格是平台自有面，
@@ -42,9 +59,125 @@
   --shell-action-glow: 0 0 15px color-mix(in srgb, var(--mobile-accent) 12%, transparent);
 }
 
-html:not(.dark) .shell-ui {
-  /* 浅色主题换明度档不换色相（brand-spec-mobile.md §2.2 规则 2/3） */
-  --shell-brand-ember: #9f621b;
+/* ============================================================================
+   排版层级（壳内语义级）
+   ----------------------------------------------------------------------------
+   为什么不用 Tailwind 的 text-[var(--font-size-*)]：
+   `text-[...]` 在 Tailwind v3 里 color 与 font-size 共用前缀，裸 var() 不带类型
+   线索，编译器按 color 生成规则（实测产物为 `.text-\[var\(--font-size-lg\)]{
+   color:var(--font-size-lg)}`），字号声明整体失效并回落继承值——壳内 95 处字号
+   声明因此全部不生效，全屏只剩 14px 一档，层级完全塌陷。
+
+   这里改用语义级：名字直接说明用途，尺寸仍取 --font-size-* 流式 token
+   （用户字号偏好与窄屏缩放照常生效）。层级由「尺寸 + 字重 + 字距」承担；
+   字色刻意不在此层——本文件是未分层样式，会整体压过 Tailwind 的 utilities 层，
+   若在此写死颜色，各处想换别档语义色会被静默忽略。尺寸轴与颜色轴正交，
+   调用点用 text-[var(--mobile-text-*)] 自取语义色。
+
+   挂在 .shell-ui 下而非裸类名：style.css 的旧规则 `.mobile-ui h2` 特异度
+   (0,1,1) 高于任何单类名 (0,1,0)，会盖住分组标题字号；`.shell-ui .shell-type-*`
+   为 (0,2,0)，稳定压过它。
+   ============================================================================ */
+.shell-ui .shell-type-display {
+  font-size: var(--font-size-2xl);
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  line-height: 1.18;
+}
+/* 主屏品牌 / 屏幕主标题：比 display 低一档 */
+.shell-ui .shell-type-title {
+  font-size: var(--font-size-xl);
+  font-weight: 650;
+  letter-spacing: -0.014em;
+  line-height: 1.25;
+}
+/* 分组标题：字距 + 字重区分，在 16px 尺寸下也能与同尺寸的列表标题拉开 */
+.shell-ui .shell-type-section {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  line-height: 1.3;
+}
+/* 列表行标题：与 body 同尺寸，靠字重建立层级 */
+.shell-ui .shell-type-label {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  letter-spacing: -0.004em;
+  line-height: 1.35;
+}
+.shell-ui .shell-type-body {
+  font-size: var(--font-size-base);
+  font-weight: 400;
+  line-height: 1.5;
+}
+/* 元信息行（版本 / 权限数 / 体积）：降一档，让主标题独占视觉重量 */
+.shell-ui .shell-type-caption {
+  font-size: var(--font-size-sm);
+  font-weight: 450;
+  line-height: 1.45;
+}
+/* 角标 / 徽章 / 计数：最小档 + 明显字距，读作标签而非正文 */
+.shell-ui .shell-type-micro {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+
+/* ============================================================================
+   可读宽度上限（横屏 / 平板）
+   ----------------------------------------------------------------------------
+   各屏内容原本随视口等比拉伸：横屏 852px 宽时四列宫格被拉到每列约 200px，
+   图标成了 vast 空白里的孤岛（ui-ux-pro-max `--domain ux` 「Adaptive gutters
+   by breakpoint / Consistent content width」）。给内容块封顶并居中，宽屏下形成
+   一条稳定的阅读栏；窄屏下 max-width 不生效，行为不变。
+   作用在滚动容器的直接子元素上，因此无需在各屏的标记里逐层包一层。
+   ============================================================================ */
+.shell-ui .shell-content-cap > * {
+  max-width: 600px;
+  margin-inline: auto;
+}
+
+/* ============================================================================
+   两行截断（图标宫格的应用名）
+   ----------------------------------------------------------------------------
+   应用名长度不可控（中英混排、插件自填），单行 truncate 在窄屏上会把
+   「终端 Terminal」砍成「终端 Term⋯」。两行夹是启动器的通行做法：短名占一行，
+   长名换行仍可读，超出两行才省略。行高压到 1.3 让两行不至于松散。
+   ============================================================================ */
+.shell-ui .shell-type-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  /* 文本顶对齐（启动器的通行做法）：一行名与两行名的首行齐平，图标行不受影响。
+     曾试过 -webkit-box-pack:center + min-height 做垂直居中，实测在 line-clamp
+     下不生效（单行名不落进两行框中心），故不保留无效声明。 */
+}
+
+/* ============================================================================
+   全屏氛围底（主屏之外的各屏共用）
+   ----------------------------------------------------------------------------
+   主屏有自己的壁纸层；应用管理 / 权限 / 设置这些次级屏原本是纯底色，底部一大片
+   死黑，页面读起来像被截断。给根容器垫一层顶部渐隐的柔光，让各屏共享同一套
+   空气感、与主屏同源又不抢列表对比度（列表卡自带 --mobile-bg-card 表面）。
+   主屏不受影响：它的壁纸层是 .shell-ui 的子元素，本层在壁纸之下。
+   ============================================================================ */
+.shell-ui::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  top: calc(-1 * var(--shell-safe-top, 0px));
+  height: calc(100% + var(--shell-safe-top, 0px));
+  background: radial-gradient(
+    132% 66% at 50% 0%,
+    color-mix(in srgb, var(--mobile-accent) 7%, transparent) 0%,
+    transparent 82%
+  );
+  pointer-events: none;
 }
 
 /* ============================================================================
@@ -57,8 +190,8 @@ html:not(.dark) .shell-ui {
 .shell-screen-enter-active,
 .shell-screen-leave-active {
   transition:
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-base) var(--shell-ease-standard);
 }
 
 .shell-screen-forward-enter-from {
@@ -90,7 +223,7 @@ html:not(.dark) .shell-ui {
    ============================================================================ */
 .shell-sheet-enter-active,
 .shell-sheet-leave-active {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--shell-dur-slow) var(--shell-ease-out);
 }
 .shell-sheet-enter-from,
 .shell-sheet-leave-to {
@@ -99,7 +232,7 @@ html:not(.dark) .shell-ui {
 
 .shell-scrim-enter-active,
 .shell-scrim-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-scrim-enter-from,
 .shell-scrim-leave-to {
@@ -128,18 +261,18 @@ html:not(.dark) .shell-ui {
    TransitionGroup 归位上移（.notify-list-move）。
    ============================================================================ */
 .notify-card {
-  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard), opacity var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .notify-card--dragging {
   transition: none;
 }
 /* 列表删除后的归位（TransitionGroup 只定义 move；enter/leave 走默认即无动画） */
 .notify-list-move {
-  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard);
 }
 /* X 按钮删除 / 取消时的离开动画：淡出 + 微缩（滑动删除的卡此时已在屏外，无感） */
 .notify-list-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity var(--shell-dur-fast) var(--shell-ease-in), transform var(--shell-dur-fast) var(--shell-ease-in);
 }
 .notify-list-leave-to {
   opacity: 0;
@@ -149,7 +282,7 @@ html:not(.dark) .shell-ui {
    依次加速向右飞出（cubic-bezier 末段加速 = 离手甩出的手感），飞出后淡出。
    animation 的 transform 覆盖卡片拖动时的内联 transform（无拖动共存场景）。 */
 .notify-card--flee {
-  animation: notify-flee 0.34s cubic-bezier(0.5, 0, 1, 0.4) forwards;
+  animation: notify-flee var(--shell-dur-slow) cubic-bezier(0.5, 0, 1, 0.4) forwards;
   pointer-events: none;
 }
 @keyframes notify-flee {
@@ -173,14 +306,14 @@ html:not(.dark) .shell-ui {
 .shell-btn-danger-outline {
   border: 1px solid color-mix(in srgb, var(--mobile-error) 55%, transparent);
   color: var(--mobile-error);
-  transition: background-color 0.2s ease;
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-btn-danger-outline:active {
   background: var(--mobile-error-muted);
 }
 .shell-btn-danger-text {
   color: var(--mobile-error);
-  transition: background-color 0.2s ease;
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-btn-danger-text:active {
   background: var(--mobile-error-muted);
@@ -210,7 +343,7 @@ html:not(.dark) .shell-ui {
   border-radius: 8px;
   font-size: var(--font-size-sm);
   color: var(--mobile-text-secondary);
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard), color var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-segmented button:active {
   opacity: 0.85;
@@ -228,7 +361,7 @@ html:not(.dark) .shell-ui {
    不循环不常驻；prefers-reduced-motion 下整体关闭（见文末块）。
    ============================================================================ */
 .shell-reveal {
-  animation: shell-reveal 0.3s cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: shell-reveal var(--shell-dur-slow) var(--shell-ease-out) both;
 }
 @keyframes shell-reveal {
   from {
@@ -247,8 +380,8 @@ html:not(.dark) .shell-ui {
 .shell-shade-enter-active,
 .shell-shade-leave-active {
   transition:
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.2s ease;
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-shade-enter-from,
 .shell-shade-leave-to {
@@ -274,9 +407,9 @@ html:not(.dark) .shell-ui {
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-secondary);
   transition:
-    background-color 0.2s ease,
-    color 0.2s ease,
-    opacity 0.2s ease;
+    background-color var(--shell-dur-fast) var(--shell-ease-standard),
+    color var(--shell-dur-fast) var(--shell-ease-standard),
+    opacity var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-icon-action:active {
   background: var(--mobile-accent-muted);
@@ -332,7 +465,7 @@ html:not(.dark) .shell-ui {
   width: var(--mobile-touch-target-min);
   height: var(--mobile-touch-target-min);
   color: var(--mobile-text-primary);
-  transition: background-color 0.2s ease;
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
 }
 .shell-capsule-btn:active {
   background: var(--mobile-accent-muted);
@@ -368,7 +501,7 @@ html:not(.dark) .shell-ui {
   height: 100%;
   /* 首尾卡也能居中：两端各留「半个视口 - 半个卡宽」 */
   padding-inline: calc(50% - var(--deck-card-w) / 2);
-  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard);
 }
 .shell-deck-card {
   position: relative;
@@ -383,8 +516,8 @@ html:not(.dark) .shell-ui {
   box-shadow: var(--mobile-card-shadow);
   overflow: hidden;
   transition:
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.24s ease;
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-base) var(--shell-ease-standard);
 }
 /* 拖拽期间关掉过渡并开启 will-change，抬起后交回 CSS 过渡——否则手指与卡片之间会慢半拍 */
 .shell-deck--dragging .shell-deck-track,
@@ -399,10 +532,17 @@ html:not(.dark) .shell-ui {
    ============================================================================ */
 
 @media (prefers-reduced-motion: reduce) {
+  /* 覆盖壳内全部自带过渡的面：屏幕栈 / 抽屉 / 通知栏 / 多任务卡 / 通知卡拖拽与
+     删除归位 / 分段器 / 图标动作 / 胶囊按钮 / 破坏性按钮 / 遮罩。
+     ui-ux-pro-max `--domain ux / Reduced Motion`：用户关闭动效后位移与缩放类
+     动画一律收敛为瞬时，只保留不产生位移的状态色变化（不列在此，靠 duration
+     极短而非归零，色变仍可见）。 */
   .shell-screen-enter-active,
   .shell-screen-leave-active,
   .shell-sheet-enter-active,
   .shell-sheet-leave-active,
+  .shell-scrim-enter-active,
+  .shell-scrim-leave-active,
   .shell-shade-enter-active,
   .shell-shade-leave-active,
   .shell-deck-track,
@@ -411,5 +551,16 @@ html:not(.dark) .shell-ui {
   .notify-card--flee {
     transition-duration: 0.01ms;
     animation: none;
+  }
+  /* 位移 / 缩放型过渡收敛为瞬时 */
+  .notify-card,
+  .notify-list-move,
+  .notify-list-leave-active,
+  .shell-segmented button,
+  .shell-icon-action,
+  .shell-capsule-btn,
+  .shell-btn-danger-outline,
+  .shell-btn-danger-text {
+    transition-duration: 0.01ms;
   }
 }

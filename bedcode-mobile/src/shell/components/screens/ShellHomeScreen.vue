@@ -18,10 +18,10 @@
     <header class="relative z-10 flex items-center gap-3 px-4 pt-3 pb-2 flex-shrink-0">
       <ShellBrandTile :size="38" />
       <div class="flex-1 min-w-0">
-        <div class="text-[var(--font-size-lg)] font-semibold leading-tight text-[var(--mobile-text-primary)]">
-          <span>Wasm</span><em class="not-italic" :style="{ color: 'var(--shell-brand-ember)' }">App</em>
+        <div class="shell-type-title">
+          BedCode
         </div>
-        <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+        <div class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
           {{ t('shell.home.localDevice') }} ·
           {{ t('shell.home.appCount', { count: stats.installed }) }}
         </div>
@@ -49,7 +49,7 @@
     </header>
 
     <!-- ==================== 内容 ==================== -->
-    <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6">
+    <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ======== 正在运行（MRU 卡片带，桌面同构） ======== -->
       <template v-if="runningOrdered.length > 0">
         <ShellSection :title="t('shell.home.runningTitle')" class="shell-reveal">
@@ -85,10 +85,10 @@
             >
               <ShellAppIcon :app="app" :size="30" />
               <span class="flex-1 min-w-0">
-                <span class="block text-[var(--font-size-sm)] font-medium text-[var(--mobile-text-primary)] truncate">
+                <span class="block shell-type-label text-[var(--mobile-text-primary)] truncate">
                   {{ app.name }}
                 </span>
-                <span class="flex items-center gap-1 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate min-w-0">
+                <span class="flex items-center gap-1 shell-type-caption text-[var(--mobile-text-secondary)] truncate min-w-0">
                   <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background: var(--mobile-success)" aria-hidden="true" />
                   <span class="min-w-0 truncate">{{ t('shell.common.running') }}</span>
                 </span>
@@ -142,13 +142,15 @@
         </template>
       </ShellSection>
       <div class="px-4">
-        <div v-if="apps.length > 0" class="grid grid-cols-4 gap-1 shell-reveal" role="list" :style="{ animationDelay: '200ms' }">
+        <!-- gap-3 = 12px：ui-ux-pro-max `--domain ux / Touch Spacing` 要求相邻触控目标
+     间距 ≥8px，原 gap-1(4px) 既低于门槛、又让四列图标挤成一团。 -->
+        <div v-if="apps.length > 0" class="grid grid-cols-4 gap-3 shell-reveal" role="list" :style="{ animationDelay: '200ms' }">
           <ShellAppCell v-for="app in sortedApps" :key="app.id" :app="app" @open="open" />
         </div>
         <!-- 空态给出下一步（安装入口在应用管理页），而不是只留一句「暂无应用」 -->
         <p
           v-else
-          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-5 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-5 text-center shell-type-caption text-[var(--mobile-text-secondary)]"
         >
           {{ t('shell.home.emptyAppsHint') }}
         </p>
@@ -157,7 +159,7 @@
       <!-- ======== 系统宫格（平台自有面，与应用同层） ======== -->
       <ShellSection :title="t('shell.home.sysTitle')" class="shell-reveal" :style="{ animationDelay: '240ms' }" />
       <div class="px-4">
-        <div class="grid grid-cols-4 gap-1 shell-reveal" role="list" :style="{ animationDelay: '280ms' }">
+        <div class="grid grid-cols-4 gap-3 shell-reveal" role="list" :style="{ animationDelay: '280ms' }">
           <button
             v-for="entry in sysEntries"
             :key="entry.id"
@@ -176,7 +178,7 @@
                 <path :d="entry.icon" />
               </svg>
             </span>
-            <span class="w-full text-center text-[var(--font-size-xs)] text-[var(--mobile-text-primary)] truncate">
+            <span class="w-full text-center shell-type-caption shell-type-clamp-2 font-medium text-[var(--mobile-text-primary)]">
               {{ entry.label }}
             </span>
           </button>
