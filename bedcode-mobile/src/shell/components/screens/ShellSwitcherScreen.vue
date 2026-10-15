@@ -12,7 +12,7 @@
           <path d="M15 6l-6 6 6 6" />
         </svg>
       </button>
-      <h1 class="flex-1 min-w-0 text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+      <h1 class="shell-type-display flex-1 min-w-0 truncate">
         {{ t('shell.switcher.title') }}
       </h1>
       <ShellChip
@@ -64,10 +64,10 @@
               <span class="flex items-center gap-2.5 px-3.5 py-3 flex-shrink-0">
                 <ShellAppIcon :app="card.app" :size="34" />
                 <span class="flex-1 min-w-0">
-                  <span class="block text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                  <span class="block shell-type-label text-[var(--mobile-text-primary)] truncate">
                     {{ card.app.name }}
                   </span>
-                  <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                  <span class="block shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                     {{ card.running ? t('shell.common.running') : t('shell.switcher.dormant') }}
                   </span>
                 </span>
@@ -87,7 +87,7 @@
                 <ShellAppIcon :app="card.app" :size="76" />
                 <!-- 预览不伪造应用截图（平台拿不到应用画面，AGENTS §5.1 B4）；
                      补一行真实元信息让卡片不是光杆图标（design-taste-v1：空态/占位不裸奔） -->
-                <span class="max-w-[80%] px-2 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-muted)] truncate">
+                <span class="max-w-[80%] px-2 text-center shell-type-caption text-[var(--mobile-text-muted)] truncate">
                   {{ card.app.version ? `v${card.app.version}` : '' }}{{ card.app.permissions.length > 0 ? ` · ${t('shell.apps.permissionCount', { count: card.app.permissions.length })}` : '' }}
                 </span>
               </span>
@@ -138,7 +138,7 @@
             }"
           />
         </span>
-        <span class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] tabular-nums" aria-hidden="true">
+        <span class="shell-type-micro text-[var(--mobile-text-secondary)] tabular-nums" aria-hidden="true">
           {{ activeIndex + 1 }}/{{ cards.length }}
         </span>
         <!-- 位置对读屏可见：圆点是纯视觉，切换后播报「第 N 张，共 M 张」 -->
@@ -171,16 +171,16 @@
           <path d="M3 9h18" />
         </svg>
       </span>
-      <p class="mt-4 text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+      <p class="mt-4 shell-type-label text-[var(--mobile-text-primary)]">
         {{ t('shell.switcher.empty') }}
       </p>
-      <p class="mt-1 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">
+      <p class="mt-1 shell-type-caption text-[var(--mobile-text-secondary)]">
         {{ t('shell.switcher.emptyHint') }}
       </p>
       <!-- 空态给主动作，不把用户堵在只有页头返回键的空屏里 -->
       <button
         type="button"
-        class="mt-5 flex items-center justify-center rounded-[10px] px-5 min-h-[var(--mobile-touch-target-min)] text-[var(--font-size-base)] font-medium transition-opacity duration-200 active:opacity-80"
+        class="mt-5 flex items-center justify-center rounded-[10px] px-5 min-h-[var(--mobile-touch-target-min)] shell-type-label transition-opacity duration-200 active:opacity-80"
         :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
         @click="nav.goHome()"
       >

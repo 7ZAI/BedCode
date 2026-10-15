@@ -18,7 +18,7 @@
       :aria-label="t('shell.notify.open', { count: badgeCount })"
       @click="overlays.toggleShade()"
     >
-      <span class="tabular-nums text-[var(--font-size-xs)]" :style="{ color: 'var(--mobile-text-secondary)' }">
+      <span class="tabular-nums shell-type-micro" :style="{ color: 'var(--mobile-text-secondary)' }">
         {{ currentTime }}
       </span>
       <span class="flex items-center gap-1.5">

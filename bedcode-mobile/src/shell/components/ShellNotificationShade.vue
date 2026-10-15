@@ -26,10 +26,10 @@
         <!-- ==================== 头部 ==================== -->
         <div class="flex items-center gap-2 px-4 pt-2 pb-2 flex-shrink-0">
           <div class="flex-1 min-w-0">
-            <h2 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+            <h2 class="shell-type-title truncate">
               {{ t('shell.notify.title') }}
             </h2>
-            <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+            <p class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
               {{ t('shell.notify.count', { count: totalCount }) }}
             </p>
           </div>
@@ -58,10 +58,10 @@
               >
                 <ShellAppIcon :app="app" :size="32" />
                 <div class="flex-1 min-w-0">
-                  <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                  <div class="shell-type-label text-[var(--mobile-text-primary)] truncate">
                     {{ app.name }}
                   </div>
-                  <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                  <div class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                     {{ t('shell.notify.pendingBody', { count: app.permissions.length }) }}
                   </div>
                 </div>
@@ -150,16 +150,16 @@
                 <!-- 扁平布局：标题行右侧嵌「来源 · 时间」，不单占一行；正文可有可无 -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 min-w-0">
-                    <span class="flex-1 min-w-0 text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                    <span class="flex-1 min-w-0 shell-type-label text-[var(--mobile-text-primary)] truncate">
                       {{ item.title }}
                     </span>
-                    <span class="flex-shrink-0 flex items-center gap-1 text-[var(--font-size-xs)] text-[var(--mobile-text-muted)]">
+                    <span class="flex-shrink-0 flex items-center gap-1 shell-type-caption text-[var(--mobile-text-muted)]">
                       <span class="max-w-[96px] truncate">{{ item.source }}</span>
                       <span aria-hidden="true">·</span>
                       <span class="tabular-nums">{{ relativeTime(item.at) }}</span>
                     </span>
                   </div>
-                  <div v-if="item.body" class="mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] break-words">
+                  <div v-if="item.body" class="mt-0.5 shell-type-caption text-[var(--mobile-text-secondary)] break-words">
                     {{ item.body }}
                   </div>
                   <!-- 进度类通知：进度条（无进度值的进度通知不渲染，避免空条） -->
@@ -208,10 +208,10 @@
                 <path d="M10.3 21a2 2 0 0 0 3.4 0" />
               </svg>
             </span>
-            <p class="mt-3 text-[var(--font-size-base)] text-[var(--mobile-text-primary)]">
+            <p class="mt-3 shell-type-body text-[var(--mobile-text-primary)]">
               {{ t('shell.notify.empty') }}
             </p>
-            <p class="mt-1 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+            <p class="mt-1 shell-type-caption text-[var(--mobile-text-secondary)]">
               {{ t('shell.notify.emptyHint') }}
             </p>
           </div>
@@ -225,7 +225,7 @@
         >
           <button
             type="button"
-            class="shell-btn-danger-outline w-full rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] min-h-[var(--mobile-touch-target-min)]"
+            class="shell-btn-danger-outline w-full rounded-[10px] px-4 py-2.5 shell-type-label min-h-[var(--mobile-touch-target-min)]"
             :disabled="clearingAll"
             @click="clearAllCascade"
           >

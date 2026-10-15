@@ -50,10 +50,17 @@ const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar?: numbe
 const safeAreaReady = inject<Ref<boolean>>('safeAreaReady', ref(true))
 const platformInfo = inject<Ref<{ isMobile: boolean }>>('platformInfo', ref({ isMobile: false }))
 
-/** 容器样式：仅移动形态下补顶部安全区；底部安全区由壳内底部元素各自 padding 承担 */
+/**
+ * 容器样式：仅移动形态下补顶部安全区；底部安全区由壳内底部元素各自 padding 承担。
+ *
+ * 同时把顶部内边距量以 `--shell-safe-top` 暴露出去：状态栏那条带子是容器的
+ * padding 区，壁纸与氛围层都画在 `.shell-ui` 里（padding 之下），不补这一下
+ * 状态栏下方会留一条与内容区不同色的硬边。壁纸据此向上越界内边距满幅铺开。
+ */
 const containerStyle = computed(() => {
   if (!platformInfo.value.isMobile) return {}
-  return { paddingTop: `${safeArea.value.top || 0}px` }
+  const top = safeArea.value.top || 0
+  return { paddingTop: `${top}px`, '--shell-safe-top': `${top}px` }
 })
 
 let sourceDisposable: Disposable | null = null

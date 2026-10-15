@@ -68,24 +68,24 @@ describe('C-P1..C-P4 偏好加载', () => {
   })
 
   it('should_keepValidField_when_otherFieldBroken', async () => {
-    const { useShellPreferences, WALLPAPER_DEFAULT } = await loadPrefsWith(
+    const { useShellPreferences, WALLPAPER_DEFAULT, WALL_DIM_DEFAULT } = await loadPrefsWith(
       JSON.stringify({ wallpaper: 'dune', wallDim: -3 }),
     )
     const prefs = useShellPreferences()
 
     expect(prefs.wallpaper.value, '合法壁纸档必须保留').toBe('dune')
     expect(prefs.wallpaper.value).not.toBe(WALLPAPER_DEFAULT)
-    expect(prefs.wallDim.value).toBe(30)
+    expect(prefs.wallDim.value, '越界值回落到默认值').toBe(WALL_DIM_DEFAULT)
   })
 
   it('should_fallBackToDefaults_when_storageCorrupted', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { useShellPreferences } = await loadPrefsWith('{not json')
+    const { useShellPreferences, WALL_DIM_DEFAULT } = await loadPrefsWith('{not json')
 
     const prefs = useShellPreferences()
 
     expect(prefs.wallpaper.value).toBe('aurora')
-    expect(prefs.wallDim.value).toBe(30)
+    expect(prefs.wallDim.value).toBe(WALL_DIM_DEFAULT)
     expect(warn, '损坏数据要可观测，不能静默').toHaveBeenCalled()
   })
 })

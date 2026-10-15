@@ -13,34 +13,36 @@
         </svg>
       </button>
       <div class="flex-1 min-w-0">
-        <h1 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+        <h1 class="shell-type-display truncate">
           {{ t('shell.apps.title') }}
         </h1>
-        <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
-          {{ t('shell.apps.subtitle', { installed: stats.installed, running: stats.running }) }}
+        <p class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
+          {{ t('shell.apps.subtitle') }}
         </p>
       </div>
     </header>
 
-    <div class="flex-1 min-h-0 overflow-y-auto pb-6">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ==================== 统计条 ==================== -->
       <!-- 单行指标条而非三张等宽卡片：三项指标同质，拆成三栏只会拉长竖向空间并显得像模板；
-           零值不再用 success 色——「0 个运行中」是中性事实，染绿会被误读为健康指示灯 -->
+           零值不再用 success 色——「0 个运行中」是中性事实，染绿会被误读为健康指示灯。
+           数字只在这里出现一次：页头副标题只说范围（「本机已装」），不重复计数——
+           同一屏里「N 个已安装 · N 个运行中」出现两遍会让其中一处显得多余。 -->
       <div class="px-4 pb-1">
         <div
           class="flex items-center gap-2 rounded-[12px] border border-[var(--mobile-group-border)] bg-[var(--mobile-bg-card)] px-3.5 py-3"
           :style="{ boxShadow: 'var(--mobile-card-shadow)' }"
         >
           <template v-for="(metric, index) in metrics" :key="metric.label">
-            <span v-if="index > 0" class="text-[var(--font-size-xs)] text-[var(--mobile-text-muted)]" aria-hidden="true">·</span>
+            <span v-if="index > 0" class="shell-type-micro text-[var(--mobile-text-muted)]" aria-hidden="true">·</span>
             <span class="flex items-baseline gap-1.5 min-w-0">
               <b
-                class="text-[var(--font-size-base)] font-semibold tabular-nums"
+                class="shell-type-label tabular-nums"
                 :style="{ color: metric.highlight ? 'var(--mobile-success)' : 'var(--mobile-text-primary)' }"
               >
                 {{ metric.value }}
               </b>
-              <span class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+              <span class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                 {{ metric.label }}
               </span>
             </span>
@@ -62,7 +64,7 @@
             <ShellAppIcon :app="app" :size="40" />
             <span class="flex-1 min-w-0">
               <span class="flex items-center gap-1.5">
-                <b class="text-[var(--font-size-base)] text-[var(--mobile-text-primary)] truncate">{{ app.name }}</b>
+                <b class="shell-type-label text-[var(--mobile-text-primary)] truncate">{{ app.name }}</b>
                 <ShellChip v-if="app.official" :label="t('shell.detail.official')" tone="accent" />
                 <ShellChip
                   v-if="app.state === 'running'"
@@ -80,7 +82,7 @@
                   tone="danger"
                 />
               </span>
-              <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+              <span class="block shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                 {{ appMeta(app) }}
               </span>
             </span>
@@ -91,7 +93,7 @@
         </ShellGroupCard>
         <p
           v-else
-          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-5 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-5 text-center shell-type-caption text-[var(--mobile-text-secondary)]"
         >
           {{ t('shell.apps.empty') }}
         </p>
@@ -112,10 +114,10 @@
               <path d="M7 10l5 5 5-5" />
               <path d="M4 21h16" />
             </svg>
-            <span class="flex-1 text-[var(--font-size-base)] text-[var(--mobile-text-primary)]">
+            <span class="flex-1 shell-type-label text-[var(--mobile-text-primary)]">
               {{ t('shell.apps.installLocal') }}
             </span>
-            <span class="flex-shrink-0 text-[var(--font-size-xs)]" :style="{ color: 'var(--mobile-warning)' }">
+            <span class="flex-shrink-0 shell-type-micro" :style="{ color: 'var(--mobile-warning)' }">
               {{ installing ? t('shell.common.loading') : t('shell.apps.installLocalHint') }}
             </span>
           </button>

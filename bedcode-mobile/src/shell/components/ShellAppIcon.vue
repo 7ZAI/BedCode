@@ -71,8 +71,16 @@ const props = withDefaults(
 
 const kind = computed(() => iconKindOf(props.app.icon))
 const initial = computed(() => initialOf(props.app.name))
-/** 图形占盒子的比例：emoji 顶格显小，path 留白更协调 */
-const innerSize = computed(() => Math.round(props.size * (kind.value === 'emoji' ? 0.62 : 0.55)))
+/**
+ * 图形占盒比例：三种形态各自留白不同，同一盒子才显得是一套。
+ * SVG 线稿本身有内边距，占 0.55 即视觉接近满格；首字母是实心字形，占 0.42；
+ * emoji 是插件清单里自带的品牌位，字面大、视觉重量最重，压到 0.52——
+ * 否则彩色 emoji 会在同为 44px 的格子里比旁边克制的线稿图标明显更响。
+ */
+const innerSize = computed(() => {
+  const ratio = kind.value === 'emoji' ? 0.52 : 0.55
+  return Math.round(props.size * ratio)
+})
 
 /** 图片加载失败标记：插件换图标后重置，避免停在首字母回退 */
 const imageFailed = ref(false)
@@ -102,10 +110,12 @@ const toneClass = computed(() => {
     case 'ghost':
       return 'bg-transparent text-[var(--mobile-text-secondary)] border-dashed border-[var(--mobile-border-hover)]'
     default:
-      // emoji 与图片自带颜色，不再叠加前景色，否则会出现双色描边
-      return kind.value === 'emoji' || kind.value === 'image'
-        ? 'bg-[var(--mobile-bg-elevated)] border-[var(--mobile-border)]'
-        : 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)] border-[var(--mobile-border)]'
+      // accent 底板对四种形态取同一个表面 + 同一条描边，只有图形本身不同。
+      // 早前 emoji / 图片走中性底、首字母回退走 accent 淡底，同一宫格里出现
+      // 深色块与浅灰块两种质感，读起来像两种控件；这里收成一套，格子只由
+      // 里面的图形区分，不靠底色。emoji / 图片自带颜色，不叠前景色，
+      // 否则会出现双色描边。
+      return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-primary)] border-[var(--mobile-border)]'
   }
 })
 </script>

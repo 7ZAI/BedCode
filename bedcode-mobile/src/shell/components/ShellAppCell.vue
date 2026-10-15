@@ -24,7 +24,7 @@
         aria-hidden="true"
       />
     </span>
-    <span class="w-full text-center text-[var(--font-size-xs)] text-[var(--mobile-text-primary)] truncate">
+    <span class="w-full text-center shell-type-caption shell-type-clamp-2 font-medium text-[var(--mobile-text-primary)]">
       {{ app.name }}
     </span>
   </button>

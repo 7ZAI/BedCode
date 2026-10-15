@@ -14,13 +14,23 @@
 
 .shell-wall {
   --wall-active: none;
+  --wall-glow: none;
 }
+/* 每档壁纸 = 一条纵向色阶（--wall-active）+ 一枚顶部柔光（--wall-glow）。
+   色阶刻意收在「比底色亮一档」而不落回纯底色：落回纯底色会让屏幕下半部变成
+   一整块死黑，空白读起来像没做完；有末档余韵，空白才读作留白。柔光给出一处
+   明确的光源方向，避免渐变均质发闷。 */
 .shell-wall.wall-aurora {
   --wall-active: linear-gradient(
     160deg,
     color-mix(in srgb, var(--mobile-accent) 26%, var(--mobile-bg-primary)) 0%,
     color-mix(in srgb, var(--mobile-success) 16%, var(--mobile-bg-primary)) 58%,
-    var(--mobile-bg-primary) 100%
+    color-mix(in srgb, var(--mobile-accent) 5%, var(--mobile-bg-primary)) 100%
+  );
+  --wall-glow: radial-gradient(
+    120% 62% at 18% 0%,
+    color-mix(in srgb, var(--mobile-accent) 13%, transparent) 0%,
+    transparent 72%
   );
 }
 .shell-wall.wall-dune {
@@ -28,7 +38,12 @@
     160deg,
     color-mix(in srgb, var(--mobile-warning) 24%, var(--mobile-bg-primary)) 0%,
     color-mix(in srgb, var(--mobile-accent) 12%, var(--mobile-bg-primary)) 55%,
-    var(--mobile-bg-primary) 100%
+    color-mix(in srgb, var(--mobile-warning) 7%, var(--mobile-bg-primary)) 100%
+  );
+  --wall-glow: radial-gradient(
+    115% 58% at 78% 4%,
+    color-mix(in srgb, var(--mobile-warning) 14%, transparent) 0%,
+    transparent 70%
   );
 }
 .shell-wall.wall-reef {
@@ -36,17 +51,29 @@
     160deg,
     color-mix(in srgb, var(--mobile-accent-secondary) 90%, var(--mobile-bg-primary)) 0%,
     color-mix(in srgb, var(--mobile-success) 10%, var(--mobile-bg-primary)) 62%,
-    var(--mobile-bg-primary) 100%
+    color-mix(in srgb, var(--mobile-success) 6%, var(--mobile-bg-primary)) 100%
+  );
+  --wall-glow: radial-gradient(
+    125% 66% at 50% -6%,
+    color-mix(in srgb, var(--mobile-accent-secondary) 16%, transparent) 0%,
+    transparent 74%
   );
 }
 
-/* 壁纸层：绝对定位铺满主屏根容器（不随内容滚动），遮罩由 ::after 叠加 */
+/* 壁纸层：绝对定位铺满主屏根容器（不随内容滚动），遮罩由 ::after 叠加。
+   两层叠放——柔光在上、色阶在下，均 cover 居中。
+
+   顶部内边距是 ShellView 容器的 padding，壁纸画在 padding 之下；这里按
+   --shell-safe-top 向上越界，铺到状态栏底下。否则状态栏那条带子只有纯底色，
+   与壁纸区之间是一条硬边，主屏一进门就像顶了根横条。 */
 .shell-wallpaper {
   position: absolute;
   inset: 0;
-  background-image: var(--wall-active, none);
-  background-size: cover;
-  background-position: center;
+  top: calc(-1 * var(--shell-safe-top, 0px));
+  height: calc(100% + var(--shell-safe-top, 0px));
+  background-image: var(--wall-glow, none), var(--wall-active, none);
+  background-size: cover, cover;
+  background-position: center, center;
   pointer-events: none;
 }
 .shell-wallpaper::after {
@@ -63,9 +90,9 @@
    色块上——预览即所得。 */
 .shell-wall-swatch {
   position: relative;
-  background-image: var(--wall-active, none);
-  background-size: cover;
-  background-position: center;
+  background-image: var(--wall-glow, none), var(--wall-active, none);
+  background-size: cover, cover;
+  background-position: center, center;
   box-shadow: var(--mobile-card-shadow);
 }
 .shell-wall-swatch::after {

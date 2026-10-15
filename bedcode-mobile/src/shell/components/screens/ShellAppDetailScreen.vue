@@ -12,25 +12,25 @@
           <path d="M15 6l-6 6 6 6" />
         </svg>
       </button>
-      <span class="text-[var(--font-size-base)] font-semibold text-[var(--mobile-text-primary)]">
+      <span class="shell-type-title text-[var(--mobile-text-primary)]">
         {{ t('shell.detail.title') }}
       </span>
     </div>
 
-    <div v-if="app" class="flex-1 min-h-0 overflow-y-auto pb-6">
+    <div v-if="app" class="flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ==================== Hero ==================== -->
       <div class="flex items-center gap-3.5 px-4 pt-2 pb-4">
         <ShellAppIcon :app="app" :size="60" />
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
-            <b class="text-[var(--font-size-xl)] text-[var(--mobile-text-primary)] truncate">{{ app.name }}</b>
+            <b class="shell-type-title text-[var(--mobile-text-primary)] truncate">{{ app.name }}</b>
             <ShellChip v-if="app.official" :label="t('shell.detail.official')" tone="accent" />
           </div>
-          <div class="mt-0.5 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] truncate">
+          <div class="mt-0.5 shell-type-caption text-[var(--mobile-text-secondary)] truncate">
             {{ app.version ? t('shell.detail.version', { version: app.version }) : '' }}
             <span v-if="app.author"> · {{ app.author }}</span>
           </div>
-          <div class="mt-1 flex items-center gap-1.5 text-[var(--font-size-xs)]">
+          <div class="mt-1 flex items-center gap-1.5 shell-type-caption">
             <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :style="{ background: stateDot }" aria-hidden="true" />
             <span :style="{ color: 'var(--mobile-text-secondary)' }">{{ stateLabel }}</span>
             <span v-if="app.error" class="truncate" :style="{ color: 'var(--mobile-error)' }"> · {{ app.error }}</span>
@@ -47,12 +47,12 @@
             borderColor: 'var(--mobile-warning)',
           }"
         >
-          <p class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+          <p class="shell-type-body text-[var(--mobile-text-primary)]">
             {{ t('shell.detail.approvalDesc', { count: app.permissions.length }) }}
           </p>
           <button
             type="button"
-            class="mt-2.5 w-full rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+            class="mt-2.5 w-full rounded-[10px] px-4 py-2.5 shell-type-label transition-opacity duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
             :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
             @click="handleApprove"
           >
@@ -69,7 +69,7 @@
           <div class="flex items-center gap-3 px-3 py-3">
             <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :style="{ background: stateDot }" aria-hidden="true" />
             <div class="flex-1 min-w-0">
-              <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+              <div class="shell-type-label text-[var(--mobile-text-primary)]">
                 {{ app.name }}
               </div>
             </div>
@@ -83,7 +83,7 @@
       <div class="px-4 pb-1">
         <ShellGroupCard v-if="permissionGroups.length > 0">
           <template v-for="group in permissionGroups" :key="group.id">
-            <div class="px-3 pt-2.5 pb-1 text-[var(--font-size-xs)] font-semibold text-[var(--mobile-text-muted)]">
+            <div class="px-3 pt-2.5 pb-1 shell-type-micro text-[var(--mobile-text-muted)]">
               {{ t(group.titleKey) }}
             </div>
             <div
@@ -92,14 +92,14 @@
               class="flex items-center gap-3 px-3 py-2.5 min-h-[var(--mobile-touch-target-min)]"
             >
               <div class="flex-1 min-w-0">
-                <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+                <div class="shell-type-label text-[var(--mobile-text-primary)]">
                   {{ permissionTitle(grant.key) }}
-                  <code class="ml-1.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">{{ grant.key }}</code>
+                  <code class="ml-1.5 shell-type-micro text-[var(--mobile-text-secondary)]">{{ grant.key }}</code>
                 </div>
-                <div v-if="grant.locked" class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+                <div v-if="grant.locked" class="shell-type-caption text-[var(--mobile-text-secondary)]">
                   {{ t('shell.detail.permissionLocked') }}
                 </div>
-                <div v-else-if="grant.scope" class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+                <div v-else-if="grant.scope" class="shell-type-caption text-[var(--mobile-text-secondary)]">
                   {{ grant.scope }}
                 </div>
               </div>
@@ -116,18 +116,18 @@
         </ShellGroupCard>
         <p
           v-else
-          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center shell-type-caption text-[var(--mobile-text-secondary)]"
         >
           {{ t('mobile.plugin.noPermissions') }}
         </p>
         <!-- 能力缺失要显性说明：把开关置灰却不解释，用户会以为是应用的问题 -->
         <p
           v-if="!permissionControlEnabled"
-          class="mt-2 px-1 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+          class="mt-2 px-1 shell-type-caption text-[var(--mobile-text-secondary)]"
         >
           {{ t('shell.detail.permissionUnsupported') }}
         </p>
-        <p v-if="toggleError" class="mt-2 px-1 text-[var(--font-size-xs)]" :style="{ color: 'var(--mobile-error)' }">
+        <p v-if="toggleError" class="mt-2 px-1 shell-type-caption" :style="{ color: 'var(--mobile-error)' }">
           {{ toggleError }}
         </p>
       </div>
@@ -137,10 +137,10 @@
       <div class="px-4 pb-1">
         <ShellGroupCard>
           <div class="flex items-center px-3 py-3 min-h-[var(--mobile-touch-target-min)]">
-            <span class="flex-1 text-[var(--font-size-base)] text-[var(--mobile-text-primary)]">
+            <span class="flex-1 shell-type-label text-[var(--mobile-text-primary)]">
               {{ t('shell.detail.appData') }}
             </span>
-            <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">{{ formatBytes(app.sizeBytes) }}</span>
+            <span class="shell-type-caption text-[var(--mobile-text-secondary)]">{{ formatBytes(app.sizeBytes) }}</span>
           </div>
           <!-- 缓存行已删：后端没有缓存统计源，永远显示「—」的行属于空白项 -->
         </ShellGroupCard>
@@ -150,7 +150,7 @@
       <ShellSection :title="t('shell.detail.grants')" :note="t('shell.detail.grantsNote')" />
       <div class="px-4 pb-1">
         <p
-          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]"
+          class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-4 text-center shell-type-caption text-[var(--mobile-text-secondary)]"
         >
           {{ t('shell.detail.grantsEmpty') }}
         </p>
@@ -162,7 +162,7 @@
       <div class="px-4 pt-3 flex flex-col gap-2.5">
         <button
           type="button"
-          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+          class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 shell-type-label text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
           @click="handleStop"
         >
           {{ t('shell.detail.disable') }}
@@ -170,7 +170,7 @@
         <button
           v-if="canRemove"
           type="button"
-          class="w-full rounded-[10px] border px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+          class="w-full rounded-[10px] border px-4 py-3 shell-type-label transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
           :style="{
             borderColor: 'var(--mobile-error)',
             color: 'var(--mobile-error)',
@@ -185,7 +185,7 @@
 
     <!-- 应用已卸载/不存在：给出原因与出口，不留白屏 -->
     <div v-else class="flex-1 flex items-center justify-center px-8 text-center">
-      <p class="text-[var(--font-size-base)] text-[var(--mobile-text-secondary)]">
+      <p class="shell-type-body text-[var(--mobile-text-secondary)]">
         {{ t('shell.run.notFound') }}
       </p>
     </div>

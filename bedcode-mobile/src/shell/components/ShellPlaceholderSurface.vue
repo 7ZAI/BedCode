@@ -3,10 +3,10 @@
     <ShellAppIcon v-if="app" :app="app" :size="56" />
 
     <div>
-      <p class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+      <p class="shell-type-label text-[var(--mobile-text-primary)]">
         {{ t('shell.run.noSurface') }}
       </p>
-      <p class="mt-1 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+      <p class="mt-1 shell-type-caption text-[var(--mobile-text-secondary)]">
         {{ t('shell.run.noSurfaceHint') }}
       </p>
     </div>

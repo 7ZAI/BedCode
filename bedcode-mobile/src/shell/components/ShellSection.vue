@@ -1,10 +1,10 @@
 <template>
   <div class="flex items-center justify-between gap-2 min-w-0 px-4 pt-4 pb-2">
-    <h2 class="text-[var(--font-size-sm)] font-semibold text-[var(--mobile-text-secondary)] truncate">
+    <h2 class="shell-type-section truncate">
       {{ title }}
     </h2>
     <div class="flex items-center gap-2 flex-shrink-0 min-w-0">
-      <span v-if="note" class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+      <span v-if="note" class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
         {{ note }}
       </span>
       <slot name="action" />

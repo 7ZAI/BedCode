@@ -7,10 +7,10 @@
     <div v-if="request && app" class="flex items-center gap-3 pb-3">
       <ShellAppIcon :app="app" :size="44" />
       <div class="min-w-0 flex-1">
-        <p class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+        <p class="shell-type-label text-[var(--mobile-text-primary)] truncate">
           {{ appName }}
         </p>
-        <p class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+        <p class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
           {{ app.version ? t('shell.detail.version', { version: app.version }) : app.id }}
         </p>
       </div>
@@ -22,24 +22,24 @@
           <path d="M12 21a9 9 0 100-18 9 9 0 000 18z M3 12h18 M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z" />
         </svg>
         <div class="min-w-0 flex-1">
-          <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)]">
+          <div class="shell-type-label text-[var(--mobile-text-primary)]">
             {{ permissionTitle(key) }}
-            <code class="ml-1.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">{{ key }}</code>
+            <code class="ml-1.5 shell-type-micro text-[var(--mobile-text-secondary)]">{{ key }}</code>
           </div>
-          <div v-if="request.targets?.[key]" class="mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] break-all">
+          <div v-if="request.targets?.[key]" class="mt-0.5 shell-type-caption text-[var(--mobile-text-secondary)] break-all">
             {{ request.targets[key] }}
           </div>
-          <div class="mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+          <div class="mt-0.5 shell-type-caption text-[var(--mobile-text-secondary)]">
             {{ request.reasons?.[key] ? t('shell.permissionPrompt.purpose', { reason: request.reasons[key] }) : t('shell.permissionPrompt.purposeUnknown') }}
           </div>
         </div>
       </div>
     </ShellGroupCard>
 
-    <p v-if="request" class="pt-2.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+    <p v-if="request" class="pt-2.5 shell-type-caption text-[var(--mobile-text-secondary)]">
       {{ t('shell.permissionPrompt.fineprint', { name: appName }) }}
     </p>
-    <p v-if="resultNote" class="pt-2 text-[var(--font-size-xs)]" :style="{ color: 'var(--mobile-warning)' }">
+    <p v-if="resultNote" class="pt-2 shell-type-caption" :style="{ color: 'var(--mobile-warning)' }">
       {{ resultNote }}
     </p>
 
@@ -47,14 +47,14 @@
       <div class="flex gap-3">
         <button
           type="button"
-          class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+          class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-4 py-3 shell-type-label text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
           @click="deny"
         >
           {{ t('shell.permissionPrompt.deny') }}
         </button>
         <button
           type="button"
-          class="flex-1 rounded-[10px] px-4 py-3 text-[var(--font-size-base)] transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
+          class="flex-1 rounded-[10px] px-4 py-3 shell-type-label transition-colors duration-200 active:opacity-80 min-h-[var(--mobile-touch-target-min)]"
           :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
           @click="allow"
         >

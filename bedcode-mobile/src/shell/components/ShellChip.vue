@@ -2,8 +2,16 @@
   <component
     :is="clickable ? 'button' : 'span'"
     :type="clickable ? 'button' : undefined"
-    class="inline-flex items-center gap-1.5 rounded-[999px] border px-2.5 text-[var(--font-size-xs)] transition-colors duration-200"
-    :class="[toneClass, clickable ? 'min-h-[32px] hover:bg-[var(--mobile-accent-muted)] active:opacity-80' : 'py-1']"
+    class="inline-flex items-center gap-1.5 rounded-[999px] border px-2.5 shell-type-micro transition-colors duration-200"
+    :class="[
+      toneClass,
+      // 可点击时撑满 44px 触控下限：胶囊的视觉高度由 py 控制，但点击区必须够。
+      // 早前固定 min-h-32px，被用在「停止实例 / 批准 / 待审批处理」这类需要用户
+      // 动手的按钮上，低于平台 44px 门槛。
+      clickable
+        ? 'min-h-[var(--mobile-touch-target-min)] hover:bg-[var(--mobile-accent-muted)] active:opacity-80'
+        : 'py-1',
+    ]"
     @click="clickable && $emit('click', $event)"
   >
     <slot name="icon" />

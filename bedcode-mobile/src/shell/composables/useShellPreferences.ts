@@ -27,7 +27,12 @@ export const WALLPAPER_CUSTOM: ShellWallpaper = 'custom'
 export const WALLPAPER_DEFAULT: ShellWallpaper = 'aurora'
 /** 遮罩强度上限：超过 70% 壁纸几乎不可见，留着只是让用户白调 */
 export const WALL_DIM_MAX = 70
-export const WALL_DIM_DEFAULT = 30
+/**
+ * 遮罩默认值从 30 降到 16：30% 的页面底色压上去后，壁纸只剩顶部一条亮带、
+ * 下半屏糊成纯底色，空白读起来像没做完。16% 仍给正文留足对比（最亮档的壁
+ * 纸底与 --mobile-text-primary 约 7:1），同时让整屏色调读作一个整体。
+ */
+export const WALL_DIM_DEFAULT = 16
 
 interface ShellUiPrefs {
   wallpaper: ShellWallpaper

@@ -12,7 +12,7 @@
           <path d="M15 6l-6 6 6 6" />
         </svg>
       </button>
-      <h1 class="flex-1 min-w-0 text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)] truncate">
+      <h1 class="shell-type-display flex-1 min-w-0 truncate">
         {{ t('shell.settings.permissions') }}
       </h1>
     </header>
@@ -40,7 +40,7 @@
       </div>
     </div>
 
-    <div class="flex-1 min-h-0 overflow-y-auto pb-6">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ==================== 视图：按应用 ==================== -->
       <template v-if="view === 'apps'">
         <!-- 待审批（需要用户动作，置顶）。审批是整单的（后端 plugin_approve：全部
@@ -63,10 +63,10 @@
             >
               <ShellAppIcon :app="app" :size="32" />
               <div class="flex-1 min-w-0">
-                <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                <div class="shell-type-label text-[var(--mobile-text-primary)] truncate">
                   {{ app.name }}
                 </div>
-                <div class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                <div class="shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                   {{ t('shell.permissions.pendingBody', { count: app.permissions.length }) }}
                 </div>
               </div>
@@ -98,10 +98,10 @@
             >
               <ShellAppIcon :app="app" :size="32" />
               <span class="flex-1 min-w-0">
-                <span class="block text-[var(--font-size-base)] text-[var(--mobile-text-primary)] truncate">
+                <span class="block shell-type-label text-[var(--mobile-text-primary)] truncate">
                   {{ app.name }}
                 </span>
-                <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
+                <span class="block shell-type-caption text-[var(--mobile-text-secondary)] truncate">
                   {{ permissionSummary(app) }}
                 </span>
               </span>
@@ -114,7 +114,7 @@
           <!-- 全无应用才给整体空态；全待审批时审批卡已占位，列表不重复解释 -->
           <p
             v-if="appRows.length === 0 && apps.length === 0"
-            class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-6 text-center text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]"
+            class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-6 text-center shell-type-caption text-[var(--mobile-text-secondary)]"
           >
             {{ t('mobile.plugin.noPermissions') }}
           </p>
@@ -137,7 +137,7 @@
               <ShellGroupCard>
                 <div v-for="word in row.items" :key="word.key" class="px-3 py-2.5">
                   <div class="flex items-center gap-2 min-w-0">
-                    <span class="flex-1 min-w-0 text-[var(--font-size-sm)] font-medium text-[var(--mobile-text-primary)] truncate">
+                    <span class="flex-1 min-w-0 shell-type-caption font-medium text-[var(--mobile-text-primary)] truncate">
                       {{ permissionTitle(word.key) }}
                     </span>
                     <code class="flex-shrink-0 text-xs font-medium text-[var(--mobile-text-secondary)]">{{ word.key }}</code>
@@ -147,15 +147,15 @@
                       v-for="g in word.apps"
                       :key="g.app.id"
                       type="button"
-                      class="flex items-center gap-1.5 rounded-full border px-2.5 h-8 min-w-0 transition-colors duration-200 active:opacity-70"
+                      class="flex items-center gap-1.5 rounded-full border px-2.5 min-h-[var(--mobile-touch-target-min)] min-w-0 transition-colors duration-200 active:opacity-70"
                       :class="grantChipClass(g)"
                       :aria-label="grantChipLabel(g)"
                       @click="nav.openDetail(g.app.id)"
                     >
                       <ShellAppIcon :app="g.app" :size="20" />
-                      <span class="text-[var(--font-size-xs)] text-[var(--mobile-text-primary)] truncate">{{ g.app.name }}</span>
+                      <span class="shell-type-micro text-[var(--mobile-text-primary)] truncate">{{ g.app.name }}</span>
                       <!-- 状态尾缀：点（实心/空心）+ 文字双通道，非纯色传态 -->
-                      <span class="flex items-center gap-1 flex-shrink-0 text-[var(--font-size-xs)]" :style="{ color: g.state.color }">
+                      <span class="flex items-center gap-1 flex-shrink-0 shell-type-micro" :style="{ color: g.state.color }">
                         <span
                           class="w-1.5 h-1.5 rounded-full flex-shrink-0"
                           :style="
@@ -176,7 +176,7 @@
         </template>
 
         <div v-else class="px-4 pt-6">
-          <p class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-6 text-center text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)]">
+          <p class="rounded-[12px] border border-dashed border-[var(--mobile-border-hover)] px-3 py-6 text-center shell-type-caption text-[var(--mobile-text-secondary)]">
             {{ t('mobile.plugin.noPermissions') }}
           </p>
         </div>

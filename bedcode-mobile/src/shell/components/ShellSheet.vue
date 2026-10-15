@@ -23,10 +23,10 @@
         <div class="mx-auto mb-3 h-1 w-9 rounded-full" style="background: var(--mobile-border-active)" aria-hidden="true" />
 
         <div v-if="title || subtitle" class="pb-3">
-          <h3 class="text-[var(--font-size-lg)] font-semibold text-[var(--mobile-text-primary)]">
+          <h3 class="shell-type-title text-[var(--mobile-text-primary)]">
             {{ title }}
           </h3>
-          <p v-if="subtitle" class="mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+          <p v-if="subtitle" class="mt-0.5 shell-type-caption text-[var(--mobile-text-secondary)]">
             {{ subtitle }}
           </p>
         </div>
