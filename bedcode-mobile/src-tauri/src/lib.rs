@@ -28,7 +28,6 @@ pub(crate) mod mock_plugin_ws;
 pub use system::config;
 pub use system::error::{AppError, Result};
 
-use android_logger::Config;
 use log::LevelFilter;
 use std::sync::Arc;
 use tauri::Manager;
@@ -44,11 +43,14 @@ pub fn run() {
     // 级别：dev 构建打满 Debug（开发期 logcat 全量）；release 收敛到 Info——
     // Android logcat 主缓冲是系统级环形（每 app 默认约 256KB~1MB），release 打
     // Debug 会占满缓冲导致关键日志被系统丢弃，且泄露内部路径等调试信息
+    //
+    // dev 构建额外做源头噪音抑制（dev 服务代理连接 / wasmtime·cranelift JIT 内部
+    // debug），避免环形缓冲被刷屏冲掉崩溃证据，判定口径见 system/logging.rs
     #[cfg(debug_assertions)]
     let log_level = LevelFilter::Debug;
     #[cfg(not(debug_assertions))]
     let log_level = LevelFilter::Info;
-    android_logger::init_once(Config::default().with_max_level(log_level).with_tag("BedCode"));
+    system::logging::init(log_level);
     tracing::info!("BedCode Mobile early logging init (tracing → log → logcat, level={log_level})");
 
     tracing::info!("Building Tauri application...");
@@ -130,12 +132,9 @@ pub fn run() {
             // 真源漂移出旧形状 `plugin_auth_records`（缺 id），使 fs 授权记录读写
             // 全失败（2026-10-14 设备实证 `no such column: id`）。已装设备的旧形状
             // 库由内核侧对账迁移（`Database::init_schema` 内），宿主不再知表形状。
-            let plugin_db = Arc::new(std::sync::Mutex::new(
-                bedcode_wasm_core::db::Database::from_connection(
-                    rusqlite::Connection::open(&db_path)
-                        .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
-                ),
-            ));
+            let plugin_db = Arc::new(std::sync::Mutex::new(bedcode_wasm_core::db::Database::from_connection(
+                rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
+            )));
             // 主库 schema 幂等初始化（settings / plugin_storage / plugin_secrets /
             // plugin_auth_policies / plugin_auth_records + 版本迁移，全部由内核真源定义）
             plugin_db
