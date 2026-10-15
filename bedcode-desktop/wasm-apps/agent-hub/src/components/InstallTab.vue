@@ -162,7 +162,7 @@ async function onRemoveCustom(url: string) {
 
 // ==================== CLI 行状态机 ====================
 
-type RowAction = 'install' | 'update' | 'latest' | 'manual' | 'waiting'
+type RowAction = 'install' | 'update' | 'latest' | 'waiting'
 
 interface Row {
   cli: CliId
@@ -196,19 +196,17 @@ const rows = computed<Row[]>(() =>
       row.hint = t('hub.card.error')
       return row
     }
-    if (!nodeReady.value) {
+    // opencode standalone 更新走官方内置命令（`opencode upgrade` 自更新：curl
+    // 安装重跑官方脚本 / npm·pnpm 走包管理器），不依赖 node；其余 CLI 的 npm
+    // 安装/更新需要 node
+    const standalone = cli === 'opencode' && info.method === 'standalone'
+    if (!nodeReady.value && !standalone) {
       row.hint = t('hub.inst.nodeGuide')
       return row
     }
     if (info.status === 'not-installed') {
       row.action = 'install'
       row.disabled = busy
-      return row
-    }
-    // 已安装：opencode standalone 生效 → 手动提示；否则按 outdated 出按钮
-    if (cli === 'opencode' && info.method === 'standalone') {
-      row.action = 'manual'
-      row.hint = t('hub.inst.manualHint')
       return row
     }
     if (update?.latest && update.outdated === false) {

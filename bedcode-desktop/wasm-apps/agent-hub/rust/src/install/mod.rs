@@ -118,7 +118,9 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     }
 
     // method/installed 取自探测状态（不信任前端传参）；node 环境缺失时前端
-    // 降级为展示命令，这里兜底拒绝
+    // 降级为展示命令，这里兜底拒绝——opencode standalone 例外：官方内置
+    // `opencode upgrade` 自更新（curl 安装重跑官方脚本 / npm·pnpm 走包管理
+    // 器），不依赖 node
     let detection = h
         .storage_get(super::STATE_KEY)
         .map_err(|e| anyhow::anyhow!("install: read detection failed: {e}"))?
@@ -129,14 +131,14 @@ pub(crate) fn start(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
                 serde_json::Value::Null,
             ))
         })?;
-    let node_ok = detection["env"]["node"].is_string();
-    if !node_ok {
-        // 无 node 环境（用户可见拒绝；ADR 0030 业务码）
-        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.nodeMissing");
-    }
     let info = &detection["clis"][cli];
     let method = info["method"].as_str().unwrap_or("unknown");
     let installed = info["installed"].as_bool().unwrap_or(false);
+    let node_ok = detection["env"]["node"].is_string();
+    if !node_ok && !(cli == "opencode" && method == "standalone") {
+        // 无 node 环境（用户可见拒绝；ADR 0030 业务码）
+        bedcode_plugin_api::bail_with_code!("com.bedcode.agent-hub.hub.inst.error.nodeMissing");
+    }
     let (script, action) =
         build_install_script(cli, method, installed, use_mirror).map_err(anyhow::Error::msg)?;
 

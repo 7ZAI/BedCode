@@ -86,7 +86,6 @@ const zhCN: MessageSchema = {
   'hub.inst.update': '更新',
   'hub.inst.latest': '已是最新',
   'hub.inst.running': '进行中…',
-  'hub.inst.manualHint': 'standalone 安装生效中：更新请走官方脚本（v1 提示手动）',
   'hub.inst.nodeGuide': '未检测到 Node.js，无法自动安装；可先安装 Node.js（https://nodejs.org）后手动执行：',
   'hub.inst.copy': '复制',
   'hub.inst.copied': '已复制',

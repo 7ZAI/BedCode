@@ -2479,13 +2479,42 @@ describe('A6 InstallTab：行状态机与两击换源', () => {
     w.unmount()
   })
 
-  it('opencode standalone → 手动提示，不给安装/更新按钮', async () => {
+  it('opencode standalone 已装且落后 → 「更新」按钮（官方 opencode upgrade 自更新）', async () => {
     const w = mountInstall({
       detection: { ...detectionBase, clis: { opencode: { status: 'ok', version: '0.1', method: 'standalone' } } },
-      state: { active: null, last: null, mirror: null, updates: {} },
+      state: { active: null, last: null, mirror: null, updates: { opencode: { latest: '0.2', outdated: true } } },
     })
     await flushPromises()
-    expect(w.text()).toContain('hub.inst.manualHint')
+    const btn = w.findAll('.ah-inst-row .ah-btn-ghost').at(0)!
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    expect(w.emitted('install')?.[0]).toEqual(['opencode', true])
+    w.unmount()
+  })
+
+  it('opencode standalone 已装且非落后 → 「已是最新」徽章（无动作按钮）', async () => {
+    const w = mountInstall({
+      detection: { ...detectionBase, clis: { opencode: { status: 'ok', version: '1.19.1', method: 'standalone' } } },
+      state: { active: null, last: null, mirror: null, updates: { opencode: { latest: '1.19.1', outdated: false } } },
+    })
+    await flushPromises()
+    expect(w.text()).toContain('hub.inst.latest')
+    w.unmount()
+  })
+
+  it('opencode standalone 缺 node 仍给「更新」按钮（官方自更新不依赖 node）', async () => {
+    const w = mountInstall({
+      detection: {
+        ...detectionBase,
+        env: { node: null, registry: '' },
+        clis: { opencode: { status: 'ok', version: '0.1', method: 'standalone' } },
+      },
+      state: { active: null, last: null, mirror: null, updates: { opencode: { latest: '0.2', outdated: true } } },
+    })
+    await flushPromises()
+    expect(w.text()).not.toContain('hub.inst.nodeGuide')
+    const btn = w.findAll('.ah-inst-row .ah-btn-ghost').at(0)!
+    expect(btn.exists()).toBe(true)
     w.unmount()
   })
 

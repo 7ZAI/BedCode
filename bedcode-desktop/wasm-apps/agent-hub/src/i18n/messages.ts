@@ -103,7 +103,6 @@ export type MessageSchema = {
   'hub.inst.update': string
   'hub.inst.latest': string
   'hub.inst.running': string
-  'hub.inst.manualHint': string
   'hub.inst.nodeGuide': string
   'hub.inst.copy': string
   'hub.inst.copied': string

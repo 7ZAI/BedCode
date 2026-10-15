@@ -143,6 +143,52 @@ fn fetch_latest_version(h: &WasmHost, pkg: &str) -> Result<String, String> {
     Err(format!("latest version unavailable for {pkg}"))
 }
 
+/// opencode GitHub Releases 仓库（curl/standalone 安装的二进制真源；官方
+/// `opencode upgrade` 对 curl 安装同样查该仓库的 latest release）
+const OPENCODE_GITHUB_REPO: &str = "anomalyco/opencode";
+
+/// GitHub Releases API 查 opencode 最新版本（免 shell，与 npm registry 同走
+/// host-http）：`GET /repos/{repo}/releases/latest` → tag_name（`v1.19.1`
+/// 形态，剥前缀 v）。未认证限 60 次/小时/IP，偶发更新检查足够
+fn fetch_github_latest(h: &WasmHost, repo: &str) -> Result<String, String> {
+    let request = json!({ "method": "GET", "url": format!("https://api.github.com/repos/{repo}/releases/latest") });
+    match h.http_fetch(&request) {
+        Ok(Some(resp)) => {
+            let status = resp.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let body = resp.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            if status == 200 {
+                if let Ok(meta) = serde_json::from_str::<Value>(body) {
+                    if let Some(tag) = meta.get("tag_name").and_then(|v| v.as_str()) {
+                        return Ok(tag.strip_prefix('v').unwrap_or(tag).to_string());
+                    }
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(e) => h.log_debug(&format!("install: github latest failed on {repo}: {e}")),
+    }
+    Err(format!("github latest unavailable for {repo}"))
+}
+
+/// 最新版本来源决策（纯函数，可测）：opencode standalone（curl 安装）以
+/// GitHub Releases 为权威（官方 `opencode upgrade` 同源），其余走 npm registry
+fn latest_uses_github(cli: &str, method: Option<&str>) -> bool {
+    cli == "opencode" && method == Some("standalone")
+}
+
+/// 最新版本查询分派：opencode standalone → GitHub Releases（失败回落 npm
+/// registry）；其余 → npm registry
+fn fetch_latest_for_cli(h: &WasmHost, cli: &str, method: Option<&str>) -> Result<String, String> {
+    if latest_uses_github(cli, method) {
+        match fetch_github_latest(h, OPENCODE_GITHUB_REPO) {
+            Ok(v) => return Ok(v),
+            Err(e) => h.log_warn(&format!("install: github latest failed, fallback npm: {e}")),
+        }
+    }
+    let pkg = npm_package(cli).ok_or_else(|| format!("no package for {cli}"))?;
+    fetch_latest_version(h, pkg)
+}
+
 /// 「检测更新」命令入口：置位 pending 并触发全量重探测（刷新本地已安装版本），
 /// 探测收敛后由 detect 回灌自动执行 [`run_update_check`]。
 /// 不在此同步查 registry——本地版本若用上次探测缓存，outdated 会按旧版本误判
@@ -164,22 +210,21 @@ pub(crate) fn run_update_check(h: &WasmHost) -> anyhow::Result<()> {
             .as_ref()
             .and_then(|d| d["clis"][cli]["version"].as_str())
             .map(|s| s.to_string());
-        let entry = match npm_package(cli) {
-            Some(pkg) => match fetch_latest_version(h, pkg) {
-                Ok(latest) => json!({
-                    "latest": latest,
-                    "outdated": outdated_flag(local.as_deref(), &latest),
-                    "checkedAt": checked_at,
-                    "error": null,
-                }),
-                Err(e) => {
-                    json!({ "latest": null, "outdated": null, "checkedAt": checked_at, "error": e })
-                }
-            },
-            None => json!({
-                "latest": null, "outdated": null, "checkedAt": checked_at,
-                "error": format!("no package for {cli}"),
+        // opencode standalone（curl 安装）→ GitHub Releases 权威来源（官方
+        // `opencode upgrade` 同源），失败回落 npm registry；其余 CLI 一律 npm
+        let method = detection
+            .as_ref()
+            .and_then(|d| d["clis"][cli]["method"].as_str());
+        let entry = match fetch_latest_for_cli(h, cli, method) {
+            Ok(latest) => json!({
+                "latest": latest,
+                "outdated": outdated_flag(local.as_deref(), &latest),
+                "checkedAt": checked_at,
+                "error": null,
             }),
+            Err(e) => {
+                json!({ "latest": null, "outdated": null, "checkedAt": checked_at, "error": e })
+            }
         };
         state["updates"][cli] = entry;
     }
@@ -252,5 +297,15 @@ mod tests {
     #[test]
     fn outdated_flag_unknown_local_is_null() {
         assert_eq!(outdated_flag(None, "1.0.0"), None);
+    }
+
+    /// 最新版本来源决策：opencode standalone → GitHub Releases；opencode
+    /// npm-global / 其余 CLI → npm registry
+    #[test]
+    fn latest_source_decision() {
+        assert!(latest_uses_github("opencode", Some("standalone")));
+        assert!(!latest_uses_github("opencode", Some("npm-global")));
+        assert!(!latest_uses_github("opencode", None));
+        assert!(!latest_uses_github("pi", Some("standalone")));
     }
 }

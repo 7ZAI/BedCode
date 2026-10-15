@@ -2,7 +2,9 @@
 //!
 //! 仅接受白名单 cli 名 + 固定模板，method/installed 来自探测状态而非前端
 //! 传参：claude native → `claude update`（镜像无关）；claude npm-global →
-//! npm 包安装；opencode standalone 拒绝自动安装（官方脚本手动，v1 提示）。
+//! npm 包安装；opencode standalone（已装）→ `opencode upgrade`（官方内置
+//! 更新命令，自动探测安装方式：curl 安装重跑官方脚本、pnpm/npm 走包管理器
+//! ——2026-10-16 修订，v1 曾拒绝并提示手动）；其余 npm-global → npm 包安装。
 //! 卸载同样只走白名单：npm-global → `npm uninstall -g <pkg>`；claude native
 //! → 官方文档卸载命令（rm launcher + 版本目录）；opencode standalone →
 //! `opencode uninstall --force`（官方命令，非交互跳过确认）。
@@ -73,7 +75,11 @@ pub(crate) fn build_uninstall_script(
 /// 返回 `(脚本, action)`；action 供 UI 展示（install/update）。
 /// - claude native → `claude update`（双平台同命令，镜像无关）
 /// - claude npm-global → npm 包安装
-/// - opencode standalone 生效 → 拒绝（更新走官方脚本，v1 提示手动）
+/// - opencode standalone（已装）→ `opencode upgrade`：官方内置更新命令，自动
+///   探测安装方式（curl 安装重跑官方安装脚本下载新二进制、npm/pnpm 走包管理
+///   器），不依赖 node、不受镜像影响。v1 曾拒绝并提示手动，2026-10-16 修订
+///   为自动（curl 安装的二进制本就来自 GitHub Releases，`opencode upgrade`
+///   是官方唯一自更新路径）；未装时仍拒绝（upgrade 只更新不安装）
 pub(crate) fn build_install_script(
     cli: &str,
     method: &str,
@@ -94,7 +100,15 @@ pub(crate) fn build_install_script(
         };
     }
     if cli == "opencode" && method == "standalone" {
-        return Err("opencode standalone: update via official script (manual)".to_string());
+        if !installed {
+            // 防御分支：standalone 归类来自 PATH 首命中 `~/.opencode/bin` 且
+            // 版本可读，实际不会走到；upgrade 只更新不安装，仍走官方脚本手动
+            return Err(
+                "opencode standalone not installed: install via official script (manual)"
+                    .to_string(),
+            );
+        }
+        return Ok(("opencode upgrade".to_string(), "update"));
     }
     let pkg = npm_package(cli).ok_or_else(|| format!("no install recipe for cli: {cli}"))?;
     Ok((
@@ -153,11 +167,27 @@ mod tests {
         assert!(build_install_script("claude", "unknown", true, false).is_err());
     }
 
-    /// opencode standalone 生效：拒绝自动安装/更新（官方脚本手动，v1 提示）
+    /// opencode standalone 已装：更新走官方内置命令 `opencode upgrade`（自动
+    /// 探测安装方式：curl 安装重跑官方脚本、npm/pnpm 走包管理器）；镜像开关
+    /// 对 standalone 更新无意义（命令不受 use_mirror 影响）
     #[test]
-    fn build_script_opencode_standalone_rejected() {
-        let err = build_install_script("opencode", "standalone", true, false).unwrap_err();
-        assert!(err.contains("standalone"), "got: {err}");
+    fn build_script_opencode_standalone_update() {
+        let (script, action) =
+            build_install_script("opencode", "standalone", true, false).expect("standalone");
+        assert_eq!(script, "opencode upgrade");
+        assert_eq!(action, "update");
+
+        let (script, _) =
+            build_install_script("opencode", "standalone", true, true).expect("standalone");
+        assert_eq!(script, "opencode upgrade");
+    }
+
+    /// opencode standalone 未装（防御分支，实际不可达）：拒绝自动安装——
+    /// upgrade 只更新不安装，安装仍走官方脚本手动
+    #[test]
+    fn build_script_opencode_standalone_not_installed_rejected() {
+        let err = build_install_script("opencode", "standalone", false, false).unwrap_err();
+        assert!(err.contains("official script"), "got: {err}");
     }
 
     /// 白名单外 cli 名拒绝（无用户自由输入拼接面）

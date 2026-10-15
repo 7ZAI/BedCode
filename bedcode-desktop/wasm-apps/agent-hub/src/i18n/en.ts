@@ -86,7 +86,6 @@ const en: MessageSchema = {
   'hub.inst.update': 'Update',
   'hub.inst.latest': 'Up to date',
   'hub.inst.running': 'Running…',
-  'hub.inst.manualHint': 'Standalone install is active: update via the official script (manual in v1)',
   'hub.inst.nodeGuide': 'Node.js not detected; automatic install unavailable. Install Node.js (https://nodejs.org) first, then run manually:',
   'hub.inst.copy': 'Copy',
   'hub.inst.copied': 'Copied',
