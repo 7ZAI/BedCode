@@ -37,7 +37,13 @@ class PluginLoaderClass {
   private scanRetryTimer: ReturnType<typeof setTimeout> | null = null
   private scanRetryStartedAt = 0
 
-  /** 应用启动时加载所有已启用插件的前端模块 */
+  /**
+   * 应用启动时只预载「启动时自动激活」应用的前端模块
+   *
+   * 移动端是应用模型：启动只扫描已安装 wasm-app，不启动任何应用。只有显式
+   * 打开自启动开关（`plugin.autostart.{id}`，默认关）的应用才会在 boot 预载，
+   * 其余应用由用户在宿主壳里点击后经 `activate()` 加载（后端激活 + 前端模块）。
+   */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
     logger.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
@@ -90,14 +96,18 @@ class PluginLoaderClass {
 
       if (this.plugins.has(manifest.id)) continue
 
-      // 以持久化启用状态为准，而非当前运行时激活状态。
-      // 原因：后端在 setup 的异步任务里自动激活已启用插件，前端首次查询
-      // plugin_list_loaded 时可能尚未完成，插件仍处于 Loaded 状态，若据此
-      // 跳过会导致重启后 UI 扩展点（工具箱/导航/设置/终端）丢失，直到手动
-      // 重开插件才恢复。启用状态是持久化存储，查询时立即可用，不受该竞态影响。
-      const isEnabled = await pluginCmds.pluginIsEnabled(manifest.id)
-      if (!isEnabled) {
-        logger.log(`[PluginLoader] Plugin ${manifest.id} not enabled, skipping frontend load`)
+      // 门禁取「启动时自动激活」偏好（`plugin.autostart.{id}`，缺省关），
+      // 而非插件运行时状态、也不是启用偏好：
+      // - 不用运行时状态：后端 boot 自动激活是异步任务，前端首次查
+      //   `plugin_list_loaded` 可能拿到尚未完成的 Loaded 态，据此跳过会
+      //   让本应自启的应用漏载；偏好是持久化存储，查询时立即可用。
+      // - 不用启用偏好（`plugin.enabled.{id}`）：启用只表示「应用可用」，
+      //   与 boot 是否启动解耦（持久化 ≠ 自启动）。默认一个应用都不自启，
+      //   前端自然也不预载，避免「前端已加载但后端未运行」的悬空状态
+      //   （loader.activate 会因 plugins Map 已有记录而短路后端激活）。
+      const isAutostart = await pluginCmds.pluginIsAutostart(manifest.id)
+      if (!isAutostart) {
+        logger.log(`[PluginLoader] Plugin ${manifest.id} not autostart, skipping frontend load`)
         continue
       }
 

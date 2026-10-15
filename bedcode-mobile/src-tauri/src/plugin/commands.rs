@@ -61,11 +61,25 @@ pub async fn plugin_is_enabled(app_handle: tauri::AppHandle, plugin_id: String) 
     Ok(manager.is_enabled(&plugin_id).await)
 }
 
-/// 设置插件启用状态
+/// 设置插件启用状态（应用「已启用 / 可用」偏好，不触发激活）
 #[tauri::command]
 pub async fn plugin_set_enabled(app_handle: tauri::AppHandle, plugin_id: String, enabled: bool) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.set_enabled(&plugin_id, enabled).await
+}
+
+/// 查询插件「启动时自动激活」偏好（缺省 false = 不自动启动）
+#[tauri::command]
+pub async fn plugin_is_autostart(app_handle: tauri::AppHandle, plugin_id: String) -> Result<bool> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    Ok(manager.is_autostart(&plugin_id).await)
+}
+
+/// 设置插件「启动时自动激活」偏好（只改偏好，下次启动生效）
+#[tauri::command]
+pub async fn plugin_set_autostart(app_handle: tauri::AppHandle, plugin_id: String, autostart: bool) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.set_autostart(&plugin_id, autostart).await
 }
 
 /// 标记插件错误

@@ -83,7 +83,7 @@ describe('插件重新激活循环（loader 路径）', () => {
       switch (cmd) {
         case 'plugin_list_loaded':
           return Promise.resolve([info])
-        case 'plugin_is_enabled':
+        case 'plugin_is_autostart':
           return Promise.resolve(true)
         case 'plugin_get_info':
           return Promise.resolve(info)

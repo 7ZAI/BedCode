@@ -1,19 +1,17 @@
 /**
  * 插件启动加载门禁测试（spec §3.5 / issue 02）
  *
- * 被测行为（loader.ts:80-114 实际实现）：
- * - isEnabled（持久化意图）= false → 跳过（意图优先，避免重启丢扩展点）
+ * 被测行为（loader.ts 实际实现）：
+ * - isAutostart（持久化自启动偏好，缺省关）= false → 跳过（移动端启动不启动应用）
  * - Activating 中间态 → 跳过（等最终态轮询兜底）
  * - pluginType: 'rust' → 跳过（后端自管）
  * - 其余状态（Activated / Degraded / Loaded / Error / NeedsApproval / Deactivated）
- *   + isEnabled=true → 放行调 loadFrontend（vitest 内动态 import 必失败 → 走
+ *   + isAutostart=true → 放行调 loadFrontend（vitest 内动态 import 必失败 → 走
  *   markError 失败恢复路径作为「已尝试加载」探针）
  * - Degraded 在放行前 console.warn 标注降级原因（loader.ts:109-111）
  *
- * 与桌面 issue 02 plugin-loader-gating.test.ts 行为差异（spec §3.5 移动端裁决）：
- * 桌面端严格 2 态门禁（Activated/Degraded 放行，其余跳过），移动端为「意图优先」
- * 模式——已启用但未就绪的插件（Loaded/Error 等）仍尝试挂载前端模块以保留
- * 扩展点可见性，待后端就绪后由轮询补载。
+ * 门禁口径（移动端应用模型）：boot 只预载显式打开「启动时自动激活」的应用，
+ * `plugin.enabled.{id}`（应用已启用 / 可用偏好）不再驱动启动——持久化 ≠ 自启动。
  *
  * 测试 seam：mock @tauri-apps/api/core 边界（loader 走 invoke 命令字符串拼装）。
  * 「尝试加载前端模块」的可观测结果 = 动态 import 在 vitest 内必然失败（asset://
@@ -58,12 +56,12 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // 默认 mock 行为：所有命令静默返回，plugin_is_enabled=true
+  // 默认 mock 行为：所有命令静默返回，plugin_is_autostart=true
   mockInvoke.mockImplementation((cmd: string) => {
     switch (cmd) {
       case 'plugin_list_loaded':
         return Promise.resolve([])
-      case 'plugin_is_enabled':
+      case 'plugin_is_autostart':
         return Promise.resolve(true)
       case 'plugin_mark_error':
         return Promise.resolve(undefined)
@@ -97,7 +95,7 @@ afterEach(async () => {
 })
 
 describe('pluginLoader.loadAll 启动加载门禁', () => {
-  it('意图优先模式：6 态放行 + Activating/rust 跳过，Degraded 标注降级原因', async () => {
+  it('自启动放行：6 态放行 + Activating/rust 跳过，Degraded 标注降级原因', async () => {
     const DEGRADED_REASON = 'startup init failed: db migration error'
 
     mockInvoke.mockImplementation((cmd: string) => {
@@ -143,7 +141,7 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
           }),
         ])
       }
-      if (cmd === 'plugin_is_enabled') {
+      if (cmd === 'plugin_is_autostart') {
         return Promise.resolve(true)
       }
       return Promise.resolve(undefined)
@@ -155,7 +153,7 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     await new Promise((r) => setTimeout(r, 0))
     await new Promise((r) => setTimeout(r, 0))
 
-    // 意图优先模式：6 状态（Activated/Degraded/Loaded/Error/NeedsApproval/Deactivated）
+    // 自启动放行：6 状态（Activated/Degraded/Loaded/Error/NeedsApproval/Deactivated）
     // 全部放行调 loadFrontend → vitest 内动态 import 必失败 → 各 1 次 markError
     expect(markErrorCount('com.bedcode.gate-ok')).toBe(1)
     expect(markErrorCount('com.bedcode.gate-degraded')).toBe(1)
@@ -176,9 +174,9 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     expect(degradedWarn!).toContain(DEGRADED_REASON)
   })
 
-  it('isEnabled=false 意图门禁：跳过前端加载（spec §3.5 核心裁决）', async () => {
-    // 同一批插件中：启用者放行、未启用者跳过——意图（持久化）优先于运行时状态
-    const enabledMap: Record<string, boolean> = {
+  it('isAutostart=false 门禁：跳过前端加载（持久化 ≠ 自启动）', async () => {
+    // 同一批插件中：开了自启动的放行、未开的跳过（与运行时状态无关）
+    const autostartMap: Record<string, boolean> = {
       'com.bedcode.gate-on': true,
       'com.bedcode.gate-off': false,
       'com.bedcode.gate-off-loaded': false,
@@ -187,17 +185,17 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     mockInvoke.mockImplementation((cmd: string, args: any) => {
       if (cmd === 'plugin_list_loaded') {
         return Promise.resolve([
-          // 已激活且启用 → 放行
+          // 已激活且开了自启动 → 放行
           makePluginInfo({ id: 'com.bedcode.gate-on', name: 'Gate On', state: { state: 'activated' } }),
-          // 已激活但意图关闭 → 跳过（即使运行时是 Activated）
+          // 已激活但未开自启动 → 跳过（即使运行时是 Activated）
           makePluginInfo({ id: 'com.bedcode.gate-off', name: 'Gate Off', state: { state: 'activated' } }),
-          // Loaded 但意图关闭 → 跳过（意图优先：重启不自动挂载）
+          // Loaded 且未开自启动 → 跳过（boot 不预载，等壳里点击）
           makePluginInfo({ id: 'com.bedcode.gate-off-loaded', name: 'Gate Off Loaded', state: { state: 'loaded' } }),
         ])
       }
-      if (cmd === 'plugin_is_enabled') {
+      if (cmd === 'plugin_is_autostart') {
         const pid = (args as { pluginId?: string })?.pluginId ?? ''
-        return Promise.resolve(enabledMap[pid] ?? true)
+        return Promise.resolve(autostartMap[pid] ?? false)
       }
       return Promise.resolve(undefined)
     })
@@ -206,17 +204,17 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     await new Promise((r) => setTimeout(r, 0))
     await new Promise((r) => setTimeout(r, 0))
 
-    // 仅启用插件走到 loadFrontend（vitest 内动态 import 必失败 → markError 1 次）
+    // 仅自启动插件走到 loadFrontend（vitest 内动态 import 必失败 → markError 1 次）
     expect(markErrorCount('com.bedcode.gate-on')).toBe(1)
-    // 意图关闭者零加载尝试
+    // 未开自启动者零加载尝试
     expect(markErrorCount('com.bedcode.gate-off')).toBe(0)
     expect(markErrorCount('com.bedcode.gate-off-loaded')).toBe(0)
 
-    // plugin_is_enabled 按插件 id 查询（参数契约）
-    const enabledCalls = mockInvoke.mock.calls
-      .filter(([c]) => c === 'plugin_is_enabled')
+    // plugin_is_autostart 按插件 id 查询（参数契约）
+    const autostartCalls = mockInvoke.mock.calls
+      .filter(([c]) => c === 'plugin_is_autostart')
       .map(([, a]) => (a as { pluginId?: string })?.pluginId)
-    expect(enabledCalls).toContain('com.bedcode.gate-off')
-    expect(enabledCalls).toContain('com.bedcode.gate-off-loaded')
+    expect(autostartCalls).toContain('com.bedcode.gate-off')
+    expect(autostartCalls).toContain('com.bedcode.gate-off-loaded')
   })
 })

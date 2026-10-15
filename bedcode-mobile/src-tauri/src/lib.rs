@@ -307,6 +307,8 @@ pub fn run() {
             crate::plugin::commands::plugin_approve,
             crate::plugin::commands::plugin_is_enabled,
             crate::plugin::commands::plugin_set_enabled,
+            crate::plugin::commands::plugin_is_autostart,
+            crate::plugin::commands::plugin_set_autostart,
             crate::plugin::commands::plugin_mark_error,
             crate::plugin::commands::plugin_report_ready,
             crate::plugin::commands::plugin_storage_get,

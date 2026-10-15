@@ -1,9 +1,18 @@
 //! Plugin 系统常量
 
-/// 插件启用状态持久化 key 前缀
+/// 插件启用状态持久化 key 前缀（应用「已启用 / 可用」偏好）
 ///
-/// 格式: `plugin.enabled.{plugin_id}`，值为 `"true"` / `"false"`
+/// 格式: `plugin.enabled.{plugin_id}`，值为 `"true"` / `"false"`。
+/// **不再驱动启动流程**：启用只是「这个应用可用」的持久化记录，启动时是否
+/// 自动激活只看 [`PLUGIN_AUTOSTART_KEY_PREFIX`]（默认关）。
 pub const PLUGIN_ENABLED_KEY_PREFIX: &str = "plugin.enabled.";
+
+/// 插件「启动时自动激活」偏好 key 前缀
+///
+/// 格式: `plugin.autostart.{plugin_id}`，值为 `"true"` / `"false"`。
+/// **缺省即关**：移动端是应用模型——启动只扫描已安装 wasm-app，不启动任何应用；
+/// 只有显式把本开关置 `true` 的应用才会在 boot 自动激活，其余等用户在宿主壳里点击。
+pub const PLUGIN_AUTOSTART_KEY_PREFIX: &str = "plugin.autostart.";
 
 /// 插件存储文件扩展名
 ///

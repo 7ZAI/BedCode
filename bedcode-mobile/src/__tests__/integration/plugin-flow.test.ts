@@ -4,11 +4,11 @@
  * 协作实体：真实 pluginLoader（模块级单例，清单过滤 / 扫描轮询 / 加载降级） +
  * plugin registry（扩展点注册清理） + pluginCmds（invoke 命令层）。
  *
- * 测试 seam：mock invoke（plugin_list_loaded / plugin_is_enabled /
+ * 测试 seam：mock invoke（plugin_list_loaded / plugin_is_autostart /
  * plugin_mark_error）+ convertFileSrc 返回不可解析路径（前端模块动态 import
  * 必然失败 → 优雅降级路径可测）。
  *
- * 覆盖：loadAll 清单过滤（rust-only 跳过 / 未启用跳过）；空清单扫描轮询
+ * 覆盖：loadAll 清单过滤（rust-only 跳过 / 未开自启动跳过）；空清单扫描轮询
  * 补载（fake timers 压缩 250ms 轮询）；前端模块加载失败 → plugin_mark_error
  * + registry 清理（半激活状态摘除）。
  */
@@ -70,7 +70,7 @@ function installInvokeMock(manifests: () => PluginInfo[]) {
     switch (cmd) {
       case 'plugin_list_loaded':
         return Promise.resolve(manifests())
-      case 'plugin_is_enabled':
+      case 'plugin_is_autostart':
         return Promise.resolve(false)
       case 'plugin_mark_error':
       case 'plugin_activate':
@@ -93,7 +93,7 @@ afterEach(() => {
 })
 
 describe('插件流：pluginLoader × registry', () => {
-  it('loadAll 清单过滤：rust-only 插件跳过、未启用前端插件不加载', async () => {
+  it('loadAll 清单过滤：rust-only 插件跳过、未开自启动前端插件不加载', async () => {
     const manifests = [
       makePluginInfo({ id: 'rust-only', pluginType: 'rust' }),
       makePluginInfo({ id: 'frontend-disabled', pluginType: 'frontend' }),
@@ -104,9 +104,9 @@ describe('插件流：pluginLoader × registry', () => {
     await pluginLoader.loadAll()
     await flushAsync()
 
-    // rust-only：不查询启用状态、不加载前端模块
-    // frontend 未启用：只查询启用状态，跳过加载
-    expect(invokeCalls('plugin_is_enabled')).toEqual([[{ pluginId: 'frontend-disabled' }]])
+    // rust-only：不查询自启动状态、不加载前端模块
+    // frontend 未开自启动：只查询自启动状态，跳过加载
+    expect(invokeCalls('plugin_is_autostart')).toEqual([[{ pluginId: 'frontend-disabled' }]])
     expect(invokeCalls('plugin_mark_error')).toHaveLength(0)
     expect(pluginLoader.getActivePlugin('frontend-disabled')).toBeUndefined()
   })
@@ -130,7 +130,7 @@ describe('插件流：pluginLoader × registry', () => {
 
     expect(invokeCalls('plugin_list_loaded')).toHaveLength(2)
     // rust-only 补载不触发前端加载
-    expect(invokeCalls('plugin_is_enabled')).toHaveLength(0)
+    expect(invokeCalls('plugin_is_autostart')).toHaveLength(0)
   })
 
   it('前端模块加载失败：plugin_mark_error + registry 清理（半激活状态摘除）', async () => {
@@ -140,7 +140,7 @@ describe('插件流：pluginLoader × registry', () => {
       switch (cmd) {
         case 'plugin_list_loaded':
           return Promise.resolve(manifests)
-        case 'plugin_is_enabled':
+        case 'plugin_is_autostart':
           return Promise.resolve(true)
         case 'plugin_mark_error':
           return Promise.resolve(undefined)

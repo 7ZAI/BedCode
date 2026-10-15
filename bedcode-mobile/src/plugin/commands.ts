@@ -42,9 +42,19 @@ export async function pluginIsEnabled(pluginId: string): Promise<boolean> {
   return await invoke('plugin_is_enabled', { pluginId })
 }
 
-/** 设置插件启用状态 */
+/** 设置插件启用状态（应用「已启用 / 可用」偏好，不触发激活） */
 export async function pluginSetEnabled(pluginId: string, enabled: boolean): Promise<void> {
   return await invoke('plugin_set_enabled', { pluginId, enabled })
+}
+
+/** 查询插件「启动时自动激活」偏好（缺省 false = 不自动启动） */
+export async function pluginIsAutostart(pluginId: string): Promise<boolean> {
+  return await invoke('plugin_is_autostart', { pluginId })
+}
+
+/** 设置插件「启动时自动激活」偏好（只改偏好，下次启动生效） */
+export async function pluginSetAutostart(pluginId: string, autostart: boolean): Promise<void> {
+  return await invoke('plugin_set_autostart', { pluginId, autostart })
 }
 
 /** 标记插件错误 */

@@ -12,6 +12,7 @@ use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::*;
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
+use crate::system::constants::plugin::PLUGIN_AUTOSTART_KEY_PREFIX;
 use crate::system::constants::plugin::PLUGIN_DATA_DIR;
 use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::settings::SettingsManager;
@@ -259,7 +260,7 @@ impl PluginManager {
         // 缺省 `UnwiredGuestEvents` 派发即 fail-visible。
         runtime.set_guest_events(Arc::new(crate::plugin::guest_events::MobileGuestEvents));
 
-        // 插件状态上报回调：置 Error + 持久化未启用 + 前端通知
+        // 插件状态上报回调：置 Error + 撤销自启动 + 持久化未启用 + 前端通知
         let plugins = self.plugins.clone();
         let settings = self.settings.clone();
         let app_handle = self.app_handle.as_ref().cloned();
@@ -282,7 +283,13 @@ impl PluginManager {
                         }
                         drop(map);
 
-                        // 持久化未启用（下次启动不再自动激活）
+                        // 撤销自启动：坏插件下次启动不再自动激活（旧行为由「持久化未启用」
+                        // 承担，启用与自启动解耦后该职责归 autostart 偏好）——避免失败插件
+                        // 每次 boot 重试报错。
+                        if let Err(e) = settings.set(format!("{}{}", PLUGIN_AUTOSTART_KEY_PREFIX, &pid_clone), "false".to_string()).await {
+                            tracing::warn!(plugin_id = %pid_clone, error = %e, "Failed to clear autostart state after plugin error");
+                        }
+                        // 持久化未启用（应用标记不可用；不再影响启动流程）
                         if let Err(e) = settings.set(format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &pid_clone), "false".to_string()).await {
                             tracing::warn!(plugin_id = %pid_clone, error = %e, "Failed to persist disabled state after plugin error");
                         }
@@ -305,6 +312,16 @@ impl PluginManager {
             tracing::info!(plugin_id = %pid, error = %err, "Plugin reported error, marked Error and disabled");
         });
 
+        // 下载目录端事实预热：`host-config.app.downloads_dir` 的同步端口读
+        // `peer::ports` 进程内缓存，而插件 activate() 期就可能读该键（ai-chatbox
+        // 数据目录 = `{AppDownloadsDir}/ai-chatbox`），peer 平台缝的预热由文件
+        // 传输插件节点启动驱动（晚于激活）——故运行时装配时先单独预热一次。
+        // 无 app_handle 的无头 / 测试上下文跳过：端口缺省 None，内核 config 域
+        // 转成显性错误（fail-visible）。
+        if let Some(handle) = self.app_handle.as_ref() {
+            crate::peer::ports::prewarm_downloads_dir(handle.as_ref()).await;
+        }
+
         let host_ctx = Arc::new(WasmHostContext::new_with_ports(
             self.plugin_db.clone(),
             self.storage.clone(),
@@ -312,13 +329,13 @@ impl PluginManager {
             self.fs_auth.clone(),
             self.message_bus.clone(),
             status_reporter,
-            Arc::new(crate::plugin::host_ports::HostPorts), // 批次 2b：宿主引擎端口装配
+            Arc::new(crate::plugin::host_ports::HostPorts::new()), // 批次 2b：宿主引擎端口装配
         ));
 
         // 宿主端事实（平台标识 = "mobile" / 无入站服务器）：单形态收口后从 wasm-core
         // 迁出的端差异实现，在插件实例化 / 激活之前注入（file-transfer 激活期探测
         // `host-platform.platform()`；晚注入 = 激活失败）
-        host_ctx.set_host_facts(Arc::new(crate::plugin::host_ports::HostPorts));
+        host_ctx.set_host_facts(Arc::new(crate::plugin::host_ports::HostPorts::new()));
 
         // host-peer 端口（wasm-core-mobile-purity 票 03）：wasm-core bare 面 19 条
         // 原语的薄转发经 crate `ports::ports()` 取本端口——权限判定 / 引擎上下文 /
@@ -465,26 +482,51 @@ impl PluginManager {
         }
     }
 
-    /// 应用启动时：读取持久化启用状态，自动激活
+    /// 启动时应当自动激活的插件清单（真源 = `plugin.autostart.{id}`，缺省即关）
+    ///
+    /// 与 `plugin.enabled.{id}`（应用启用 / 可用性偏好）**解耦**：移动端是应用
+    /// 模型——启动只扫描已安装 wasm-app，不启动任何应用；只有显式打开自启动开关
+    /// 的应用才会在 boot 自动激活，其余保持 Loaded，等用户在宿主壳里点击启动。
+    /// 返回按 id 排序（稳定顺序，不依赖 HashMap 迭代序），便于日志与测试断言。
+    ///
+    /// 抽成独立方法是为可单测：`load_all` 需要真 `tauri::AppHandle`（测试构造不出），
+    /// 而「哪些该自启」的判据本身必须能单独钉住。
+    pub(crate) async fn auto_start_candidates(&self) -> Vec<String> {
+        let ids: Vec<String> = self.plugins.read().await.keys().cloned().collect();
+        let mut candidates = Vec::new();
+        for id in ids {
+            let key = format!("{}{}", PLUGIN_AUTOSTART_KEY_PREFIX, &id);
+            match self.settings.get(&key).await {
+                Ok(Some(value)) if value == "true" => candidates.push(id),
+                // 缺省（未设置）/ "false" 一律不自启；读取失败按 fail-safe 不自启
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(plugin_id = %id, error = %e, "Failed to read autostart state");
+                }
+            }
+        }
+        candidates.sort();
+        candidates
+    }
+
+    /// 应用启动时：扫描已完成（`scan_and_load`），此处只对显式开启「启动时自动激活」
+    /// 的应用做自动激活（`plugin.autostart.{id}`，缺省关）
+    ///
+    /// 其余应用保持 Loaded 态，等用户在宿主壳里点击启动（`plugin_activate`）。
     pub async fn load_all(&self, app_handle: &tauri::AppHandle) {
-        let plugins = self.plugins.read().await;
-        let plugin_ids: Vec<String> = plugins.keys().cloned().collect();
-        drop(plugins);
+        let plugin_ids: Vec<String> = self.plugins.read().await.keys().cloned().collect();
 
         // 存量兼容：迁移后首启自动批准（一次性，见 auto_approve_legacy）
         self.auto_approve_legacy(&plugin_ids).await;
 
-        for id in plugin_ids {
-            if let Ok(Some(value)) = self
-                .settings
-                .get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &id))
-                .await
-            {
-                if value == "true" {
-                    if let Err(e) = self.activate(&id).await {
-                        tracing::warn!(plugin_id = %id, error = %e, "Failed to auto-activate plugin on startup");
-                    }
-                }
+        let candidates = self.auto_start_candidates().await;
+        tracing::info!(
+            count = candidates.len(),
+            "[PluginManager] autostart candidates resolved (plugin.autostart.{{id}}, default off)"
+        );
+        for id in candidates {
+            if let Err(e) = self.activate(&id).await {
+                tracing::warn!(plugin_id = %id, error = %e, "Failed to auto-activate plugin on startup");
             }
         }
 
@@ -1058,7 +1100,9 @@ impl PluginManager {
         }
     }
 
-    /// 查询插件启用状态
+    /// 查询插件启用状态（应用「已启用 / 可用」偏好，不是启动触发器）
+    ///
+    /// 启用偏好与自启动偏好分离：启用表示「这个应用可用」，不决定 boot 是否启动。
     pub async fn is_enabled(&self, plugin_id: &str) -> bool {
         let key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
         match self.settings.get(&key).await {
@@ -1067,11 +1111,28 @@ impl PluginManager {
         }
     }
 
-    /// 设置插件启用状态并持久化
+    /// 设置插件启用状态并持久化（应用「已启用 / 可用」偏好，不触发激活）
     pub async fn set_enabled(&self, plugin_id: &str, enabled: bool) -> Result<()> {
         let key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
         self.settings.set(key, enabled.to_string()).await?;
         tracing::info!(plugin_id = %plugin_id, enabled = enabled, "Plugin enabled state persisted");
+        Ok(())
+    }
+
+    /// 查询插件「启动时自动激活」偏好（缺省 false = 不自动启动）
+    pub async fn is_autostart(&self, plugin_id: &str) -> bool {
+        let key = format!("{}{}", PLUGIN_AUTOSTART_KEY_PREFIX, plugin_id);
+        matches!(self.settings.get(&key).await, Ok(Some(v)) if v == "true")
+    }
+
+    /// 设置插件「启动时自动激活」偏好并持久化
+    ///
+    /// 只改偏好，不在当前进程立即激活 / 停用（与启用偏好一致：偏好 → 下次 boot
+    /// 或用户显式操作生效，避免宿主「改配置即启停」的隐式副作用）。
+    pub async fn set_autostart(&self, plugin_id: &str, autostart: bool) -> Result<()> {
+        let key = format!("{}{}", PLUGIN_AUTOSTART_KEY_PREFIX, plugin_id);
+        self.settings.set(key, autostart.to_string()).await?;
+        tracing::info!(plugin_id = %plugin_id, autostart = autostart, "Plugin autostart state persisted");
         Ok(())
     }
 
@@ -1138,10 +1199,14 @@ impl PluginManager {
         // Egress：卸载清策略 + 记录 + URL 声明（重装即全新授权，ADR 0022 §8 生命周期）
         crate::egress::policy().purge_plugin(plugin_id);
 
-        // 清理启用偏好、审批记录与插件存储
+        // 清理启用 / 自启动偏好、审批记录与插件存储
         let enabled_key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
         if let Err(e) = self.settings.remove(&enabled_key).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to remove enabled setting on uninstall");
+        }
+        let autostart_key = format!("{}{}", PLUGIN_AUTOSTART_KEY_PREFIX, plugin_id);
+        if let Err(e) = self.settings.remove(&autostart_key).await {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to remove autostart setting on uninstall");
         }
         if let Err(e) = self.approvals.revoke(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to revoke approval on uninstall");
@@ -1966,5 +2031,119 @@ mod tests {
             "审批记录已撤销"
         );
         assert!(!ext_dir.exists(), "插件目录已删除");
+    }
+
+    // ==================== 启用 / 自启动解耦（plugin.autostart） ====================
+    //
+    // 行为契约：启动时自动激活只由 `plugin.autostart.{id}` 决定（缺省关），
+    // 与 `plugin.enabled.{id}`（应用已启用 / 可用偏好）无关。
+
+    /// 正例 + 反例：同为「已启用」，只有开了自启动的进入候选
+    #[tokio::test]
+    async fn test_auto_start_candidates_honors_autostart_not_enabled() {
+        let (manager, _tmp) = setup_manager().await;
+        seed_plugin(&manager, "com.bedcode.test.as-on", PluginState::Loaded).await;
+        seed_plugin(&manager, "com.bedcode.test.as-off", PluginState::Loaded).await;
+
+        // 两者都应「已启用」（可用性偏好），但只有 as-on 开了自启动
+        manager
+            .set_enabled("com.bedcode.test.as-on", true)
+            .await
+            .expect("enable on");
+        manager
+            .set_enabled("com.bedcode.test.as-off", true)
+            .await
+            .expect("enable off");
+        manager
+            .set_autostart("com.bedcode.test.as-on", true)
+            .await
+            .expect("autostart on");
+
+        assert_eq!(
+            manager.auto_start_candidates().await,
+            vec!["com.bedcode.test.as-on".to_string()],
+            "启用偏好不得进入自启动候选（持久化 ≠ 自启动）"
+        );
+    }
+
+    /// 边界：缺省（未设置自启动）→ 零候选
+    #[tokio::test]
+    async fn test_auto_start_candidates_default_off() {
+        let (manager, _tmp) = setup_manager().await;
+        seed_plugin(&manager, "com.bedcode.test.as-default", PluginState::Loaded).await;
+        manager
+            .set_enabled("com.bedcode.test.as-default", true)
+            .await
+            .expect("enable");
+
+        assert!(
+            manager.auto_start_candidates().await.is_empty(),
+            "未设置自启动的应用默认不启动"
+        );
+    }
+
+    /// 正例 + 反例 + 副作用：自启动偏好持久化（缺省 false → true → false）
+    #[tokio::test]
+    async fn test_autostart_preference_persists_and_defaults_off() {
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.as-persist";
+
+        assert!(!manager.is_autostart(pid).await, "缺省 = 不自动启动");
+
+        manager.set_autostart(pid, true).await.expect("set true");
+        assert!(manager.is_autostart(pid).await, "置 true 后生效");
+
+        manager.set_autostart(pid, false).await.expect("set false");
+        assert!(!manager.is_autostart(pid).await, "置 false 后回退");
+    }
+
+    /// 错误回退：上报错误撤销自启动（坏插件下次 boot 不再重试）且置 Error
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_reported_error_clears_autostart_and_marks_error() {
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.as-error";
+        seed_plugin(&manager, pid, PluginState::Activated).await;
+        manager.set_autostart(pid, true).await.expect("autostart");
+
+        let ctx = manager.wasm_host_ctx.get().expect("host ctx");
+        (ctx.status_reporter)(pid, "boom");
+
+        assert!(
+            !manager.is_autostart(pid).await,
+            "错误回退必须撤销自启动，否则坏插件每次 boot 重试报错"
+        );
+        match manager.get_info(pid).await.expect("info").state {
+            PluginState::Error { error } => assert!(error.contains("boom"), "err: {error}"),
+            other => panic!("期望 Error 终态，实际: {other:?}"),
+        }
+    }
+
+    /// 副作用：卸载清掉自启动偏好（重装即全新，不继承旧开关）
+    #[tokio::test]
+    async fn test_uninstall_removes_autostart_preference() {
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-uninstall-autostart";
+        let ext_dir = manager.plugins_dir().join(pid);
+        std::fs::create_dir_all(&ext_dir).expect("create plugin dir");
+        std::fs::write(ext_dir.join("plugin.json"), r#"{"id":"x"}"#).expect("write manifest");
+        let hash = crate::plugin::approval::compute_dir_hash(&ext_dir).expect("dir hash");
+        manager
+            .approvals
+            .approve(pid, &[], &hash, "0.1.0")
+            .await
+            .expect("approve");
+        seed_user_plugin(
+            &manager,
+            pid,
+            &ext_dir,
+            vec![],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+        manager.set_autostart(pid, true).await.expect("set autostart");
+
+        manager.uninstall(pid).await.expect("uninstall");
+
+        assert!(!manager.is_autostart(pid).await, "卸载后自启动偏好已清除");
     }
 }

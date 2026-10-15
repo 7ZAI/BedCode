@@ -26,13 +26,14 @@
 │                                                     ▼                          │
 │  PluginManager.scan_and_load: 扫描 plugin.json → 编译 WASM → 实例化            │
 │  前端 pluginLoader: convertFileSrc() 经 asset protocol 加载 index.js          │
-│  load_all: 按启用偏好（plugin.enabled.{id}）自动激活                           │
+│  load_all: 只按自启动偏好（plugin.autostart.{id}，缺省关）自动激活             │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **关键概念**（见仓库根 [`../CONTEXT.md`](../CONTEXT.md) 词汇表）：
 
-- **启用 (Enabled)**：用户的持久化偏好，决定启动时是否自动激活；Toggle 绑定它。插件上报错误时自动撤销启用。
+- **启用 (Enabled)**：用户的持久化偏好，表示应用「可用」（`plugin.enabled.{id}`）。**不决定启动是否激活**（持久化 ≠ 自启动），插件上报错误时自动撤销。
+- **自启动 (Autostart)**：用户的持久化偏好，表示应用应随宿主启动自动激活（`plugin.autostart.{id}`，**缺省关**）。宿主启动只扫描已安装 wasm-app、不启动任何应用；只有显式打开自启动的应用在 boot 自动激活，其余等用户在宿主壳里点击启动。
 - **激活 (Activated)**：运行时状态（Activated / Loaded / Deactivated / Error），由状态徽章展示。
 - **插件包 (Plugin Package)**：单个 zip 分发单元，内含 `plugin.json`、`index.js` 与可选 `.wasm`。
 - **卸载 (Uninstall)**：删除用户安装插件的文件与偏好；内置插件只可停用不可卸载。
@@ -265,7 +266,7 @@ wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 
    - **从 URL 安装**：输入 zip 下载链接
 3. 安装成功后列表出现插件，Toggle 启用
 
-**加载链路**：内置插件（APK assets）首启由 Kotlin 桥解压到 `app_data_dir/plugins/{id}/`（`.bedcode-source` 标记防重复、按版本刷新）；用户安装的插件由安装器解压到同一目录（标记 `file-install` / `remote-download`）。启动时 `scan_and_load` 统一扫描，按启用偏好自动激活。
+**加载链路**：内置插件（APK assets）首启由 Kotlin 桥解压到 `app_data_dir/plugins/{id}/`（`.bedcode-source` 标记防重复、按版本刷新）；用户安装的插件由安装器解压到同一目录（标记 `file-install` / `remote-download`）。启动时 `scan_and_load` 统一扫描并实例化，但**不启动任何应用**；只有显式打开自启动偏好（`plugin.autostart.{id}`）的应用才会自动激活，其余在宿主壳里点击后才激活。
 
 **卸载**：详情内「卸载」按钮（仅用户安装的插件）——停用、删除文件、清理偏好与存储，不可恢复。
 
@@ -307,8 +308,8 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 
 1. 首启：内置插件自动解压（日志 `Extracted bundled plugin` / `Dev-copied builtin plugin`）
 2. 列表：插件出现，来源显示「内置」/「已安装」，状态徽章正确
-3. 启用：Toggle 打开 → Activated；重启应用后自动激活
-4. 停用：Toggle 关闭 → Deactivated；重启后不自动激活
+3. 自启动：打开自启动开关后，重启应用 → 该应用自动 Activated；未打开的保持 Loaded，点击后才 Activated
+4. 点击启动：壳内点击未启动应用 → 后端激活 + 前端运行面加载；停止后回 Deactivated，下次启动不自动复活
 5. 文件安装：选择 zip → 安装成功 → 列表出现 → 可启用
 6. URL 安装：输入 zip 链接 → 下载安装成功
 7. 卸载：用户安装插件显示卸载按钮，确认后文件删除、列表消失；内置插件无卸载按钮
