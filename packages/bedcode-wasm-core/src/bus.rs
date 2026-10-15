@@ -79,7 +79,11 @@ pub trait MessageDispatcher: Send + Sync + 'static {
     ///
     /// 默认实现返回 `Ok(false)`：非生产投递器（测试替身）未接 WS 通道时
     /// 视为「无导出」，不影响既有实现与用例。
-    fn dispatch_ws_frame(&self, _plugin_id: &str, _frame: &WsFrameDispatch) -> anyhow::Result<bool> {
+    fn dispatch_ws_frame(
+        &self,
+        _plugin_id: &str,
+        _frame: &WsFrameDispatch,
+    ) -> anyhow::Result<bool> {
         Ok(false)
     }
 }
@@ -148,6 +152,15 @@ impl BusSubscriber {
 
 // ==================== MessageBus ====================
 
+/// 发布任务（FIFO 元素）：`(topic, sender, format, payload_json, payload_binary)`
+type PublishJob = (
+    String,
+    String,
+    PayloadFormat,
+    serde_json::Value,
+    Option<Vec<u8>>,
+);
+
 /// 消息总线（宿主侧，全局共享）
 pub struct MessageBus {
     /// topic → 订阅者列表
@@ -156,16 +169,164 @@ pub struct MessageBus {
     dispatcher: Arc<RwLock<Option<Arc<dyn MessageDispatcher>>>>,
     /// core-monitor 注册表（订阅者丢弃/格式拒绝计数；PluginHost 初始化时注入）
     monitor: Arc<RwLock<Option<Arc<MetricsRegistry>>>>,
+    /// 发布 FIFO：**同步**入队（`UnboundedSender::send` 不阻塞、不需 await），
+    /// 由单一消费者任务串行 fan-out 到各订阅者有界队列。
+    ///
+    /// **为什么必须有这一层（顺序契约）**：原实现每次 publish 都 `handle.spawn`
+    /// 一个任务，任务里先 `subscribers.read().await` 再入队——两个相邻 publish 的
+    /// 两个任务在锁上竞争，**先发布的可能后入队** ⇒ 订阅者按错序收到消息。
+    /// 实测（`bedcode-mobile/src-tauri/tests/terminal_plugin_pipe_e2e.rs` P-003）：
+    /// 连续 16 KiB 终端输出帧成对互换，终端按错序渲染（字节连续/顺序契约被破坏）。
+    /// 单消费者把「发布序 = 入队序 = 投递序」钉死，且不依赖调用方是否持 runtime。
+    publish_tx: mpsc::UnboundedSender<PublishJob>,
+    /// FIFO 消费端：首个 publish 时被投递任务取走；`None` = 任务已在跑
+    publish_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<PublishJob>>>,
 }
 
 impl MessageBus {
-    /// 创建消息总线（dispatcher / monitor 延迟注入）
+    /// 创建消息总线（dispatcher / monitor 延迟注入；投递任务首个 publish 时惰性启动）
     pub fn new() -> Self {
+        let (publish_tx, publish_rx) = mpsc::unbounded_channel();
         Self {
             subscribers: Arc::new(RwLock::new(HashMap::new())),
             dispatcher: Arc::new(RwLock::new(None)),
             monitor: Arc::new(RwLock::new(None)),
+            publish_tx,
+            publish_rx: std::sync::Mutex::new(Some(publish_rx)),
         }
+    }
+
+    /// 确保单消费者投递任务在跑（惰性；无 runtime 上下文 → false，调用方丢弃消息）
+    ///
+    /// 幂等：消费端只能被取走一次（`Mutex<Option<Receiver>>` 即护栏）；并发首发布时
+    /// 两者都 `send` 进同一 FIFO，入队序仍 = 发布序。
+    fn ensure_delivery_task(&self) -> bool {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        let rx = {
+            let mut guard = self.publish_rx.lock().unwrap_or_else(|p| p.into_inner());
+            match guard.take() {
+                Some(rx) => rx,
+                None => return true, // 已在跑
+            }
+        };
+        let subscribers = self.subscribers.clone();
+        let monitor = self.monitor.clone();
+        let mut rx = rx;
+        handle.spawn(async move {
+            // 串行消费：发布序 = 入队序 = 投递序（顺序契约的唯一落点）。
+            // 每轮先 `recv().await` 等一条，随后把**同轮已入队**的后续消息一并 fan-out
+            //（`try_recv` 循环，顺序不变）——突发发布在同一轮排空，投递节奏不被慢消费方
+            // 拖慢；背压仍由每订阅者有界队列的 `try_send` 承担（满即丢弃 + 计数）。
+            while let Some((topic, sender, format, payload, payload_binary)) = rx.recv().await {
+                Self::fan_out(
+                    &subscribers,
+                    &monitor,
+                    topic,
+                    sender,
+                    format,
+                    payload,
+                    payload_binary,
+                )
+                .await;
+                while let Ok((topic, sender, format, payload, payload_binary)) = rx.try_recv() {
+                    Self::fan_out(
+                        &subscribers,
+                        &monitor,
+                        topic,
+                        sender,
+                        format,
+                        payload,
+                        payload_binary,
+                    )
+                    .await;
+                }
+            }
+        });
+        true
+    }
+
+    /// 单消费者 fan-out（原 per-publish 任务体；语义逐字保留：无订阅者丢弃、格式
+    /// 不匹配拒绝 + 计数、队列满丢弃 + 计数、成功路径零日志）
+    ///
+    /// 与发布路径分离的唯一目：把「拿订阅者表读锁」从**发布**挪到**串行投递**——
+    /// 发布方只做一次同步 `send`，锁竞争不再影响入队顺序（见 `publish_tx` 注释）。
+    async fn fan_out(
+        subscribers: &Arc<RwLock<HashMap<String, Vec<BusSubscriber>>>>,
+        monitor: &Arc<RwLock<Option<Arc<MetricsRegistry>>>>,
+        topic: String,
+        sender: String,
+        format: PayloadFormat,
+        payload: serde_json::Value,
+        payload_binary: Option<Vec<u8>>,
+    ) {
+        // monitor 与订阅者建队列时同一两阶段注入源（消费时动态读取）；此处保持
+        // 参数显式，避免 future 重构误删注入面（当前 fan-out 只读订阅者表）
+        let _ = monitor;
+        let subscribers = subscribers.read().await;
+        let Some(subs) = subscribers.get(&topic) else {
+            // 无订阅者 → 丢弃。这是**按消息触发**的分支，与下面的成功投递同属热路径，
+            // 逐条打 debug 同样会成风暴（实测 task:status-changed 这类「bus + emit + ws
+            // 三通道」topic 在无跨插件消费者时每次事件都刷一行）。发布意图由插件侧自己的
+            // 日志留痕；本锁见 hot_path_logging_test.rs。
+            return;
+        };
+
+        let msg = BusMessage {
+            topic: topic.to_string(),
+            sender: sender.to_string(),
+            payload,
+            payload_binary,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        };
+
+        for sub in subs.iter() {
+            if sub.plugin_id() == &sender {
+                continue;
+            }
+            // 格式偏好不匹配：拒绝投递（不进队列）+ 计数进监控 + warn
+            if sub.format() != format {
+                if let Some(m) = sub.metrics() {
+                    m.record_bus_format_rejected();
+                }
+                tracing::warn!(
+                    plugin_id = %sub.plugin_id(),
+                    topic = %topic,
+                    format = ?format,
+                    "MessageBus: subscriber format mismatch, message rejected"
+                );
+                continue;
+            }
+            // 每订阅者有界队列：try_send 失败即丢弃（背压保护），丢弃计数进 core-monitor
+            //（plugin 维度）
+            match sub.try_send(msg.clone()) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    if let Some(m) = sub.metrics() {
+                        m.record_bus_dropped();
+                    }
+                    tracing::warn!(
+                        plugin_id = %sub.plugin_id(),
+                        topic = %topic,
+                        "MessageBus: subscriber queue full, message dropped"
+                    );
+                }
+                Err(TrySendError::Closed(_)) => {
+                    // 订阅者已移除/停用（队列关闭）：消息丢弃、不计数、不打日志
+                    // ——停用路径上队列关闭与消息到达同频发生，逐条打日志即风暴
+                }
+            }
+        }
+        // 成功入队的路径**不落任何日志**：publish 是按消息触发的热路径，高频数据面
+        // topic（PTY 输出通知 ≥50ms/句柄、WS 事件流）会把它打成日志风暴——实测单次
+        // 会话 11 分钟刷 9585 行、占开发日志 52% 字节，且每次内容都是
+        // `enqueued=1/1 rejected=0` 的零信息重复。投递健康度由 core-monitor 的
+        // `bus.dropped` / `bus.format_rejected` 计数承担（本函数异常分支各自 warn），
+        // 正常投递无需逐条留痕。
     }
 
     /// 注入消息投递器（PluginHost 构造完成后调用一次）
@@ -223,84 +384,25 @@ impl MessageBus {
         payload: serde_json::Value,
         payload_binary: Option<Vec<u8>>,
     ) {
-        let subscribers_arc = self.subscribers.clone();
-        let topic_owned = topic.to_string();
-        let sender_owned = sender.to_string();
-
-        // host function 与 PluginHost 均在 runtime 上下文内调用，try_current 理论上不会失败
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        // 同步入队：入队序 = 调用序（顺序契约；见 `publish_tx` 字段注释）。
+        // 无 runtime 上下文 = 无法起投递任务 → 与原语义一致丢弃 + warn。
+        if !self.ensure_delivery_task() {
             tracing::warn!(topic = %topic, "MessageBus: no runtime context, message dropped");
             return;
-        };
-
-        handle.spawn(async move {
-            let topic = topic_owned;
-            let sender = sender_owned;
-
-            let subscribers = subscribers_arc.read().await;
-            let Some(subs) = subscribers.get(&topic) else {
-                // 无订阅者 → 丢弃。这是**按消息触发**的分支，与下面的成功投递同属
-                // 热路径，逐条打 debug 同样会成风暴（实测 task:status-changed 这类
-                // 「bus + emit + ws 三通道」topic 在无跨插件消费者时每次事件都刷一行）。
-                // 发布意图由插件侧自己的日志留痕；本锁见 hot_path_logging_test.rs。
-                return;
-            };
-
-            let msg = BusMessage {
-                topic: topic.to_string(),
-                sender: sender.to_string(),
+        }
+        if self
+            .publish_tx
+            .send((
+                topic.to_string(),
+                sender.to_string(),
+                format,
                 payload,
                 payload_binary,
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-            };
-
-            for sub in subs.iter() {
-                if sub.plugin_id() == &sender {
-                    continue;
-                }
-                // 格式偏好不匹配：拒绝投递（不进队列）+ 计数进监控 + warn
-                if sub.format() != format {
-                    if let Some(m) = sub.metrics() {
-                        m.record_bus_format_rejected();
-                    }
-                    tracing::warn!(
-                        plugin_id = %sub.plugin_id(),
-                        topic = %topic,
-                        format = ?format,
-                        "MessageBus: subscriber format mismatch, message rejected"
-                    );
-                    continue;
-                }
-                // 每订阅者有界队列：try_send 失败即丢弃（背压保护），
-                // 丢弃计数进 core-monitor（plugin 维度）
-                match sub.try_send(msg.clone()) {
-                    Ok(()) => {}
-                    Err(TrySendError::Full(_)) => {
-                        if let Some(m) = sub.metrics() {
-                            m.record_bus_dropped();
-                        }
-                        tracing::warn!(
-                            plugin_id = %sub.plugin_id(),
-                            topic = %topic,
-                            "MessageBus: subscriber queue full, message dropped"
-                        );
-                    }
-                    Err(TrySendError::Closed(_)) => {
-                        // 订阅者已移除/停用（队列关闭）：消息丢弃、不计数、不打日志
-                        // ——停用路径上队列关闭与消息到达同频发生，逐条打日志即风暴
-                    }
-                }
-            }
-            // 成功入队的路径**不落任何日志**：publish 是按消息触发的热路径，
-            // 高频数据面 topic（PTY 输出通知 ≥50ms/句柄、WS 事件流）会把它打成
-            // 日志风暴——实测单次会话 11 分钟刷 9585 行、占开发日志 52% 字节，且
-            // 每次内容都是 `enqueued=1/1 rejected=0` 的零信息重复。投递健康度由
-            // core-monitor 的 `bus.dropped` / `bus.format_rejected` 计数承担
-            // （本函数异常分支各自 warn），正常投递无需逐条留痕。
-        });
+            ))
+            .is_err()
+        {
+            tracing::warn!(topic = %topic, "MessageBus: delivery task is gone, message dropped");
+        }
     }
 
     /// 订阅 topic（WASM 插件，JSON 格式偏好，默认路径零回归）
@@ -317,7 +419,12 @@ impl MessageBus {
     }
 
     /// 订阅公共路径：建每订阅者有界队列 + spawn 消费任务（recv → dispatch）
-    async fn subscribe_wasm_with_format(&self, plugin_id: &str, topic: &str, format: PayloadFormat) {
+    async fn subscribe_wasm_with_format(
+        &self,
+        plugin_id: &str,
+        topic: &str,
+        format: PayloadFormat,
+    ) {
         let mut subscribers = self.subscribers.write().await;
         let subs = subscribers.entry(topic.to_string()).or_default();
         // 避免重复订阅
@@ -371,7 +478,12 @@ impl MessageBus {
     }
 
     /// 订阅 topic（静态注册插件，JSON 格式偏好）
-    pub async fn subscribe_static(&self, plugin_id: &str, topic: &str, handler: Box<dyn BusMessageHandler>) {
+    pub async fn subscribe_static(
+        &self,
+        plugin_id: &str,
+        topic: &str,
+        handler: Box<dyn BusMessageHandler>,
+    ) {
         let mut subscribers = self.subscribers.write().await;
         let subs = subscribers.entry(topic.to_string()).or_default();
         // 每订阅者有界队列 + 消费任务（handler 在任务内独占调用）
@@ -472,7 +584,14 @@ enum BusBinding {
     /// （端口与总线必须同源，见 [`HostBusPort::ws_ports`]）。
     LateBound(
         Arc<dyn Fn() -> Arc<MessageBus> + Send + Sync>,
-        Arc<dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts> + Send + Sync>,
+        Arc<
+            dyn Fn(
+                    &Arc<MessageBus>,
+                )
+                    -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
+                + Send
+                + Sync,
+        >,
     ),
 }
 
@@ -498,7 +617,17 @@ impl HostBusPort {
     /// AppContext → 装端口」，而总线在 `PluginHost` 构造时创建。装配期把总线钉死
     /// 的话，提前装配出来的那套端口会永远指向占位总线（插件订阅永收不到消息）；
     /// late-bound 让「早装的」与「晚装的」在总线就位后行为一致。
-    pub fn late_bound<F>(resolve: F, ws_ports_for: Arc<dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts> + Send + Sync>) -> Self
+    pub fn late_bound<F>(
+        resolve: F,
+        ws_ports_for: Arc<
+            dyn Fn(
+                    &Arc<MessageBus>,
+                )
+                    -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
+                + Send
+                + Sync,
+        >,
+    ) -> Self
     where
         F: Fn() -> Arc<MessageBus> + Send + Sync + 'static,
     {
@@ -652,7 +781,12 @@ impl bedcode_server_base::ports::BusPort for HostBusPort {
         self.bus().publish_binary(topic, sender, payload);
     }
 
-    async fn subscribe_static(&self, subscriber: &str, topic: &str, handler: Box<dyn bedcode_server_base::ports::BusMessageHandler>) {
+    async fn subscribe_static(
+        &self,
+        subscriber: &str,
+        topic: &str,
+        handler: Box<dyn bedcode_server_base::ports::BusMessageHandler>,
+    ) {
         self.bus()
             .subscribe_static(subscriber, topic, Box::new(WasmHandlerAdapter(handler)))
             .await;
@@ -700,7 +834,9 @@ mod tests {
     /// HostBusPort / BusBoundWsPorts 属桌面总线插座词汇（票 02 M3 语义边界：
     /// 随 T-04 迁宿主）。
     fn test_ws_ports_factory() -> Arc<
-        dyn Fn(&Arc<MessageBus>) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
+        dyn Fn(
+                &Arc<MessageBus>,
+            ) -> Arc<dyn bedcode_server_websocket::plugin_binding::ports::WsPorts>
             + Send
             + Sync,
     > {
@@ -728,7 +864,10 @@ mod tests {
     impl MessageDispatcher for TestDispatcher {
         fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()> {
             if self.fail.iter().any(|p| p == plugin_id) {
-                return Err(anyhow::anyhow!("simulated dispatch failure for {}", plugin_id));
+                return Err(anyhow::anyhow!(
+                    "simulated dispatch failure for {}",
+                    plugin_id
+                ));
             }
             if !self.delay.is_zero() {
                 std::thread::sleep(self.delay);
@@ -774,7 +913,9 @@ mod tests {
     }
 
     /// 构造测试 dispatcher（activated 之外的插件一律视为未激活）
-    fn test_dispatcher(activated: &[&str]) -> (Arc<dyn MessageDispatcher>, Receiver<(String, BusMessage)>) {
+    fn test_dispatcher(
+        activated: &[&str],
+    ) -> (Arc<dyn MessageDispatcher>, Receiver<(String, BusMessage)>) {
         let (tx, rx) = std::sync::mpsc::channel();
         (
             Arc::new(TestDispatcher {
@@ -794,13 +935,19 @@ mod tests {
     }
 
     /// 构造测试静态订阅者（base 形状，HostBusPort 端口路径；2026-10-08 补）
-    fn test_base_handler() -> (Box<dyn bedcode_server_base::ports::BusMessageHandler>, Receiver<BusMessage>) {
+    fn test_base_handler() -> (
+        Box<dyn bedcode_server_base::ports::BusMessageHandler>,
+        Receiver<BusMessage>,
+    ) {
         let (tx, rx) = std::sync::mpsc::channel();
         (Box::new(TestHandler { tx }), rx)
     }
 
     /// 等待投递结果，超时视为未投递
-    fn wait_delivery<T>(rx: &Receiver<T>, timeout: Duration) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
+    fn wait_delivery<T>(
+        rx: &Receiver<T>,
+        timeout: Duration,
+    ) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
         rx.recv_timeout(timeout)
     }
 
@@ -845,7 +992,8 @@ mod tests {
         let payload = serde_json::json!({"taskId": "t-1", "status": "running"});
         bus.publish("task:status-changed", "plugin-a", payload.clone());
 
-        let (plugin_id, msg) = wait_delivery(&rx, Duration::from_secs(2)).expect("WASM 订阅者应收到消息");
+        let (plugin_id, msg) =
+            wait_delivery(&rx, Duration::from_secs(2)).expect("WASM 订阅者应收到消息");
         assert_eq!(plugin_id, "plugin-b");
         assert_eq!(msg.topic, "task:status-changed");
         assert_eq!(msg.sender, "plugin-a");
@@ -909,7 +1057,8 @@ mod tests {
 
         bus.publish("topic:act", "plugin-a", serde_json::json!(1));
 
-        let (plugin_id, _) = wait_delivery(&rx, Duration::from_secs(2)).expect("激活的订阅者应收到");
+        let (plugin_id, _) =
+            wait_delivery(&rx, Duration::from_secs(2)).expect("激活的订阅者应收到");
         assert_eq!(plugin_id, "plugin-c");
         assert!(wait_delivery(&rx, Duration::from_millis(300)).is_err());
     }
@@ -931,8 +1080,8 @@ mod tests {
 
         bus.publish("topic:multi", "plugin-a", serde_json::json!(1));
 
-        let (plugin_id, _) =
-            wait_delivery(&rx, Duration::from_secs(2)).expect("plugin-c 应收到（plugin-b 的失败不影响它）");
+        let (plugin_id, _) = wait_delivery(&rx, Duration::from_secs(2))
+            .expect("plugin-c 应收到（plugin-b 的失败不影响它）");
         assert_eq!(plugin_id, "plugin-c");
     }
 
@@ -946,7 +1095,8 @@ mod tests {
         let (dispatcher, _rx_d) = test_dispatcher(&[]);
         bus.set_dispatcher(dispatcher).await;
         let (handler, rx) = test_handler();
-        bus.subscribe_static("plugin-c", "topic:static", handler).await;
+        bus.subscribe_static("plugin-c", "topic:static", handler)
+            .await;
 
         bus.publish("topic:static", "plugin-a", serde_json::json!({"n": 42}));
 
@@ -962,14 +1112,15 @@ mod tests {
     async fn test_static_subscriber_receives_without_dispatcher() {
         let bus = MessageBus::new();
         let (handler, rx) = test_handler();
-        bus.subscribe_static("plugin-c", "topic:static", handler).await;
+        bus.subscribe_static("plugin-c", "topic:static", handler)
+            .await;
         // 同时注册一个 WASM 订阅者，验证未注入 dispatcher 时被跳过而不是阻塞静态投递
         bus.subscribe_wasm("plugin-b", "topic:static").await;
 
         bus.publish("topic:static", "plugin-a", serde_json::json!(1));
 
-        let msg =
-            wait_delivery(&rx, Duration::from_secs(1)).expect("静态订阅者走 Rust callback，不应依赖 WASM dispatcher");
+        let msg = wait_delivery(&rx, Duration::from_secs(1))
+            .expect("静态订阅者走 Rust callback，不应依赖 WASM dispatcher");
         assert_eq!(msg.sender, "plugin-a");
     }
 
@@ -983,7 +1134,8 @@ mod tests {
         bus.set_dispatcher(dispatcher).await;
         bus.subscribe_wasm("plugin-b", "topic:unsub").await;
         let (handler, _rx_h) = test_handler();
-        bus.subscribe_static("plugin-c", "topic:unsub", handler).await;
+        bus.subscribe_static("plugin-c", "topic:unsub", handler)
+            .await;
 
         bus.unsubscribe("plugin-b", "topic:unsub").await;
         bus.unsubscribe("plugin-b", "topic:not-exist").await;
@@ -1008,7 +1160,8 @@ mod tests {
         bus.publish("topic:y", "plugin-a", serde_json::json!(2));
 
         // topic:x 应因无订阅者被清空；topic:y 仍投递给 plugin-c
-        let (plugin_id, msg) = wait_delivery(&rx, Duration::from_secs(2)).expect("plugin-c 应收到 topic:y");
+        let (plugin_id, msg) =
+            wait_delivery(&rx, Duration::from_secs(2)).expect("plugin-c 应收到 topic:y");
         assert_eq!(plugin_id, "plugin-c");
         assert_eq!(msg.topic, "topic:y");
         assert!(wait_delivery(&rx, Duration::from_millis(300)).is_err());
@@ -1027,20 +1180,29 @@ mod tests {
         // 非 UTF-8 字节（含 0xFF/0xFE/0xC3 0x28 等非法 UTF-8 序列）
         let non_utf8: Vec<u8> = vec![0x00, 0xFF, 0xFE, 0x80, 0x41, 0xC3, 0x28];
         bus.publish_binary("blob:transfer", "plugin-a", non_utf8.clone());
-        let (plugin_id, msg) = wait_delivery(&rx, Duration::from_secs(2)).expect("二进制订阅者应收到非 UTF-8 载荷");
+        let (plugin_id, msg) =
+            wait_delivery(&rx, Duration::from_secs(2)).expect("二进制订阅者应收到非 UTF-8 载荷");
         assert_eq!(plugin_id, "plugin-b");
         assert_eq!(
             msg.payload_binary.as_ref(),
             Some(&non_utf8),
             "非 UTF-8 字节必须原样透传"
         );
-        assert_eq!(msg.payload, serde_json::Value::Null, "二进制消息的 JSON 字段恒为 Null");
+        assert_eq!(
+            msg.payload,
+            serde_json::Value::Null,
+            "二进制消息的 JSON 字段恒为 Null"
+        );
 
         // MB 级大载荷（2MB，模 251 校验字节一致性）
         let large: Vec<u8> = (0..2 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
         bus.publish_binary("blob:transfer", "plugin-a", large.clone());
         let (_, msg) = wait_delivery(&rx, Duration::from_secs(2)).expect("MB 级大载荷应收到");
-        assert_eq!(msg.payload_binary.as_ref(), Some(&large), "大载荷字节必须一致");
+        assert_eq!(
+            msg.payload_binary.as_ref(),
+            Some(&large),
+            "大载荷字节必须一致"
+        );
     }
 
     /// JSON 格式偏好的订阅者收不到二进制消息：拒绝 + warn + 拒绝计数进监控
@@ -1203,20 +1365,35 @@ mod tests {
 
         let (handler, rx) = test_base_handler();
         port.subscribe_static("sub", "topic:sub", handler).await;
-        assert_eq!(bus_a.subscriber_count("topic:sub").await, 1, "订阅应落在当时解析到的总线 A 上");
+        assert_eq!(
+            bus_a.subscriber_count("topic:sub").await,
+            1,
+            "订阅应落在当时解析到的总线 A 上"
+        );
 
         // 切到 B 后重发一次同名订阅：应叠加在 B 上（A 上仍只有 1 个）
         *slot.lock().expect("bus slot lock") = bus_b.clone();
         let (handler2, rx2) = test_base_handler();
         port.subscribe_static("sub2", "topic:sub", handler2).await;
-        assert_eq!(bus_b.subscriber_count("topic:sub").await, 1, "切换后的订阅应落在 B 上");
-        assert_eq!(bus_a.subscriber_count("topic:sub").await, 1, "A 上不应出现切换后的订阅");
+        assert_eq!(
+            bus_b.subscriber_count("topic:sub").await,
+            1,
+            "切换后的订阅应落在 B 上"
+        );
+        assert_eq!(
+            bus_a.subscriber_count("topic:sub").await,
+            1,
+            "A 上不应出现切换后的订阅"
+        );
 
         // 反向验证：投 B 能收到，A 收不到
         bus_b.publish("topic:sub", "sender-y", serde_json::json!({"to": "b"}));
         let msg = wait_delivery(&rx2, Duration::from_secs(2)).expect("B 上的订阅者应收到消息");
         assert_eq!(msg.payload, serde_json::json!({"to": "b"}));
-        assert!(wait_delivery(&rx, Duration::from_millis(300)).is_err(), "A 上的订阅者不应收到投给 B 的消息");
+        assert!(
+            wait_delivery(&rx, Duration::from_millis(300)).is_err(),
+            "A 上的订阅者不应收到投给 B 的消息"
+        );
     }
 
     /// late-bound 二进制面：`publish_binary` 同样走当前解析目标
@@ -1245,9 +1422,17 @@ mod tests {
         let bytes: Vec<u8> = vec![0x00, 0xFF, 0x80];
         port.publish_binary("blob:late", "sender-z", bytes.clone());
 
-        let (_plugin, msg) = wait_delivery(&rx_db, Duration::from_secs(2)).expect("二进制应投递到当前总线 B");
-        assert_eq!(msg.payload_binary.as_ref(), Some(&bytes), "非 UTF-8 字节必须原样透传到当前总线");
-        assert!(wait_delivery(&rx_da, Duration::from_millis(300)).is_err(), "旧总线不应收到二进制消息");
+        let (_plugin, msg) =
+            wait_delivery(&rx_db, Duration::from_secs(2)).expect("二进制应投递到当前总线 B");
+        assert_eq!(
+            msg.payload_binary.as_ref(),
+            Some(&bytes),
+            "非 UTF-8 字节必须原样透传到当前总线"
+        );
+        assert!(
+            wait_delivery(&rx_da, Duration::from_millis(300)).is_err(),
+            "旧总线不应收到二进制消息"
+        );
     }
 
     /// 钉死形态回归：`new()` 仍只投给构造时给定的那条总线（无头 harness / 单测装配面）
@@ -1260,8 +1445,12 @@ mod tests {
         let bus_b = Arc::new(MessageBus::new());
         let (handler_a, rx_a) = test_handler();
         let (handler_b, rx_b) = test_handler();
-        bus_a.subscribe_static("sub", "topic:fixed", handler_a).await;
-        bus_b.subscribe_static("sub", "topic:fixed", handler_b).await;
+        bus_a
+            .subscribe_static("sub", "topic:fixed", handler_a)
+            .await;
+        bus_b
+            .subscribe_static("sub", "topic:fixed", handler_b)
+            .await;
 
         let port = HostBusPort::new(
             bus_a.clone(),
@@ -1269,8 +1458,12 @@ mod tests {
         );
         port.publish("topic:fixed", "sender-x", serde_json::json!({"n": 1}));
 
-        let msg = wait_delivery(&rx_a, Duration::from_secs(2)).expect("钉死形态应投给构造时那条总线");
+        let msg =
+            wait_delivery(&rx_a, Duration::from_secs(2)).expect("钉死形态应投给构造时那条总线");
         assert_eq!(msg.payload, serde_json::json!({"n": 1}));
-        assert!(wait_delivery(&rx_b, Duration::from_millis(300)).is_err(), "钉死形态不得投给其他总线");
+        assert!(
+            wait_delivery(&rx_b, Duration::from_millis(300)).is_err(),
+            "钉死形态不得投给其他总线"
+        );
     }
 }
