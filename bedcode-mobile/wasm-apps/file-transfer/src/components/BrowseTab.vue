@@ -25,7 +25,7 @@ const props = defineProps<{
   currentRoot: { id: string; name: string } | null
   selected: Set<string>
   selectedCount: number
-  /** 是否存在具备传输能力的对端（决定空态与可发送性） */
+  /** 活跃对端是否已连接就绪（决定空态与下拉刷新可用性；未就绪时不发必败的 list-remote） */
   peerOnline: boolean
   t: Translate
 }>()
@@ -86,7 +86,9 @@ function finishRefresh(): void {
 
 function onPullStart(e: TouchEvent): void {
   const el = scrollEl.value
-  if (!el || el.scrollTop > 0 || props.loading || pullState.value === 'refreshing') return
+  // 无就绪活跃对端时不进下拉态：list-remote 必失败（no active peer），
+  // 刷新请求只会把误导性错误渲染成「目录不可用」；空态的「查询对端」按钮是就绪前的动作入口
+  if (!el || el.scrollTop > 0 || props.loading || !props.peerOnline || pullState.value === 'refreshing') return
   pullingActive.value = true
   pullStartY = e.touches[0].clientY
 }
@@ -144,6 +146,8 @@ onBeforeUnmount(() => {
 
 type EmptyKind = 'empty' | 'notSharing' | 'error'
 
+// notSharing = 无就绪活跃对端（未发现 / 已发现未连接均归一，动作走「查询对端」）：
+// 此时发 list-remote 必失败，不能给刷新动作；empty = 已就绪但对端共享目录为空
 const emptyKind = computed<EmptyKind>(() => {
   if (props.error) return 'error'
   if (!props.peerOnline && !props.currentRoot) return 'notSharing'

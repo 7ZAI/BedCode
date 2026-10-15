@@ -53,15 +53,26 @@ import { subscribeAppBackPressed } from './back-button'
 /**
  * 提取 Tauri invoke 拒绝值的可读信息
  *
- * Rust 命令返回 Err(AppError) 时，AppError 的 Serialize 实现是纯字符串，
- * Tauri IPC 以该字符串 reject（非 Error 实例、无 .message 字段）；
- * dev-shell / 单测环境抛出的则是 Error 对象。两种形态都取到文本。
+ * 拒绝值形态三类：
+ * 1. 宿主 Rust 命令 Err(AppError)：经 ADR 0030 信封序列化，reject 值 = `{ code, request_id, params? }`
+ *    （真源 `bedcode-server-base::error::AppError::Serialize`，移动宿主经 wasm-core re-export 共用；
+ *    信封**永不携带**错误原文 / 堆栈，技术详情只进宿主日志）；
+ * 2. dev-shell / 单测环境：Error 实例；
+ * 3. 兼容纯字符串形态（整核前移动端本地 error.rs `serialize_str` 行为，已退役）。
+ *
+ * 信封没有 message 字段，取 `code, request_id=<id>` 作可读标识——request_id 是宿主日志
+ * 关联键（同条 tracing 的 `request_id` / `error` 字段），带上它才能从客户端侧 grep 到那一次失败。
  */
 function extractInvokeErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message
   if (typeof e === 'string') return e
-  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
-    return (e as { message: string }).message
+  if (e && typeof e === 'object') {
+    const obj = e as Record<string, unknown>
+    if (typeof obj.message === 'string') return obj.message
+    if (typeof obj.code === 'string') {
+      const rid = typeof obj.request_id === 'string' ? `, request_id=${obj.request_id}` : ''
+      return `${obj.code}${rid}`
+    }
   }
   return ''
 }
@@ -95,11 +106,14 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       const handler = commandHandlers.get(id)
       if (handler) return handler(...args)
       // 本地 handler 查不到时回退到 WASM 命令桥（宿主 PluginManager.invoke_command）；
-      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found。
-      // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
+      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活、无活跃对端）
+      // 统一掩盖成 Command not found。信封形态经 extractInvokeErrorMessage 取 code + request_id。
       try {
         return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
       } catch (e) {
+        // 原始拒绝值全量落盘（dev 控制台 + 攒批转发，release 也转发 error 级）：
+        // 信封只有 code/request_id，细节在宿主日志，此处留形状供关联排查
+        frontendLogger.error(`[PluginContext] command "${id}" failed:`, e)
         const detail = extractInvokeErrorMessage(e)
         throw new Error(detail ? `Command not found: ${id} (${detail})` : `Command not found: ${id}`)
       }

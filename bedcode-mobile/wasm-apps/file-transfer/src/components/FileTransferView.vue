@@ -181,13 +181,26 @@ async function uploadFile(): Promise<void> {
   }
 }
 
-/** 对端就绪状态变化驱动目录加载（上线加载共享根，下线清空） */
+/**
+ * 就绪的活跃对端 id（'' = 未就绪：没有活跃对端，或活跃对端未连接）。
+ *
+ * 浏览对端目录的准入条件 = 该值非空，与桌面端口径一致（桌面 watch peer.value.id 驱动
+ * loadRoots/reset）：`file-transfer.list-remote` 按插件侧 ACTIVE_NODE 寻址（resolve_node），
+ * 无活跃对端时调用必失败（no active peer）。不能用 `tasks.peerOnline` 作闸门——那只是
+ * 「发现到任意具备传输能力的设备」，未连接、甚至只有快照恢复条目时也为真。
+ * watch 源用 id 而非布尔：活跃对端从一个已连接节点兜底切到另一个时也要重载目录。
+ */
+const readyPeerId = computed(() => (devices.peer.value.online ? devices.peer.value.id : ''))
+
+/** 活跃对端就绪状态变化驱动目录加载（就绪加载共享根，未就绪清空浏览态）；
+ *  immediate：挂载时按当前状态对齐一次，替代此前挂载无条件 loadRoots（无活跃对端必失败） */
 watch(
-  () => tasks.peerOnline.value,
-  (online) => {
-    if (online) void fs.loadRoots()
+  readyPeerId,
+  (id) => {
+    if (id) void fs.loadRoots()
     else fs.reset()
   },
+  { immediate: true },
 )
 
 // ==================== 底部行动条 ====================
@@ -261,7 +274,6 @@ onMounted(() => {
   })
   // 挂载晚于设备事件时主动探测一次
   if (!tasks.peerOnline.value) void tasks.queryPeer()
-  void fs.loadRoots()
 })
 
 onUnmounted(() => {
@@ -344,7 +356,7 @@ onUnmounted(() => {
           :current-root="fs.currentRoot.value"
           :selected="fs.selected.value"
           :selected-count="fs.selectedCount.value"
-          :peer-online="tasks.peerOnline.value"
+          :peer-online="readyPeerId !== ''"
           :t="t"
           @cd="(name) => fs.cd(name)"
           @up="() => fs.up()"
