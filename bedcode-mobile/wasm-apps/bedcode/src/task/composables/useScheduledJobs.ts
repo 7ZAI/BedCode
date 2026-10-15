@@ -1,5 +1,5 @@
 /**
- * 定时任务核心逻辑（移动端工具箱「定时任务」页）
+ * 定时任务核心逻辑（移动端任务页「定时任务」页签）
  *
  * 列表数据源为对端桌面端 scheduled-jobs/list；创建走 scheduled-jobs/create。
  * 实时刷新由 useTaskHistory 的事件去抖联动（本 composable 的 load 注册为

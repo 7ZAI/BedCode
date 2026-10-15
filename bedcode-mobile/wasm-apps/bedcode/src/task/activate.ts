@@ -3,7 +3,7 @@
  *
  * 承载：终端工具栏入口（按当前会话 agent 白名单动态可见）+ 自渲染任务队列面板
  * （AutoTaskPanelHost，createApp 挂载到 document.body，与桌面端 AutoTaskModal 一致）
- * + 工具箱「任务记录 / 定时任务」页注册 + i18n 注册。
+ * + 任务页「预设任务 / 定时任务 / 任务记录」三页签注册 + i18n 注册。
  *
  * 数据面（ADR 0012「手机看、桌面管」）：本域不落本地业务真源，全部经
  * `task/api.ts` 的 HTTP 客户端访问桌面端 `com.bedcode.terminal-session` 端点；
@@ -186,7 +186,7 @@ function unmountPanel() {
   modalContainer = null
 }
 
-/** 注入面板与工具箱样式（宿主不加载插件 dist/style.css，运行时注入一次） */
+/** 注入面板与任务页样式（宿主不加载插件 dist/style.css，运行时注入一次） */
 function injectPanelStyle() {
   if (!document.getElementById('terminal-session-task-panel-style')) {
     const styleEl = document.createElement('style')
@@ -266,16 +266,16 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
   injectPanelStyle()
   mountPanel(context)
 
-  // 票 2026-10-10 批次 C2：`registerToolboxPage` 已整面退役。工具箱界面（任务记录 +
-  // 定时任务两页签）改由 app 域运行面的「工具箱」页签直接渲染 AutoTaskToolboxView
-  // （见 ../app/AppRoot.vue），不再作为独立扩展点注册。
+  // 票 2026-10-10 批次 C2：`registerToolboxPage` 已整面退役。任务页界面（预设任务 /
+  // 定时任务 / 任务记录三页签）改由 app 域运行面的「任务」页签直接渲染
+  // AutoTaskToolboxView（见 ../app/AppRoot.vue），不再作为独立扩展点注册。
 
   // 壳内任务页：动态路由（host 页头模式自带返回）+ 应用胶囊菜单入口。
-  // 权限未授予时注册抛错，不影响插件其余能力（与工具箱页同一口径）。
+  // 权限未授予时注册抛错，不影响插件其余能力（与任务页同一口径）。
   try {
     routeDisposable = context.ui.registerRoute({
       id: 'tasks',
-      title: context.i18n.t('toolboxTitle'),
+      title: context.i18n.t('tasksTitle'),
       component: AutoTaskToolboxView,
       header: true,
     })

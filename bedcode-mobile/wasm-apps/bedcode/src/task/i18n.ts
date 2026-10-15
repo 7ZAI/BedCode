@@ -49,13 +49,36 @@ const zhCN: Record<string, string> = {
   save: '保存',
   delete: '删除',
   loading: '加载中...',
-  // ==================== 工具箱入口 ====================
-  toolboxTitle: '自动任务',
-  'toolbox.title': '自动任务',
+  // ==================== 任务页入口 ====================
+  // 页签 id / 文案键原为 toolbox*，2026-10-16 随「工具箱 → 任务」改名一并退役；
+  // 终端域 Terminal 自己的 toolbox.* 子树（TaskEditDialog 等消费）与此无关，保留。
+  tasksTitle: '任务',
+  'tasks.title': '任务',
   // 壳内入口：胶囊菜单项（打开任务页；旧宿主退役后任务页的唯一入口）
   capsuleTitle: '任务',
-  'toolbox.tabs.history': '任务记录',
-  'toolbox.tabs.scheduled': '定时任务',
+  'tasks.tabs.preset': '预设任务',
+  'tasks.tabs.scheduled': '定时任务',
+  'tasks.tabs.history': '任务记录',
+  // ==================== 预设任务页 ====================
+  // 新增 / 编辑表单复用终端域 TaskEditDialog（其文案键在 terminal/i18n.ts 的
+  // toolbox.* 子树），此处只收本页独有部分：卡片动作、状态徽章、执行流程与空态。
+  'preset.execute': '执行',
+  'preset.edit': '编辑',
+  'preset.delete': '删除',
+  'preset.status.unused': '未使用',
+  'preset.status.executing': '执行中',
+  'preset.status.completed': '已完成',
+  'preset.status.interrupted': '已中断',
+  'preset.noTasks': '暂无预设任务',
+  'preset.emptyHint': '保存常用指令，一键发送到终端',
+  'preset.confirmDelete': '删除这个预设任务？',
+  'preset.confirmExecute': '确认执行',
+  'preset.willSendToTerminal': '指令将发送到所选会话的终端',
+  'preset.selectSession': '选择会话',
+  'preset.noActiveSessions': '暂无运行中的会话',
+  'preset.connectFirst': '请先连接桌面端',
+  'preset.sentToTerminal': '已发送到终端',
+  'preset.sendFailed': '发送失败',
   // ==================== 任务记录页 ====================
   'history.statusFilter.all': '全部',
   'history.statusFilter.in_progress': '执行中',
@@ -165,13 +188,38 @@ const en: Record<string, string> = {
   save: 'Save',
   delete: 'Delete',
   loading: 'Loading...',
-  // ==================== Toolbox entries ====================
-  toolboxTitle: 'Auto Tasks',
-  'toolbox.title': 'Auto Tasks',
-  // 壳内入口：胶囊菜单项（任务页入口）
+  // ==================== Task page entry ====================
+  // Tab id / message keys were `toolbox*` before the 2026-10-16 Toolbox → Tasks rename;
+  // the terminal domain's own `toolbox.*` subtree (consumed by TaskEditDialog etc.) is
+  // unrelated to this page and is kept as-is.
+  tasksTitle: 'Tasks',
+  'tasks.title': 'Tasks',
+  // Shell entry: capsule menu item (opens the tasks page; sole entry after old host retired)
   capsuleTitle: 'Tasks',
-  'toolbox.tabs.history': 'Task History',
-  'toolbox.tabs.scheduled': 'Scheduled Jobs',
+  'tasks.tabs.preset': 'Preset Tasks',
+  'tasks.tabs.scheduled': 'Scheduled Jobs',
+  'tasks.tabs.history': 'Task History',
+  // ==================== Preset Tasks tab ====================
+  // The add / edit form reuses the terminal domain's TaskEditDialog (whose message keys live
+  // in terminal/i18n.ts under `toolbox.*`); only this page's own strings live here: card
+  // actions, status badge, execution flow and empty state.
+  'preset.execute': 'Execute',
+  'preset.edit': 'Edit',
+  'preset.delete': 'Delete',
+  'preset.status.unused': 'Unused',
+  'preset.status.executing': 'Running',
+  'preset.status.completed': 'Completed',
+  'preset.status.interrupted': 'Interrupted',
+  'preset.noTasks': 'No preset tasks',
+  'preset.emptyHint': 'Save frequently used commands and send them to the terminal in one tap',
+  'preset.confirmDelete': 'Delete this preset task?',
+  'preset.confirmExecute': 'Confirm execution',
+  'preset.willSendToTerminal': 'The command will be sent to the selected session terminal',
+  'preset.selectSession': 'Select Session',
+  'preset.noActiveSessions': 'No active sessions',
+  'preset.connectFirst': 'Please connect to the desktop first',
+  'preset.sentToTerminal': 'Sent to terminal',
+  'preset.sendFailed': 'Failed to send',
   // ==================== Task History tab ====================
   'history.statusFilter.all': 'All',
   'history.statusFilter.in_progress': 'Running',

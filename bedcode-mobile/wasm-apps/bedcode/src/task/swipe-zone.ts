@@ -1,9 +1,9 @@
 /**
- * 工具箱横滑区「横向滚动容器」判定（AutoTaskToolboxView 专用）
+ * 任务页横滑区「横向滚动容器」判定（AutoTaskToolboxView 专用）
  *
  * 背景（实测缺陷，2026-10-14）：纵向滚动容器的 overflow-x 会被 CSS 规范计算为 auto
  * （overflow-y 可滚动时兄弟轴 visible 强算为 auto），任务列表里无空格长串（日志片段 /
- * URL / 错误码）横向溢出 6px（chromium 实测）即被旧实现判为「可横向滚动」→ 工具箱
+ * URL / 错误码）横向溢出 6px（chromium 实测）即被旧实现判为「可横向滚动」→ 任务页
  * zone 内横滑整轮 skip（内层不切页签、外层不翻主页面）→ 表现为「左右滑动失效」。
  *
  * 判据：纵向滚动容器（scrollHeight > clientHeight）排除；其余容器仅当横向溢出

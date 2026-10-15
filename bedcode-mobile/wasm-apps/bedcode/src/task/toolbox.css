@@ -1,5 +1,5 @@
 /**
- * Auto Task 工具箱页样式（插件侧）
+ * 任务页样式（插件侧）
  *
  * 经 index.ts 以 `?inline` 导入并注入 document.head（宿主不加载插件 dist/style.css）。
  * 类名统一 .att- 前缀，避免与宿主全局样式冲突；设计变量复用宿主 --mobile-* token。

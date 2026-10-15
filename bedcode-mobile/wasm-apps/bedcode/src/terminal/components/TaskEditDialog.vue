@@ -143,7 +143,7 @@
  * 包含工程目录选择和文件浏览功能。
  *
  * 当 lockedDir 传入时，目录自动锁定为该值且不可更改（终端视图场景），
- * 否则显示目录下拉菜单供用户选择（工具箱场景）。
+ * 否则显示目录下拉菜单供用户选择（任务页场景）。
  */
 
 import { ref, computed, watch, nextTick, inject } from 'vue'
@@ -158,7 +158,7 @@ const props = defineProps<{
   task: PresetTask | null
   /** 是否已连接桌面端 */
   isConnected: boolean
-  /** 可选的工程目录列表（工具箱场景使用） */
+  /** 可选的工程目录列表（任务页场景使用） */
   projectDirs: string[]
   /** 当前活跃会话 ID（用于文件浏览 fallback） */
   activeSessionId: string

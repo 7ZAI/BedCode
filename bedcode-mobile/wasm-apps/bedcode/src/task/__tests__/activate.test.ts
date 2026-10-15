@@ -9,7 +9,7 @@
  * | C-T1 | registerRoute | 任务页注册为插件动态路由（id `tasks`，host 页头模式自带返回） | 入参形状 + header true |
  * | C-T2 | registerCapsuleItem | 壳内应用菜单项（id `task-page`，文案走 `context.i18n`） | 入参形状 |
  * | C-T3 | onSelect 副作用 | 胶囊项点击 → `ui.openPage('tasks')` | 调用一次且路由 id 正确 |
- * | C-T4 | 停用回收 | 路由 / 胶囊 / 工具箱 / 工具栏 disposable 各回收一次 | dispose 各 1 次 |
+ * | C-T4 | 停用回收 | 路由 / 胶囊 / 任务面板 / 工具栏 disposable 各回收一次 | dispose 各 1 次 |
  * | C-T5 | supported-agents 门控 | 受保护端点只在**已认证（paired）**时请求（401 回归） | 未配对 0 次 / 配对 1 次 / 认证后补拉 1 次 |
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'

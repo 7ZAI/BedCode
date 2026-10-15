@@ -3,13 +3,16 @@
  *
  * 纯状态 + 纯函数，不触 DOM、不触组件，便于单测钉行为契约。
  *
- * 排序口径沿用旧宿主底部导航：内置插槽 order = 连接 0 / 会话 100 / 工具箱 200 /
+ * 排序口径沿用旧宿主底部导航：内置插槽 order = 连接 0 / 会话 100 / 任务 200 /
  * 设置 300（`e92cc40a3^:src/components/MobileNav.vue`），页面索引按排序后位置生成。
  * 保留 order 而非直接用数组下标，是为了让后续插件页签能像旧宿主那样插在中间值上。
+ *
+ * 第三项 id 为 `tasks`（原 `toolbox`）：该页签呈现的是任务域（预设任务 / 定时任务 /
+ * 任务记录三页签），旧名「工具箱」已随 2026-10-16 改名一并退役。
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 
-export type AppTab = 'connection' | 'sessions' | 'toolbox' | 'settings'
+export type AppTab = 'connection' | 'sessions' | 'tasks' | 'settings'
 
 export interface AppTabDef {
   id: AppTab
@@ -23,7 +26,7 @@ export interface AppTabDef {
 export const APP_TABS: readonly AppTabDef[] = [
   { id: 'connection', labelKey: 'app.nav.connection', order: 0 },
   { id: 'sessions', labelKey: 'app.nav.sessions', order: 100 },
-  { id: 'toolbox', labelKey: 'app.nav.toolbox', order: 200 },
+  { id: 'tasks', labelKey: 'app.nav.tasks', order: 200 },
   { id: 'settings', labelKey: 'app.nav.settings', order: 300 },
 ]
 

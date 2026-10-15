@@ -29,23 +29,23 @@ import {
 } from '../panelDock'
 import type { AppTab } from '../useAppTabs'
 
-const ORDER: AppTab[] = ['connection', 'sessions', 'toolbox', 'settings']
+const ORDER: AppTab[] = ['connection', 'sessions', 'tasks', 'settings']
 
 describe('C-PD1 当前页停靠', () => {
   it('should_dockActive_when_panelIsCurrentTab', () => {
     expect(
-      dockClassOf({ id: 'toolbox', active: 'toolbox', order: ORDER }),
+      dockClassOf({ id: 'tasks', active: 'tasks', order: ORDER }),
     ).toBe(ACTIVE_DOCK)
   })
 })
 
 describe('C-PD2 相对位置停靠', () => {
   it('should_dockLeft_when_panelPassedCurrentTab', () => {
-    expect(dockClassOf({ id: 'connection', active: 'toolbox', order: ORDER })).toBe(LEFT_DOCK)
+    expect(dockClassOf({ id: 'connection', active: 'tasks', order: ORDER })).toBe(LEFT_DOCK)
   })
 
   it('should_dockRight_when_panelNotYetReached', () => {
-    expect(dockClassOf({ id: 'settings', active: 'toolbox', order: ORDER })).toBe(RIGHT_DOCK)
+    expect(dockClassOf({ id: 'settings', active: 'tasks', order: ORDER })).toBe(RIGHT_DOCK)
   })
 
   it('should_dockRight_when_activeIsFirstTab', () => {

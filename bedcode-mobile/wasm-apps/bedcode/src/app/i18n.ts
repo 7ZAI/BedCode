@@ -14,7 +14,7 @@ export const messagesZhCN = {
     nav: {
       connection: '连接',
       sessions: '会话',
-      toolbox: '工具箱',
+      tasks: '任务',
       settings: '设置',
       label: '主导航',
     },
@@ -39,7 +39,7 @@ export const messagesEn = {
     nav: {
       connection: 'Connection',
       sessions: 'Sessions',
-      toolbox: 'Toolbox',
+      tasks: 'Tasks',
       settings: 'Settings',
       label: 'Main navigation',
     },

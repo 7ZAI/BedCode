@@ -1,6 +1,6 @@
 <template>
   <div class="att-root mobile-ui">
-    <!-- 自绘页签：任务记录 / 定时任务（双面板常驻挂载，切页不丢订阅与滚动位置） -->
+    <!-- 自绘页签：预设任务 / 定时任务 / 任务记录（三面板常驻挂载，切页不丢订阅与滚动位置） -->
     <div class="att-tabs">
       <button
         v-for="tab in tabs"
@@ -25,13 +25,17 @@
       @touchend="onZoneTouchEnd"
       @touchcancel="onZoneTouchEnd"
     >
-      <!-- 双面板常驻挂载（保订阅与滚动位置），切页走透明度+位移过渡；
-           面板停靠类由 activeTabIndex 驱动：新页自动从滑动方向侧滑入 -->
+      <!-- 三面板常驻挂载（保订阅与滚动位置），切页走透明度+位移过渡；
+           面板停靠类由 activeTabIndex 驱动：新页自动从滑动方向侧滑入。
+           面板序号与 tabs 数组下标一一对应（panelClass(index) 直接吃下标） -->
       <div :class="['att-tab-panel', panelClass(0)]">
-        <TaskHistoryTab :context="context" :history="history" />
+        <PresetTasksTab :context="context" @open-connection="emit('open-connection')" />
       </div>
       <div :class="['att-tab-panel', panelClass(1)]">
         <ScheduledJobsTab :context="context" :scheduled="scheduled" />
+      </div>
+      <div :class="['att-tab-panel', panelClass(2)]">
+        <TaskHistoryTab :context="context" :history="history" />
       </div>
     </div>
   </div>
@@ -39,18 +43,23 @@
 
 <script setup lang="ts">
 /**
- * AutoTaskToolboxView — 自动任务工具箱页（2 页签容器）
+ * AutoTaskToolboxView — 任务页（3 页签容器）
  *
- * 宿主 ToolboxView 经 PluginViewHost provide pluginContext 后渲染本组件。
- * 业务逻辑全部下沉到 composables（useTaskHistory / useScheduledJobs），
- * 本组件只做：页签切换 + 两页联动（事件去抖重拉 + 断线重连重拉）。
+ * app 域运行面的「任务」页签与壳内 `tasks` 路由经 PluginViewHost provide pluginContext
+ * 后渲染本组件。业务逻辑全部下沉到 composables（useTaskHistory / useScheduledJobs）
+ * 与预设任务真源（SDK `getPresetTasks()`），本组件只做：页签切换 + 两页联动
+ * （事件去抖重拉 + 断线重连重拉）。
+ *
+ * 页签顺序 = 预设任务 / 定时任务 / 任务记录（tabs 数组即视觉顺序，面板按下标一一对应；
+ * 新增页签必须同时补 tabs 项与对应 panel，否则 panelClass 的下标对不上）。
  */
 import { inject, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { getMobileApi } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useSwipeTabs } from '@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs'
-import TaskHistoryTab from './TaskHistoryTab.vue'
+import PresetTasksTab from './PresetTasksTab.vue'
 import ScheduledJobsTab from './ScheduledJobsTab.vue'
+import TaskHistoryTab from './TaskHistoryTab.vue'
 import { useTaskHistory } from '../composables/useTaskHistory'
 import { useScheduledJobs } from '../composables/useScheduledJobs'
 import { delegateSwipe } from '../../app/swipeArbitration'
@@ -60,10 +69,16 @@ const context = inject<PluginContext>('pluginContext')!
 const t = (key: string): string => context.i18n.t(key)
 const mobileApi = getMobileApi()
 
-const activeTab = ref<'history' | 'scheduled'>('history')
-const tabs: { key: 'history' | 'scheduled'; label: string }[] = [
-  { key: 'history', label: 'toolbox.tabs.history' },
-  { key: 'scheduled', label: 'toolbox.tabs.scheduled' },
+/** 预设任务页需要把用户引导回连接页时向上发事件（页签切换归 app 域） */
+const emit = defineEmits<{ 'open-connection': [] }>()
+
+type TabKey = 'preset' | 'scheduled' | 'history'
+
+const activeTab = ref<TabKey>('preset')
+const tabs: { key: TabKey; label: string }[] = [
+  { key: 'preset', label: 'tasks.tabs.preset' },
+  { key: 'scheduled', label: 'tasks.tabs.scheduled' },
+  { key: 'history', label: 'tasks.tabs.history' },
 ]
 
 /** 当前页签序号：横滑区边界声明（data-zone-at-*）与步进切换共用 */

@@ -12,7 +12,7 @@
  * | C-AA3 | registerSurface | 注册唯一运行面 = AppRoot | 组件引用相等 |
  * | C-AA4 | dispose | 运行面回收一次 | dispose 1 次 |
  * | C-AA5 | i18n 双语同步 | zh-CN 与 en 的 app 键集合完全一致 | 键路径数组相等 |
- * | C-AA6 | 导航文案齐备 | 4 个内置页签文案双语都在 | app.nav.{connection,sessions,toolbox,settings} |
+ * | C-AA6 | 导航文案齐备 | 4 个内置页签文案双语都在 | app.nav.{connection,sessions,tasks,settings} |
  */
 import { describe, it, expect, vi } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
@@ -117,7 +117,7 @@ describe('C-AA5/C-AA6 i18n 双语', () => {
     const required = [
       'app.nav.connection',
       'app.nav.sessions',
-      'app.nav.toolbox',
+      'app.nav.tasks',
       'app.nav.settings',
       'app.nav.label',
     ]
@@ -132,7 +132,7 @@ describe('C-AA5/C-AA6 i18n 双语', () => {
 
   it('should_translateEveryNavLabel_when_localesDiffer', () => {
     // 反例防护：zh 与 en 的导航文案不得相同（复制粘贴漏翻的典型症状）
-    const navKeys = ['connection', 'sessions', 'toolbox', 'settings', 'label']
+    const navKeys = ['connection', 'sessions', 'tasks', 'settings', 'label']
     for (const key of navKeys) {
       const zh = (messagesZhCN.app.nav as Record<string, string>)[key]
       const en = (messagesEn.app.nav as Record<string, string>)[key]
