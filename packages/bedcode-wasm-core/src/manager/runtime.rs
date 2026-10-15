@@ -316,18 +316,11 @@ impl WasmRuntime {
         abi: AbiPolicy,
     ) -> crate::Result<Self> {
         // 内核配置：编译期默认 < 配置文件 < 运行时覆盖（set_config）。
-        // 配置文件缺失/非法不阻断启动——记录 warn 并回落编译期默认
+        // 配置文件缺失/非法不阻断启动——`load_or_default` 记录 warn 并回落编译期默认
         let core_config = app_handle
             .as_ref()
             .and_then(|h| h.path().app_config_dir().ok())
-            .map(|d| d.join(CoreConfig::FILE_NAME))
-            .map(|path| match CoreConfig::load_from(&path) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "内核配置加载失败，回落编译期默认");
-                    CoreConfig::default()
-                }
-            })
+            .map(|d| CoreConfig::load_or_default(&d.join(CoreConfig::FILE_NAME)))
             .unwrap_or_default();
         Self::with_setup(
             storage,

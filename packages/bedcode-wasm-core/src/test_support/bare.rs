@@ -230,12 +230,25 @@ pub fn setup_headless_runtime_with_abi(
     aot_cache_dir: Option<std::path::PathBuf>,
     abi: crate::manager::runtime::AbiPolicy,
 ) -> crate::Result<crate::manager::runtime::WasmRuntime> {
+    setup_headless_runtime_with_config(aot_cache_dir, abi, crate::config::CoreConfig::default())
+}
+
+/// 同 [`setup_headless_runtime_with_abi`]，但显式注入内核配置
+///
+/// 端宿主用例要按**生产引擎配置**装配才有代表性：例如移动端关掉信号式 trap
+/// （`EngineTuning::signals_based_traps = Some(false)`，见 `mobile_core_config`）后，
+/// 移动宿主的插件闭环用例必须用同一份配置跑——否则「trap 变成错误而非崩溃」这条
+/// 产品性质在测试里根本没被装配到。
+pub fn setup_headless_runtime_with_config(
+    aot_cache_dir: Option<std::path::PathBuf>,
+    abi: crate::manager::runtime::AbiPolicy,
+    core_config: crate::config::CoreConfig,
+) -> crate::Result<crate::manager::runtime::WasmRuntime> {
     let storage = crate::storage::PluginStorage::test_storage();
     let mut runtime = crate::manager::runtime::WasmRuntime::with_setup(
         storage,
         None,
-        crate::manager::runtime::EngineSetup::new(crate::config::CoreConfig::default())
-            .with_abi(abi),
+        crate::manager::runtime::EngineSetup::new(core_config).with_abi(abi),
     )?;
     // AOT 缓存目录：无头装配注入（生产路径经 app_handle 取；测试用例断言
     // 缓存产物落点需要显式注入——aot_cache_dir 是 pub(crate)，crate 内可达）

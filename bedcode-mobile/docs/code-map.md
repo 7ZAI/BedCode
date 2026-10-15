@@ -90,6 +90,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 移动端插件系统与桌面同架构（wasmtime 组件沙箱，双端共用 `packages/bedcode-wasm-core`）。做插件相关改动按层定位：
 
 - **机制核 + 统一壳（双端同一份源码）**：`packages/bedcode-wasm-core/`（bus / config / db / security / storage / 引擎机制 + 统一运行时壳；移动不开 `desktop-assembly`，dev 依赖加 `test-support`；WIT 绑定全在宿主）
+- **移动端引擎配置（端事实）**：`plugin/manager.rs::mobile_core_config` —— 配置文件覆盖面（`CoreConfig::load_or_default`）叠加移动固定项：**关信号式 trap**（`EngineTuning::signals_based_traps = Some(false)`）。Android 的 ART 经 `libsigchain` 接管信号处理器 ⇒ 信号式 trap 会被判成非 wasm 故障并交回上一个处理器（WebView/crashpad）⇒ 任何 guest trap 变成宿主进程 SIGILL；关闭后 trap 由生成代码显式抛出（详见 `docs/knowledge/plugin-wasm-logging.md` 补充段）
 - **权限真源（桌面同构，2026-10-14）**：内核 `PermissionManager`——激活时按生效权限授予（受信来源 = manifest 全量；用户安装 = 批准 ∩ 请求），停用时撤销；宿主 adapter 一律经 `WasmHostContext::{has_permission, granted_permissions, revoke_permissions}` 进出，**没有**移动独有的 `granted_permissions` 镜像  
 - **移动宿主自报域**：`src-tauri/src/plugin/host_domains/`（只留端差异 4 域 http / peer / mdns / ws；双端全等 8 域由内核 `core_binding` 单份实现）+ `bindings.rs`（宿主 bindgen + 白名单双向校验）+ `guest_events.rs`（移动 events 导出派发器）
 - **移动独有域（整面住宿主）**：`src-tauri/src/plugin/{notify,fs_mobile,terminal_stream,connection,auth}.rs`（各自 `impl Host` + 域逻辑 + Android 桥；`notify` 本体是共享域契约 `host-notify`）

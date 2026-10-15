@@ -288,6 +288,23 @@ pub struct EngineTuning {
     pub wasm_reference_types: Option<bool>,
     /// Wasm 64 位线性内存提案（`None` = 跟随 wasmtime 默认）
     pub wasm_memory64: Option<bool>,
+    /// 是否启用「信号式 trap」（`Config::signals_based_traps`；`None` = 跟随 wasmtime 默认开）
+    ///
+    /// `false` = 所有 wasm trap（`unreachable`/panic、边界检查、栈溢出、燃料耗尽……）
+    /// 由生成代码经**显式 libcall** 抛出（内存访问附带显式边界检查），不依赖宿主信号
+    /// 处理器；语义完全等价（错误仍带 wasm backtrace），代价是代码略大 / 内存访问略慢。
+    ///
+    /// **为什么需要这个开关（端宿主可配的端事实）**：Android 上 ART 会经 `libsigchain`
+    /// 接管应用注册的信号处理器，wasmtime 的信号式 trap 在这条链上会被判成「非 wasm
+    /// 故障」并把信号交回上一个处理器（WebView/crashpad）⇒ **任何 guest trap 都变成
+    /// 宿主进程 SIGILL 退出**（2026-10-15 ai-chatbox 崩溃即此路径），而不是一条带
+    /// backtrace 的插件错误。关掉信号式 trap 后 trap 由生成代码显式抛出，不再经过信号
+    /// 链。移动宿主在当前值上取 `false`（见 `PluginManager` 的 `mobile_core_config`）；
+    /// 桌面保持上游默认（信号式 trap 可用且更快）。
+    ///
+    /// 非看门狗项：不在 `reassert_locked_knobs` 锁定面内（逃生舱可覆盖），且关掉后
+    /// 仍保留燃料/内存/栈全部上限（它只改 trap 的投递方式，不改限额）。
+    pub signals_based_traps: Option<bool>,
 }
 
 impl Default for EngineTuning {
@@ -312,6 +329,7 @@ impl Default for EngineTuning {
             wasm_tail_call: None,
             wasm_reference_types: None,
             wasm_memory64: None,
+            signals_based_traps: None,
         }
     }
 }
@@ -433,6 +451,25 @@ impl Default for CoreConfig {
 impl CoreConfig {
     /// 默认配置文件名（应用配置目录下）
     pub const FILE_NAME: &'static str = "wasm-core.json";
+
+    /// 生产启动路径的「读配置或回落默认」
+    ///
+    /// 文件缺失 → 编译期默认；文件非法（解析/校验失败）→ **warn 记录 + 回落默认**，
+    /// 不阻断启动（配置是可选覆盖面）。非法配置必须留痕：静默回落到默认会把
+    /// 「明明配了却不生效」变成无迹可查的幽灵问题。
+    ///
+    /// 两端宿主与 `WasmRuntime::new` 共用此入口——宿主若要叠加端固定项
+    /// （如移动端关信号式 trap），先取本函数再改写字段，保证「配置文件覆盖面」
+    /// 不被绕过。
+    pub fn load_or_default(path: &Path) -> Self {
+        match Self::load_from(path) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "内核配置加载失败，回落编译期默认");
+                Self::default()
+            }
+        }
+    }
 
     /// 从 JSON 文件加载配置；文件不存在返回默认配置
     ///
@@ -578,6 +615,43 @@ mod tests {
         assert_eq!(tuning.wasm_tail_call, None);
         assert_eq!(tuning.wasm_reference_types, None);
         assert_eq!(tuning.wasm_memory64, None);
+        assert_eq!(tuning.signals_based_traps, None);
+    }
+
+    /// `load_or_default`：文件缺失 → 编译期默认；文件非法 → warn + 默认（不阻断启动）
+    ///
+    /// 两端宿主（含移动 `mobile_core_config`）都经本入口拿配置，非法文件必须回落
+    /// 而不是报错掉启动；回落同时留 warn（不得静默）
+    #[test]
+    fn load_or_default_falls_back_to_compiled_default() {
+        let dir =
+            std::env::temp_dir().join(format!("wasm-core-cfg-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 缺失文件 → 默认
+        let missing = dir.join("not-written-yet.json");
+        assert_eq!(CoreConfig::load_or_default(&missing), CoreConfig::default());
+
+        // 非法文件 → 默认（不 panic、不报错）
+        let invalid = dir.join("invalid.json");
+        std::fs::write(&invalid, r#"{"engine":{"tuning":{"opt_level":"turbo"}}}"#).unwrap();
+        assert_eq!(CoreConfig::load_or_default(&invalid), CoreConfig::default());
+
+        // 合法文件 → 文件值（覆盖面不被绕过）
+        let ok = dir.join("ok.json");
+        std::fs::write(
+            &ok,
+            r#"{"engine":{"tuning":{"signals_based_traps":false}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            CoreConfig::load_or_default(&ok)
+                .engine
+                .tuning
+                .signals_based_traps,
+            Some(false)
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// `debug_info` 推导规则四分支：显式值优先 / 调试模式推导 / 非调试保持 `None` /
@@ -630,7 +704,7 @@ mod tests {
             &path,
             r#"{"engine":{"tuning":{"component_model_async":true,"backtrace_details":"disable",
                 "memory_may_move":true,"debug_info":true,"opt_level":"speed-and-size",
-                "profiling":"jit-dump","parallel_compilation":false}}}"#,
+                "profiling":"jit-dump","parallel_compilation":false,"signals_based_traps":false}}}"#,
         )
         .unwrap();
         let cfg = CoreConfig::load_from(&path).expect("合法 tuning 配置应加载成功");
@@ -640,6 +714,7 @@ mod tests {
         assert_eq!(cfg.engine.tuning.opt_level, Some(OptLevel::SpeedAndSize));
         assert_eq!(cfg.engine.tuning.profiling, Some(Profiling::JitDump));
         assert_eq!(cfg.engine.tuning.parallel_compilation, Some(false));
+        assert_eq!(cfg.engine.tuning.signals_based_traps, Some(false));
 
         // 缺省字段回落默认（不因新增字段破坏旧配置文件）
         std::fs::write(&path, r#"{"engine":{"tuning":{"debug_info":true}}}"#).unwrap();

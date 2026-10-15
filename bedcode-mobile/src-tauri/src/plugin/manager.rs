@@ -27,6 +27,34 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// 预授权 storage key(file-transfer mount-local 时追加写入)。
 pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
 
+/// 移动端内核配置：配置文件覆盖面 + 移动端固定项
+///
+/// - 先经 `CoreConfig::load_or_default` 读应用配置目录下的 `wasm-core.json`
+///   （与 `WasmRuntime::new` 同一入口，配置文件覆盖面不被绕过）；
+/// - 再施加移动端固定项：**关掉信号式 trap**（`signals_based_traps = false`）。
+///
+/// **为什么移动端必须关**：Android 的 ART 经 `libsigchain` 接管应用注册的信号处理器，
+/// wasmtime 的信号式 trap 在这条链上会被判成「非 wasm 故障」并把信号交回上一个处理器
+/// （WebView/crashpad）⇒ **任何 guest trap（插件 panic / 越界 / 栈溢出 / 燃料耗尽）都
+/// 变成宿主进程 SIGILL 退出**，而不是一条带 wasm backtrace 的插件错误（2026-10-15
+/// ai-chatbox 崩溃即此路径，诊断见 `.scratch/2026-10-15-mobile-ai-chatbox-sigill/`）。
+/// 关掉后全部 trap 由生成代码经显式 libcall 抛出（内存访问附带显式边界检查），语义
+/// 完全等价，代价是代码略大 / 内存访问略慢。
+///
+/// 桌面端保持上游默认（信号式 trap 可用且更快，实测 trap 能正常转成插件错误）——
+/// 这是端事实差异，取值归本端宿主（ADR 0052 D4），机制（配置项本身）住 wasm-core。
+pub fn mobile_core_config(app_config_dir: Option<&std::path::Path>) -> bedcode_wasm_core::config::CoreConfig {
+    let mut config = app_config_dir
+        .map(|dir| {
+            bedcode_wasm_core::config::CoreConfig::load_or_default(
+                &dir.join(bedcode_wasm_core::config::CoreConfig::FILE_NAME),
+            )
+        })
+        .unwrap_or_default();
+    config.engine.tuning.signals_based_traps = Some(false);
+    config
+}
+
 /// 收集插件的预授权路径
 ///
 /// 当前恒返回空：注册入口（原 `register_preauth_provider`）在本端无任何
@@ -210,14 +238,19 @@ impl PluginManager {
         }
         // 统一运行时壳（单形态 2026-10-13）：wasm-core 零端 ABI 知识——
         // 构造注入移动 ABI 规格（20，无 abi-form 导出）；first_party_dirs 移动
-        // 无此概念（桌面 worker 免弹窗通道，ADR 0034）传空表
-        let runtime = Arc::new(WasmRuntime::new(
+        // 无此概念（桌面 worker 免弹窗通道，ADR 0034）传空表。
+        // 引擎配置经 `mobile_core_config`（含移动端固定项：关信号式 trap，见其注释）
+        let core_config = mobile_core_config(
+            self.app_handle
+                .as_ref()
+                .and_then(|h| h.path().app_config_dir().ok())
+                .as_deref(),
+        );
+        let runtime = Arc::new(WasmRuntime::with_setup(
             self.storage.clone(),
             self.app_handle.as_ref().cloned(),
-            Vec::new(),
-            crate::plugin::wasm_runtime::AbiPolicy {
-                form: None,
-            },
+            crate::plugin::wasm_runtime::EngineSetup::new(core_config)
+                .with_abi(crate::plugin::wasm_runtime::AbiPolicy { form: None }),
         )?);
         // guest 事件派发器（票 05 绑定归位）：`events` 导出是各端契约事实，内核零绑定
         // ——注入移动实现（词汇：on-bus-message / on-auth-success / on-disconnect /
@@ -1510,6 +1543,26 @@ mod tests {
             info.state,
             PluginState::Activated,
             "替换 Ok 形态组件后重试激活应入 Activated"
+        );
+    }
+
+    /// 移动端引擎配置：生产装配路径必须**关掉信号式 trap**
+    ///
+    /// Android 上 ART 经 `libsigchain` 接管应用注册的信号处理器 ⇒ wasmtime 的信号式
+    /// trap 被判成「非 wasm 故障」并交回上一个处理器（WebView/crashpad）⇒ **任何 guest
+    /// trap（插件 panic / 越界 / 栈溢出 / 燃料耗尽）都变成宿主进程 SIGILL 退出**
+    /// （2026-10-15 ai-chatbox 崩溃即此路径）。关掉后 trap 由生成代码经显式 libcall 抛出，
+    /// 不再经过信号链。
+    ///
+    /// 本用例走**生产装配路径**（`init_wasm_runtime_with` → `mobile_core_config`）：
+    /// 只断言配置面值不得漏接（漏接 = 崩溃照旧且无任何报错）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mobile_engine_disables_signals_based_traps() {
+        let (manager, _tmp) = setup_manager().await;
+        let engine = bedcode_wasm_core::test_support::runtime_engine(manager.wasm_runtime());
+        assert!(
+            !engine.get_signals_based_traps(),
+            "移动端必须关掉信号式 trap：否则任何 guest trap 都会 delegate 成进程 SIGILL"
         );
     }
 

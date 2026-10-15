@@ -67,6 +67,19 @@
 - P1 调试模式：自动化受限（需要真实 debug profile wasm 产物），列为构建脚本冒烟（产物含 DWARF
   section 检查），燃料倍率以真实插件跑通为准。
 
+## 补充（2026-10-15）：双端 trap 投递方式差异——移动端关闭信号式 trap
+
+移动端曾出现「**任何** guest trap ⇒ 宿主进程 SIGILL 退出」：Android 的 ART 经 `libsigchain`
+接管应用注册的信号处理器，wasmtime 的信号式 trap 在这条链上被判成「非 wasm 故障」后把信号
+交回上一个处理器（WebView/crashpad）——**上面刀 1 的 backtrace 因此根本到不了**，插件 panic
+表现为进程崩溃。
+
+落地：移动宿主 `mobile_core_config` 关掉信号式 trap（`EngineTuning::signals_based_traps
+= Some(false)`，机制住 wasm-core 配置面、取值归移动宿主）——trap 改由生成代码经显式 libcall
+抛出（内存访问附带显式边界检查），不再依赖信号链，刀 1 的 `wasm backtrace` 才真的可用；
+桌面保持上游默认（信号式 trap 可用且更快）。诊断全文与真机复验步骤见
+`.scratch/2026-10-15-mobile-ai-chatbox-sigill/spec.md`。
+
 ## Out of Scope（衔接项）
 
 - 前端日志框架接入与 `report_frontend_log` / `devConsoleRelay.ts` relay 删除（另一会话专项）

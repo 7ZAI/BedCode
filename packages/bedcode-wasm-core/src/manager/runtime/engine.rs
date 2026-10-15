@@ -388,6 +388,14 @@ pub(crate) fn build_engine_config(core_config: &CoreConfig, debug_mode: bool) ->
     if let Some(v) = tuning.wasm_memory64 {
         config.wasm_memory64(v);
     }
+    // 信号式 trap 开关（端事实）：移动宿主取 false——Android ART 经 `libsigchain` 接管
+    // 信号处理器，信号式 trap 会被判成非 wasm 故障并交回上一个处理器（WebView/crashpad）
+    // ⇒ 任何 guest trap 都变成宿主进程 SIGILL；`false` = 全部 trap 走显式 libcall。
+    // 影响代码生成（边界检查不再依赖 guard page）⇒ 换值会换 AOT 产物（旧 cwasm 反序列化
+    // 失败后自动回落重编，见 `compile_component_from_file`）
+    if let Some(v) = tuning.signals_based_traps {
+        config.signals_based_traps(v);
+    }
 
     // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
     if engine.compile_cache {
@@ -466,6 +474,7 @@ pub(crate) fn log_effective_engine_config(
         opt_level = ?tuning.opt_level,
         profiling = ?tuning.profiling,
         parallel_compilation = ?tuning.parallel_compilation,
+        signals_based_traps = ?tuning.signals_based_traps,
         "WASM engine configured"
     );
 }
@@ -631,6 +640,46 @@ mod tests {
             .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// 信号式 trap 开关必须真到达 Engine（配置面 → wasmtime 原语的接线锁）
+    ///
+    /// 背景：Android 上 ART 经 `libsigchain` 接管信号处理器，信号式 trap 会被判成
+    /// 「非 wasm 故障」并交回上一个处理器（WebView/crashpad）⇒ 任何 guest trap 变成
+    /// 宿主进程 SIGILL。移动宿主取 `Some(false)`（显式 libcall 抛 trap，不经信号链）——
+    /// 本用例钉住「配置值确实进到 Engine」这一步：漏接就是崩溃照旧且无任何报错。
+    /// `None` 分支同样要留痕：它必须逐字继承 wasmtime 默认（本机 `cfg!(has_native_signals)`）。
+    #[test]
+    fn signals_based_traps_tuning_reaches_engine() {
+        let mut off = CoreConfig::default();
+        off.engine.tuning.signals_based_traps = Some(false);
+        let engine_off =
+            wasmtime::Engine::new(&build_engine_config(&off, false)).expect("engine (off)");
+        assert!(
+            !engine_off.get_signals_based_traps(),
+            "Some(false) 必须关闭信号式 trap"
+        );
+
+        let mut on = CoreConfig::default();
+        on.engine.tuning.signals_based_traps = Some(true);
+        let engine_on =
+            wasmtime::Engine::new(&build_engine_config(&on, false)).expect("engine (on)");
+        assert!(
+            engine_on.get_signals_based_traps(),
+            "Some(true) 必须开启信号式 trap"
+        );
+
+        // 跟随默认组：None = 不调用 API，逐字继承上游默认
+        // （与未触碰的 `Config::new()` 逐值对比——比写死 true 更严谨：本判据不假设平台）
+        let plain = wasmtime::Engine::new(&wasmtime::Config::new()).expect("engine (plain)");
+        let engine_default =
+            wasmtime::Engine::new(&build_engine_config(&CoreConfig::default(), false))
+                .expect("engine (default)");
+        assert_eq!(
+            engine_default.get_signals_based_traps(),
+            plain.get_signals_based_traps(),
+            "None 必须逐字继承上游默认（不得自作主张）"
+        );
     }
 
     /// AOT 缓存键：同输入稳定、随源码大小与路径变化（双形态共用同一份判据）
