@@ -1,0 +1,130 @@
+/* ============================================================================
+   主屏壁纸样式（唯一真源）
+   ----------------------------------------------------------------------------
+   渐变全部由 color-mix() 从既有 --mobile-* 语义 token 派生（零新 hex），
+   双主题与主色色板自动适配：default 色板下 accent 是象牙白/近黑，壁纸呈现
+   低饱和的纸感；forest/ocean/sunset/violet 色板下壁纸随主色偏色。
+   遮罩强度 --wall-dim（0–70，%）由壳偏好提供，用页面底色压住壁纸护文字对比度。
+
+   消费者（共用同一份档位与遮罩逻辑，禁止在别处另写一份渐变）：
+   · 壳主屏背景层：shell-wall + shell-wallpaper
+   · 壳设置页壁纸预览：shell-wall-swatch（2026-10-15 起已随背景区块迁往外观设置页）
+   · 外观设置页壁纸选择器：wallpaper-picker / wallpaper-swatch（旧路由 /mobile/settings/appearance）
+   ============================================================================ */
+
+.shell-wall {
+  --wall-active: none;
+}
+.shell-wall.wall-aurora {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-accent) 26%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-success) 16%, var(--mobile-bg-primary)) 58%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+.shell-wall.wall-dune {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-warning) 24%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-accent) 12%, var(--mobile-bg-primary)) 55%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+.shell-wall.wall-reef {
+  --wall-active: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mobile-accent-secondary) 90%, var(--mobile-bg-primary)) 0%,
+    color-mix(in srgb, var(--mobile-success) 10%, var(--mobile-bg-primary)) 62%,
+    var(--mobile-bg-primary) 100%
+  );
+}
+
+/* 壁纸层：绝对定位铺满主屏根容器（不随内容滚动），遮罩由 ::after 叠加 */
+.shell-wallpaper {
+  position: absolute;
+  inset: 0;
+  background-image: var(--wall-active, none);
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+}
+.shell-wallpaper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* --wall-dim 为 0 时透明 = 壁纸全显；70 时页面色占 70% */
+  background: color-mix(in srgb, var(--mobile-bg-primary) calc(var(--wall-dim, 30) * 1%), transparent);
+}
+
+/* 壁纸预览色块：与主屏同一份 --wall-* 真源，避免两处各写一份渐变。
+   缩略图必须与页面底色分离（深底上的深色渐变不描边就融进页面）：给一档更实
+   的投影。遮罩叠层与主屏同一逻辑（--wall-dim），由选择器把滑杆当前值实时绑到
+   色块上——预览即所得。 */
+.shell-wall-swatch {
+  position: relative;
+  background-image: var(--wall-active, none);
+  background-size: cover;
+  background-position: center;
+  box-shadow: var(--mobile-card-shadow);
+}
+.shell-wall-swatch::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--mobile-bg-primary) calc(var(--wall-dim, 30) * 1%), transparent);
+  pointer-events: none;
+}
+
+/* ============================================================================
+   外观设置页壁纸选择器（旧路由 /mobile/settings/appearance）
+   ----------------------------------------------------------------------------
+   与 set-... 页的 palette-picker 同形态：全宽换行的色块按钮（预览 + 文字标签，
+   非纯色传达）；预览块复用上面的 shell-wall-swatch 档位与遮罩逻辑。
+   ============================================================================ */
+.wallpaper-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+.wallpaper-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+  transition: border-color 0.2s ease, background-color 0.2s ease, opacity 0.2s ease;
+}
+.wallpaper-picker-btn:active {
+  opacity: 0.75;
+}
+.wallpaper-picker-btn.active {
+  border-color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
+}
+.wallpaper-swatch {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+/* 自定义档位：未选图时是「＋」占位，选过后是图片缩略图 */
+.wallpaper-swatch--custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+}
+.wallpaper-swatch--custom img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

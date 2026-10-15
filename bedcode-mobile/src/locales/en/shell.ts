@@ -39,7 +39,7 @@ export default {
       sysTitle: 'System',
       sysApps: 'App manager',
       sysPermissions: 'Permissions',
-      sysSettings: 'Platform settings',
+      sysSettings: 'Settings',
     },
     apps: {
       title: 'WASM apps',
@@ -125,7 +125,7 @@ export default {
       emptyHint: 'App launches, connection state and pending approvals show up here',
       clearAll: 'Clear all',
       dismissOne: 'Dismiss notification: {title}',
-      openApp: 'Open',
+      openByTap: 'Tap to open {title}',
       justNow: 'Just now',
       minutesAgo: '{count} min ago',
       hoursAgo: '{count} h ago',
@@ -179,19 +179,7 @@ export default {
       },
     },
     settings: {
-      title: 'Platform settings',
-      background: 'Background',
-      backgroundNote: 'Home screen only',
-      wallNone: 'None',
-      wallAurora: 'Aurora',
-      wallDune: 'Dune',
-      wallReef: 'Reef',
-      wallCustom: 'Custom',
-      wallPick: 'Choose from gallery',
-      wallReplace: 'Replace image',
-      wallRemove: 'Remove image',
-      wallPickFailed: 'Could not read the selected image. Try another one.',
-      wallDim: 'Dim strength',
+      title: 'Settings',
       platform: 'Platform',
       appearance: 'Appearance',
       appearanceHint: 'Theme and palette',
@@ -199,9 +187,8 @@ export default {
       permissionsHint: 'Group apps by permission',
       // 2026-10-14: Connection / authentication entries were removed from platform
       // settings — they are not host-owned (connections and credentials belong to each
-      // app). The legacy pages stay until their last reference retires; see revision-2.md R11.
-      egress: 'Egress policy',
-      egressHint: 'Security egress tiers',
+      // app). 2026-10-15: the egress policy entry was removed too (user request; legacy
+      // page and route stay until retired, see revision-2.md R11).
       about: 'About WasmApp',
       appSettings: 'App settings',
       runtime: 'WasmApp Mobile {version}',
@@ -212,6 +199,17 @@ export default {
       pendingBody: '{count} permissions awaiting approval',
       approveStart: 'Approve and start',
       approveFailed: 'Approval failed; check the app details',
+      // Dual views: by app (default, one app per row — no cross-group repeats) / by permission (reverse lookup)
+      viewSwitch: 'Permission overview view',
+      viewApps: 'By app',
+      viewGroups: 'By permission',
+      appSection: 'App permissions',
+      appSummary: '{granted} granted',
+      appSummaryLocked: '{granted} granted · {locked} default',
+      appNone: 'No permissions',
+      granted: 'Granted',
+      locked: 'Default',
+      ungranted: 'Not granted',
     },
     capsule: {
       title: 'App',

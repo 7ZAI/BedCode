@@ -33,6 +33,7 @@ import { getShellRegistry } from '../registry'
 import { useShellApps } from '../composables/useShellApps'
 import type { Disposable } from '../types'
 import '../styles/shell.css'
+import '@/styles/wallpaper.css'
 
 const registry = getShellRegistry()
 const { refresh, apps } = useShellApps()

@@ -83,10 +83,16 @@ watch(
   },
 )
 
+/** 圆角随尺寸线性放大并钳制：小盒（列表行）接近方形角，大可盒（预览位）过渡到拟 Windows/Android 大圆角，避免同一图标在 12/16 两档间跳变 */
+const borderRadius = computed(() => {
+  const r = Math.round(props.size * 0.25)
+  return `${Math.min(18, Math.max(10, r))}px`
+})
+
 const boxStyle = computed(() => ({
   width: `${props.size}px`,
   height: `${props.size}px`,
-  borderRadius: props.size >= 48 ? '16px' : '12px',
+  borderRadius: borderRadius.value,
 }))
 
 const toneClass = computed(() => {

@@ -1,13 +1,13 @@
 <template>
-  <SettingsSubPage :title="$t('settings.appearance.title')">
+  <SettingsSubPage :title="t('settings.appearance.title')">
     <div class="px-4 py-4 space-y-5">
       <!-- 通用：主题、语言（分段按钮切换，替代下拉） -->
       <section class="space-y-2">
-        <h2 class="settings-section-title">{{ $t('settings.appearance.generalSection') }}</h2>
+        <h2 class="settings-section-title">{{ t('settings.appearance.generalSection') }}</h2>
         <div class="settings-group">
           <div class="settings-row">
-            <span class="settings-label settings-row-label">{{ $t('settings.appearance.theme') }}</span>
-            <div class="settings-segment" role="group" :aria-label="$t('settings.appearance.theme')">
+            <span class="settings-label settings-row-label">{{ t('settings.appearance.theme') }}</span>
+            <div class="settings-segment" role="group" :aria-label="t('settings.appearance.theme')">
               <button
                 v-for="opt in themeOptions"
                 :key="opt.value"
@@ -21,10 +21,10 @@
             </div>
           </div>
           <div class="settings-row">
-            <span class="settings-label">{{ $t('settings.appearance.palette') }}</span>
+            <span class="settings-label">{{ t('settings.appearance.palette') }}</span>
           </div>
           <!-- 主色色板：小屏放不下 5 个并排按钮，改为全宽换行的色块选择器（色块 + 文字标签，非纯色传达） -->
-          <div class="palette-picker" role="group" :aria-label="$t('settings.appearance.palette')">
+          <div class="palette-picker" role="group" :aria-label="t('settings.appearance.palette')">
             <button
               v-for="opt in paletteOptions"
               :key="opt.value"
@@ -38,8 +38,8 @@
             </button>
           </div>
           <div class="settings-row">
-            <span class="settings-label settings-row-label">{{ $t('settings.appearance.language') }}</span>
-            <div class="settings-segment" role="group" :aria-label="$t('settings.appearance.language')">
+            <span class="settings-label settings-row-label">{{ t('settings.appearance.language') }}</span>
+            <div class="settings-segment" role="group" :aria-label="t('settings.appearance.language')">
               <button
                 v-for="opt in languageOptions"
                 :key="opt.value"
@@ -57,10 +57,10 @@
 
       <!-- 显示：字体大小（3 档滑块） -->
       <section class="space-y-2">
-        <h2 class="settings-section-title">{{ $t('settings.appearance.displaySection') }}</h2>
+        <h2 class="settings-section-title">{{ t('settings.appearance.displaySection') }}</h2>
         <div class="settings-group">
           <div class="settings-row">
-            <span class="settings-label">{{ $t('settings.appearance.fontSize') }}</span>
+            <span class="settings-label">{{ t('settings.appearance.fontSize') }}</span>
           </div>
           <div class="px-4 pb-4">
             <div
@@ -88,8 +88,95 @@
         </div>
       </section>
 
+      <!-- 主屏背景（壁纸）：2026-10-15 由壳设置页迁入——背景属外观配置，
+           与主题/色板/字体同在一个页面；档位渐变与遮罩预览复用主屏同一份
+           真源（styles/wallpaper.css）。壁纸只落主屏：应用运行面保持纯色。 -->
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ t('settings.appearance.backgroundSection') }}</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <span class="settings-label">{{ t('settings.appearance.backgroundNote') }}</span>
+          </div>
+          <div class="wallpaper-picker" role="group" :aria-label="t('settings.appearance.backgroundSection')">
+            <button
+              v-for="wall in wallpaperOptions"
+              :key="wall.id"
+              type="button"
+              class="wallpaper-picker-btn"
+              :class="{ active: wallpaper === wall.id }"
+              :style="{ '--wall-dim': wallDim }"
+              :aria-pressed="wallpaper === wall.id"
+              @click="setWallpaper(wall.id)"
+            >
+              <span class="wallpaper-swatch shell-wall-swatch" :class="wall.swatchClass" aria-hidden="true" />
+              <span class="min-w-0 truncate">{{ wall.label }}</span>
+            </button>
+
+            <!-- 自定义图档位：未选过时是「＋」入口，选过后是图片缩略图 -->
+            <button
+              type="button"
+              class="wallpaper-picker-btn"
+              :class="{ active: wallpaper === WALLPAPER_CUSTOM }"
+              :style="{ '--wall-dim': wallDim }"
+              :aria-pressed="wallpaper === WALLPAPER_CUSTOM"
+              @click="onCustomWallpaperTap"
+            >
+              <span class="wallpaper-swatch wallpaper-swatch--custom" aria-hidden="true">
+                <img v-if="wallpaperImage" :src="toFileAssetUrl(wallpaperImage)" alt="" />
+                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="3" />
+                  <path d="M3 15l4.5-4 4 3.5L15 11l6 5" />
+                  <circle cx="9" cy="9.5" r="1.3" />
+                </svg>
+              </span>
+              <span class="min-w-0 truncate">{{ t('settings.appearance.wallCustom') }}</span>
+            </button>
+          </div>
+
+          <!-- 自定义图操作行：只在已经选过图时出现 -->
+          <div v-if="wallpaperImage" class="flex gap-2 px-4 pb-3">
+            <button
+              type="button"
+              class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+              :disabled="pickingWallpaper"
+              @click="pickCustomWallpaper"
+            >
+              {{ pickingWallpaper ? '…' : t('settings.appearance.wallReplace') }}
+            </button>
+            <button
+              type="button"
+              class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
+              @click="removeCustomWallpaper"
+            >
+              {{ t('settings.appearance.wallRemove') }}
+            </button>
+          </div>
+
+          <!-- 遮罩强度：越高越像纯色底，护壁纸上的文字对比度（滑杆值实时绑到色块预览） -->
+          <div class="px-4 pb-4">
+            <label class="block" :for="'appearance-wall-dim'">
+              <span class="flex items-center justify-between text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
+                <span>{{ t('settings.appearance.wallDim') }}</span>
+                <span class="tabular-nums">{{ wallDim }}%</span>
+              </span>
+              <input
+                id="appearance-wall-dim"
+                type="range"
+                min="0"
+                :max="WALL_DIM_MAX"
+                :value="wallDim"
+                class="w-full mt-1.5"
+                :style="{ accentColor: 'var(--mobile-accent)' }"
+                :aria-valuetext="`${wallDim}%`"
+                @input="onDimInput"
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
       <!-- 票 2026-10-10 批次 C4：「最大可打开终端数量」是**业务项**（终端域事实），
-           真源与 UI 已下沉 terminal-session 的应用内设置页（spec §2）。此处删除，
+           真源与 UI 已下沉 bedcode 应用的设置页（spec §2）。此处删除，
            避免同一上限在外观页与终端设置页各存一份、用户改了一处却不知另一处不动。 -->
     </div>
   </SettingsSubPage>
@@ -97,13 +184,18 @@
 
 <script setup lang="ts">
 /**
- * 外观设置二级页面 - 主题、语言、字体大小、最大可打开终端数量
- * 状态来自 useMobileSettings 共享单例，变更自动保存
+ * 外观设置二级页面 - 主题、语言、字体、主屏背景
+ * 状态来自 useMobileSettings 共享单例（主题/色板/语言/字号）与 useShellPreferences
+ * （壁纸/遮罩），变更自动保存。
  */
 import { onMounted, computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
+import '@/styles/wallpaper.css'
 import { useMobileSettings } from '@/composables/useMobileSettings'
+import { importShellWallpaper, toFileAssetUrl } from '@/plugin/assets'
+import { logger } from '@/utils/frontendLogger'
+import { WALL_DIM_MAX, WALLPAPER_CUSTOM, useShellPreferences, type ShellWallpaper } from '@/shell/composables/useShellPreferences'
 
 const { t } = useI18n()
 
@@ -180,6 +272,64 @@ function onFontSliderPointerDown(e: PointerEvent) {
 }
 
 onMounted(loadSettings)
+
+// ==================== 主屏背景（壁纸） ====================
+// 2026-10-15 由壳设置页迁入（用户指令：背景并入外观设置）；档位/遮罩与主屏
+// 同一份真源（styles/wallpaper.css + useShellPreferences）。
+const { wallpaper, wallpaperImage, wallDim, setWallpaper, setWallpaperImage, setWallDim } =
+  useShellPreferences()
+
+/** 壁纸档位（id + 预览类 + 本地化名），预览色块复用主屏同一份 --wall-* 渐变 */
+const wallpaperOptions = computed<
+  Array<{ id: ShellWallpaper; label: string; swatchClass: string }>
+>(() => [
+  { id: 'none', label: t('settings.appearance.wallNone'), swatchClass: 'bg-[var(--mobile-bg-elevated)]' },
+  { id: 'aurora', label: t('settings.appearance.wallAurora'), swatchClass: 'shell-wall wall-aurora' },
+  { id: 'dune', label: t('settings.appearance.wallDune'), swatchClass: 'shell-wall wall-dune' },
+  { id: 'reef', label: t('settings.appearance.wallReef'), swatchClass: 'shell-wall wall-reef' },
+])
+
+/** 自定义壁纸选图中（按钮置灰 + 文案切加载，避免重复拉起选择器） */
+const pickingWallpaper = ref(false)
+
+/** 选图并落盘（宿主命令）：返回 null = 用户取消，不作为错误处理；选图器异常记日志，
+ *  不让未处理 rejection 外泄 */
+async function pickCustomWallpaper(): Promise<void> {
+  if (pickingWallpaper.value) return
+  pickingWallpaper.value = true
+  try {
+    const path = await importShellWallpaper()
+    if (path !== null) setWallpaperImage(path)
+  } catch (e) {
+    logger.error('[Appearance] wallpaper import failed', e)
+  } finally {
+    pickingWallpaper.value = false
+  }
+}
+
+/** 点自定义档位：已选中 → 换图；有图未选中 → 选中；无图 → 选图 */
+function onCustomWallpaperTap(): void {
+  if (wallpaper.value === WALLPAPER_CUSTOM) {
+    void pickCustomWallpaper()
+    return
+  }
+  if (wallpaperImage.value) {
+    setWallpaper(WALLPAPER_CUSTOM)
+    return
+  }
+  void pickCustomWallpaper()
+}
+
+/** 移除自定义图 */
+function removeCustomWallpaper(): void {
+  setWallpaperImage(null)
+}
+
+/** 遮罩滑杆：钳制交给偏好模块，越界值不抛错 */
+function onDimInput(event: Event): void {
+  const target = event.target as HTMLInputElement
+  setWallDim(Number(target.value))
+}
 </script>
 
 <style scoped>

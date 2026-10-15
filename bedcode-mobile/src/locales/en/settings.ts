@@ -29,7 +29,7 @@ export default {
     },
     appearance: {
       title: 'Appearance',
-      subtitle: 'Theme, language, font and terminal count',
+      subtitle: 'Theme, language, font and home background',
       theme: 'Theme',
       lightMode: 'Light Mode',
       darkMode: 'Dark Mode',
@@ -49,12 +49,26 @@ export default {
       fontXLarge: 'Extra Large',
       generalSection: 'General',
       displaySection: 'Display',
+      // Home wallpaper (moved from the shell settings page on 2026-10-15: background
+      // belongs to appearance config, same screen as theme/palette; gradient & dim
+      // preview logic live in styles/wallpaper.css, shared with the home screen)
+      backgroundSection: 'Home background',
+      backgroundNote: 'Home screen only',
+      wallNone: 'None',
+      wallAurora: 'Aurora',
+      wallDune: 'Dune',
+      wallReef: 'Reef',
+      wallCustom: 'Custom',
+      wallPick: 'Choose from gallery',
+      wallReplace: 'Replace image',
+      wallRemove: 'Remove image',
+      wallDim: 'Overlay strength',
     },
     connection: {
       title: 'Connection Settings',
       subtitle: 'Link encryption and transport security',
       // Ticket 2026-10-10 C4: autoReconnect / keepAlive / defaultPort are business
-      // settings, now owned by the terminal-session app's settings page.
+      // settings, now owned by the bedcode app's settings page.
       businessElsewhere:
         'Auto reconnect, keep-alive and default port now live in the BedCode app settings.',
       linkCryptoSection: 'Link Encryption',
@@ -71,7 +85,7 @@ export default {
       title: 'Authentication Settings',
       subtitle: 'Biometric credential',
       // Ticket 2026-10-10 C4: preferred auth method is a business setting, now owned
-      // by the terminal-session app.
+      // by the bedcode app.
       biometricSection: 'Biometric Credential',
       biometricDesc: 'The key is stored in system secure hardware and can only sign after fingerprint/face authentication. The private key never leaves the device.',
       bind: 'Bind Biometric Auth',
@@ -94,7 +108,7 @@ export default {
       notConnected: 'Not connected, cannot bind',
     },
     // Ticket 2026-10-10 C4: the whole `notification` group is retired — every entry is a
-    // business setting, now owned by the terminal-session app; the
+    // business setting, now owned by the bedcode app; the
     // `mobile-settings-notifications` route retires with it.
     egress: {
       title: 'Network Access',
@@ -150,7 +164,7 @@ export default {
       clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
     },
     // Ticket 2026-10-10: the `actions` group retired; both actions were moved by
-    // ownership — "reset settings" to the terminal-session app, "clear all data"
+    // ownership — "reset settings" to the bedcode app, "clear all data"
     // to this file's about group (device-level wipe, host-owned).
     browser: {
       confirmOpen: 'Are you sure you want to open this link in a browser?',

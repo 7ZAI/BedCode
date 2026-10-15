@@ -29,7 +29,7 @@ export default {
     },
     appearance: {
       title: '外观',
-      subtitle: '主题、语言、字体与终端数量',
+      subtitle: '主题、语言、字体与主屏背景',
       theme: '主题',
       lightMode: '浅色模式',
       darkMode: '深色模式',
@@ -49,14 +49,27 @@ export default {
       fontXLarge: '超大',
       generalSection: '通用',
       displaySection: '显示',
+      // 主屏壁纸（2026-10-15 由壳设置页迁入：背景属外观配置，与主题/色板同屏；
+      // 档位渐变/遮罩预览逻辑在 styles/wallpaper.css，与主屏同源）
+      backgroundSection: '主屏背景',
+      backgroundNote: '仅主屏',
+      wallNone: '无',
+      wallAurora: '极光',
+      wallDune: '沙丘',
+      wallReef: '礁湖',
+      wallCustom: '自定义',
+      wallPick: '从相册选择',
+      wallReplace: '更换图片',
+      wallRemove: '移除图片',
+      wallDim: '遮罩强度',
       // 票 2026-10-10 C4：terminalSection / maxOpenTerminals 随「终端上限」这一业务项
-      // 下沉 terminal-session，外观页只留平台项。
+      // 下沉 bedcode 应用，外观页只留平台项。
     },
     connection: {
       title: '连接设置',
       subtitle: '链路加密与传输安全',
       // 票 2026-10-10 C4：自动重连 / 保持连接 / 默认端口是业务项，已下沉
-      // terminal-session 的应用内设置页；此处只留平台项（链路加密）。
+      // bedcode 应用的设置页；此处只留平台项（链路加密）。
       businessElsewhere: '自动重连、保持连接与默认端口等连接设置已移至「BedCode」应用的设置页。',
       linkCryptoSection: '链路加密',
       linkCryptoMaster: '启用链路加密',
@@ -70,7 +83,7 @@ export default {
     authentication: {
       title: '认证设置',
       subtitle: '生物凭证绑定',
-      // 票 2026-10-10 C4：首选认证方式是业务项，已下沉 terminal-session。
+      // 票 2026-10-10 C4：首选认证方式是业务项，已下沉 bedcode 应用。
       biometricSection: '生物认证密钥',
       biometricDesc: '密钥存储于系统安全硬件，仅通过指纹/人脸认证后可签名，私钥永不出设备。',
       bind: '绑定生物认证',
@@ -93,7 +106,7 @@ export default {
       notConnected: '未连接，无法绑定',
     },
     // 票 2026-10-10 C4：notification 整组退役——通知三开关 / 振动 / 提示音皆业务项，
-    // 已下沉 terminal-session 的应用内设置页，`mobile-settings-notifications` 路由同批退役。
+    // 已下沉 bedcode 应用的设置页，`mobile-settings-notifications` 路由同批退役。
     egress: {
       title: '网络访问授权',
       subtitle: '查看与撤销外网访问授权',

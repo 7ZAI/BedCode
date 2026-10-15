@@ -74,11 +74,22 @@
               </span>
 
               <span
-                class="flex-1 min-h-0 mx-3.5 mb-3 rounded-[14px] flex items-center justify-center"
-                :style="{ background: 'var(--mobile-bg-primary)' }"
+                class="relative flex-1 min-h-0 mx-3.5 mb-3 rounded-[14px] flex flex-col items-center justify-center gap-2 overflow-hidden"
+                :style="{
+                  // 运行中卡片的水洗底色：success-muted 在浅色主题下只有 0.1 透明度几近不可见，
+                  // 用 color-mix 把实色按比例混进底面色，双主题都保持可辨；状态另有文字冗余（非纯色传达）
+                  background: card.running
+                    ? 'color-mix(in srgb, var(--mobile-success) 12%, var(--mobile-bg-primary))'
+                    : 'var(--mobile-bg-primary)',
+                }"
                 aria-hidden="true"
               >
                 <ShellAppIcon :app="card.app" :size="76" />
+                <!-- 预览不伪造应用截图（平台拿不到应用画面，AGENTS §5.1 B4）；
+                     补一行真实元信息让卡片不是光杆图标（design-taste-v1：空态/占位不裸奔） -->
+                <span class="max-w-[80%] px-2 text-center text-[var(--font-size-xs)] text-[var(--mobile-text-muted)] truncate">
+                  {{ card.app.version ? `v${card.app.version}` : '' }}{{ card.app.permissions.length > 0 ? ` · ${t('shell.apps.permissionCount', { count: card.app.permissions.length })}` : '' }}
+                </span>
               </span>
             </button>
 
@@ -101,8 +112,8 @@
         </div>
       </div>
 
-      <!-- 显式导航 + 位置指示：拖拽**不是唯一路径**（WCAG 2.2 Dragging Movements），
-           键盘 / 单击用户用这一对按钮与圆点完成同一件事 -->
+        <!-- 显式导航 + 位置指示：拖拽**不是唯一路径**（WCAG 2.2 Dragging Movements），
+             键盘 / 单击用户用这一对按钮与圆点完成同一件事；页码数字对可见用户可读 -->
       <div class="flex items-center justify-center gap-2 pb-3 flex-shrink-0">
         <button
           type="button"
@@ -126,6 +137,9 @@
               background: index === activeIndex ? 'var(--mobile-accent)' : 'var(--mobile-border-active)',
             }"
           />
+        </span>
+        <span class="text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] tabular-nums" aria-hidden="true">
+          {{ activeIndex + 1 }}/{{ cards.length }}
         </span>
         <!-- 位置对读屏可见：圆点是纯视觉，切换后播报「第 N 张，共 M 张」 -->
         <span class="sr-only" role="status" aria-live="polite">

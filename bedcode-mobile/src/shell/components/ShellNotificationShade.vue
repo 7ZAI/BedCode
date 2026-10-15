@@ -56,7 +56,7 @@
                 :key="app.id"
                 class="flex items-center gap-3 rounded-[12px] border border-[var(--mobile-border)] bg-[var(--mobile-bg-elevated)] px-3 py-3"
               >
-                <ShellAppIcon :app="app" :size="34" />
+                <ShellAppIcon :app="app" :size="32" />
                 <div class="flex-1 min-w-0">
                   <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
                     {{ app.name }}
@@ -81,36 +81,91 @@
             :title="t('shell.notify.list')"
             :note="t('shell.notify.listNote', { count: notifications.length })"
           />
-          <div v-if="notifications.length > 0" class="px-4 flex flex-col gap-2">
-            <article
-              v-for="item in notifications"
+          <TransitionGroup
+            v-if="notifications.length > 0"
+            name="notify-list"
+            tag="div"
+            class="px-4 flex flex-col gap-2"
+          >
+            <div
+              v-for="(item, index) in notifications"
               :key="item.id"
-              class="rounded-[12px] border border-[var(--mobile-border)] bg-[var(--mobile-bg-elevated)] px-3 py-3"
+              class="notify-card-wrap relative overflow-hidden rounded-[12px]"
+              :class="{ 'notify-card--flee': clearingAll && !item.sticky }"
+              :style="clearingAll && !item.sticky ? { animationDelay: `${index * 48}ms` } : undefined"
             >
+              <!-- 滑动删除指示层：卡片滑开时露出红底 + 垃圾桶——手势的删除表达，
+                   不给驻留项（它们不响应滑动）。跟随卡片圆角被外层裁切。 -->
+              <div
+                v-if="!item.sticky"
+                class="absolute inset-0 flex items-center justify-end pr-5"
+                :style="{ background: 'var(--mobile-error)', color: 'var(--mobile-text-on-accent)' }"
+                aria-hidden="true"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 6h18 M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2 M19 6l-.8 13.1a2 2 0 0 1-2 1.9H7.8a2 2 0 0 1-2-1.9L5 6 M10 11v6 M14 11v6" />
+                </svg>
+              </div>
+              <article
+              class="notify-card relative overflow-hidden rounded-[12px] border border-[var(--mobile-border-hover)] bg-[var(--mobile-bg-card)] px-3 py-2.5"
+              :class="{ 'notify-card--dragging': cardDragState(item.id)?.dragging }"
+              :style="cardStyle(item)"
+              :role="item.appId ? 'button' : undefined"
+              :tabindex="item.appId ? 0 : undefined"
+              :aria-label="item.appId ? t('shell.notify.openByTap', { title: item.title }) : undefined"
+              @pointerdown="onCardPointerDown($event, item)"
+              @pointermove="onCardPointerMove($event, item)"
+              @pointerup="onCardPointerUp($event, item)"
+              @pointercancel="resetCardDrag(item.id)"
+              @click="onCardClick(item)"
+              @keydown.enter="item.appId && openApp(item.appId)"
+              @keydown.space.prevent="item.appId && openApp(item.appId)"
+            >
+              <!-- 类型色条：progress=进行中（强调色左条）；信息/事件卡不画条，保持克制的纯卡片 -->
+              <span
+                v-if="item.kind === 'progress'"
+                class="absolute left-0 top-0 bottom-0 w-[3px]"
+                :style="{ background: 'var(--mobile-accent)' }"
+                aria-hidden="true"
+              />
               <div class="flex items-start gap-2.5">
+                <!-- 图标块：圆角方块（Android 13 通知形态），progress 强调色高亮，普通态描边中性 -->
                 <span
-                  class="flex items-center justify-center w-7 h-7 rounded-full flex-shrink-0"
-                  :style="{ background: 'var(--mobile-accent-muted)', color: 'var(--mobile-text-secondary)' }"
+                  class="flex items-center justify-center w-8 h-8 rounded-[10px] border flex-shrink-0"
+                  :style="
+                    item.kind === 'progress'
+                      ? { background: 'var(--mobile-accent-muted)', color: 'var(--mobile-accent)', borderColor: 'transparent' }
+                      : {
+                          background: 'var(--mobile-bg-elevated)',
+                          color: 'var(--mobile-text-secondary)',
+                          borderColor: 'var(--mobile-border)',
+                        }
+                  "
                   aria-hidden="true"
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path :d="item.icon" />
                   </svg>
                 </span>
+                <!-- 扁平布局：标题行右侧嵌「来源 · 时间」，不单占一行；正文可有可无 -->
                 <div class="flex-1 min-w-0">
-                  <div class="text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] break-words">
-                    {{ item.title }}
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="flex-1 min-w-0 text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate">
+                      {{ item.title }}
+                    </span>
+                    <span class="flex-shrink-0 flex items-center gap-1 text-[var(--font-size-xs)] text-[var(--mobile-text-muted)]">
+                      <span class="max-w-[96px] truncate">{{ item.source }}</span>
+                      <span aria-hidden="true">·</span>
+                      <span class="tabular-nums">{{ relativeTime(item.at) }}</span>
+                    </span>
                   </div>
                   <div v-if="item.body" class="mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] break-words">
                     {{ item.body }}
                   </div>
-                  <div class="mt-1 text-[var(--font-size-xs)] text-[var(--mobile-text-muted)]">
-                    {{ item.source }} · {{ relativeTime(item.at) }}
-                  </div>
                   <!-- 进度类通知：进度条（无进度值的进度通知不渲染，避免空条） -->
                   <div
                     v-if="item.kind === 'progress' && typeof item.progress === 'number'"
-                    class="mt-2 h-1.5 rounded-full overflow-hidden"
+                    class="mt-1.5 h-1 rounded-full overflow-hidden"
                     :style="{ background: 'var(--mobile-accent-muted)' }"
                     role="progressbar"
                     :aria-valuenow="item.progress"
@@ -123,31 +178,23 @@
                     />
                   </div>
                 </div>
-                <!-- 驻留项没有单条关闭：它表示「需要处理」而不是「看过就算」 -->
+                <!-- 驻留项没有单条关闭：它表示「需要处理」而不是「看过就算」。
+                     X 是滑动删除的可达性替代（键盘 / 读屏 / 不支持手势时）。 -->
                 <button
                   v-if="!item.sticky"
                   type="button"
-                  class="flex items-center justify-center flex-shrink-0 rounded-[8px] w-9 h-9 transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+                  class="flex items-center justify-center flex-shrink-0 rounded-[8px] min-w-[var(--mobile-touch-target-min)] min-h-[var(--mobile-touch-target-min)] -mr-1 transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
                   :aria-label="t('shell.notify.dismissOne', { title: item.title })"
-                  @click="dismiss(item.id)"
+                  @click.stop="dismiss(item.id)"
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :style="{ color: 'var(--mobile-text-secondary)' }">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" :style="{ color: 'var(--mobile-text-secondary)' }" aria-hidden="true">
                     <path d="M6 6l12 12M18 6L6 18" />
                   </svg>
                 </button>
               </div>
-
-              <!-- 关联应用的打开动作：通知是入口而不是终点 -->
-              <div v-if="item.appId" class="mt-2 pl-[38px]">
-                <ShellChip
-                  :label="t('shell.notify.openApp')"
-                  tone="accent"
-                  clickable
-                  @click="openApp(item.appId)"
-                />
-              </div>
-            </article>
-          </div>
+              </article>
+            </div>
+          </TransitionGroup>
 
           <!-- 空态：说明「通知从哪来」，而不是只丢一句「暂无通知」 -->
           <div v-if="pendingApps.length === 0 && notifications.length === 0" class="px-6 pt-8 text-center">
@@ -170,15 +217,17 @@
           </div>
         </div>
 
-        <!-- ==================== 底部动作 ==================== -->
+        <!-- 底部动作：清除全部。触发级联飞离动画（等差异步右飞），全部飞出后才真正
+             清空 store——删除要有可见表达，而不是瞬间消失。级联期间按钮禁用防重入。 -->
         <div
           v-if="notifications.length > 0"
           class="flex-shrink-0 border-t border-[var(--mobile-group-divider)] px-4 py-3"
         >
           <button
             type="button"
-            class="w-full rounded-[10px] border border-[var(--mobile-border)] px-4 py-2.5 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
-            @click="clearAll"
+            class="shell-btn-danger-outline w-full rounded-[10px] px-4 py-2.5 text-[var(--font-size-base)] min-h-[var(--mobile-touch-target-min)]"
+            :disabled="clearingAll"
+            @click="clearAllCascade"
           >
             {{ t('shell.notify.clearAll') }}
           </button>
@@ -206,7 +255,10 @@ import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch, type Re
 import { useI18n } from 'vue-i18n'
 import i18n from '@/locales'
 import { useShellApps } from '../composables/useShellApps'
-import { useShellNotifications } from '../composables/useShellNotifications'
+import {
+  useShellNotifications,
+  type ShellNotification,
+} from '../composables/useShellNotifications'
 import { useShellOverlays } from '../composables/useShellOverlays'
 import { useShellNavigation } from '../composables/useShellNavigation'
 import { openShellApp } from '../composables/useShellOpen'
@@ -286,6 +338,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopTicker()
+  if (clearCascadeTimer !== null) {
+    window.clearTimeout(clearCascadeTimer)
+    clearCascadeTimer = null
+  }
 })
 
 function close(): void {
@@ -296,8 +352,134 @@ function dismiss(id: string): void {
   dismissNotification(id)
 }
 
+// ==================== 通知卡：左右滑动删除 + 点击打开 ====================
+// 滑动是增强（Android 通知同款手势），X 按钮保留为无障碍/键盘替代；
+// 驻留项（sticky = 需要处理）不响应滑动与关闭。点击打开只对有关联应用的
+// 通知生效；滑动中抑制点击，避免「滑到一半松手」误触发打开。
+
+/** 拖动阈值（px）：超过即删除，未超回弹 */
+const SWIPE_DISMISS_PX = 88
+
+/** 正在拖动的卡片 id 与位移 x（拖动中无过渡，跟手） */
+const dragId = ref<string | null>(null)
+const dragX = ref(0)
+/** 已释放但正在滑出动画的卡片（位移定格在屏外，动画结束 dismiss） */
+const swipeOut = ref<{ id: string; x: number } | null>(null)
+
+let dragStartX = 0
+let dragStartY = 0
+let dragAxis: 'x' | 'y' | null = null
+let suppressTap = false
+
+/** 拖动中状态（模板据此关过渡） */
+function cardDragState(id: string): { dragging: boolean } {
+  return { dragging: dragId.value === id }
+}
+
+/** 卡片位移样式：拖动跟手（由 cardDragState 关过渡），滑出动画定格屏外，其余静止 */
+function cardStyle(item: ShellNotification): Record<string, string> {
+  const style: Record<string, string> = {
+    boxShadow: 'var(--mobile-card-shadow)',
+    touchAction: 'pan-y',
+  }
+  if (dragId.value === item.id) {
+    style.transform = `translateX(${dragX.value}px)`
+  } else if (swipeOut.value?.id === item.id) {
+    style.transform = `translateX(${swipeOut.value.x}px)`
+  }
+  return style
+}
+
+/** 起点在按钮上（X）不开始滑动；驻留项不响应 */
+function onCardPointerDown(e: PointerEvent, item: ShellNotification): void {
+  if (item.sticky) return
+  if ((e.target as HTMLElement).closest('button')) return
+  dragId.value = item.id
+  dragX.value = 0
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragAxis = null
+  suppressTap = false
+}
+
+function onCardPointerMove(e: PointerEvent, item: ShellNotification): void {
+  if (dragId.value !== item.id) return
+  const dx = e.clientX - dragStartX
+  const dy = e.clientY - dragStartY
+  // 首帧定轴：水平位移占优才开始拖（超过 8px）；垂直交给列表滚动
+  if (dragAxis === null) {
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return
+    dragAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+    if (dragAxis === 'y') {
+      resetCardDrag(item.id)
+      return
+    }
+  }
+  if (dragAxis !== 'x') return
+  e.preventDefault()
+  dragX.value = dx
+  suppressTap = true
+}
+
+function onCardPointerUp(_e: PointerEvent, item: ShellNotification): void {
+  if (dragId.value !== item.id) return
+  const x = dragX.value
+  dragId.value = null
+  if (Math.abs(x) > SWIPE_DISMISS_PX) {
+    // 滑出动画（notify-card 的 transform 过渡生效）后移除；x 定格在屏外
+    swipeOut.value = { id: item.id, x: x > 0 ? window.innerWidth : -window.innerWidth }
+    window.setTimeout(() => {
+      swipeOut.value = null
+      dismiss(item.id)
+    }, 220)
+    return
+  }
+  // 回弹：dragX 归零，由卡片 transition 负责动画
+  dragX.value = 0
+}
+
+function resetCardDrag(id: string): void {
+  if (dragId.value === id) {
+    dragId.value = null
+    dragX.value = 0
+  }
+}
+
+/** 整卡点击打开（有关联应用时）；纯滑动的松手不触发放开 */
+function onCardClick(item: ShellNotification): void {
+  if (!item.appId || suppressTap) return
+  void openApp(item.appId)
+}
+
 function clearAll(): void {
   clearNotifications()
+}
+
+// ==================== 全部删除（级联飞离动画） ====================
+// 点「清除全部」：非驻留卡按 index 等差延迟（48ms/张）依次加速右飞，
+// 最后一张飞出后才清空 store——删除有可见表达而不是瞬间消失（prefers-reduced-motion
+// 下动画被 CSS 禁用，仍以完整时长走 clear 逻辑，行为不受动画影响）。
+const FLEE_STEP_MS = 48
+const FLEE_DURATION_MS = 360 /* 与 CSS .notify-card--flee 动画时长一致 + 余量 */
+
+/** 级联飞离进行中（防重入；动画结束时清空 store） */
+const clearingAll = ref(false)
+let clearCascadeTimer: number | null = null
+
+function clearAllCascade(): void {
+  if (clearingAll.value) return
+  const fleeCount = notifications.value.filter((n) => !n.sticky).length
+  if (fleeCount === 0) {
+    clearAll()
+    return
+  }
+  clearingAll.value = true
+  const totalMs = (fleeCount - 1) * FLEE_STEP_MS + FLEE_DURATION_MS
+  clearCascadeTimer = window.setTimeout(() => {
+    clearCascadeTimer = null
+    clearingAll.value = false
+    clearAll()
+  }, totalMs)
 }
 
 /** 去审批：关面板 + 进应用详情（那里有「批准并启动」） */

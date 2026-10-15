@@ -16,10 +16,11 @@
  * | C-N7 | 通知栏渲染 | 待处理来自应用状态派生（needsApproval），不是独立生命周期 | 批准（状态变化）后卡片消失 |
  * | C-N8 | 通知栏计数 | 计数 = 通知条数 + 待审批数 | 头部/角标口径一致 |
  * | C-N9 | 通知栏动作 | 单条关闭 / 清除全部 / 去审批 / 打开应用 | 分别落到 dismiss / clear / openDetail / openShellApp |
+ * | C-N10 | 滑动删除 | 水平滑超阈值删除（带滑出动画）；短滑回弹；垂直滚动让位；驻留项豁免 | 超阈值→移除；短/垂直/sticky→保留 |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import {
   resetShellNotifications,
   useShellNotifications,
@@ -283,7 +284,19 @@ describe('C-N9 通知栏动作', () => {
     expect(clearBtn, '有非驻留条目时应提供「清除全部」').toBeTruthy()
     await clearBtn.trigger('click')
 
-    expect(notifications.notifications.value.map((n) => n.title)).toEqual(['sticky'])
+    // 2026-10-15：清除全部改为级联飞离动画（等差逐张右飞）——点击后非立即清空，
+    // 末张飞完（360ms + 等差步长）才真正落库；动画期间非驻留卡仍在
+    expect(
+      notifications.notifications.value.map((n) => n.title),
+      '级联动画未结束前不立即清空',
+    ).toContain('plain')
+    await vi.waitFor(
+      () => {
+        expect(notifications.notifications.value.map((n) => n.title)).toEqual(['sticky'])
+      },
+      { timeout: 2000, interval: 50 },
+    )
+    wrapper.unmount()
   })
 
   it('should_openDetailAndCloseShade_when_pendingCardTapped', async () => {
@@ -309,11 +322,114 @@ describe('C-N9 通知栏动作', () => {
     shadeOpen.value = true
     const wrapper = mountShade()
 
-    const open = wrapper.findAll('button').find((b) => b.text().includes('shell.notify.openApp'))!
-    expect(open, '带关联应用的通知应提供打开入口').toBeTruthy()
-    await open.trigger('click')
+    // 2026-10-15：去掉了独立「打开」按钮——整卡可点即打开（有关联应用时）
+    const card = wrapper
+      .findAll('article')
+      .find((a) => a.text().includes('from-app'))!
+    expect(card, '带关联应用的通知卡应在场').toBeTruthy()
+    expect(card.attributes('role'), '可打开的卡片应暴露 button 语义').toBe('button')
+    await card.trigger('click')
 
     expect(mockCloseShade).toHaveBeenCalled()
     expect(mockOpenShellApp).toHaveBeenCalledWith('com.test.app')
+  })
+})
+
+// ==================== 滑动删除 ====================
+
+describe('C-N10 左右滑动删除', () => {
+  /** 找指定标题的通知卡 */
+  function cardOf(wrapper: ReturnType<typeof mount>, title: string) {
+    return wrapper.findAll('article').find((a) => a.text().includes(title))!
+  }
+
+  /**
+   * 模拟一次拖动：pointerdown → 两次 move（首帧定轴，次帧到终点） → pointerup
+   * 传入相对位移 dx/dy（屏幕坐标 delta）
+   */
+  async function swipe(
+    wrapper: ReturnType<typeof mount>,
+    title: string,
+    dx: number,
+    dy = 0,
+  ): Promise<void> {
+    const card = cardOf(wrapper, title)!
+    await card.trigger('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 })
+    await card.trigger('pointermove', {
+      clientX: 100 + dx / 2,
+      clientY: 100 + dy / 2,
+      pointerId: 1,
+    })
+    await card.trigger('pointermove', {
+      clientX: 100 + dx,
+      clientY: 100 + dy,
+      pointerId: 1,
+    })
+    await card.trigger('pointerup', { clientX: 100 + dx, clientY: 100 + dy, pointerId: 1 })
+  }
+
+  it('should_dismissAfterSwipeOut_when_horizontalSwipePassesThreshold', async () => {
+    notifications.pushNotification({ kind: 'info', icon: 'i', source: 's', title: 'swipe-me' })
+    shadeOpen.value = true
+    const wrapper = mountShade()
+
+    await swipe(wrapper, 'swipe-me', 150, 0)
+
+    // 松手瞬间：滑出动画未结束，卡片仍在、通知未删（swipeOut 位移定格屏外）
+    expect(cardOf(wrapper, 'swipe-me').exists(), '滑出动画期间卡片暂留').toBe(true)
+    expect(notifications.notifications.value.length, '动画期间存储未删').toBe(1)
+    // 220ms 滑出动画结束后删除（真实等待，避免 fake timers 与 vtu flush 纠缠）
+    await vi.waitFor(
+      () => {
+        expect(notifications.notifications.value.length, '超阈值滑动后通知应被删除').toBe(0)
+      },
+      { timeout: 800, interval: 50 },
+    )
+    await nextTick()
+    const remains = wrapper.findAll('article').some((a) => a.text().includes('swipe-me'))
+    expect(remains, 'DOM 同步移除').toBe(false)
+    wrapper.unmount()
+  })
+
+  it('should_snapBack_when_swipeBelowThreshold', async () => {
+    notifications.pushNotification({ kind: 'info', icon: 'i', source: 's', title: 'stay' })
+    shadeOpen.value = true
+    const wrapper = mountShade()
+
+    await swipe(wrapper, 'stay', 30, 0)
+
+    expect(cardOf(wrapper, 'stay').exists(), '短滑应回弹不删除').toBe(true)
+    expect(notifications.notifications.value.length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('should_notDrag_when_gestureIsVertical', async () => {
+    notifications.pushNotification({ kind: 'info', icon: 'i', source: 's', title: 'v-swip' })
+    shadeOpen.value = true
+    const wrapper = mountShade()
+
+    await swipe(wrapper, 'v-swip', 10, 120)
+
+    expect(cardOf(wrapper, 'v-swip').exists(), '垂直滚动应让位列表滚动，不删除').toBe(true)
+    expect(notifications.notifications.value.length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('should_ignoreSwipe_when_entryIsSticky', async () => {
+    notifications.pushNotification({
+      kind: 'info',
+      icon: 'i',
+      source: 's',
+      title: 'pinned',
+      sticky: true,
+    })
+    shadeOpen.value = true
+    const wrapper = mountShade()
+
+    await swipe(wrapper, 'pinned', 200, 0)
+
+    expect(cardOf(wrapper, 'pinned').exists(), '驻留项不响应滑动（同 X 语义）').toBe(true)
+    expect(notifications.notifications.value.length).toBe(1)
+    wrapper.unmount()
   })
 })

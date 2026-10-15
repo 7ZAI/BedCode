@@ -72,7 +72,7 @@
                 <ShellChip
                   v-else-if="app.state === 'disabled'"
                   :label="t('shell.common.disabled')"
-                  tone="warn"
+                  tone="neutral"
                 />
                 <ShellChip
                   v-else-if="app.state === 'error'"

@@ -52,7 +52,7 @@
     <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6">
       <!-- ======== 正在运行（MRU 卡片带，桌面同构） ======== -->
       <template v-if="runningOrdered.length > 0">
-        <ShellSection :title="t('shell.home.runningTitle')">
+        <ShellSection :title="t('shell.home.runningTitle')" class="shell-reveal">
           <!-- 多任务入口：recents 在业界是全局可达的（Android / iOS 都能从任意屏进入），
                底部系统条退役后这里补上，不至于只能从运行页胶囊绕进去 -->
           <template #action>
@@ -69,7 +69,7 @@
             </button>
           </template>
         </ShellSection>
-        <div class="px-4 flex gap-2.5 overflow-x-auto pb-1" role="list">
+        <div class="px-4 flex gap-2.5 overflow-x-auto pb-1 shell-reveal" role="list" :style="{ animationDelay: '50ms' }">
           <article
             v-for="app in runningOrdered"
             :key="app.id"
@@ -79,7 +79,7 @@
           >
             <button
               type="button"
-              class="flex items-center gap-2 w-full text-left min-h-[var(--mobile-touch-target-min)]"
+              class="flex items-center gap-2 w-full text-left min-h-[var(--mobile-touch-target-min)] active:opacity-70 transition-opacity duration-150"
               :aria-label="t('shell.home.switchTo', { name: app.name })"
               @click="open(app.id)"
             >
@@ -88,8 +88,9 @@
                 <span class="block text-[var(--font-size-sm)] font-medium text-[var(--mobile-text-primary)] truncate">
                   {{ app.name }}
                 </span>
-                <span class="block text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate">
-                  {{ t('shell.common.running') }}
+                <span class="flex items-center gap-1 text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)] truncate min-w-0">
+                  <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background: var(--mobile-success)" aria-hidden="true" />
+                  <span class="min-w-0 truncate">{{ t('shell.common.running') }}</span>
                 </span>
               </span>
             </button>
@@ -111,8 +112,8 @@
            滑动切下一张。定宽而非 flex-1 是刻意的——卡片内容由应用自持，等宽拉伸会让
            单行信息量不同的卡片看起来参差。 -->
       <template v-if="slotCards.length > 0">
-        <ShellSection :title="t('shell.home.slotsTitle')" />
-        <div class="shell-slot-track" role="list">
+        <ShellSection :title="t('shell.home.slotsTitle')" class="shell-reveal" :style="{ animationDelay: '80ms' }" />
+        <div class="shell-slot-track shell-reveal" role="list" :style="{ animationDelay: '120ms' }">
           <div v-for="card in slotCards" :key="card.key" class="shell-slot-item" role="listitem">
             <component :is="card.component" :app="card.app" />
           </div>
@@ -120,7 +121,7 @@
       </template>
 
       <!-- ======== 应用宫格 ======== -->
-      <ShellSection :title="t('shell.home.appsTitle')" :note="t('shell.home.appsNote', { count: apps.length })">
+      <ShellSection :title="t('shell.home.appsTitle')" :note="t('shell.home.appsNote', { count: apps.length })" class="shell-reveal" :style="{ animationDelay: '160ms' }">
         <template #action>
           <!-- 图标按钮（44px 触控目标）：入口语义是「应用管理」，文字 chip 在宫格标题行里
                抢视觉重心且显得扁平，改用单图标 + 可访问名（ui-ux-pro-max --domain icons：
@@ -141,8 +142,8 @@
         </template>
       </ShellSection>
       <div class="px-4">
-        <div v-if="apps.length > 0" class="grid grid-cols-4 gap-1" role="list">
-          <ShellAppCell v-for="app in apps" :key="app.id" :app="app" @open="open" />
+        <div v-if="apps.length > 0" class="grid grid-cols-4 gap-1 shell-reveal" role="list" :style="{ animationDelay: '200ms' }">
+          <ShellAppCell v-for="app in sortedApps" :key="app.id" :app="app" @open="open" />
         </div>
         <!-- 空态给出下一步（安装入口在应用管理页），而不是只留一句「暂无应用」 -->
         <p
@@ -154,21 +155,21 @@
       </div>
 
       <!-- ======== 系统宫格（平台自有面，与应用同层） ======== -->
-      <ShellSection :title="t('shell.home.sysTitle')" />
+      <ShellSection :title="t('shell.home.sysTitle')" class="shell-reveal" :style="{ animationDelay: '240ms' }" />
       <div class="px-4">
-        <div class="grid grid-cols-4 gap-1" role="list">
+        <div class="grid grid-cols-4 gap-1 shell-reveal" role="list" :style="{ animationDelay: '280ms' }">
           <button
             v-for="entry in sysEntries"
             :key="entry.id"
             type="button"
-            class="flex flex-col items-center gap-1.5 py-2 rounded-[12px] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)]"
+            class="flex flex-col items-center gap-1.5 py-2 rounded-[12px] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] active:opacity-70"
             :aria-label="entry.label"
             role="listitem"
             @click="entry.run()"
           >
             <span
-              class="flex items-center justify-center flex-shrink-0 rounded-[12px] w-11 h-11 border border-[var(--mobile-border)]"
-              :style="{ background: 'var(--mobile-bg-elevated)', color: 'var(--mobile-text-secondary)' }"
+              class="flex items-center justify-center flex-shrink-0 rounded-[12px] w-11 h-11 border"
+              :style="{ background: entry.tileBg, color: entry.tileColor, borderColor: entry.tileBorder }"
               aria-hidden="true"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -217,7 +218,7 @@ import ShellSection from '../ShellSection.vue'
 
 const { t } = useI18n()
 const nav = useShellNavigation()
-const { stats, apps, stop } = useShellApps()
+const { stats, apps, sortedApps, stop } = useShellApps()
 const { recentIds } = useShellRecent()
 const { open } = useShellOpen()
 const overlays = useShellOverlays()
@@ -272,24 +273,36 @@ const slotCards = computed(() =>
   ),
 )
 
-/** 系统宫格：平台自有面（应用管理 / 权限管理 / 平台设置），全部 push 进栈以便返回 */
+/** 系统宫格：平台自有面（应用管理 / 权限管理 / 设置），全部 push 进栈以便返回。
+ *  每个入口一个档案色（tile*），色相用于入口辨识而非危险等级；
+ *  图标为重新绘制版本（圆角宫格 / 盾+勾 / 齿轮+孔）。 */
 const sysEntries = computed(() => [
   {
     id: 'apps',
     label: t('shell.home.sysApps'),
-    icon: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+    icon: 'M5 3h5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M16 3h5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M5 14h5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z M16 14h5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z',
+    tileBg: 'var(--shell-tile-apps-bg)',
+    tileColor: 'var(--shell-tile-apps-color)',
+    tileBorder: 'var(--shell-tile-apps-border)',
     run: () => nav.navigate('apps'),
   },
   {
     id: 'permissions',
     label: t('shell.home.sysPermissions'),
-    icon: 'M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6l8-3z M9 12l2 2 4-4',
+    icon: 'M12 3l8 3v6c0 4.5-3.2 7.6-8 9-4.8-1.4-8-4.5-8-9V6l8-3z M9.2 12.1l2 2 3.6-3.8',
+    tileBg: 'var(--shell-tile-perms-bg)',
+    tileColor: 'var(--shell-tile-perms-color)',
+    tileBorder: 'var(--shell-tile-perms-border)',
     run: () => nav.openPermissions(),
   },
   {
     id: 'settings',
     label: t('shell.home.sysSettings'),
-    icon: 'M12 8a4 4 0 100-8 4 4 0 000 8z M4.5 21a7.5 7.5 0 0 1 15 0',
+    // 齿轮（lucide settings 形态） + 中心孔
+    icon: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+    tileBg: 'var(--shell-tile-settings-bg)',
+    tileColor: 'var(--shell-tile-settings-color)',
+    tileBorder: 'var(--shell-tile-settings-border)',
     run: () => nav.navigate('settings'),
   },
 ])

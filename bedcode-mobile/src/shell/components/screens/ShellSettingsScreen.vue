@@ -36,119 +36,6 @@
         </div>
       </div>
 
-      <!-- ==================== 背景（主屏壁纸） ==================== -->
-      <!-- 壁纸只落主屏：应用运行面保持纯色，业务内容可读性优先。
-           内置四档是 token 派生的渐变；自定义图由**宿主**选图并拷进 $APPDATA
-           （前端零资源访问，AGENTS §6），壳只存路径偏好。 -->
-      <ShellSection :title="t('shell.settings.background')" :note="t('shell.settings.backgroundNote')" />
-      <div class="px-4 pb-1">
-        <ShellGroupCard>
-          <div class="px-3 py-3">
-            <div class="flex items-center gap-2">
-              <button
-                v-for="wall in wallpaperOptions"
-                :key="wall.id"
-                type="button"
-                class="relative flex-1 h-14 rounded-[10px] border overflow-hidden transition-colors duration-200 min-h-[var(--mobile-touch-target-min)]"
-                :class="[wall.swatchClass, wallpaper === wall.id ? 'border-[var(--mobile-accent)]' : 'border-[var(--mobile-border)]']"
-                :aria-label="wall.label"
-                :aria-pressed="wallpaper === wall.id"
-                @click="setWallpaper(wall.id)"
-              >
-                <span
-                  v-if="wallpaper === wall.id"
-                  class="absolute right-1 bottom-1 flex items-center justify-center w-4 h-4 rounded-full"
-                  :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
-                  aria-hidden="true"
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                </span>
-              </button>
-
-              <!-- 自定义图档位：未选过时是「＋」入口，选过后是图片缩略图 -->
-              <button
-                type="button"
-                class="relative flex-1 h-14 rounded-[10px] border overflow-hidden transition-colors duration-200 min-h-[var(--mobile-touch-target-min)]"
-                :class="wallpaper === WALLPAPER_CUSTOM ? 'border-[var(--mobile-accent)]' : 'border-[var(--mobile-border)]'"
-                :style="{ background: 'var(--mobile-bg-elevated)' }"
-                :aria-label="t('shell.settings.wallCustom')"
-                :aria-pressed="wallpaper === WALLPAPER_CUSTOM"
-                :disabled="pickingWallpaper"
-                @click="onCustomWallpaperTap"
-              >
-                <img
-                  v-if="wallpaperImage"
-                  :src="toFileAssetUrl(wallpaperImage)"
-                  alt=""
-                  class="w-full h-full object-cover"
-                />
-                <span
-                  v-else
-                  class="flex items-center justify-center w-full h-full text-[var(--mobile-text-secondary)]"
-                  aria-hidden="true"
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="5" width="18" height="14" rx="3" />
-                    <path d="M3 15l4.5-4 4 3.5L15 11l6 5" />
-                    <circle cx="9" cy="9.5" r="1.3" />
-                  </svg>
-                </span>
-                <span
-                  v-if="wallpaper === WALLPAPER_CUSTOM"
-                  class="absolute right-1 bottom-1 flex items-center justify-center w-4 h-4 rounded-full"
-                  :style="{ background: 'var(--mobile-accent)', color: 'var(--mobile-text-on-accent)' }"
-                  aria-hidden="true"
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                </span>
-              </button>
-            </div>
-
-            <!-- 自定义图操作行：只在已经选过图时出现（没图时点上面的档位即可） -->
-            <div v-if="wallpaperImage" class="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
-                :disabled="pickingWallpaper"
-                @click="pickCustomWallpaper"
-              >
-                {{ pickingWallpaper ? t('shell.common.loading') : t('shell.settings.wallReplace') }}
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded-[10px] border border-[var(--mobile-border)] px-3 py-2 text-[var(--font-size-base)] text-[var(--mobile-text-secondary)] transition-colors duration-200 active:bg-[var(--mobile-accent-muted)] min-h-[var(--mobile-touch-target-min)]"
-                @click="removeCustomWallpaper"
-              >
-                {{ t('shell.settings.wallRemove') }}
-              </button>
-            </div>
-
-            <!-- 遮罩强度：越高越像纯色底，护文字对比度（壁纸上的文字必须能读） -->
-            <label class="block mt-3" :for="'shell-wall-dim'">
-              <span class="flex items-center justify-between text-[var(--font-size-xs)] text-[var(--mobile-text-secondary)]">
-                <span>{{ t('shell.settings.wallDim') }}</span>
-                <span class="tabular-nums">{{ wallDim }}%</span>
-              </span>
-              <input
-                id="shell-wall-dim"
-                type="range"
-                min="0"
-                :max="WALL_DIM_MAX"
-                :value="wallDim"
-                class="w-full mt-1.5"
-                :style="{ accentColor: 'var(--mobile-accent)' }"
-                :aria-valuetext="`${wallDim}%`"
-                @input="onDimInput"
-              />
-            </label>
-          </div>
-        </ShellGroupCard>
-      </div>
-
       <!-- ==================== 平台 ==================== -->
       <ShellSection :title="t('shell.settings.platform')" />
       <div class="px-4 pb-1">
@@ -204,7 +91,7 @@
 /**
  * 我的 / 平台设置
  *
- * 平台项是壳自带的（背景 / 出站授权 / 权限总览 / 外观 / 关于），
+ * 平台项是壳自带的（权限总览 / 外观 / 关于），
  * 应用项来自各应用的 registerSettingsEntry——两者在同一张卡里按「平台项在前」排列，
  * 新增应用设置不需要改本文件。
  *
@@ -214,24 +101,15 @@
  *      与版本/更新同属「关于本机」，一级设置页不再摆一排红按钮；
  *   ③ 应用贡献的设置项没给 onSelect 时落到该应用详情页——不留点了没反应的死行。
  *
- * 票 2026-10-10 批次 C4：业务设置入口（连接策略 / 通知）随真源下沉 terminal-session
+ * 票 2026-10-10 批次 C4：业务设置入口（连接策略 / 通知）随真源下沉 bedcode 应用
  * 从本表删除；壳只留平台机制与安全闸门，避免同一个开关在壳与应用各存一份真值。
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { importShellWallpaper, toFileAssetUrl } from '@/plugin/assets'
-import { logger } from '@/utils/frontendLogger'
 import { usePlatform } from '../../composables/usePlatform'
-import { useToast } from '../../composables/useToast'
 import { useShellApps } from '../../composables/useShellApps'
 import { useShellNavigation } from '../../composables/useShellNavigation'
-import {
-  WALL_DIM_MAX,
-  WALLPAPER_CUSTOM,
-  useShellPreferences,
-  type ShellWallpaper,
-} from '../../composables/useShellPreferences'
 import ShellBrandTile from '../ShellBrandTile.vue'
 import ShellGroupCard from '../ShellGroupCard.vue'
 import ShellSection from '../ShellSection.vue'
@@ -251,74 +129,12 @@ const DEFAULT_ENTRY_ICON =
 
 const { t } = useI18n()
 const router = useRouter()
-const toast = useToast()
 const nav = useShellNavigation()
 const { apps } = useShellApps()
 const { platformInfo } = usePlatform()
-const { wallpaper, wallpaperImage, wallDim, setWallpaper, setWallpaperImage, setWallDim } =
-  useShellPreferences()
 
-/**
- * 壁纸档位（id + 预览类 + 本地化名）
- *
- * 预览色块复用主屏同一份 --wall-* 真源（shell.css）：两处各写一份渐变必然漂移。
- * 「无」档不给 shell-wall 类，显示纯页面底色；自定义图不在本表（第五个档位
- * 是图片缩略图，不是渐变）。
- */
-const wallpaperOptions = computed<
-  Array<{ id: ShellWallpaper; label: string; swatchClass: string }>
->(() => [
-  { id: 'none', label: t('shell.settings.wallNone'), swatchClass: 'bg-[var(--mobile-bg-primary)]' },
-  { id: 'aurora', label: t('shell.settings.wallAurora'), swatchClass: 'shell-wall wall-aurora shell-wall-swatch' },
-  { id: 'dune', label: t('shell.settings.wallDune'), swatchClass: 'shell-wall wall-dune shell-wall-swatch' },
-  { id: 'reef', label: t('shell.settings.wallReef'), swatchClass: 'shell-wall wall-reef shell-wall-swatch' },
-])
 
-/** 自定义壁纸选图中（按钮置灰 + 文案切「加载中」，避免重复拉起选择器） */
-const pickingWallpaper = ref(false)
 
-/**
- * 选图并落盘（宿主命令）：返回 null = 用户取消，不作为错误处理
- *
- * 成功路径由 setWallpaperImage 同时把档位切到 custom；失败只提示、不动现有偏好。
- */
-async function pickCustomWallpaper(): Promise<void> {
-  if (pickingWallpaper.value) return
-  pickingWallpaper.value = true
-  try {
-    const path = await importShellWallpaper()
-    if (path !== null) setWallpaperImage(path)
-  } catch (e) {
-    logger.error('[ShellSettings] wallpaper import failed', e)
-    toast.error(t('shell.settings.wallPickFailed'))
-  } finally {
-    pickingWallpaper.value = false
-  }
-}
-
-/** 点自定义档位：已选中 → 换图；有图未选中 → 选中；无图 → 选图 */
-function onCustomWallpaperTap(): void {
-  if (wallpaper.value === WALLPAPER_CUSTOM) {
-    void pickCustomWallpaper()
-    return
-  }
-  if (wallpaperImage.value) {
-    setWallpaper(WALLPAPER_CUSTOM)
-    return
-  }
-  void pickCustomWallpaper()
-}
-
-/** 移除自定义图（文件留在 $APPDATA，下次换图由宿主单槽位覆盖） */
-function removeCustomWallpaper(): void {
-  setWallpaperImage(null)
-}
-
-/** 遮罩滑杆：原生 input 只给数值，钳制交给偏好模块（越界值不抛错） */
-function onDimInput(event: Event): void {
-  const target = event.target as HTMLInputElement
-  setWallDim(Number(target.value))
-}
 
 /** 版本号来自构建期注入（与设置页同源，不另立真源） */
 const appVersion = __APP_VERSION__
@@ -330,13 +146,6 @@ const deviceLabel = computed(() => {
 })
 
 const platformEntries = computed<PlatformEntry[]>(() => [
-  {
-    id: 'egress',
-    label: t('shell.settings.egress'),
-    hint: t('shell.settings.egressHint'),
-    icon: 'M14 5h6v6 M20 5l-8 8 M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4',
-    onSelect: () => router.push({ name: 'mobile-settings-egress' }),
-  },
   {
     id: 'appearance',
     label: t('shell.settings.appearance'),

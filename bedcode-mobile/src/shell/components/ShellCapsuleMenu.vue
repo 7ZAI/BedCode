@@ -9,13 +9,14 @@
         v-for="item in items"
         :key="item.id"
         type="button"
-        class="flex items-center gap-3 w-full px-3 py-3 text-left transition-colors duration-200 active:bg-[var(--mobile-group-row-active)] min-h-[var(--mobile-touch-target-min)]"
+        class="flex items-center gap-3 w-full px-3 py-3 text-left transition-colors duration-200 min-h-[var(--mobile-touch-target-min)]"
+        :class="item.danger ? 'active:bg-[var(--mobile-error-muted)]' : 'active:bg-[var(--mobile-group-row-active)]'"
         @click="select(item)"
       >
-        <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: 'var(--mobile-text-secondary)' }">
+        <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" :style="{ color: item.danger ? 'var(--mobile-error)' : 'var(--mobile-text-secondary)' }">
           <path :d="item.icon" />
         </svg>
-        <span class="flex-1 min-w-0 text-[var(--font-size-base)] text-[var(--mobile-text-primary)] truncate">
+        <span class="flex-1 min-w-0 text-[var(--font-size-base)] truncate" :class="item.danger ? 'text-[var(--mobile-error)]' : 'text-[var(--mobile-text-primary)]'">
           {{ item.label }}
         </span>
       </button>
@@ -60,6 +61,8 @@ interface CapsuleEntry {
   label: string
   icon: string
   order: number
+  /** 破坏性项（停用）：红字 + 红按压底，与普通菜单项视觉区分 */
+  danger?: boolean
   run: () => void | Promise<void>
 }
 
@@ -91,6 +94,7 @@ const items = computed<CapsuleEntry[]>(() => {
       label: t('shell.capsule.disable'),
       icon: 'M12 4V2m0 20v-2M4 12H2m20 0h-2 M12 7a5 5 0 100 10 5 5 0 000-10z M15.5 8.5L20 4M8.5 15.5L4 20',
       order: 30,
+      danger: true,
       run: async () => {
         overlays.closeCapsule()
         await stop(id)

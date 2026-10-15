@@ -3,7 +3,7 @@
  *
  * 与 en/shell.ts 一一对应（i18n 双语纪律：新增/修改 key 必须两侧同步）。
  * 分组口径：home=主屏、switcher=多任务、notify=通知栏、run=应用运行页、
- * settings=平台设置、permissions=权限管理。
+ * settings=设置、permissions=权限管理。
  *
  * 文案纪律（2026-10-14 修订）：只写用户能感知的事实与后果，不写平台实现说明
  * 或原型/方案期解释（如「平台叠加的控制项」「运行面预留位」）。
@@ -39,7 +39,7 @@ export default {
       sysTitle: '系统',
       sysApps: '应用管理',
       sysPermissions: '权限管理',
-      sysSettings: '平台设置',
+      sysSettings: '设置',
     },
     apps: {
       title: 'WASM 应用',
@@ -124,7 +124,7 @@ export default {
       emptyHint: '应用启动、连接状态与待审批事项会出现在这里',
       clearAll: '清除全部',
       dismissOne: '关闭通知：{title}',
-      openApp: '打开',
+      openByTap: '点击打开 {title}',
       justNow: '刚刚',
       minutesAgo: '{count} 分钟前',
       hoursAgo: '{count} 小时前',
@@ -178,28 +178,15 @@ export default {
       },
     },
     settings: {
-      title: '平台设置',
-      background: '背景',
-      backgroundNote: '仅主屏',
-      wallNone: '无',
-      wallAurora: '极光',
-      wallDune: '沙丘',
-      wallReef: '礁湖',
-      wallCustom: '自定义',
-      wallPick: '从相册选择',
-      wallReplace: '更换图片',
-      wallRemove: '移除图片',
-      wallPickFailed: '未能读取所选图片，请换一张重试。',
-      wallDim: '遮罩强度',
+      title: '设置',
       platform: '平台',
       appearance: '外观',
       appearanceHint: '主题与色板',
       permissions: '权限总览',
       permissionsHint: '按权限看应用',
       // 2026-10-14：连接 / 认证两项从平台设置删除——它们不是宿主面（连接与凭据归
-      // 各应用自持）；底层实现页在其最后引用退役前暂留，见 revision-2.md R11。
-      egress: '出站策略',
-      egressHint: '安全出口档位',
+      // 各应用自持）；2026-10-15：出站策略入口一并移除（用户指令，旧实现页与路由暂留，
+      // 见 revision-2.md R11）。
       about: '关于 WasmApp',
       appSettings: '应用设置',
       runtime: 'WasmApp Mobile {version}',
@@ -210,6 +197,17 @@ export default {
       pendingBody: '{count} 项权限待批准',
       approveStart: '批准并启动',
       approveFailed: '批准失败，请查看应用详情',
+      // 双视图：按应用（默认，一行一应用不跨组重复）/ 按权限（反查：哪些应用持有某权限）
+      viewSwitch: '权限总览视图',
+      viewApps: '按应用',
+      viewGroups: '按权限',
+      appSection: '应用权限',
+      appSummary: '{granted} 项已授予',
+      appSummaryLocked: '{granted} 项已授予 · {locked} 项默认',
+      appNone: '未申请权限',
+      granted: '已授予',
+      locked: '默认授予',
+      ungranted: '未授予',
     },
     capsule: {
       title: '应用',

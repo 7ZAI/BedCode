@@ -45,6 +45,13 @@ vi.mock('vue-i18n', () => ({
 vi.mock('@/shell/composables/useShellApps', () => ({
   useShellApps: () => ({
     apps: computed(() => apps.value),
+    // 与生产实现同语义：运行中优先，其次按名称（中文 localeCompare）
+    sortedApps: computed(() =>
+      [...apps.value].sort((a, b) => {
+        const r = Number(b.state === 'running') - Number(a.state === 'running')
+        return r !== 0 ? r : a.name.localeCompare(b.name, 'zh-Hans-CN')
+      }),
+    ),
     stats: computed(() => ({ installed: apps.value.length, running: 0, totalBytes: 0 })),
     stop: mockStop,
   }),
