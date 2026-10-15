@@ -51,6 +51,17 @@ pub trait HostModule: Send + Sync + 'static {
     /// 返回类型即 `add_to_linker` 的原生错误（[`wasmtime::Error`]）——装配面唯一
     /// 可能的失败是 linker 注册冲突/重名（典型：同一 interface 被两个模块装配）。
     fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()>;
+
+    /// 本模块是否为**兜底 / 兼容桩**（默认 `false`）
+    ///
+    /// 语义：只为 import 闭合（或跨端同进程装配）而存在的实现，**有正式实现时让位**。
+    /// `ModuleRegistry::install_all` 第二遍装配这类模块，并跳过接口已被正式实现占用的
+    /// 那些（例：移动侧的 `mobile-desktop-compat`——它把桌面专属 interface 实现成
+    /// fail-visible 桩，跨端跨进程测试里桌面真实现同时在场时必须让位）。
+    /// 单端装配下无竞争，行为与普通模块一致（照装）。
+    fn fallback(&self) -> bool {
+        false
+    }
 }
 
 /// inventory 提交类型（能力 crate 用 `submit!` 自报；宿主用 `collect!` 收集）

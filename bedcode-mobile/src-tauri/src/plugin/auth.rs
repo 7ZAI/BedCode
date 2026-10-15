@@ -41,6 +41,13 @@ impl HostModule for AuthModule {
         DESC
     }
 
+    /// 端差异域实现：跨端**同进程**装配（cross-end rig：桌面 lib 与移动 lib 同时链入）
+    /// 时让位给已安装的另一端实现（接口同名，重复注册即 `defined twice`）；
+    /// 单端装配（生产移动宿主）无竞争，照常安装。
+    fn fallback(&self) -> bool {
+        true
+    }
+
     fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
         bedcode::plugin::host_auth_client::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
     }

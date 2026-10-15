@@ -61,6 +61,13 @@ impl HostModule for NotifyModule {
         DESC
     }
 
+    /// 端差异域实现：跨端**同进程**装配（cross-end rig：桌面 lib 与移动 lib 同时链入）
+    /// 时让位给已安装的另一端实现（接口同名，重复注册即 `defined twice`）；
+    /// 单端装配（生产移动宿主）无竞争，照常安装。
+    fn fallback(&self) -> bool {
+        true
+    }
+
     fn register(&self, linker: &mut wasmtime::component::Linker<WasmPluginState>) -> wasmtime::Result<()> {
         bedcode::plugin::host_notify::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)?;
         bedcode::plugin::host_notify_mobile::add_to_linker::<WasmPluginState, HasSelf>(linker, |s| s)
@@ -125,7 +132,7 @@ impl bedcode::plugin::host_notify::Host for WasmPluginState {
                 "host_notify",
                 Err("host_notify panicked".to_string()),
                 || {
-                    let ports = crate::plugin::host_ports::HostPorts;
+                    let ports = crate::plugin::host_ports::HostPorts::default();
                     block_on_async(ports.notify_show(&plugin_id, &title, &body, vibrate, sound))
                         .map_err(|e| format!("notification failed: {}", e))
                 },
@@ -152,7 +159,7 @@ impl bedcode::plugin::host_notify_mobile::Host for WasmPluginState {
                 "host_notify_check_permission",
                 Err("host_notify_check_permission panicked".to_string()),
                 || {
-                    let ports = crate::plugin::host_ports::HostPorts;
+                    let ports = crate::plugin::host_ports::HostPorts::default();
                     block_on_async(ports.notify_check_permission())
                         .map_err(|e| format!("notification permission check failed: {}", e))
                 },
@@ -176,7 +183,7 @@ impl bedcode::plugin::host_notify_mobile::Host for WasmPluginState {
                 "host_notify_request_permission",
                 Err("host_notify_request_permission panicked".to_string()),
                 || {
-                    let ports = crate::plugin::host_ports::HostPorts;
+                    let ports = crate::plugin::host_ports::HostPorts::default();
                     block_on_async(ports.notify_request_permission())
                         .map_err(|e| format!("notification permission request failed: {}", e))
                 },
@@ -201,7 +208,7 @@ impl bedcode::plugin::host_notify_mobile::Host for WasmPluginState {
                 "host_notify_vibrate",
                 Err("host_notify_vibrate panicked".to_string()),
                 || {
-                    let ports = crate::plugin::host_ports::HostPorts;
+                    let ports = crate::plugin::host_ports::HostPorts::default();
                     block_on_async(ports.notify_vibrate(duration_ms)).map_err(|e| format!("vibrate failed: {}", e))
                 },
             )
@@ -224,7 +231,7 @@ impl bedcode::plugin::host_notify_mobile::Host for WasmPluginState {
                 "host_notify_play_sound",
                 Err("host_notify_play_sound panicked".to_string()),
                 || {
-                    let ports = crate::plugin::host_ports::HostPorts;
+                    let ports = crate::plugin::host_ports::HostPorts::default();
                     block_on_async(ports.notify_play_sound()).map_err(|e| format!("play sound failed: {}", e))
                 },
             )

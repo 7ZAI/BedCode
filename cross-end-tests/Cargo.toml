@@ -57,6 +57,19 @@ actix-web = "4"
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 跨端链路场景（2026-10-15）：在测试内以无头宿主上下文加载**移动端真实插件产物**
+# （终端订阅协议 / 会话 HTTP / 认证编排已随票 12/15 下沉 wasm 插件，移动 lib 里
+# 已无 `terminal_link` / `session::http`）。需要 wasm-core 的测试装配面
+# （MockPorts / build_host_ctx_with / headless runtime），与两端自身测试同一套夹具。
+bedcode-wasm-core = { path = "../packages/bedcode-wasm-core", default-features = false, features = ["test-support"] }
+# `ConnectionEnginePort` / 端口替身是 async trait（与两端同版本）
+async-trait = "0.1"
+# 事件通道场景的会话触发面（带移动 JWT 的真实 HTTP；形状与桌面 HTTP 面逐字对齐）。
+# 移动侧会话 HTTP 客户端已随票 13 下沉 wasm 插件，而单进程 rig 装不下两端宿主域实现，
+# 故此处用宿主同版本的 reqwest 直打桌面路由（协议形状由桌面侧测试互补钉住）。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 移动插件世界夹具的错误类型（与两端同版本）
+anyhow = "1"
 
 # ==================== 编译资源（对齐两端，避免 wasmtime/actix 编译期 OOM） ====================
 # 路径依赖的 profile 只认本包根（workspace 语义）：不写则退回 cargo 默认

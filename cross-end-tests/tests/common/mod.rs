@@ -15,3 +15,4 @@
 
 pub mod desktop_ctx;
 pub mod mobile_ctx;
+pub mod mobile_plugin;

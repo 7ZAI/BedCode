@@ -115,6 +115,22 @@ impl ModuleRegistry {
         Self { modules }
     }
 
+    /// 从**显式模块集**构造注册表（不经 `inventory` 收集）
+    ///
+    /// 存在的理由：`collected()` 只能拿到当前二进制里 `submit!` 过的模块，构造不出
+    /// 「真实现 + 兜底/兼容桩」的精确对峙组合——而 [`Self::install_all`] 的两遍装配
+    /// 语义（兜底让位）必须能被单独钉住：跨端同进程 rig 虽是这套语义的目标场景，
+    /// 但其测试是 `#[ignore]` 的（CI 不跑），没有这里的单测，让位逻辑就只有
+    /// 「真实互连时炸一次」这一个发现渠道。
+    ///
+    /// 排序口径与 `collected()` 一致（按模块名字典序：装配顺序稳定 ⇒ 重复注册的
+    /// 报错可复现）。
+    pub fn from_modules(modules: Vec<&'static dyn crate::module::HostModule>) -> Self {
+        let mut modules = modules;
+        modules.sort_by_key(|m| m.desc().name);
+        Self { modules }
+    }
+
     /// 已装配模块的描述符（装配顺序 = 字典序）
     pub fn descs(&self) -> Vec<HostModuleDesc> {
         self.modules.iter().map(|m| m.desc()).collect()
@@ -190,12 +206,21 @@ impl ModuleRegistry {
         violations
     }
 
-    /// 逐模块装配进插件 linker（顺序 = 字典序）
+    /// 逐模块装配进插件 linker（顺序 = 字典序；**兜底/兼容桩模块最后**）
     ///
     /// 任一模块装配失败即整体失败并点名该模块（fail-visible：不允许「装了一半」的
     /// linker 流到实例化，那会让 guest 在更晚、更难定位的地方炸）。
+    ///
+    /// **两遍装配**：先装正式实现（`fallback() == false`），再装 [`HostModule::fallback`]
+    /// 自报的兜底/兼容桩，且**跳过接口已被正式实现占用的桩**。为什么必须这样：跨端同
+    /// 进程装配（`cross-end-tests`：桌面 lib 与移动 lib 同时链入）时，移动侧的桌面兼容桩
+    /// （`mobile-desktop-compat`：只为 import 闭合的 fail-visible 桩）会与桌面真实现
+    /// 同名 interface 撞车；桩的语义本来就是「没有真实现时才填位」，跳过是正解。
+    /// 单端装配下接口无竞争，两遍装配与单遍行为一致（桩照装）。
     pub fn install_all(&self, linker: &mut Linker<WasmPluginState>) -> Result<()> {
-        for module in &self.modules {
+        let mut claimed: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        // 第一遍：正式实现
+        for module in self.modules.iter().filter(|m| !m.fallback()) {
             let desc = module.desc();
             module
                 .register(linker)
@@ -203,6 +228,31 @@ impl ModuleRegistry {
                     module: desc.name,
                     source,
                 })?;
+            claimed.extend(desc.interfaces.iter().copied());
+        }
+        // 第二遍：兜底/兼容桩（接口已被正式实现占用即跳过；无竞争则照装）
+        for module in self.modules.iter().filter(|m| m.fallback()) {
+            let desc = module.desc();
+            let contested: Vec<&&'static str> = desc
+                .interfaces
+                .iter()
+                .filter(|i| claimed.contains(**i))
+                .collect();
+            if !contested.is_empty() {
+                tracing::debug!(
+                    module = desc.name,
+                    interfaces = ?contested,
+                    "host-kit: fallback module skipped (interfaces already provided by real implementations)"
+                );
+                continue;
+            }
+            module
+                .register(linker)
+                .map_err(|source| HostKitError::Register {
+                    module: desc.name,
+                    source,
+                })?;
+            claimed.extend(desc.interfaces.iter().copied());
         }
         Ok(())
     }

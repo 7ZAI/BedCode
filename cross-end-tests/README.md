@@ -4,8 +4,9 @@
 零 adb、零 WebView、零模拟器。
 
 ```bash
-# 前置：桌面随包 wasm 产物（认证中心）须已构建
+# 前置：两端随包 wasm 产物都须已构建（2026-10-15 起移动侧协议客户端也在 wasm 插件里）
 cd bedcode-desktop && pnpm run plugins:build
+cd bedcode-mobile && pnpm run plugins:build
 
 cd cross-end-tests && cargo test
 ```
@@ -20,10 +21,15 @@ cd cross-end-tests && cargo test
 | 端 | 真实侧 | mock 侧 |
 |---|---|---|
 | 桌面 | Actix 服务器（`src-tauri/tests/pty_session_chain.rs` 等） | 通用 reqwest / tokio-tungstenite 客户端 |
-| 移动 | AuthHttpClient / SessionHttpClient / TerminalLinkManager | 假桌面服务器（`tests/common/mod.rs`） |
+| 移动 | 移动 wasm 插件产物（终端协议 / 会话 HTTP / 认证编排）+ 宿主传输面 | 假桌面服务器（`tests/common/mock_plugin_ws` 一类夹具） |
 
 两套 mock 各自自洽。若文档或任一端实现偏离，**两端测试全绿但真实互连必坏**。
-本工程消灭这个盲区：请求字节由移动端真实客户端生成，应答字节由桌面真实插件生成。
+本工程消灭这个盲区：请求字节由移动端真实客户端（真插件）生成，应答字节由桌面真实插件生成。
+
+> **守门意义（2026-10-15 实测）**：终端链路下沉 wasm 插件后，本套件曾因引用退役的宿主
+> `terminal_link` 而不编译、且未接入 CI —— 期间「重放前不清屏 → 移动端整屏重复」类
+> 回归从两端 CI 底下派过。现在本包接入 `test.yml`（job `cross-end`），且移动侧夹具统一走
+> `common/mobile_plugin.rs`（真产物 + 无头宿主，见下）。
 
 ## 结构
 
@@ -34,19 +40,29 @@ cross-end-tests/
 └── tests/
     ├── common/
     │   ├── desktop_ctx.rs  # 桌面无头装配：AppContext + 真实认证中心产物 + Actix 服务器
-    │   └── mobile_ctx.rs   # 移动端客户端装配：目标设备 / 全局 token / 事件与输出记录替身
+    │   ├── mobile_ctx.rs   # 移动端装配：目标设备 / 全局 token / 输出记录替身
+    │   └── mobile_plugin.rs# 移动**真插件产物**世界（wasm + 无头宿主 + 页面通道 + 窄转发计数）
     ├── harness_selfcheck.rs    # 台子自检（场景红了先排除台子坏了）
     ├── pairing_auth_flow.rs    # 配对 / QR / 重认证（正例 + 4 类反例）
     ├── jwt_rotate_reconnect.rs # 密钥环轮换宽限期（ADR 0033：旧 token 轮换后仍可用）
-    ├── session_http_flow.rs    # 会话 HTTP 面 + 1002 错误信封 + remove 幂等
-    ├── terminal_ws_flow.rs     # 终端流闭环（真实 bash PTY 输出到达移动端）
-    ├── terminal_output_pressure.rs # 终端输出压力：零缺口 / 重锚 fail-visible / 背压
-    ├── fail_closed_flow.rs     # fail-closed（无中心在册 / 伪造凭证）
-    ├── lifecycle_flow.rs       # 桌面停用 / 激活对移动端连接的联动
+    ├── session_http_flow.rs    # 会话 HTTP 面（插件命令信封 + 1002 + remove 幂等）
+    ├── terminal_ws_flow.rs     # 终端闭环（真 PTY ↔ 真移动插件：prewarm/重放/连续性/背压/停止）
+    ├── fail_closed_flow.rs     # fail-closed（无中心在册 / 伪造凭证 / WS 面同闸门）
+    ├── lifecycle_flow.rs       # 桌面停用 / 激活对移动端链路的联动
     ├── event_channel_flow.rs   # 事件通道 session-control（7 类事件 + 不重放 + 自愈）
     ├── http_proxy_flow.rs      # HTTP 代理面（Egress + JWT 注入 + 链路加密信封）
     └── mdns_health_flow.rs     # mDNS 发现/广播 + /api/health 探测
 ```
+
+**移动侧夹具口径（`common/mobile_plugin.rs`）**：加载 `bedcode-mobile/src-tauri/resources/plugins/mobile/**/*.wasm`
+（`pnpm run plugins:build` 落点）→ `MockPorts` 只供给端事实（主连接目标 = 本进程桌面服务器、
+token = 配对真发）→ 真实宿主面（WS 客户端引擎 / HTTP egress / 页面窄转发 / 权限判定）全部真实现 →
+测试经插件命令面（`terminal-session.*`）驱动，经 `get-state` 与页面 Channel 观测。
+
+> 已删除的旧场景：`terminal_output_pressure.rs` / `terminal_resync_ordering.rs`（驱动退役的
+> 宿主 `terminal_link`）。其中压力/连续性契约并入 `terminal_ws_flow.rs` 的 C-005/C-009；“重锚
+> 信号先于重放字节”类契约在无头 harness 不可观测（插件事件出口需真 AppHandle），消费侧契约
+> 由移动端前端 vitest（`wasm-apps/bedcode/src/terminal/__tests__/store.test.ts`）承接。
 
 **每个场景 = 一个独立测试二进制**：`AppContext` 是进程级 `OnceLock` 单例，场景之间
 无法重装，只能靠进程隔离。

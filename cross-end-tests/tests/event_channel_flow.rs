@@ -7,7 +7,7 @@
 //! 任务队列、任务历史的实时更新**全靠这条通道**；它静默失效时 UI 不会报错，
 //! 只会「一直少一次刷新」。
 //!
-//! 驱动侧的口径：会话生命周期经**移动端真实 `SessionHttpClient`**（HTTP 下令，
+//! 驱动侧的口径：会话生命周期经**移动端真实插件**（`terminal-session.*` 命令 → HTTP 下令，
 //! 与生产同一条路）；任务/模式/定时域经**桌面命令面 `plugin_command`**
 //! （= 桌面 UI 那条路，`api_bridge::plugin_invoke` 的下游）——这些端点在移动端
 //! **没有 Rust 客户端**（只经前端 HTTP 代理，见 `http_proxy_flow.rs`），故不存在
@@ -48,7 +48,6 @@ use bedcode_mobile_lib::auth::http::{AuthHttpClient, DeviceAuthContext};
 use bedcode_mobile_lib::connection::event_ws::run_supervisor;
 use bedcode_mobile_lib::connection::WsClientEvent;
 use bedcode_mobile_lib::router::MobileEvent;
-use bedcode_mobile_lib::session::http::SessionHttpClient;
 use bedcode_mobile_lib::state::{get_auth_manager, get_connection_manager};
 use bedcode_mobile_lib::system::constants::connection::is_auth_fatal_close_code;
 
@@ -57,6 +56,65 @@ use common::mobile_ctx;
 
 /// 配对时申报的设备名：JWT claims 里的 `device_name`，事件 `source_device` 的来源
 const DEVICE_NAME: &str = "CrossEnd Event Phone";
+
+/// 带移动 JWT 的真实 HTTP 建会话（形状 = 桌面 `/api/sessions/start`，与退役前移动侧
+/// `SessionHttpClient::start_session` 逐字一致）：E-001a 要靠它验证「事件 `source_device`
+/// 来自 JWT claims 的设备名」这条跨面身份链。
+async fn start_session(base: &str, token: &str, config_id: &str, what: &str) -> String {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/sessions/start"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "configId": config_id, "cols": 100, "rows": 30 }))
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{what} HTTP 建会话失败：{e}"));
+    let body: serde_json::Value = resp.json().await.unwrap_or_else(|e| panic!("{what} 响应非 JSON：{e}"));
+    assert_eq!(body["code"], 0, "{what} 建会话业务码应为 0：{body}");
+    body["data"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{what} 响应缺 sessionId：{body}"))
+        .to_string()
+}
+
+/// 带移动 JWT 的真实 HTTP 停会话
+async fn stop_session(base: &str, token: &str, session_id: &str, what: &str) {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/sessions/{session_id}/stop"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{what} 停会话失败：{e}"));
+    assert_eq!(resp.status(), 200, "{what} 停会话 HTTP 状态应为 200");
+}
+
+/// 带移动 JWT 的真实 HTTP 移除会话
+async fn remove_session(base: &str, token: &str, session_id: &str, what: &str) {
+    let resp = reqwest::Client::new()
+        .delete(format!("{base}/api/sessions/{session_id}/remove"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{what} 移除会话失败：{e}"));
+    assert_eq!(resp.status(), 200, "{what} 移除会话 HTTP 状态应为 200");
+}
+
+/// 带移动 JWT 的真实 HTTP 读会话列表（对账腿用）
+async fn list_sessions(base: &str, token: &str) -> Vec<serde_json::Value> {
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/api/sessions"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .expect("读列表失败");
+    let body: serde_json::Value = resp.json().await.expect("列表响应非 JSON");
+    assert_eq!(body["code"], 0, "列表业务码应为 0：{body}");
+    // 桌面契约：`data: {sessions: [...]}`（旧控制器逐字段形状）；数组形状一并接受
+    let data = &body["data"];
+    data.as_array()
+        .cloned()
+        .or_else(|| data["sessions"].as_array().cloned())
+        .unwrap_or_default()
+}
 
 /// 播种的会话配置名（会话记录名 = 配置名，事件 `session_name` 的来源）
 const CONFIG_NAME: &str = "cross-end-events";
@@ -189,14 +247,12 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
     )
     .await;
 
-    let sessions = SessionHttpClient::new();
+    // 会话下令面在移动真插件里（HTTP + 宿主代注 JWT）：与事件通道（移动 lib 的
+    // 监督任务/路由）在同一进程内并行跑，正是跨端真实形态
     let config_id = desktop_ctx::seed_shell_config(CONFIG_NAME).await;
 
     // ==================== E-001a 会话创建事件 ====================
-    let session_id = sessions
-        .start_session(&base, &config_id, Some(100), Some(30))
-        .await
-        .expect("E-001a 移动端 HTTP 建会话");
+    let session_id = start_session(&base, &token, &config_id, "E-001a").await;
     let created = events
         .wait_for("E-001a session:created", |e| {
             matches!(e, MobileEvent::SyncSessionCreated { .. })
@@ -224,10 +280,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
     }
 
     // ==================== E-001b 会话停止事件 ====================
-    sessions
-        .stop_session(&base, &session_id)
-        .await
-        .expect("E-001b 停止会话");
+    stop_session(&base, &token, &session_id, "E-001b").await;
     let stopped = events
         .wait_for("E-001b session:stopped", |e| {
             matches!(e, MobileEvent::SyncSessionStopped { .. })
@@ -248,10 +301,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
     }
 
     // ==================== E-001c 会话移除事件 ====================
-    sessions
-        .remove_session(&base, &session_id)
-        .await
-        .expect("E-001c 移除会话");
+    remove_session(&base, &token, &session_id, "E-001c").await;
     let removed = events
         .wait_for("E-001c session:removed", |e| {
             matches!(e, MobileEvent::SyncSessionRemoved { .. })
@@ -270,10 +320,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
 
     // ==================== E-002 任务域 / 模式域 / 定时域事件 ====================
     // 任务事件需要一个在跑的会话承载（调度下发要求会话仍在登记域内）
-    let task_session = sessions
-        .start_session(&base, &config_id, Some(100), Some(30))
-        .await
-        .expect("E-002 建承载会话");
+    let task_session = start_session(&base, &token, &config_id, "E-002").await;
 
     // ---- E-002a session:mode-changed（先关自动执行：入队不立即下发，队列数可预期） ----
     plugin_command(
@@ -448,10 +495,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
     assert_eq!(fatal_dropped, 1, "E-003b 致命断链前事件通道上应恰好有一个在线连接");
 
     // 断链期间驱动一次真实的、会广播的状态迁移（停会话 → session:stopped）
-    sessions
-        .stop_session(&base, &task_session)
-        .await
-        .expect("E-003b 断链期间停会话");
+    stop_session(&base, &token, &task_session, "E-003b 断链期间停会话").await;
     mobile_ctx::assert_no_mobile_event(
         &events,
         "E-003b 断链期间的事件不得落地",
@@ -496,7 +540,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
     // （这正是 `ws_event_channel_ready` 存在的原因——事件不重放，重连后必须对账）
     let mut reconciled = None;
     for _ in 0..100 {
-        let list = sessions.list_sessions(&base).await.expect("E-003b 对账读列表");
+        let list = list_sessions(&base, &token).await;
         if let Some(entry) = list.iter().find(|s| s["id"] == task_session) {
             let st = entry["status"].as_str().unwrap_or("").to_string();
             if st != "running" {
@@ -531,10 +575,7 @@ async fn plugin_events_reach_mobile_over_real_event_channel() {
         .await;
 
     // ==================== 收尾 ====================
-    sessions
-        .remove_session(&base, &task_session)
-        .await
-        .expect("收尾移除会话");
+    remove_session(&base, &token, &task_session, "收尾移除会话").await;
     // 主动断开（生产同款：manual_disconnect 标记会让监督任务的自愈循环直接退出）——
     // 否则常驻事件通道会一直挂着，服务器的优雅停机会等它超时
     get_connection_manager().disconnect().await;

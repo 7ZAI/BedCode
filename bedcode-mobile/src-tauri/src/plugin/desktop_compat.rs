@@ -108,6 +108,13 @@ impl HostModule for MobileDesktopCompatModule {
         DESC
     }
 
+    /// 兜底/兼容桩：只为 import 闭合（跨端共享产物）而存在。跨端同进程装配
+    /// （桌面真实现与移动桩同时在场）时必须让位——否则同一 interface 被装配两次，
+    /// 当日即红：`map entry \`call\` defined twice`。
+    fn fallback(&self) -> bool {
+        true
+    }
+
     fn register(
         &self,
         linker: &mut wasmtime::component::Linker<WasmPluginState>,

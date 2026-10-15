@@ -4,7 +4,65 @@
 //! 白名单锁必须**双向**都钉住（漏进 / 漏出），否则任一方向单独存在都能被绕过。
 
 use bedcode_host_kit::{HostKitError, HostModule, HostModuleDesc, ModuleRegistry, WasmPluginState};
+use std::cell::RefCell;
 use wasmtime::component::Linker;
+
+// 装配记录（本测试线程上哪些模块的 `register` 真的跑起来了）
+//
+// **为什么用 thread_local**：`cargo test` 在同一二进制内**并行**跑用例，进程级
+// 静态记录会把别的用例的装配结果混进来（断言变成与执行顺序相关、随机红）。
+// `install_all` 是同步调用、`register` 就在测试线程内执行，线程局部记录既隔离
+// 又无需加锁。
+//
+// 观察点选择：component `Linker` 没有「查已注册函数」的读 API，故以桩自身的
+// 副作用为观察通道。记录的是 `install_all` 的**行为结果**（谁让位、谁装上），
+// 不是 mock 调用次数——同一断言直接区分「兜底桩装上」与「真实现装上」两种结果。
+thread_local! {
+    static INSTALLED: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+fn installed_log() -> Vec<&'static str> {
+    INSTALLED.with(|log| log.borrow().clone())
+}
+
+fn reset_installed_log() {
+    INSTALLED.with(|log| log.borrow_mut().clear());
+}
+
+/// 可指定「兜底/兼容桩」身份的测试模块（替身）
+///
+/// 真实现与桩**刻意用同一函数名**：真实世界里两边都是 wit-bindgen 的
+/// `add_to_linker`（函数名逐字相同），「同名 interface + 同名函数」装两次即
+/// `defined twice`。让位逻辑一旦失效，这里立刻以该错误红出来，而不是悄悄装成
+/// 两份、谁都看不出来。
+struct RecordingModule {
+    name: &'static str,
+    interfaces: &'static [&'static str],
+    func: &'static str,
+    is_fallback: bool,
+}
+
+impl HostModule for RecordingModule {
+    fn desc(&self) -> HostModuleDesc {
+        HostModuleDesc {
+            name: self.name,
+            interfaces: self.interfaces,
+            permissions: &[],
+            abi_min: 1,
+        }
+    }
+
+    fn fallback(&self) -> bool {
+        self.is_fallback
+    }
+
+    fn register(&self, linker: &mut Linker<WasmPluginState>) -> wasmtime::Result<()> {
+        let mut instance = linker.instance(self.interfaces[0])?;
+        instance.func_new(self.func, |_store, _ty, _args, _rets| Ok(()))?;
+        INSTALLED.with(|log| log.borrow_mut().push(self.name));
+        Ok(())
+    }
+}
 
 /// 测试用能力模块（替身：只登记一个空壳 interface 命名空间，不引入 WIT 依赖）
 struct StubModule {
@@ -276,6 +334,145 @@ fn host_port_unavailable_error_names_both_types() {
 
 inventory::submit! {
     bedcode_host_kit::ModuleEntry { module: &ALPHA }
+}
+
+
+// ==================== 兜底/兼容桩的两遍装配（cross-end 同进程装配的让位语义）====================
+
+/// 真实现（同接口）：名前置 `z-` 以**字典序排在兜底桩之后**——让位不得依赖
+/// 「正式模块恰好先排」这种偶然（装配顺序按名排序，而语义必须是两遍而非一遍）
+static SHARED_REAL: RecordingModule = RecordingModule {
+    name: "z-real",
+    interfaces: &["test:pkg/shared"],
+    func: "pinned-fn",
+    is_fallback: false,
+};
+
+/// 兜底/兼容桩（同接口）：名前置 `a-` 排在真实现之前
+static SHARED_COMPAT: RecordingModule = RecordingModule {
+    name: "a-compat",
+    interfaces: &["test:pkg/shared"],
+    func: "pinned-fn",
+    is_fallback: true,
+};
+
+/// 正例：同一 interface 上兜底桩让位给真实现（不装、不报错、不 shadow）
+///
+/// 这是跨端同进程装配（桌面 lib 与移动 lib 同时链入）的唯一正解：移动侧的桌面
+/// 兼容桩只在「没有真实现」时填位，否则两份 `add_to_linker` 撞同一 interface
+/// 即 `defined twice`，当日即红。
+#[test]
+fn install_all_skips_fallback_when_real_implementation_claims_interface() {
+    reset_installed_log();
+    let engine = test_engine();
+    let mut linker = Linker::<WasmPluginState>::new(&engine);
+
+    ModuleRegistry::from_modules(vec![&SHARED_COMPAT, &SHARED_REAL])
+        .install_all(&mut linker)
+        .expect("兜底桩让位后必须装配成功（同名 interface 不得 defined twice）");
+
+    assert_eq!(
+        installed_log(),
+        vec!["z-real"],
+        "只有真实现可注册：兜底桩必须被跳过（名字谁先谁后不影响）"
+    );
+}
+
+/// 正例：接口无人占用时兜底桩照常装配（单端装配下行为不变）
+///
+/// 生产移动宿主只链移动 lib，兼容桩就是那个 interface 的唯一提供者——若因为
+/// 「fallback 一律不装」把这条路径也砍了，跨端共享产物的 import 直接悬空。
+#[test]
+fn install_all_registers_fallback_when_interface_uncontested() {
+    reset_installed_log();
+    static SOLO_COMPAT: RecordingModule = RecordingModule {
+        name: "solo-compat",
+        interfaces: &["test:pkg/compat-only"],
+        func: "pinned-fn",
+        is_fallback: true,
+    };
+    let engine = test_engine();
+    let mut linker = Linker::<WasmPluginState>::new(&engine);
+
+    ModuleRegistry::from_modules(vec![&SOLO_COMPAT])
+        .install_all(&mut linker)
+        .expect("无竞争的兜底桩必须装上");
+
+    assert_eq!(installed_log(), vec!["solo-compat"]);
+}
+
+/// 反例：两个**真实现**抢同一 interface 必须显性失败并点名（两遍装配不放宽这条）
+///
+/// 与 `install_all_rejects_duplicate_on_same_linker_and_names_module` 互补：那条
+/// 走「同一 registry 装两遍」，本条款走「一个 registry 内两个真实现同名」——
+/// 都是能力域抢同一 guest import 名字段，装配期就得炸。
+#[test]
+fn install_all_rejects_two_real_modules_claiming_same_interface() {
+    static REAL_A: RecordingModule = RecordingModule {
+        name: "real-a",
+        interfaces: &["test:pkg/contested"],
+        func: "pinned-fn",
+        is_fallback: false,
+    };
+    static REAL_B: RecordingModule = RecordingModule {
+        name: "real-b",
+        interfaces: &["test:pkg/contested"],
+        func: "pinned-fn",
+        is_fallback: false,
+    };
+    let engine = test_engine();
+    let mut linker = Linker::<WasmPluginState>::new(&engine);
+
+    let err = ModuleRegistry::from_modules(vec![&REAL_A, &REAL_B])
+        .install_all(&mut linker)
+        .expect_err("两个真实现同名 interface 必须失败");
+
+    match err {
+        HostKitError::Register { module, source } => {
+            assert!(
+                matches!(module, "real-a" | "real-b"),
+                "必须点名后装的那个模块，got {module:?}"
+            );
+            assert!(
+                source.to_string().contains("defined twice"),
+                "unexpected wasmtime error: {source}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+/// 边界：两个兜底桩抢同一 interface——先装者占位，后到者跳过（不炸）
+///
+/// 桩的语义本就是「没有正式提供者时填位」，桩之间同名属于装配配置问题：按字典序
+/// 让先登场的赢，比整份装配失败更符合兜底定位（真需要严谨应由白名单/离线校验管）。
+#[test]
+fn install_all_skips_second_fallback_claiming_same_interface() {
+    reset_installed_log();
+    static COMPAT_FIRST: RecordingModule = RecordingModule {
+        name: "b-compat-first",
+        interfaces: &["test:pkg/dual-compat"],
+        func: "pinned-fn",
+        is_fallback: true,
+    };
+    static COMPAT_SECOND: RecordingModule = RecordingModule {
+        name: "c-compat-second",
+        interfaces: &["test:pkg/dual-compat"],
+        func: "pinned-fn",
+        is_fallback: true,
+    };
+    let engine = test_engine();
+    let mut linker = Linker::<WasmPluginState>::new(&engine);
+
+    ModuleRegistry::from_modules(vec![&COMPAT_FIRST, &COMPAT_SECOND])
+        .install_all(&mut linker)
+        .expect("桩间同名不得让整份装配失败");
+
+    assert_eq!(
+        installed_log(),
+        vec!["b-compat-first"],
+        "先登场的兜底桩占位，后到者跳过"
+    );
 }
 inventory::submit! {
     bedcode_host_kit::ModuleEntry { module: &MID }

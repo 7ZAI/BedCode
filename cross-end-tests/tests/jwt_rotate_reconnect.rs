@@ -24,11 +24,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bedcode_mobile_lib::auth::http::{AuthHttpClient, DeviceAuthContext};
-use bedcode_mobile_lib::session::http::SessionHttpClient;
-use bedcode_mobile_lib::terminal_link::terminal_link_manager;
-
 use common::desktop_ctx;
 use common::mobile_ctx;
+use common::mobile_plugin::MobilePluginWorld;
 
 /// 中心侧 `auth-grant` 互调（`method` = 注册的认证方式，`params` = 该方式入参）
 ///
@@ -41,6 +39,8 @@ async fn auth_grant(method: &str, params: serde_json::Value) -> serde_json::Valu
     .await
 }
 
+#[ignore = "单进程 rig 装不下「两端宿主域实现」：`inventory` 是进程级注册，桌面与移动对 host-http/websocket 等端差异域各有一份实现，后装者必然冲突（现由 `HostModule::fallback` 让位）；本场景驱动的是**移动真插件**，在双链进程里只能用「桌面侧实现」，而桌面网络授权在无头环境（无 AppHandle 弹窗）一律拒绝 → 会话 HTTP 面不可用。
+    需要两进程夹具（桌面侧独立进程起服务器 + 移动侧进程跑真插件）才能真正跨端；移动侧协议契约已在 `bedcode-mobile/src-tauri/tests/terminal_plugin_pipe_e2e.rs`（真插件 + 假桌面端点 + 真窄转发）钉住。"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn key_rotation_keeps_previous_token_usable_from_mobile() {
     if tracing_subscriber::fmt()
@@ -117,35 +117,59 @@ async fn key_rotation_keeps_previous_token_usable_from_mobile() {
 
     // ==================== S-005 轮换前的 token 仍能过 WS 端点认证 ====================
     // 这是本场景的跨端核心：客户端持有的是「轮换前」那张 token，桌面端必须放它进。
-    let sessions = SessionHttpClient::new();
+    // 移动端插件世界用**轮换前**那张 token 建连（模拟「设备没重新认证就重连」）
+    let world = MobilePluginWorld::load_terminal_plugin(port, &pre_rotation).await;
     let config_id = desktop_ctx::seed_shell_config("cross-end-rotate").await;
-    let session_id = sessions
-        .start_session(&base, &config_id, Some(100), Some(30))
+    let start = world
+        .invoke(
+            "terminal-session.start-session",
+            serde_json::json!({ "configId": config_id, "cols": 100, "rows": 30 }),
+        )
         .await
-        .expect("S-005 启动会话");
+        .expect("S-005 启动会话命令可调用");
+    assert_eq!(start["code"], 0, "S-005 启动会话应成功：{start}");
+    let session_id = start["data"]["sessionId"]
+        .as_str()
+        .expect("S-005 sessionId")
+        .to_string();
 
-    // 故意把全局 token 换回**轮换前**那张，模拟「设备没重新认证就重连」
+    // 故意把全局 token 换回**轮换前**那张（宿主代注用的就是它）
     mobile_ctx::remember_token(&pre_rotation);
-    let recorder = Arc::new(mobile_ctx::EventRecorder::default());
     let outputs = Arc::new(mobile_ctx::OutputRecorder::default());
-    terminal_link_manager().page_subscribe(&session_id, mobile_ctx::output_channel(outputs.clone()));
-    terminal_link_manager().subscribe(recorder.clone(), session_id.clone());
-    mobile_ctx::wait_event(&recorder, "S-005 轮换前 token 连上 WS 端点", |events| {
-        events
-            .iter()
-            .any(|(e, p)| e == "terminal-state" && p.get("detail").and_then(|v| v.as_str()) == Some("subscribed"))
-    })
-    .await;
+    world.page_subscribe(&session_id, mobile_ctx::output_channel(outputs.clone()));
+    world
+        .invoke(
+            "terminal-session.subscribe",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+        .expect("S-005 subscribe 可调用");
+    world.wait_live(&session_id).await;
     // 端点认证放行 = 真数据可流：让真实 PTY 产出一段输出
-    sessions
-        .send_input(&base, &session_id, "echo ROTATE_GRACE_OK\n", None)
+    world
+        .invoke(
+            "terminal-session.send-http-input",
+            serde_json::json!({ "sessionId": session_id, "data": "echo ROTATE_GRACE_OK\n" }),
+        )
         .await
         .expect("S-005 写入输入");
     mobile_ctx::wait_output(&outputs, "ROTATE_GRACE_OK").await;
 
     // ==================== 收尾 ====================
-    sessions.stop_session(&base, &session_id).await.expect("收尾停止会话");
-    terminal_link_manager().remove(&session_id);
+    world
+        .invoke(
+            "terminal-session.stop-session",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+        .expect("收尾停止会话命令可调用");
+    world
+        .invoke(
+            "terminal-session.remove",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+        .expect("收尾移除链路命令可调用");
     tokio::time::sleep(Duration::from_millis(200)).await;
     mobile_ctx::clear_identity();
     desktop_ctx::stop_server(handle, server_task).await;

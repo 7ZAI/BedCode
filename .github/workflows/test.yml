@@ -10,6 +10,7 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'cross-end-tests/**'
       - '.github/workflows/test.yml'
   pull_request:
     branches-ignore:
@@ -17,6 +18,7 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'cross-end-tests/**'
       - '.github/workflows/test.yml'
 
 permissions:
@@ -250,6 +252,104 @@ jobs:
       - name: Cargo test (mobile)
         working-directory: bedcode-mobile/src-tauri
         run: cargo test
+
+  # ==================== 跨端真实互连 ====================
+  #
+  # 两端各自的集成测试对面都是「按文档手写的 mock 对端」——两套 mock 各自自洽时，
+  # 协议漂移能在两端 CI 全绿下长期存活（2026-10-15 实测：终端链路/会话客户端下沉
+  # wasm 插件后，本套件既不编译也无人看守，渲染重复类回归直接从门禁下溜过）。
+  #
+  # 本 job 跑的是同一进程内 **桌面真实服务器 + 真实桌面插件产物 ↔ 移动真实插件产物**
+  # （零 mock、零 adb、零 WebView）：两端都必须先构建插件产物（resources/plugins/**），
+  # 产物缺失时场景显性失败（不静默 skip）。
+  cross-end:
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 同 rust-desktop：job 内磁盘缓存，不写 GHA 配额
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 桌面插件产物需要（单一事实来源 scripts/wasip3-toolchain.sh）
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            bedcode-desktop/src-tauri
+            bedcode-mobile/src-tauri
+            cross-end-tests
+
+      # −− 桌面插件产物（随包 resources/plugins/desktop）−−
+      - name: Install dependencies (desktop)
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
+      - name: Build plugins (desktop WASM artifacts)
+        working-directory: bedcode-desktop
+        run: pnpm run plugins:build
+
+      # −− 移动插件产物（随包 resources/plugins/mobile）−−
+      - name: Install dependencies (mobile)
+        working-directory: bedcode-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Install SDK dependencies (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-mobile dist)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm run build
+
+      - name: Install mobile plugin dependencies
+        run: |
+          for p in ai-chatbox bedcode file-transfer ocr; do
+            if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
+              echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
+              continue
+            fi
+            echo "== installing wasm-apps/$p =="
+            (cd "bedcode-mobile/wasm-apps/$p" && pnpm install --frozen-lockfile) || exit 1
+          done
+
+      - name: Build plugins (mobile WASM artifacts)
+        working-directory: bedcode-mobile
+        run: pnpm run plugins:build
+
+      # 每个场景 = 一个独立测试二进制（AppContext 进程级单例，场景间靠进程隔离）
+      - name: Cross-end tests (real desktop ↔ real mobile plugins)
+        working-directory: cross-end-tests
+        run: cargo test -- --nocapture
 
   # ==================== 前端 vitest ====================
 

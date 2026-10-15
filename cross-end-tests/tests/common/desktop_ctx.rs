@@ -207,7 +207,7 @@ fn link_crypto_dir() -> &'static PathBuf {
 pub async fn enable_link_crypto_http() {
     // 身份材料是落盘文件（`load_or_create` 不建父目录，GUI 侧目录由 app_data_dir 保证）
     std::fs::create_dir_all(link_crypto_dir()).expect("create link crypto dir");
-    let guard = AppContext::global().db().lock().await;
+    let guard = AppContext::global().db().lock().expect("db lock");
     // `init_at_startup` 自身对身份失败只 error 日志 + 强制全关（fail-safe），
     // 因此这里必须核对快照真的开了，否则后续断言会在“全关但无报错”下假绿
     bedcode_server_core::link_crypto::init_at_startup(link_crypto_dir(), guard.conn());
@@ -274,17 +274,37 @@ async fn init_app_context_inner(activate_center: bool) {
         return;
     }
     {
-        let db = Arc::new(tokio::sync::Mutex::new(
+        let db = Arc::new(std::sync::Mutex::new(
             Database::new(Path::new(":memory:")).expect("create in-memory db failed"),
         ));
-        db.lock().await.init_schema().expect("init db schema failed");
+        db.lock()
+            .expect("db lock")
+            .init_schema()
+            .expect("init db schema failed");
 
         let plugins_dir = bundled_plugins_dir();
         let user_dir = user_plugins_dir();
         std::fs::create_dir_all(&user_dir).expect("create temp user plugins dir failed");
 
-        let plugin_host = PluginHost::new(db.clone(), &plugins_dir, &user_dir, None, None, Vec::new(), bedcode_desktop_lib::wasm_core::manager::runtime::AbiPolicy::UNCONSTRAINED, std::sync::Arc::new(bedcode_desktop_lib::wasm_core::host_api::ports::UnimplementedHostFacts), None).await;
+        let plugin_host = PluginHost::new(
+            db.clone(),
+            &plugins_dir,
+            &user_dir,
+            None,
+            None,
+            Vec::new(),
+            bedcode_desktop_lib::wasm_core::manager::runtime::AbiPolicy::UNCONSTRAINED,
+            std::sync::Arc::new(bedcode_desktop_lib::wasm_core::host_api::ports::UnimplementedHostFacts),
+            None,
+        )
+        .await;
         plugin_host.init_message_bus().await;
+        // guest 事件派发器（生产同款）：缺省 `UnwiredGuestEvents` 会让总线投递 fail-visible
+        //（会话中心 dispatch 报错 → trap；实测症状 = 插件 api 回调超时）。本 rig 自建
+        // PluginHost 须自行注入——晚绑定使注入对扫描期已建实例同样生效。
+        plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+            bedcode_desktop_lib::plugin::guest_events::DesktopGuestEvents,
+        ));
         plugin_host
             .wasm_host_ctx()
             .set_plugin_db_root(Some(plugin_db_root().clone()));
