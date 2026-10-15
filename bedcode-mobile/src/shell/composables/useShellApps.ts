@@ -68,6 +68,17 @@ const registry = getShellRegistry()
 
 /** 是否正在拉取清单 */
 const loading: Ref<boolean> = ref(false)
+/**
+ * 清单是否已首次拉取落地（模块级，跨壳挂载保持「已拉过」这一事实）
+ *
+ * 为什么必须有它：壳先渲染、清单后拉取，这中间 `apps` 为空——运行屏若把「查不到
+ * 应用」当成终态，就会闪一句「应用不存在」（2026-10-16 用户反馈）。「还没拉」与
+ * 「拉完确实没有」必须分开：前者出加载态，后者才出空态。
+ *
+ * 放模块级而非组件级：清单记录与壳内屏幕栈一样跨挂载存活（ShellView 卸载只摘数据源、
+ * 不清记录，见其 onUnmounted 注释），重挂的壳不必等一次完整拉取才允许判空。
+ */
+const listReady: Ref<boolean> = ref(false)
 /** 最近一次动作的错误原因（供 UI 展示；成功清空） */
 const lastError: Ref<string | null> = ref(null)
 
@@ -129,6 +140,8 @@ async function refresh(): Promise<void> {
     )
   } finally {
     loading.value = false
+    // 无论成功失败都算「已尝试过」：否则拉取持续失败时运行屏会永远停在加载态
+    listReady.value = true
   }
 }
 
@@ -372,6 +385,8 @@ export interface ShellApps {
   runningApps: ComputedRef<ShellApp[]>
   stats: ComputedRef<ShellStats>
   loading: ComputedRef<boolean>
+  /** 清单是否已首次拉取落地（false = 还在拉，UI 应出加载态而非空态；见模块内 listReady 注释） */
+  listReady: ComputedRef<boolean>
   lastError: ComputedRef<string | null>
   getApp: typeof getApp
   refresh: typeof refresh
@@ -397,6 +412,7 @@ export function useShellApps(): ShellApps {
     runningApps,
     stats,
     loading: computed(() => loading.value),
+    listReady: computed(() => listReady.value),
     lastError: computed(() => lastError.value),
     getApp,
     refresh,

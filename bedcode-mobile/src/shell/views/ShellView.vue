@@ -20,15 +20,16 @@
 /**
  * 宿主壳路由入口（/mobile/shell）
  *
- * 这一层只做四件事：注册应用数据源、首次拉清单、卸载时回收、自持布局框（安全区/高度链）。
- * 其余全部交给 ShellHost——入口越薄，将来替换数据源时改动面越小。
+ * 这一层只做四件事：注册应用数据源、首次拉清单、卸载时摘数据源（清单记录不随卸载清，
+ * 见 onUnmounted 注释）、自持布局框（安全区/高度链）。其余全部交给 ShellHost
+ * ——入口越薄，将来替换数据源时改动面越小。
  *
  * 安全区与平台信息由 App.vue provide 注入（同一进程级真源，壳不另起一份）。
  */
 import { computed, inject, onMounted, onUnmounted, ref, type Ref } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import ShellHost from '../components/ShellHost.vue'
-import { createPluginAppSource, PLUGIN_APP_SOURCE_ID } from '../adapters/pluginAppSource'
+import { createPluginAppSource } from '../adapters/pluginAppSource'
 import { getShellRegistry } from '../registry'
 import { useShellApps } from '../composables/useShellApps'
 import type { Disposable } from '../types'
@@ -102,8 +103,10 @@ onUnmounted(() => {
     clearTimeout(listRetryTimer)
     listRetryTimer = null
   }
-  // 对称回收：先清该源写入的应用，再摘数据源，避免留下无主的记录
-  registry.clearSource(PLUGIN_APP_SOURCE_ID)
+  // 只摘数据源，**不清清单记录**：壳内屏幕栈是模块级单例、跨挂载存活，从插件整页
+  // 路由（如应用设置页）返回时重挂的 ShellView 立即渲染栈顶的 app-run 屏——清掉记录
+  // 会让它在这段窗口把「清单还没重拉回来」判成「应用不存在」（2026-10-16 用户反馈）。
+  // 清单新鲜度由挂载时的 refresh 对账（upsertApps 全量覆盖，未返回的应用自然回收）。
   sourceDisposable?.dispose()
   sourceDisposable = null
 })

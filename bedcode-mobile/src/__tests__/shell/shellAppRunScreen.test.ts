@@ -11,6 +11,7 @@
  * | C-R4 | 胶囊回主屏 | home 图标（不是「退出应用」语义）回主屏 | nav.goHome |
  * | C-R5 | 运行面 | 应用运行面在胶囊之下挂载 | ShellAppSurface 在场 |
  * | C-R6 | 无底部导航条 | 平台导航条已退役，本屏不渲染系统条 | 页面无 shell-system-bar |
+ * | C-R7 | 清单未落地不出空态 | 壳重挂载后清单要等 refresh，这段窗口 apps 为空 | 标题留空，**不**显示 notFound |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -23,12 +24,17 @@ const mockGoHome = vi.fn()
 const params = ref<Record<string, string>>({ appId: 'a' })
 
 const apps = ref<ShellApp[]>([])
+/** 清单是否已拉完（useShellApps.listReady 替身） */
+const listReady = ref(true)
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 vi.mock('@/shell/composables/useShellApps', () => ({
-  useShellApps: () => ({ getApp: (id: string) => apps.value.find((a) => a.id === id) }),
+  useShellApps: () => ({
+    getApp: (id: string) => apps.value.find((a) => a.id === id),
+    listReady,
+  }),
 }))
 vi.mock('@/shell/composables/useShellNavigation', () => ({
   useShellNavigation: () => ({
@@ -60,6 +66,7 @@ function app(id: string, name: string): ShellApp {
 beforeEach(() => {
   params.value = { appId: 'a' }
   apps.value = [app('a', 'AppA')]
+  listReady.value = true
   mockOpenCapsule.mockClear()
   mockOpenSwitcher.mockClear()
   mockGoHome.mockClear()
@@ -73,11 +80,22 @@ describe('C-R1 应用身份', () => {
     expect(wrapper.find('[role="img"][aria-label="AppA"]').exists(), '应用图标应在场').toBe(true)
   })
 
-  it('should_fallBackToNotFound_when_appMissing', () => {
+  it('should_fallBackToNotFound_when_appMissingAfterListReady', () => {
     apps.value = []
+    listReady.value = true
     const wrapper = mount(ShellAppRunScreen)
 
     expect(wrapper.text()).toContain('shell.run.notFound')
+  })
+
+  it('should_notShowNotFound_when_appMissingButListStillLoading', () => {
+    // 回归（2026-10-16 用户反馈：从插件设置页返回闪「应用不存在」）：
+    // 清单未落地（壳先渲染、清单后到的窗口）时不得判空——「还没拉」不是「不存在」
+    apps.value = []
+    listReady.value = false
+    const wrapper = mount(ShellAppRunScreen)
+
+    expect(wrapper.text()).not.toContain('shell.run.notFound')
   })
 })
 

@@ -8,9 +8,10 @@
     <header class="flex items-center gap-2.5 px-3 pt-1.5 pb-1 flex-shrink-0">
       <ShellAppIcon v-if="app" :app="app" :size="30" />
       <span
-        class="flex-1 min-w-0 text-[var(--font-size-base)] font-medium text-[var(--mobile-text-primary)] truncate"
+        class="flex-1 min-w-0 shell-type-label text-[var(--mobile-text-primary)] truncate"
       >
-        {{ app?.name ?? t('shell.run.notFound') }}
+        <!-- 清单未落地时不出「应用不存在」：那是空态，不是加载态（见 useShellApps.listReady） -->
+        {{ app?.name ?? (listReady ? t('shell.run.notFound') : '') }}
       </span>
 
       <div class="shell-capsule">
@@ -69,6 +70,9 @@
  *
  * 底部系统条已在 2026-10-14 修订中整条退役：入口收进本屏胶囊（多任务 / 回主屏），
  * 非根屏的返回由各屏自己的页头承担。这样平台导航条不再长期占用应用的可视高度。
+ *
+ * 标题取名时要看 listReady：壳先渲染、清单后到，这段窗口内 apps 为空，
+ * 直接显示「应用不存在」是假空态。
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -81,7 +85,7 @@ import ShellAppSurface from '../ShellAppSurface.vue'
 const { t } = useI18n()
 const nav = useShellNavigation()
 const overlays = useShellOverlays()
-const { getApp } = useShellApps()
+const { getApp, listReady } = useShellApps()
 
 const appId = computed(() => nav.params.value.appId ?? '')
 const app = computed(() => getApp(appId.value))

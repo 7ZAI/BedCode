@@ -7,9 +7,17 @@
          都属于应用自己，平台不实现，接入后由应用注册 surface 顶掉这里） -->
     <ShellPlaceholderSurface v-else-if="app" :app="app" />
 
-    <!-- 应用不存在：给出原因，不留白屏 -->
+    <!-- 清单尚未拉完：加载态。壳先渲染、清单后到，这段窗口里 apps 为空，
+         此时报「应用不存在」是假空态（2026-10-16 用户反馈）。 -->
+    <div v-else-if="!listReady" class="flex flex-1 items-center justify-center">
+      <span class="shell-type-body text-[var(--mobile-text-secondary)]">
+        {{ t('shell.common.loading') }}
+      </span>
+    </div>
+
+    <!-- 应用不存在：清单已就绪仍查不到，给出原因，不留白屏 -->
     <div v-else class="flex flex-1 items-center justify-center px-8 text-center">
-      <p class="text-[var(--font-size-base)] text-[var(--mobile-text-secondary)]">
+      <p class="shell-type-body text-[var(--mobile-text-secondary)]">
         {{ t('shell.run.notFound') }}
       </p>
     </div>
@@ -27,6 +35,9 @@
  *   ③ 预留位 + 空态说明（尚未接入时）
  *
  * 原型的终端、AI Chatbox、文件传输界面属于 ① 的范畴，不在本仓库实现。
+ *
+ * 「查不到 app」分两态：清单还没拉完（listReady=false）走加载态，拉完仍查不到才走
+ * 空态。两者混为一谈会让清单落地前的窗口闪一句「应用不存在」。
  */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -36,7 +47,7 @@ import ShellPlaceholderSurface from './ShellPlaceholderSurface.vue'
 const props = defineProps<{ appId: string }>()
 
 const { t } = useI18n()
-const { getApp, resolveSurface } = useShellApps()
+const { getApp, resolveSurface, listReady } = useShellApps()
 
 const app = computed(() => getApp(props.appId))
 /** 用 appId 而非 app 对象做依赖：应用停止/启动后对象会换，但解析入口不变 */
