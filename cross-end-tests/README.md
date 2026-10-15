@@ -26,14 +26,15 @@ cd cross-end-tests && cargo test
 只链移动包 ⇒ 移动宿主域实现无竞争安装 ⇒ 移动插件的 WS / 页面窄转发走**移动生产实现**。
 
 ```bash
-# 前置（两进程场景额外）
+# 前置（两进程场景额外）：先建 harness 二进制（default 模式；两进程模式不构建它）
 cd cross-end-tests && cargo build -p bedcode-crossend-desktop-harness
 
-# 两进程场景住在移动包（依赖图只含移动侧——跨端包依赖桌面 lib 会经 cargo feature
-# 统一把 server-crate 的 common-host 绑定编译进来，移动 whitelist 直接红，
-# 见 .scratch/2026-10-15-cross-end-two-process/spec.md §5.1）
-cd bedcode-mobile/src-tauri \
-  && cargo test --test two_proc_terminal_ws --test two_proc_selfcheck -- --ignored --nocapture
+# 两进程场景 = 本包 `two-proc` 构建模式：desktop-lib 是 optional 依赖、被 feature
+# 整体出图 ⇒ server-crate 的 common-host 无人开启 ⇒ 移动 whitelist 干净。
+# 只跑 cross-end-tests（`-p`）：连桌面侧成员一起构建会 feature 统一而复现污染。
+cd cross-end-tests \
+  && cargo test -p cross-end-tests --no-default-features --features two-proc \
+     --test two_proc_terminal_ws --test two_proc_selfcheck -- --nocapture
 ```
 
 - 场景：`two_proc_terminal_ws`（C-001..C-009：桌面命令面建会话 → 移动插件真 WS 链路
@@ -71,19 +72,27 @@ cross-end-tests/
 │   ├── src/lib.rs          # 装配面（desktop_ctx 同构）+ rpc_dispatch + 装配守卫
 │   └── src/main.rs         # READY <port> + stdin/stdout JSON-RPC 控制面循环
 ├── src/lib.rs              # 空 lib（crate 级说明）
-└── tests/                  # 单进程 rig 场景：
+└── tests/                  # 单进程 rig 场景（default 模式）+ 两进程场景（two-proc 模式）：
     ├── common/             # desktop_ctx（桌面无头装配）/ mobile_ctx / mobile_plugin（移动真产物世界）
+    ├── two_proc_common/    # 两进程：desktop 驱动（spawn harness + JSON-RPC）；mobile_* 复用 common/
+    ├── two_proc_selfcheck.rs    # 两进程台子自检（装配守卫 + spawn→READY→rpc→shutdown）
+    ├── two_proc_terminal_ws.rs # 终端闭环两进程版（C-001..C-009）
     ├── harness_selfcheck.rs    # 台子自检
     ├── pairing_auth_flow.rs    # 配对 / QR / 重认证
     ├── jwt_rotate_reconnect.rs # 密钥环轮换宽限期（# [ignore]：单进程装不下两端宿主域实现）
     ├── session_http_flow.rs    # 会话 HTTP 面（# [ignore]，同因）
-    ├── terminal_ws_flow.rs     # 终端闭环（# [ignore]；两进程版 = bedcode-mobile two_proc_terminal_ws）
+    ├── terminal_ws_flow.rs     # 终端闭环（# [ignore]；两进程版 = two_proc_terminal_ws）
     ├── fail_closed_flow.rs     # fail-closed（# [ignore]，同因）
     ├── lifecycle_flow.rs       # 停用/激活联动（# [ignore]，同因）
     ├── event_channel_flow.rs   # 事件通道 session-control（激活）
     ├── http_proxy_flow.rs      # HTTP 代理面 + 链路加密信封（激活）
     └── mdns_health_flow.rs     # mDNS 发现/广播 + /api/health（激活）
 ```
+
+**两种构建模式（Cargo features，见 Cargo.toml `[features]`）**：`default = ["desktop"]`
+跑单进程场景；`--no-default-features --features two-proc` 把 desktop-lib（optional 依赖）
+整体出图，跑两进程场景。两模式互斥无法被 cargo 强制，混用会被
+`two_proc_selfcheck` 的装配守卫显性拦下。
 
 **移动侧夹具口径（`common/mobile_plugin.rs`）**：加载 `bedcode-mobile/src-tauri/resources/plugins/mobile/**/*.wasm`
 （`pnpm run plugins:build` 落点）→ `MockPorts` 只供给端事实（主连接目标 = 本进程桌面服务器、

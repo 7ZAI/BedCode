@@ -1802,6 +1802,7 @@ dependencies = [
  "async-trait",
  "bedcode-desktop",
  "bedcode-discovery-engine",
+ "bedcode-host-kit",
  "bedcode-mobile",
  "bedcode-server-base",
  "bedcode-server-core",

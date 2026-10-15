@@ -1,13 +1,14 @@
 //! 两进程 rig 台子自检（场景红了先排除台子坏了；单进程 rig 的 harness_selfcheck 同款职责）
 //!
+//! 本文件只在本包 `two-proc` 构建模式编译运行（`cargo test -p cross-end-tests
+//! --no-default-features --features two-proc ...`）：
 //! ① 装配守卫：本测试二进制的 `inventory` 收集必须只含移动宿主模块、不得含桌面独有
-//!    模块——两进程形态的「测试进程只链移动侧」不变量（feature 统一/依赖图被破坏时
-//!    显性失败；单进程 rig 的病在依赖图上复发就是这个症状）。
+//!    模块——`two-proc` 模式的「测试进程只链移动侧」不变量（桌面 lib 一旦被误放进
+//!    依赖图/被混用 feature 开启，移动真插件又会跑在桌面宿主实现上——单进程 rig 的病）。
 //! ② 驱动自检：spawn harness → READY → 一次轻量 rpc 往返 → 优雅关停。
 //!
-//! ⚠ ② 需要 `desktop-harness` 二进制在场（`cd cross-end-tests && cargo build
-//! -p bedcode-crossend-desktop-harness`），故 `#[ignore]`——由 CI cross-end job 显式
-//! 以 `--ignored` 运行（移动包默认 `cargo test` 不构建该 bin）。
+//! harness 二进制由 default 模式预先构建（`cargo build -p bedcode-crossend-desktop-harness`，
+//! 见 `desktop::harness_bin_path` 的显性失败说明）。
 
 mod two_proc_common;
 
@@ -16,7 +17,7 @@ use two_proc_common::desktop::DesktopHarness;
 /// 装配守卫——移动独有必须在场、桌面独有必须缺席
 ///
 /// 名字清单与 harness 的 `desktop_harness::guard_side` 同表（各取双方独有名字做判据；
-/// server-crate 绑定模块（http / websocket / discovery / peer-net）在本包图里
+/// server-crate 绑定模块（http / websocket / discovery / peer-net）在本模式下
 /// `common-host` 未开 ⇒ 不提交，判据里不需要它们）。
 #[test]
 fn test_process_inventory_is_mobile_only() {
@@ -51,14 +52,13 @@ fn test_process_inventory_is_mobile_only() {
     ] {
         assert!(
             !names.iter().any(|n| n == forbid),
-            "测试进程混入桌面宿主模块 {forbid}（依赖图被破坏？两进程形态失效）：{joined}"
+            "测试进程混入桌面宿主模块 {forbid}（桌面 lib 在 two-proc 模式被链入？feature 混用/依赖图被破坏）：{joined}"
         );
     }
 }
 
 /// 驱动自检：spawn → READY → 轻量 rpc 往返 → 优雅关停
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "需先构建 desktop-harness（cross-end-tests workspace 成员）；由 cross-end job 显式 --ignored 运行"]
 async fn harness_spawn_ready_rpc_shutdown() {
     if tracing_subscriber::fmt()
         .with_test_writer()

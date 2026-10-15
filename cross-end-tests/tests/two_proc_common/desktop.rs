@@ -1,15 +1,14 @@
-//! 桌面进程驱动（两进程 rig 的测试侧；移动包内副本）
+//! 桌面进程驱动（两进程 rig 的测试侧）
 //!
-//! spawn `bedcode-crossend-desktop-harness` 二进制（真实桌面服务器进程，随包产物 +
-//! 真 Actix + 真 PTY，属 `cross-end-tests` workspace 成员），经 stdin/stdout
-//! JSON-RPC 控制面驱动：种子会话配置 / 插件互调与命令面 / WS 端点观测 / 链路加密
-//! 开关与计数 / 优雅关停。协议见 `cross-end-tests/desktop-harness/src/lib.rs` 的
-//! `rpc_dispatch` 与 `.scratch/2026-10-15-cross-end-two-process/spec.md`。
+//! spawn `bedcode-crossend-desktop-harness` 二进制（真实桌面服务器进程，独立包/workspace
+//! 成员，随包产物 + 真 Actix + 真 PTY），经 stdin/stdout JSON-RPC 控制面驱动：种子会话
+//! 配置 / 插件互调与命令面 / WS 端点观测 / 链路加密开关与计数 / 优雅关停。协议见
+//! `cross-end-tests/desktop-harness/src/lib.rs` 的 `rpc_dispatch` 与
+//! `.scratch/2026-10-15-cross-end-two-process/spec.md`。
 //!
-//! 本文件是 `cross-end-tests/tests/common/desktop_ctx.rs`（单进程 rig 的进程内直调面）
-//! 与跨端驱动（曾放跨端包、后因 feature 统一污染而搬迁）的**跨进程版**——每个 helper
-//! 一次 rpc 往返。两进程形态要求测试二进制**只引用移动侧代码**（本包依赖图即此）；
-//! 装配守卫在 `tests/two_proc_selfcheck.rs` 钉住（fail-visible）。
+//! 与 `tests/common/desktop_ctx.rs`（单进程 rig 的进程内直调面）对应：本文件是同一套
+//! 测试 API 的**跨进程版**（每个 helper 一次 rpc 往返）。**只在本包 `two-proc` 构建
+//! 模式下编译**（桌面 lib 出图 ⇒ 移动宿主域实现无竞争安装——单进程 rig 装不下的那半）。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -28,18 +27,19 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// 轮询判据预算（与桌面端 desktop_ctx 的 WAIT_TIMEOUT 同口径）
 const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// harness 二进制路径（跨端包 workspace 共享 target 桶的落点；可用环境变量覆盖）
+/// harness 二进制路径（workspace 共享 target 桶的落点；可用环境变量覆盖）
 ///
+/// 两进程模式不构建它（`required-features = ["desktop"]` 的 bin 在 `two-proc` 模式下
+/// 被跳过）——由先跑的 default 模式构建（`cargo build -p bedcode-crossend-desktop-harness`）。
 /// 缺失时**显性失败**（不是 skip）：跨端互连的唯一驱动方式就是真进程。
 fn harness_bin_path() -> PathBuf {
     if let Ok(p) = std::env::var("BEDCODE_CROSSEND_DESKTOP_BIN") {
         return PathBuf::from(p);
     }
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../cross-end-tests/target/debug/bedcode-crossend-desktop-harness");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/bedcode-crossend-desktop-harness");
     assert!(
         p.exists(),
-        "desktop harness 二进制缺失：{}。先构建：`cd cross-end-tests && cargo build -p bedcode-crossend-desktop-harness`",
+        "desktop harness 二进制缺失：{}。先构建（default 模式）：`cd cross-end-tests && cargo build -p bedcode-crossend-desktop-harness`",
         p.display()
     );
     p

@@ -98,35 +98,37 @@ lib 的 bin」不链接移动 lib——但这是**脆弱事实**：一旦有人�
 ## 3. 文件落点（最终形态；§5.1 实测偏离 1 后调整）
 
 ```text
-cross-end-tests/                        # workspace 根（桌面侧成员，无污染问题）
-├── Cargo.toml                          # 加了 [workspace] members = [".", "desktop-harness"]
-├── desktop-harness/                    # workspace 成员（共享 target 桶；自己的 lockfile 已并入根）
+cross-end-tests/                        # workspace 根（desktop-harness 为成员，共享 target 桶）
+├── Cargo.toml                          # [workspace] members + optional desktop-lib + [features] + [[test]]
+├── desktop-harness/                    # 桌面进程（独立包；依赖图只含桌面侧）
 │   ├── Cargo.toml                       # 依赖：桌面 lib + server-* + host-kit + tokio…
 │   ├── src/lib.rs                       # 装配面（desktop_ctx.rs 同构搬运）+ rpc_dispatch + 守卫
 │   └── src/main.rs                      # READY + JSON-RPC 循环
-└── tests/                              # 单进程 rig 场景（不动）
-
-bedcode-mobile/src-tauri/tests/        # two_proc 测试唯一落点（依赖图只含移动侧）
-├── two_proc_common/
-│   ├── mod.rs                           # desktop 驱动 + mobile_ctx + mobile_world（夹具副本）
-│   ├── desktop.rs                       # DesktopHarness（spawn + JSON-RPC + 轮询 helpers）
-│   ├── mobile_ctx.rs                    # cross-end-tests common/mobile_ctx.rs 的副本（逐字一致）
-│   └── mobile_world.rs                  # 其 mobile_plugin.rs 的副本（差异仅产物路径一行）
-├── two_proc_selfcheck.rs                # 装配守卫（激活）+ 驱动自检（#[ignore]，cross-end job 跑）
-└── two_proc_terminal_ws.rs              # terminal_ws_flow 的两进程版（C-001..C-009，#[ignore]）
+└── tests/                              # 两种构建模式的场景同住一处
+    ├── common/                         # desktop_ctx / mobile_ctx / mobile_plugin（单一真源）
+    ├── two_proc_common/                # 两进程：desktop 驱动；mobile_* 以 #[path] 复用 common/
+    ├── two_proc_selfcheck.rs           # 装配守卫 + 驱动自检（two-proc 模式）
+    ├── two_proc_terminal_ws.rs         # terminal_ws_flow 两进程版（C-001..C-009，two-proc 模式）
+    └── *其他 10 个单进程场景*            # desktop 模式（required-features = ["desktop"]）
 ```
+
+**构建模式（`[features]`）**：`default = ["desktop"]`（单进程 rig；desktop-lib = optional 依赖
+开启 ⇒ common-host 随之）vs `two-proc = []`（**desktop-lib 整个出图** ⇒ common-host 无人开启 ⇒
+移动 whitelist 干净）。单进程场景 `[[test]] required-features = ["desktop"]`、两进程场景
+`required-features = ["two-proc"]`——cargo 按构建模式决定编译集，两种模式互不编译对方的测试。
+两模式互斥无法被 cargo 强制（混用会复现污染，被 inventory 守卫显性拦下）。
 
 `desktop-harness/src/lib.rs` 与 `cross-end-tests/tests/common/desktop_ctx.rs` 是**同源同构**
 （同一套 GUI bootstrap 装配顺序）。两处头注互相指认；改装配顺序必须同步两处 + GUI
-`src-tauri/src/lib.rs` setup（server-lib-split 票 07 的教训）。夹具副本（mobile_ctx/
-mobile_world）同理：头注互相指认，改装配语义必须同步副本 + 移动生产装配
-（`plugin/manager.rs`）。
+`src-tauri/src/lib.rs` setup（server-lib-split 票 07 的教训）。夹具无副本（two_proc 直接
+复用 `common/mobile_*`，`#[path]` 编入同一源文件）。
 
-## 4. 验收（阶段一；已完成项打勾）
+## 4. 验收（阶段一 + 迁移；已完成项打勾）
 
 - [x] `cd cross-end-tests && cargo build -p bedcode-crossend-desktop-harness` 出 bin（共享桶）
 - [x] `two_proc_selfcheck` 绿：装配守卫（模块清单对表）、spawn → READY → shutdown 全流程
-- [x] `two_proc_terminal_ws` 绿：C-001..C-009 逐条过（判据函数与单进程旧场景一致；连跑 2 次稳定）
+- [x] `two_proc_terminal_ws` 绿：C-001..C-009 逐条过（判据函数与单进程旧场景一致；连跑稳定）
+- [x] 两进程测试迁回 cross-end-tests（optional dep + feature 门控，夹具单一真源；移动包副本删除）
 - [ ] 旧 4 个激活场景（pairing_auth / event_channel / http_proxy / mdns_health）不回归
 - [ ] CI：test.yml cross-end job 增 `desktop-harness` 构建步骤 + two_proc 显式运行步骤
 - [ ] README（cross-end-tests）补两进程段：形态 / 前置 / 守卫 / 与单进程 rig 的关系
@@ -155,10 +157,19 @@ mobile_world）同理：头注互相指认，改装配语义必须同步副本 +
 `host-http/host-websocket/host-mdns/host-peer`（与 `mobile-host-core` 同名 interface，
 且非 fallback 先装）。cargo 没有 per-target feature 隔离，同一包内无解。
 
-**结论**：two_proc 测试搬到 `bedcode-mobile/src-tauri/tests/`（依赖图只含移动侧；移动包
-对 server crates 不开 `common-host`，绑定模块 cfg 掉不提交——单端 e2e 一直在该图里跑
-已证）。`desktop-harness` 仍留在 cross-end-tests workspace（桌面侧成员，无污染问题，
-共享 target 桶省磁盘——独立桶实测把开发盘推到 92% 满）。CI 分开跑。
+**结论（迁移后终态，2026-10-15 用户裁决「做吧」）**：用 **optional 依赖 + feature 门控**解除，
+two_proc 测试迁回 cross-end-tests：`bedcode-desktop-lib` 改成 `optional = true`，
+`default = ["desktop"]` / `two-proc = []` 两个 feature——`two-proc` 模式下桌面 lib **整个出图**
+（不是「链接了但 cfg 掉」：cargo 对未启用的 optional 依赖不 resolve，feature 统一只作用在
+解析进图的 crate 上），common-host 无人开启 ⇒ 绑定模块不提交 ⇒ whitelist 干净。测试目标按
+`[[test]] required-features` 分集：单进程场景 `["desktop"]`、两进程场景 `["two-proc"]`，两种
+模式互不编译对方的测试。中间态（搬到移动包）撤销：夹具不再有两份副本，`\#[path]` 直接复用
+`common/mobile_*`。`desktop-harness` 保持独立包/workspace 成员（桌面侧，无污染问题，共享
+target 桶省磁盘——独立桶实测把开发盘推到 92% 满）；两进程模式 `-p cross-end-tests` 单包构建，
+避免与桌面侧成员一起构建时 feature 统一复现污染。
+
+⚠ 两 feature 互斥无法被 cargo 强制：`--features "desktop two-proc"` 会复现污染，但
+`two_proc_selfcheck` 的 inventory 装配守卫运行时直接红（显性失败不静默）。
 
 **偏离 2：会话生命周期（start/stop）改走桌面命令面，移动插件 HTTP 面无头不可测。**
 

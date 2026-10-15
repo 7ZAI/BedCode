@@ -49,7 +49,7 @@ const WAIT: Duration = Duration::from_secs(20);
 /// `\x1b[?2004l` 后接 `\r` 回列首，再输出首行），「独占一行」按**终端语义**提取：
 /// `\r` 与 `\n` 都视为行断（CR 回列首 = 该位置开始新行），行首/行尾空白剥离。
 /// 只按 `\n` 分行会让 `\x1b[?2004l\rSEQ_1` 粘成一行、行首判据落空（首行静默丢失）——
-/// 与两进程版 `bedcode-mobile/src-tauri/tests/two_proc_terminal_ws.rs` 同实现（判据函数逐字一致）。
+/// 与两进程版 `tests/two_proc_terminal_ws.rs` 同实现（判据函数逐字一致）。
 fn seq_lines(text: &str, prefix: &str) -> Vec<String> {
     text.split(['\r', '\n'])
         .map(|l| l.trim())

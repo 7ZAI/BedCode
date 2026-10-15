@@ -3,15 +3,14 @@
 //! （`com.bedcode.terminal-session` 移动侧 wasm，本进程内真实运行 + 真宿主窄转发）
 //! 经真实 TCP 互连。
 //!
-//! ## 与单进程版 `cross-end-tests/tests/terminal_ws_flow.rs` 的关系
+//! ## 与单进程版 `terminal_ws_flow.rs` 的关系
 //!
 //! 同一行为契约 C-001..C-009（判据函数逐字一致），**一处形态差异**：
 //! 单进程 rig 在同一进程里装两端宿主域实现，移动真插件只能跑在桌面宿主实现上
 //! （`#[ignore]`，见其头注）；本版把桌面侧拆成**独立进程**——本测试二进制只链移动侧
-//! （依赖图 = 移动包；feature 统一不会被桌面 lib 污染，见
-//! `.scratch/2026-10-15-cross-end-two-process/spec.md` §5 实测记录），移动宿主域实现
-//! （host-http / host-websocket / terminal_stream 窄转发）无竞争安装，移动插件的
-//! WS / 页面通道走的是**移动生产实现**。
+//! （依赖图 = 本包 `two-proc` 模式：cargo feature 把桌面 lib 出图 ⇒ server-crate 的
+//! `common-host` 无人开启；spec §5.1 实测），移动宿主域实现（host-http / host-websocket /
+//! terminal_stream 窄转发）无竞争安装，移动插件的 WS / 页面通道走的是**移动生产实现**。
 //!
 //! ## 会话生命周期（start/stop）为什么走桌面命令面而不是移动插件 HTTP
 //!
@@ -23,12 +22,13 @@
 //! **桌面命令面** `session.ws.control`（与生产 WS 会话控制通道共用 `ws_control` 域实现，
 //! 桌面 UI 同一入口），被测的跨端面——移动插件 WS 链路（prewarm/subscribe/send-input/
 //! session_stopped 传播）——保持全真。移动插件 host-http 的 wire 契约另由激活场景
-//! `cross-end-tests/tests/event_channel_flow.rs`（reqwest 直打）+ 移动单端
-//! `tests/session_http_flow.rs`（就地端口 impl）承接；「L1 桌面端目标在无头 CI 下是否
-//! 放行」是安全相关待裁决项（见 spec §5.1），不得单方面改。
+//! `event_channel_flow.rs`（reqwest 直打）+ 移动单端 `tests/session_http_flow.rs`
+//! （就地端口 impl）承接；「L1 桌面端目标在无头 CI 下是否放行」是安全相关待裁决项
+//! （见 spec §5.1），不得单方面改。
 //!
-//! ⚠ 需要 `desktop-harness` 二进制在场，故 `#[ignore]`——由 CI cross-end job 显式
-//! 以 `--ignored` 运行（移动包默认 `cargo test` 不构建该 bin）。
+//! 运行：`cargo build -p bedcode-crossend-desktop-harness`（先建 harness）→
+//! `cargo test -p cross-end-tests --no-default-features --features two-proc \
+//!   --test two_proc_terminal_ws -- --nocapture`。
 //!
 //! 行为契约：
 //! | 契约 | 行为 |
@@ -42,6 +42,11 @@
 //! | C-007 | 桌面命令面 stop_session → 桌面广播 session_stopped → 移动插件链路停止，页面通道不再增长 |
 //! | C-008 | 全程宿主窄转发零丢弃（`gateway_stats.dropped_*` == 0） |
 //! | C-009 | 客户端不 ack 的压力路径：400 行序列仍完整递增无重复（背压逃生阀） |
+//!
+//! ## 判据函数
+//!
+//! [`seq_lines`] 按终端语义 `\r`/`\n` 都分行（bash 复位 bracketed paste 会把首行粘进
+//! ANSI 前缀，只按 `\n` 分行会让首行静默丢失）——与单进程版同实现。
 
 mod two_proc_common;
 
@@ -52,7 +57,7 @@ use bedcode_mobile_lib::auth::http::{AuthHttpClient, DeviceAuthContext};
 
 use two_proc_common::desktop::{self, DesktopHarness, SESSION_PLUGIN_ID};
 use two_proc_common::mobile_ctx;
-use two_proc_common::mobile_world::MobilePluginWorld;
+use two_proc_common::mobile_plugin::MobilePluginWorld;
 
 /// 单次等待预算（真实 wasm 组件 + 真实 PTY，CI 慢机放宽）
 const WAIT: Duration = Duration::from_secs(20);
@@ -72,7 +77,6 @@ fn seq_lines(text: &str, prefix: &str) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "需先构建 desktop-harness（cross-end-tests workspace 成员）；由 cross-end job 显式 --ignored 运行"]
 async fn real_pty_output_reaches_mobile_plugin_page_channel() {
     if tracing_subscriber::fmt()
         .with_test_writer()
