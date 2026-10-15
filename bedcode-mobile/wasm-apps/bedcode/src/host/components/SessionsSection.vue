@@ -487,7 +487,7 @@ function handleNavigateToFiles(config: SessionConfigSummary): void {
 
 .section-head__label {
   padding-inline: 0.25rem;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--mobile-text-secondary);
 }

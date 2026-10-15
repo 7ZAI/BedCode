@@ -24,7 +24,13 @@ import {
   toSettingString,
 } from '../settingsModel'
 
-/** 与宿主 useMobileSettings::MobileSettings 对齐的字段集合（写穿判据，见 settingsModel 头注） */
+/**
+ * 与宿主 useMobileSettings::MobileSettings 对齐的字段集合（写穿判据，见 settingsModel 头注）
+ *
+ * 表内键分两类，两类都必须在本文件里显式登记，新增键漏登记时这里会红：
+ * - 宿主同名字段：宿主有消费者（自动重连 / 通知 / 终端上限），必须同名才能被读到
+ * - 插件自有字段：**没有**宿主消费者，桥按插件键直落 KV（writeSetting 的「未知键」分支）
+ */
 const HOST_KNOWN_FIELDS = [
   'autoReconnect',
   'keepAlive',
@@ -69,14 +75,31 @@ describe('C-SM1 定义表结构', () => {
   })
 })
 
-describe('C-SM2 键名与宿主字段同名（写穿判据）', () => {
+/**
+ * 插件自有键（2026-10-16 起）：键不在宿主 MobileSettings 里，也没有宿主消费者，
+ * 经 `writeSetting` 的未知键分支直落 KV + `readAllSettings` 回读，往返自洽。
+ */
+const PLUGIN_OWNED_FIELDS = [
+  // 主色色板：宿主外壳固定用默认主色（外观页的色板选择器已随本次下沉移除），
+  // 壳不读这个值，读它的只有本应用自己的运行面根节点
+  'accentPalette',
+]
+
+describe('C-SM2 键名归属（写穿判据）', () => {
   it('should_useHostFieldNames_when_keysComparedWithHost', () => {
-    // 改名会让宿主消费者（自动重连 / 通知 / 终端上限）静默读到默认值
+    // 反例防护：宿主同名字段改名会让消费者（自动重连 / 通知 / 终端上限）静默读到默认值
     for (const item of ALL_SETTINGS) {
       expect(
-        HOST_KNOWN_FIELDS,
-        `${item.key} 不是宿主 MobileSettings 的字段名，桥的写穿会失效`,
+        [...HOST_KNOWN_FIELDS, ...PLUGIN_OWNED_FIELDS],
+        `${item.key} 既非宿主同名字段、也未登记为插件自有键`,
       ).toContain(item.key)
+    }
+  })
+
+  it('should_notOverlapHostAndPluginOwnedFields_when_bothListed', () => {
+    // 把插件自有键误登成宿主同名字段会让 writeSetting 走写穿分支，改的是宿主单例而非 KV
+    for (const key of PLUGIN_OWNED_FIELDS) {
+      expect(HOST_KNOWN_FIELDS).not.toContain(key)
     }
   })
 })
@@ -86,6 +109,8 @@ describe('C-SM3 平台项不得混入业务表', () => {
     // 平台项由宿主设置页持有（spec §2 切分口径）；混进来会造成两处 UI 都写同一项
     const keys = ALL_SETTINGS.map((s) => s.key)
 
+    // 主色色板 accentPalette 在表内是**例外且是有意的**：主题深浅 / 语言 / 字号缩放
+    // 这三项平台项仍不得混入
     expect(keys).not.toContain('fontSize')
   })
 })
@@ -175,10 +200,13 @@ describe('C-SM7 取值转 KV 字符串', () => {
 
 describe('定义表分组顺序', () => {
   it('should_keepLegacyGroupOrder_when_tableBuilt', () => {
+    // appearance 插在 terminal 与 auth 之间：视觉上是「通用外观」段落，
+    // 放在认证前、终端后，避免把用户从连接类设置里拽走
     expect(SETTING_GROUPS.map((g) => g.id)).toEqual([
       'connection',
       'notifications',
       'terminal',
+      'appearance',
       'auth',
     ])
   })

@@ -38,10 +38,22 @@ function makePluginContext() {
   } as unknown as PluginContext
 }
 
-/** 认证方式分段按钮（按文案 key 定位；settingsModel 里的选项键固定） */
+/**
+ * 认证方式分段按钮（按选项文案 key 定位）
+ *
+ * 不能用 `button[aria-pressed]` 全量取再按下标——2026-10-16 新增「主色色板」5 个
+ * 枚举段后页面上有 7 个 aria-pressed 按钮，按下标定位会打到色板那一行去。
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function authSegments(wrapper: any) {
-  return wrapper.findAll('button[aria-pressed]') as any[]
+  const all = wrapper.findAll('button[aria-pressed]') as any[]
+  const picked = all.filter((b) =>
+    ['settings.authMethod.pairingCode', 'settings.authMethod.biometric'].includes(b.text()),
+  )
+  if (picked.length !== 2) {
+    throw new Error(`认证方式段应为 2 个，实际 ${picked.length} 个：${all.map((b) => b.text()).join(' | ')}`)
+  }
+  return picked
 }
 
 async function mountPage() {

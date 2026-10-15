@@ -47,7 +47,7 @@ Promise.all([
   completeStartupTask('settings')
   logger.log('[Init] Platform and settings pre-loaded')
 
-  // 首次渲染前预应用主题（.dark 类 + data-palette + isSystemDark）：
+  // 首次渲染前预应用主题（.dark 类 + isSystemDark；主色色板归各 app 自持，此处不预挂）：
   // 消除深色用户「首帧浅色 → onMounted 后深色」的启动闪变
   presetThemeBeforeMount()
 

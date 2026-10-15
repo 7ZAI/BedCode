@@ -7,8 +7,12 @@
  * 再翻转（闪变）。main.ts 在 app.mount 前调用 presetThemeBeforeMount()，把
  * .dark 类与 data-palette 提前挂到 <html>。
  *
- * 本测试验证该函数的行为契约：theme 取值（dark/light/system×系统深浅）与
- * palette 设置到 documentElement 的结果一致、幂等、无副作用残留。
+ * 本测试验证该函数的行为契约：theme 取值（dark/light/system×系统深浅）设置到
+ * documentElement 的结果一致、幂等、无副作用残留。
+ *
+ * **主色色板不在本函数职责内**（2026-10-16）：色板归各 wasm-app 自持，宿主壳固定用
+ * `:root` 默认主色，所以这里断言的是「宿主**不**碰 data-palette」——把 palette 挂回
+ * <html> 会让壳与应用再次同色，正是本次下沉要打破的。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
@@ -32,10 +36,10 @@ function stubSystemDark(matches: boolean) {
   return stub
 }
 
+/** 设置主题；`palette` 已从 store 类型移除（历史存档里的旧值由 loadSettings 剔除） */
 function setTheme(theme: string) {
   const store = useSettingsStore()
   store.settings.ui.theme = theme
-  store.settings.ui.palette = 'ocean'
 }
 
 function cleanupDom() {
@@ -56,18 +60,23 @@ describe('presetThemeBeforeMount 首帧主题预应用', () => {
     vi.unstubAllGlobals()
   })
 
-  it('theme=dark → html 挂上 .dark 类 + data-palette', () => {
+  it('theme=dark → html 挂上 .dark 类', () => {
     setTheme('dark')
     presetThemeBeforeMount()
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(document.documentElement.getAttribute('data-palette')).toBe('ocean')
   })
 
-  it('theme=light → html 不带 .dark 类（浅色 token 生效），palette 仍写入', () => {
+  it('theme=light → html 不带 .dark 类（浅色 token 生效）', () => {
     setTheme('light')
     presetThemeBeforeMount()
     expect(document.documentElement.classList.contains('dark')).toBe(false)
-    expect(document.documentElement.getAttribute('data-palette')).toBe('ocean')
+  })
+
+  it('反例：宿主不挂 data-palette（色板已下沉各 app，主色由应用运行面自持）', () => {
+    // html 上残留一个 data-palette 会让壳整体改色；宿主任何路径都不该再写它
+    setTheme('dark')
+    presetThemeBeforeMount()
+    expect(document.documentElement.getAttribute('data-palette')).toBeNull()
   })
 
   it('theme=system + 系统深色 → .dark 类挂上（首帧即深色，消除浅色闪帧）', () => {
@@ -90,6 +99,6 @@ describe('presetThemeBeforeMount 首帧主题预应用', () => {
     presetThemeBeforeMount()
     presetThemeBeforeMount()
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(document.documentElement.getAttribute('data-palette')).toBe('ocean')
+    expect(document.documentElement.getAttribute('data-palette')).toBeNull()
   })
 })

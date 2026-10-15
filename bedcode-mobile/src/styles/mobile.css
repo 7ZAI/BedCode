@@ -452,24 +452,30 @@ button.group-row:active,
   background: var(--mobile-group-row-active);
 }
 
+/* 分组卡内文字统一取根级流式字号档位，不再各自写裸 clamp()。
+   这么做的两个原因：① 裸 clamp() 不带 --mobile-font-scale，设置里的
+   「字体大小」对分组卡完全无效（用户调了档位看着没反应）；② 裸 clamp()
+   与 --font-size-* 是两条并行字阶，档位一旦调整就对不齐。
+   档位取值：标题/标签 = lg，副行 = base，右侧取值 = base。 */
+
 .group-row-title {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-size: var(--font-size-lg);
   font-weight: 500;
   color: var(--mobile-row-title);
 }
 
 .group-row-label {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-size: var(--font-size-lg);
   color: var(--mobile-row-title);
 }
 
 .group-row-sub {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-base);
   color: var(--mobile-row-sub);
 }
 
 .group-row-value {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  font-size: var(--font-size-base);
   color: var(--mobile-row-value);
 }
 
@@ -539,7 +545,7 @@ button.group-row:active,
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
@@ -782,52 +788,67 @@ button.settings-row:active {
    仅覆盖主色相关 token（--mobile-accent 系 + text-on-accent），色值取自
    bedcode-desktop/src/style.css 同名 palette（改色需双端同改）。
    背景/文字/边框等基础 token 的默认值（warm 色板）已与桌面端对齐；
-   其余 palette 仅切换主色，不覆盖背景（与桌面端「色板只换主色调」策略一致）。 */
+   其余 palette 仅切换主色，不覆盖背景（与桌面端「色板只换主色调」策略一致）。
 
-:root[data-palette='forest'] {
+   归属（2026-10-16）：主色是**各 wasm-app 自持的产品外观**，宿主壳不再提供色板
+   选择器（外壳固定用下方 :root 默认主色），故选择器从 `:root[data-palette=…]`
+   放宽为 `[data-palette=…]` —— 属性挂在哪个元素的哪一层子树，那一层子树就用哪套主色。
+   bedcode 应用在运行面根节点挂 `data-palette`（见 app/AppRoot.vue），于是应用内主色
+   自成一派，壳的导航 / 卡片 / 对话框保持默认象牙白，互不串色。
+
+   生效原理是自定义属性的「直接声明压过继承」，不是选择器权重：主色 token 挂在
+   承载 data-palette 的元素上，本级声明必然压过从 html 继承来的同名 token。 */
+
+[data-palette='forest'] {
   --mobile-accent: #86c49b;
   --mobile-accent-muted: rgba(134, 196, 155, 0.12);
   --mobile-accent-secondary: rgba(134, 196, 155, 0.2);
   --mobile-text-on-accent: #101713;
 }
-:root[data-palette='ocean'] {
+[data-palette='ocean'] {
   --mobile-accent: #5fd0e8;
   --mobile-accent-muted: rgba(95, 208, 232, 0.12);
   --mobile-accent-secondary: rgba(95, 208, 232, 0.2);
   --mobile-text-on-accent: #0b1620;
 }
-:root[data-palette='sunset'] {
+[data-palette='sunset'] {
   --mobile-accent: #f5a383;
   --mobile-accent-muted: rgba(245, 163, 131, 0.12);
   --mobile-accent-secondary: rgba(245, 163, 131, 0.2);
   --mobile-text-on-accent: #1b1210;
 }
-:root[data-palette='violet'] {
+[data-palette='violet'] {
   --mobile-accent: #b9a6f7;
   --mobile-accent-muted: rgba(185, 166, 247, 0.12);
   --mobile-accent-secondary: rgba(185, 166, 247, 0.2);
   --mobile-text-on-accent: #141020;
 }
 
-/* 浅色模式：同名 palette 的浅色主色（与桌面端 light 变体同源） */
+/* 浅色模式：同名 palette 的浅色主色（与桌面端 light 变体同源）。
+   选择器带 `html:not(.dark)` 祖先限定，权重高于上面的深色值；`html:not(.dark)[…]`
+   一路保留是为了承载元素正好是 html 时也不失配（宿主壳已不挂该属性）。 */
+html:not(.dark) [data-palette='forest'],
 html:not(.dark)[data-palette='forest'] {
   --mobile-accent: #3e6b4f;
   --mobile-accent-muted: rgba(62, 107, 79, 0.12);
   --mobile-accent-secondary: rgba(62, 107, 79, 0.2);
   --mobile-text-on-accent: #fdfcf7;
 }
+html:not(.dark) [data-palette='ocean'],
 html:not(.dark)[data-palette='ocean'] {
   --mobile-accent: #0e7490;
   --mobile-accent-muted: rgba(14, 116, 144, 0.12);
   --mobile-accent-secondary: rgba(14, 116, 144, 0.2);
   --mobile-text-on-accent: #ffffff;
 }
+html:not(.dark) [data-palette='sunset'],
 html:not(.dark)[data-palette='sunset'] {
   --mobile-accent: #d9532a;
   --mobile-accent-muted: rgba(217, 83, 42, 0.12);
   --mobile-accent-secondary: rgba(217, 83, 42, 0.2);
   --mobile-text-on-accent: #fefaf5;
 }
+html:not(.dark) [data-palette='violet'],
 html:not(.dark)[data-palette='violet'] {
   --mobile-accent: #6d4fc6;
   --mobile-accent-muted: rgba(109, 79, 198, 0.12);
@@ -835,7 +856,9 @@ html:not(.dark)[data-palette='violet'] {
   --mobile-text-on-accent: #fcfbfe;
 }
 
-/* ==================== 色板选择器色块（设置页「主色色板」展示用） ====================
+/* ==================== 色板选择器色块（wasm-app 设置页「主色色板」展示用） ====================
+   2026-10-16 起选择器 UI 迁到各 wasm-app 自己的设置页（宿主外观页不再提供）；
+   色值 token 仍是全局的，应用运行面渲染在壳文档内，取值照旧继承 :root。
    default 跟随当前主题默认主色（深色 = 象牙白 / 浅色 = 近黑），
    其余与上方同名 palette 主色同源（改色需双端同改）。 */
 :root {

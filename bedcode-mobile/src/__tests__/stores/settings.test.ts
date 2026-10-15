@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { useSettingsStore } from '@/stores/settings'
 
 /** 构造一个完整的 ui 节（saveSettings 浅合并按节整体替换，调用方需传完整节） */
-function fullUi(overrides: Partial<{ theme: string; terminal_font_size: number; terminal_font_family: string; show_preview: boolean; language: string; max_cached_terminals: number; notify_in_background: boolean; palette: string }> = {}) {
+function fullUi(overrides: Partial<{ theme: string; terminal_font_size: number; terminal_font_family: string; show_preview: boolean; language: string; max_cached_terminals: number; notify_in_background: boolean }> = {}) {
   return {
     theme: 'system',
     terminal_font_size: 12,
@@ -27,7 +27,6 @@ function fullUi(overrides: Partial<{ theme: string; terminal_font_size: number; 
     language: 'zh-CN',
     max_cached_terminals: 10,
     notify_in_background: true,
-    palette: 'default',
     ...overrides,
   }
 }
@@ -53,7 +52,8 @@ describe('settings store', () => {
     expect(store.settings.ui.language).toBe('zh-CN')
     expect(store.settings.ui.max_cached_terminals).toBe(10)
     expect(store.settings.ui.notify_in_background).toBe(true)
-    expect(store.settings.ui.palette).toBe('default')
+    // 2026-10-16：主色色板移出宿主，真源归各 wasm-app 的 accentPalette
+    expect('palette' in store.settings.ui).toBe(false)
   })
 
   it('loadSettings merges partial backend response over defaults per section', async () => {

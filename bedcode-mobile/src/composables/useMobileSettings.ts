@@ -251,19 +251,6 @@ export function useMobileSettings() {
     }
   })
 
-  /** 主色色板 - 与桌面端同名 palette 同源，两端各自独立选择 */
-  const paletteMode = computed({
-    get: () => settingsStore.settings.ui.palette || 'default',
-    set: (value: string) => {
-      settingsStore.saveSettings({
-        ui: {
-          ...settingsStore.settings.ui,
-          palette: value
-        }
-      })
-    }
-  })
-
   /** 当前语言 */
   const currentLanguage = computed({
     get: () => settingsStore.settings.ui.language || 'zh-CN',
@@ -273,7 +260,6 @@ export function useMobileSettings() {
   return {
     settings,
     themeMode,
-    paletteMode,
     currentLanguage,
     loadSettings,
     saveSettings,

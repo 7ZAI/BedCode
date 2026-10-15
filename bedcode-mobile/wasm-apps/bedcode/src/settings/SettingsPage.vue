@@ -19,9 +19,19 @@
           class="flex items-center justify-between gap-3 px-3 min-h-[48px] py-2"
           :style="index > 0 ? { borderTop: '1px solid var(--mobile-group-border)' } : {}"
         >
-          <span class="flex-1 min-w-0 text-sm" :style="{ color: 'var(--mobile-text-primary)' }">
-            {{ t(item.labelKey) }}
-          </span>
+          <!-- 标签列：选项多到一行放不下时（主色色板 5 档）纵向堆叠，说明文字才不会被挤没 -->
+          <div class="flex-1 min-w-0">
+            <div class="text-sm" :style="{ color: 'var(--mobile-text-primary)' }">
+              {{ t(item.labelKey) }}
+            </div>
+            <div
+              v-if="item.hintKey"
+              class="text-[var(--font-size-xs)] mt-0.5"
+              :style="{ color: 'var(--mobile-text-muted)' }"
+            >
+              {{ t(item.hintKey) }}
+            </div>
+          </div>
 
           <!-- 布尔项：复用应用内开关（终端域 Toggle，契约与宿主设置页一致） -->
           <Toggle
@@ -61,8 +71,13 @@
             </button>
           </div>
 
-          <!-- 枚举项：分段选择 -->
-          <div v-else class="flex items-center gap-1 flex-shrink-0">
+          <!-- 枚举项：分段选择。flex-wrap 是必需的——主色色板 5 档在窄屏一行放不下，
+               不换行会把标签列挤到 0 宽。窄屏时整行换行，宽屏仍保持同行。 -->
+          <div
+            v-else
+            class="flex items-center gap-1 flex-shrink-0"
+            :class="(item.options?.length ?? 0) > 3 ? 'flex-wrap justify-end max-w-[62%]' : ''"
+          >
             <button
               v-for="opt in item.options ?? []"
               :key="opt.value"

@@ -17,6 +17,7 @@ export const messagesZhCN = {
       notifications: '通知',
       terminal: '终端',
       auth: '认证',
+      appearance: '外观',
       platform: '平台设置',
     },
     autoReconnect: '断线自动重连',
@@ -32,6 +33,15 @@ export const messagesZhCN = {
     authMethod: {
       pairingCode: '配对码',
       biometric: '生物识别',
+    },
+    accentPalette: '主色色板',
+    accentPaletteHint: '仅影响本应用界面，不改变外壳配色',
+    palette: {
+      default: '默认',
+      forest: '森野绿',
+      ocean: '海洋青',
+      sunset: '落日晚霞',
+      violet: '星空紫',
     },
     actions: {
       reset: '重置设置',
@@ -53,6 +63,7 @@ export const messagesEn = {
       notifications: 'Notifications',
       terminal: 'Terminal',
       auth: 'Authentication',
+      appearance: 'Appearance',
       platform: 'Platform settings',
     },
     autoReconnect: 'Reconnect automatically',
@@ -68,6 +79,15 @@ export const messagesEn = {
     authMethod: {
       pairingCode: 'Pairing code',
       biometric: 'Biometrics',
+    },
+    accentPalette: 'Accent Palette',
+    accentPaletteHint: 'Applies to this app only; the shell keeps its own colours',
+    palette: {
+      default: 'Default',
+      forest: 'Forest',
+      ocean: 'Ocean',
+      sunset: 'Sunset',
+      violet: 'Violet',
     },
     actions: {
       reset: 'Reset settings',

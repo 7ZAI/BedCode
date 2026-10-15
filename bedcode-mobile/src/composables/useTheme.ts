@@ -41,9 +41,11 @@ function applyTheme(theme: string) {
   // 系统栏图标外观跟随 App 主题（而非设备主题）
   void syncSystemBarAppearance(isDark)
 
-  // 主色色板：与桌面端同名 palette 同源（背景/文字等其余 token 保持移动端自身风格）
-  const palette = useSettingsStore().settings.ui.palette || 'default'
-  root.setAttribute('data-palette', palette)
+  // 主色色板**不**在这里挂：2026-10-16 起主色归各 wasm-app 自持，宿主壳固定用
+  // mobile.css 的 `:root` 默认主色（象牙白），应用把 `data-palette` 挂在自己运行面的
+  // 根节点上（见 wasm-apps/bedcode/src/app/AppRoot.vue），因此壳与应用互不串色。
+  // 历史遗留的 settings.ui.palette 值会被清掉（见 stores/settings.ts 的 migrateUi），
+  // 迁到应用的 accentPalette 键，避免旧值在无人写 UI 的情况下悄悄改壳的主色。
 }
 
 function setupTheme() {
@@ -92,11 +94,6 @@ export function useTheme() {
     cleanupTheme()
     applyTheme(newTheme)
     setupTheme()
-  })
-
-  // 监听主色色板变化（palette 与 theme 独立，无需重建 system 监听）
-  watch(() => settingsStore.settings.ui.palette, () => {
-    applyTheme(settingsStore.settings.ui.theme)
   })
 
   // 主题对应的容器类名

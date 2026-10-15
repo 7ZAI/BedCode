@@ -9,8 +9,12 @@
  * 「是否为宿主已知键」，同名才能让宿主消费者（自动重连 / 通知 / 终端上限）读到真值，
  * 从而真源下沉的同时宿主行为不回退。改名会让这些消费者静默读到默认值。
  *
- * 平台项（主题 / 语言 / UI 字号缩放 / 关于 / 出站授权 / 链路加密）**不在本表**：
+ * 平台项（主题深浅 / 语言 / UI 字号缩放 / 关于 / 出站授权 / 链路加密）**不在本表**：
  * 它们是平台机制与安全闸门，由宿主设置页持有（见 spec §2 设置切分口径）。
+ *
+ * **主色色板在本表**（2026-10-16 从宿主外观页下沉）：主色是本应用的产品外观（B5 业务
+ * 默认值 / 策略），宿主外壳固定用默认象牙白，不再全局改色。选择器只改本应用运行面
+ * 根节点上的 `data-palette`（见 ../app/AppRoot.vue），不外溢到壳。
  */
 
 export type SettingKind = 'boolean' | 'number' | 'enum'
@@ -97,6 +101,26 @@ export const SETTING_GROUPS: SettingGroup[] = [
         labelKey: 'settings.maxOpenTerminals',
         min: 1,
         max: 20,
+      },
+    ],
+  },
+  {
+    id: 'appearance',
+    titleKey: 'settings.group.appearance',
+    items: [
+      {
+        key: 'accentPalette',
+        kind: 'enum',
+        fallback: 'default',
+        labelKey: 'settings.accentPalette',
+        hintKey: 'settings.accentPaletteHint',
+        options: [
+          { value: 'default', labelKey: 'settings.palette.default' },
+          { value: 'forest', labelKey: 'settings.palette.forest' },
+          { value: 'ocean', labelKey: 'settings.palette.ocean' },
+          { value: 'sunset', labelKey: 'settings.palette.sunset' },
+          { value: 'violet', labelKey: 'settings.palette.violet' },
+        ],
       },
     ],
   },

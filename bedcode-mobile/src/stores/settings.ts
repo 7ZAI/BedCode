@@ -27,8 +27,8 @@ export interface Settings {
     max_cached_terminals?: number
     // 是否在后台时发送通知
     notify_in_background?: boolean
-    // 主色色板（与桌面端同名色板同源；default = Dracula 象牙白）
-    palette?: string
+    // 主色色板已于 2026-10-16 移出宿主（归各 wasm-app 自持，见 settings.accentPalette）；
+    // 类型里不再有 palette 字段，loadSettings 也会把它从历史存档里剔除。
   }
 }
 
@@ -51,7 +51,6 @@ const defaultSettings: Settings = {
     language: 'zh-CN',
     max_cached_terminals: 10,
     notify_in_background: true,
-    palette: 'default',
   },
 }
 
@@ -61,10 +60,17 @@ export const useSettingsStore = defineStore('settings', () => {
   async function loadSettings() {
     try {
       const loaded = await invoke<Settings>('get_app_settings')
+      // ui 里显式剔除历史遗留的 palette：主色已下沉到 wasm-app 自持的 accentPalette
+      // （mobile.accentPalette），宿主再留着这个键只会让旧值看起来「还在生效」。
+      // 走 Record 断言是因为 Settings['ui'] 已不再声明 palette，但后端存档里可能还有。
+      const { palette: _retiredPalette, ...ui } = {
+        ...defaultSettings.ui,
+        ...loaded.ui,
+      } as Record<string, unknown> & Settings['ui']
       settings.value = {
         network: { ...defaultSettings.network, ...loaded.network },
         session: { ...defaultSettings.session, ...loaded.session },
-        ui: { ...defaultSettings.ui, ...loaded.ui },
+        ui,
       }
     } catch (e) {
       logger.error('[Settings] Failed to load settings:', e)

@@ -31,7 +31,7 @@ vi.mock('@/composables/useMobileSettings', () => ({
   useMobileSettings: () => ({
     settings: ref({ fontSize: 'normal' }),
     themeMode: ref('light'),
-    paletteMode: ref('default'),
+    // 2026-10-16：主色色板移出宿主外观页，paletteMode 一并退役（真源在 wasm-app 设置域）
     currentLanguage: ref('zh-CN'),
     loadSettings: vi.fn(async () => undefined),
   }),

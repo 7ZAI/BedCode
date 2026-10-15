@@ -3,7 +3,7 @@ export default {
     title: 'Settings',
     // Ticket 2026-10-10: `general` / `dangerZone` retired with the `actions` group
     // (no UI callers left). 2026-10-14: the device-level wipe copy moved into this
-    // file's `about` group (entry moved from platform settings to "About WasmApp").
+    // file's `about` group (entry moved from platform settings to "About BedCode").
     groups: {
       connection: 'Connection',
       security: 'Security',
@@ -34,12 +34,6 @@ export default {
       lightMode: 'Light Mode',
       darkMode: 'Dark Mode',
       followSystem: 'Follow System',
-      palette: 'Accent Palette',
-      paletteDefault: 'Default',
-      paletteForest: 'Forest',
-      paletteOcean: 'Ocean',
-      paletteSunset: 'Sunset',
-      paletteViolet: 'Violet',
       language: 'Language',
       languageChinese: '中文',
       languageEnglish: 'English',
@@ -50,7 +44,7 @@ export default {
       generalSection: 'General',
       displaySection: 'Display',
       // Home wallpaper (moved from the shell settings page on 2026-10-15: background
-      // belongs to appearance config, same screen as theme/palette; gradient & dim
+      // belongs to appearance config, same screen as theme mode; gradient & dim
       // preview logic live in styles/wallpaper.css, shared with the home screen)
       backgroundSection: 'Home background',
       backgroundNote: 'Home screen only',

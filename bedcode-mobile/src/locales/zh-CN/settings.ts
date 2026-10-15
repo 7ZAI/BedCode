@@ -3,7 +3,7 @@ export default {
     title: '设置',
     // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用）。
     // 2026-10-14：设备级擦除的文案迁入本文件 `about` 组的 dangerZone 系列
-    // （入口从平台设置一级页迁到「关于 WasmApp」）。
+    // （入口从平台设置一级页迁到「关于 BedCode」）。
     groups: {
       connection: '连接',
       security: '安全',
@@ -34,12 +34,6 @@ export default {
       lightMode: '浅色模式',
       darkMode: '深色模式',
       followSystem: '跟随系统',
-      palette: '主色色板',
-      paletteDefault: '默认',
-      paletteForest: '森野绿',
-      paletteOcean: '海洋青',
-      paletteSunset: '落日晚霞',
-      paletteViolet: '星空紫',
       language: '语言',
       languageChinese: '中文',
       languageEnglish: 'English',
@@ -49,7 +43,7 @@ export default {
       fontXLarge: '超大',
       generalSection: '通用',
       displaySection: '显示',
-      // 主屏壁纸（2026-10-15 由壳设置页迁入：背景属外观配置，与主题/色板同屏；
+      // 主屏壁纸（2026-10-15 由壳设置页迁入：背景属外观配置，与主题深浅同屏；
       // 档位渐变/遮罩预览逻辑在 styles/wallpaper.css，与主屏同源）
       backgroundSection: '主屏背景',
       backgroundNote: '仅主屏',
@@ -153,7 +147,7 @@ export default {
       installingUpdate: '正在安装更新...',
       downloadUpdate: '立即更新',
       currentVersion: '当前版本',
-      // 危险操作（2026-10-14 修订）：从平台设置一级页迁入「关于 WasmApp」。
+      // 危险操作（2026-10-14 修订）：从平台设置一级页迁入「关于 BedCode」。
       // 擦除对象含设备入场凭据与宿主连接态，按 §8 凭据零过境只能由宿主执行，
       // 实现见 src/composables/useClearAllData.ts。
       dangerZone: '危险操作',

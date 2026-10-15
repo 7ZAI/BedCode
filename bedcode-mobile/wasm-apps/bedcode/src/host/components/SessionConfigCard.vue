@@ -14,12 +14,12 @@
             />
           </svg>
         </span>
-        <span class="flex-1 min-w-0 text-base font-medium text-[var(--mobile-text-primary)] truncate">
+        <span class="flex-1 min-w-0 text-lg font-medium text-[var(--mobile-text-primary)] truncate">
           {{ config.name }}
         </span>
         <!-- 主操作：44px 触控高度 + accent 实底描边，与设置页主按钮 / 设备卡在线态同一语言 -->
         <button
-          class="flex-shrink-0 h-11 px-4 rounded-xl text-sm font-semibold transition-colors duration-200 active:opacity-80"
+          class="flex-shrink-0 h-11 px-4 rounded-xl text-base font-semibold transition-colors duration-200 active:opacity-80"
           style="background: var(--mobile-accent-muted); color: var(--mobile-accent); border: 1px solid color-mix(in srgb, var(--mobile-accent) 22%, transparent)"
           :class="{ 'opacity-50': isStarting }"
           :disabled="isStarting"
@@ -113,10 +113,11 @@ defineEmits<{
 </script>
 
 <style scoped>
-/* 元信息两行的层级：标签是弱说明（小且最暗），值才是内容（更大更亮） */
+/* 元信息两行的层级：标签是弱说明（小且最暗），值才是内容（更大更亮）。
+   档位 sm / base 与下方配置名的 lg 组成三级，值不会与名字抢视觉。 */
 .config-meta-label {
   display: block;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   line-height: 1.4;
   letter-spacing: 0.02em;
   color: var(--mobile-text-disabled);
@@ -124,7 +125,7 @@ defineEmits<{
 
 .config-meta-value {
   margin-top: 0.125rem;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   line-height: 1.4;
   color: var(--mobile-text-secondary);
 }
