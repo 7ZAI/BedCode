@@ -126,7 +126,7 @@ cd src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin   # 仅�
 cd src-tauri && cargo check
 ```
 
-- **`:dev:log`** 每次启动清空当天日志、Ctrl+C 前 flush；默认过滤非业务噪音（wasmtime / 框架 tag / 构建进展），`BEDCODE_LOG_NO_FILTER=1` 看全量。详见 `docs/knowledge/logging.md`。
+- **`:dev:log`** 每次启动清空当天日志、Ctrl+C 前 flush；默认过滤非业务噪音（wasmtime / 框架 tag / dev 服务代理连接 / 构建进展），`BEDCODE_LOG_NO_FILTER=1` 看全量。详见 `docs/knowledge/logging.md`。
 - **`:dev:log` 的颜色**：控制台**原样透传**子进程输出（ANSI 颜色与 `\r` 进度条覆盖都保留），只有落盘文件是纯文本。但子进程 stdout 接的是管道不是 TTY，tauri CLI / cargo / Gradle 会判定「非交互」而不产色——想让上游真的吐色，加 `FORCE_COLOR=1 CLICOLOR_FORCE=1 CARGO_TERM_COLOR=always pnpm run tauri:android:dev:log`（管道透明、过滤与落盘行为不变）。
 - **APK 输出**：`src-tauri/gen/android/app/build/outputs/apk/{debug,universal/debug}/`。Android Studio 打开 `src-tauri/gen/android`。
 - **签名唯一真源 = 仓库根 `bedcode.keystore`**。
@@ -279,7 +279,7 @@ pnpm run package         # 产出 dist/<plugin-id>.zip
 ```text
 bedcode-desktop/src-tauri/resources/plugins/desktop/<plugin-id>/{index.js,plugin.json,<lib>.wasm}
 bedcode-mobile/src-tauri/resources/plugins/mobile/<plugin-id>/      # 进 APK 资源（首启解压）
-bedcode-mobile/plugins/<name>/dist/<plugin-id>.zip                  # 可分发的插件包
+bedcode-mobile/wasm-apps/<name>/dist/<plugin-id>.zip                   # 可分发的插件包
 dist/plugin-packages/<target>/<plugin-id>.zip                       # §5.5 的 zip 分发包
 dist/sdk-packages/<target>/                                         # §5.5 的 SDK 产物
 ```
