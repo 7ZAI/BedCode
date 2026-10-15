@@ -182,7 +182,7 @@ describe('结构锁：WS 帧级加密与 waiting_input 漂移零残留（票 06�
   })
 
   // 旧宿主 SessionsView / SessionCard 随阶段 B 退役：会话状态展示面已迁
-  // terminal-session 宿主页域（host/utils.ts 的状态键表 + host/components/SessionsSection.vue）
+  // bedcode 应用宿主页域（host/utils.ts 的状态键表 + host/components/SessionsSection.vue）
   it('会话状态比较统一到桌面 wire 字面量 waitingInput（snake_case 漂移零残留）', async () => {
     const [mc, utils, section] = await Promise.all([
       readFile('src/composables/useMobileConnection.ts', 'utf-8'),

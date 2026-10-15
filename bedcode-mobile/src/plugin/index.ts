@@ -75,7 +75,7 @@ export async function initPluginSystem(
       writeSetting,
       onSessionEvent: subscribeHostSessionEvents,
       mockSessionId: import.meta.env.DEV ? MOCK_SESSION_ID : null,
-      // ── 连接引擎面（票 2026-10-09：宿主页下沉 terminal-session，引擎事实与动作）──
+      // ── 连接引擎面（票 2026-10-09：宿主页下沉 bedcode 应用，引擎事实与动作）──
       connectionStatus: connection.connectionStatus,
       isConnecting: connection.isConnecting,
       currentDevice: connection.currentDevice,

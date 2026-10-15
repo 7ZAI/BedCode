@@ -23,12 +23,12 @@ export function activateAppDomain(context: PluginContext): Disposable {
 
   const surface = context.ui.registerSurface({ component: AppRoot })
 
-  context.logger.info('[terminal-session] app shell domain activated')
+  context.logger.info('[BedCode] app shell domain activated')
 
   return {
     dispose() {
       surface.dispose()
-      context.logger.info('[terminal-session] app shell domain deactivated')
+      context.logger.info('[BedCode] app shell domain deactivated')
     },
   }
 }

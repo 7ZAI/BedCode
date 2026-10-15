@@ -3,7 +3,7 @@
  * （票 2026-10-10：全量 UI 下沉 —— 底部导航 + 页签容器）
  *
  * 被测：`src/app/activate.ts`（activateAppDomain）。
- * 运行面 = terminal-session 在宿主壳内的入口（旧宿主主流程的承继面）。
+ * 运行面 = bedcode 应用（BedCode）在宿主壳内的入口（旧宿主主流程的承继面）。
  *
  * | 契约 | 来源 | 规则 | 预期 |
  * |---|---|---|---|

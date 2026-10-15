@@ -14,7 +14,7 @@
 //! 1. **退役面缺席**（Rust + 前端扫非注释行）：`MdnsAdvertiser` / `advertiser` /
 //!    广播命令字面量 / `AdvertiseConfig` / 自建 `ServiceDaemon::new` 归零；
 //! 2. **browse 薄壳在场**（防「删 browse 绕过锁」）：宿主浏览面 `MdnsDiscovery`
-//!    与其三条命令必须仍在（browse 有活消费者：terminal-session 宿主页经
+//!    与其三条命令必须仍在（browse 有活消费者：bedcode 应用宿主页经
 //!    `mobileApi` 消费）；共享守护复用锚点在 `src/peer/ports.rs` 在场。
 
 use std::path::{Path, PathBuf};

@@ -355,7 +355,7 @@ mod tests {
                 plugin_dir.join(PLUGIN_MANIFEST_FILE),
                 r#"{
                     "id": "com.bedcode.terminal-session",
-                    "name": "Terminal Session",
+                    "name": "BedCode",
                     "version": "1.0.0-beta",
                     "pluginType": "wasm",
                     "rustLibrary": "bedcode_plugin_terminal_session",

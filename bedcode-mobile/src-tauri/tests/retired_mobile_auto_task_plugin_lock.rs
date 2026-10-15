@@ -94,7 +94,7 @@ fn retired_auto_task_plugin_id_is_absent_from_host_sources() {
     let violations = scan(&root, &files, &RETIRED_LITERALS);
     assert!(
         violations.is_empty(),
-        "宿主源码出现已退役的 auto-task 字样（票 16 并入 terminal-session）：\n{}",
+        "宿主源码出现已退役的 auto-task 字样（票 16 并入 bedcode 应用）：\n{}",
         violations.join("\n")
     );
 }
@@ -162,7 +162,7 @@ fn frontend_and_dev_shell_have_no_retired_auto_task_literal() {
 fn merged_task_domain_and_plugin_retirement_stay() {
     // 反向断言：合并终态必须原样在场——
     // ① 旧插件目录（工程源码）与打包资源目录必须不存在（fail-visible①，防「留着旧产物」）；
-    // ② terminal-session app 必须持有 D6 强制① 的权限并集与换 id 后的扩展点；
+    // ② bedcode 应用必须持有 D6 强制① 的权限并集与换 id 后的扩展点；
     // ③ 任务域基址已是新前缀；插件源码零旧 id 字样。
     let repo = mobile_repo_root();
     let plugin_dir = repo.join("wasm-apps/auto-task");
@@ -193,7 +193,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
     ] {
         assert!(
             manifest.contains(needle),
-            "合并后的 terminal-session manifest 缺失 `{needle}`（D6 强制① 权限并集 / 换 id）"
+            "合并后的 bedcode 应用 manifest 缺失 `{needle}`（D6 强制① 权限并集 / 换 id）"
         );
     }
 
@@ -208,7 +208,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
     ] {
         assert!(
             !manifest.contains(retired),
-            "terminal-session manifest 仍带退役面 `{retired}`（票 2026-10-10 C2 整面退役）"
+            "bedcode 应用 manifest 仍带退役面 `{retired}`（票 2026-10-10 C2 整面退役）"
         );
     }
 
@@ -251,7 +251,7 @@ fn merged_task_domain_and_plugin_retirement_stay() {
     let plugin_src = repo.join("wasm-apps/bedcode/src");
     let mut files: Vec<String> = Vec::new();
     collect_ext(&plugin_src, &plugin_src, &["ts", "vue"], &mut files);
-    assert!(!files.is_empty(), "terminal-session 前端源码为空，扫描路径有误");
+    assert!(!files.is_empty(), "bedcode 应用前端源码为空，扫描路径有误");
     let violations = scan(&plugin_src, &files, &RETIRED_LITERALS);
     assert!(
         violations.is_empty(),

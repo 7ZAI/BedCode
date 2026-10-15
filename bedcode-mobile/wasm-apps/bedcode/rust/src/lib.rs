@@ -85,7 +85,7 @@ impl WasmPlugin for TerminalSessionPlugin {
 
     fn activate() -> anyhow::Result<()> {
         let h = host();
-        h.log_info("Terminal Session plugin activating (remote-terminal-consumer, mobile)");
+        h.log_info("BedCode plugin activating (remote-terminal-consumer, mobile)");
         // 认证状态对账（票 14 阶段 B）：事件不重放，激活期以引擎事实为准
         auth::log_auth_state(&h);
         // 订阅必须在 activate 期完成（宿主不缓冲不重放，晚订阅静默丢）：
@@ -104,7 +104,7 @@ impl WasmPlugin for TerminalSessionPlugin {
 
     fn deactivate() -> anyhow::Result<()> {
         let h = host();
-        h.log_info("Terminal Session plugin deactivating (closing all terminal links)");
+        h.log_info("BedCode plugin deactivating (closing all terminal links)");
         // 关闭全部终端连接（显式 close = 宿主取消自动重连，purge 兜底不泄漏）
         for handle in LINK_MANAGER.lock().expect("link manager lock").drain_handles() {
             if let Err(e) = h.ws_close(&handle, "{}") {
@@ -188,7 +188,7 @@ impl WasmPlugin for TerminalSessionPlugin {
     }
 
     fn on_shutdown() -> anyhow::Result<()> {
-        host().log_info("Terminal Session plugin shut down (remote-terminal-consumer, mobile)");
+        host().log_info("BedCode plugin shut down (remote-terminal-consumer, mobile)");
         Ok(())
     }
 }

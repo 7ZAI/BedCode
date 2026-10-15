@@ -1,5 +1,5 @@
 /**
- * 宿主连接生命周期事件面 → 插件（票 2026-10-09：宿主页下沉 terminal-session）
+ * 宿主连接生命周期事件面 → 插件（票 2026-10-09：宿主页下沉 bedcode 应用）
  *
  * 旧宿主 DevicesView/useMobileConnection 直接听 `ws_reconnecting` /
  * `ws_reconnected` / `ws_unexpected_disconnect` / `ws_reauth_rejected` /

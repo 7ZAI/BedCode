@@ -322,7 +322,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
    * 为什么必须展平（2026-10-14 实测修正）：宿主取文案走 `t('<插件id>.<域>.<键>')`，
    * vue-i18n 按点号逐段寻路径。插件若把消息写成嵌套对象（如 `{ app: { title: '远程终端' } }`），
    * 前缀后得到的是**键名带点的对象**（`'com.x.app' → {title}`）——路径寻址在第二段就断了，
-   * 全部文案回退成 key 字面量（实测 terminal-session 整个运行面显示 `com.bedcode.terminal-session.app.title`）。
+   * 全部文案回退成 key 字面量（实测 bedcode 应用整个运行面显示 `com.bedcode.terminal-session.app.title`）。
    * 展平后每个键都是叶子，路径直达；数组与标量原样保留（vue-i18n 的列表/复数消息不能拆）。
    */
   function flattenMessages(

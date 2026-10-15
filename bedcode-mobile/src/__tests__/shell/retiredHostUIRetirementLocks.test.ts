@@ -136,7 +136,7 @@ const RETIRED_EXTENSION_POINTS = [
   'PluginTerminalBar',
 ]
 
-/** 票 2026-10-10 C4 退役的设置路由（整页皆业务项，已下沉 terminal-session） */
+/** 票 2026-10-10 C4 退役的设置路由（整页皆业务项，已下沉 bedcode 应用） */
 const RETIRED_C4_ROUTES = ['mobile-settings-notifications', 'NotificationSettingsView']
 
 /** 票 2026-10-10 D1 从宿主删除的孤儿（各自在 wasm-apps 下有自持副本） */

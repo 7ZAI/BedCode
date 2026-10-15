@@ -318,7 +318,7 @@ fn test_component_limiter_rejects_over_limit_memory() {
 /// 迁移 ticket 04 验收：SDK `wasm_entry!` 宏生成的组件能被宿主加载，
 /// 完成 ABI 协商（version=ABI_VERSION）、激活、命令调用（含错误 JSON 透传）
 ///
-/// 被测对象是真实插件（terminal-session，票 16 合并后的终端 + 任务域
+/// 被测对象是真实插件（bedcode 应用，票 16 合并后的终端 + 任务域
 /// app）经新 SDK 编译的产物 —— 宏展开正确性、
 /// `export!` 跨 crate 接线、8 组接口全量导出的最终证明（插件业务代码零改动）。
 #[test]
@@ -355,7 +355,7 @@ fn test_sdk_macro_component_loads_and_activates() {
             )
             .expect("instantiate terminal-session component");
 
-        // 激活/停用（terminal-session：activate 期订阅 ws 属主 topic + 认证状态探测）
+        // 激活/停用（bedcode 应用：activate 期订阅 ws 属主 topic + 认证状态探测）
         assert_eq!(plugin.activate().expect("activate"), 0);
         assert_eq!(plugin.deactivate().expect("deactivate"), 0);
 
@@ -364,7 +364,7 @@ fn test_sdk_macro_component_loads_and_activates() {
             serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
         assert_eq!(manifest["id"], "com.bedcode.terminal-session");
 
-        // 命令调用：terminal-session 对未知命令返回 Err → 宏序列化为 {"error": ...} JSON
+        // 命令调用：bedcode 应用对未知命令返回 Err → 宏序列化为 {"error": ...} JSON
         let result = plugin
             .invoke_command("no.such.cmd", "{}")
             .expect("invoke_command");

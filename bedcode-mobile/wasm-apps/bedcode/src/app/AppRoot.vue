@@ -83,7 +83,8 @@
 /**
  * 应用运行面（票 2026-10-10：全量 UI 下沉 —— 承接旧宿主主流程整体页）
  *
- * 本组件是 terminal-session wasm-app 在宿主壳内的运行面（壳 /mobile/shell →
+ * 本组件是 BedCode wasm-app（目录 `wasm-apps/bedcode/`，插件 id 仍是
+ * `com.bedcode.terminal-session`）在宿主壳内的运行面（壳 /mobile/shell →
  * 应用运行屏 → 本组件）。它承接旧宿主 `MobileLayout + MobileSwipeContainer +
  * MobileNav` 三件套的职责：
  * - 头部（标题 / 连接状态 / 刷新）与页签容器在本组件

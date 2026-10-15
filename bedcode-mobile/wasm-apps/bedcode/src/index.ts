@@ -33,13 +33,13 @@ let hostDomain: Disposable | null = null
 let appDomain: Disposable | null = null
 
 export async function activate(context: PluginContext): Promise<void> {
-  context.logger.info('Terminal Session plugin activating (remote-terminal-consumer, mobile)')
+  context.logger.info('BedCode plugin activating (remote-terminal-consumer, mobile)')
   // 内容域先于壳域激活：运行面组件 setup 时要能取到 host / terminal / task 三域文案
   hostDomain = activateHostPageDomain(context)
   terminalDomain = activateTerminalDomain(context)
   await activateTaskDomain(context)
   appDomain = activateAppDomain(context)
-  context.logger.info('Terminal Session plugin activated')
+  context.logger.info('BedCode plugin activated')
 }
 
 export function deactivate(): void {

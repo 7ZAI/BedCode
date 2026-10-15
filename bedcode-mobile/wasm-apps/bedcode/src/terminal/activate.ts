@@ -70,12 +70,12 @@ export function activateTerminalDomain(context: PluginContext): Disposable {
     }),
   ]
 
-  logger.debug('[terminal-session] terminal domain activated')
+  logger.debug('[BedCode] terminal domain activated')
   return {
     dispose() {
       for (const d of disposables) d.dispose()
       initTerminalHost(null)
-      logger.debug('[terminal-session] terminal domain deactivated')
+      logger.debug('[BedCode] terminal domain deactivated')
     },
   }
 }

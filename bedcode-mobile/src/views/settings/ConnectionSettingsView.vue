@@ -3,7 +3,7 @@
     <div class="px-4 py-4 space-y-5">
       <!-- 票 2026-10-10 批次 C4：本页只保留**平台项**（链路加密，ADR 0022 ②类安全闸门）。
            自动重连 / 保持连接 / 默认端口是业务设置，票 2026-10-10 起真源与 UI 归
-           terminal-session 的应用内设置页（spec §2 设置切分口径），此处不再重复实现——
+           bedcode 应用的设置页（spec §2 设置切分口径），此处不再重复实现——
            两处各写一份必然漂移，且会让用户不知道改哪个才作数。 -->
       <section class="space-y-2">
         <h2 class="settings-section-title">{{ $t('settings.connection.linkCryptoSection') }}</h2>
@@ -64,7 +64,7 @@
  *
  * 票 2026-10-10 批次 C4 起本页**只管平台项**：链路加密是 ADR 0022 ②类安全闸门
  * （fail-closed，属宿主机制面），故留壳。原先同页的自动重连 / 保持连接 / 默认端口
- * 是业务设置，真源与 UI 已下沉 terminal-session，此处删除以免两处实现漂移。
+ * 是业务设置，真源与 UI 已下沉 bedcode 应用，此处删除以免两处实现漂移。
  *
  * 「重连间隔」可调项已于 2026-10-04 移除：重连节奏收敛到 Rust 侧
  * `ReconnectManager`（指数退避 + 抖动 + 同因熔断 + 1s 下限），不再是前端

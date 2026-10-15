@@ -414,7 +414,7 @@ export async function httpCurrentTask(sessionId: string) {
   )
 }
 
-/** 查询任务域（terminal-session app）支持的 agent 列表 */
+/** 查询任务域（bedcode app）支持的 agent 列表 */
 export async function httpListSupportedAgents() {
   return request<{ agents: string[] }>(
     '/api/plugin/com.bedcode.terminal-session/supported-agents'

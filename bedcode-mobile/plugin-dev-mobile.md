@@ -204,7 +204,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 
 ### 自渲染浮层（createApp 模式）
 
-插件需弹出自定义面板/弹窗时，可像内置 terminal-session 插件（任务域）一样自行挂载 Vue 应用（宿主只负责注册入口按钮，不承载插件 UI）：
+插件需弹出自定义面板/弹窗时，可像内置 bedcode 插件（显示名 BedCode，任务域）一样自行挂载 Vue 应用（宿主只负责注册入口按钮，不承载插件 UI）：
 
 ```ts
 import { createApp } from 'vue'

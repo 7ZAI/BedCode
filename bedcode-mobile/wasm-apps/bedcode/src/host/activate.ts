@@ -23,12 +23,12 @@ export function activateHostPageDomain(context: PluginContext): Disposable {
     order: 10,
   })
 
-  context.logger.info('[terminal-session] host page domain activated')
+  context.logger.info('[BedCode] host page domain activated')
 
   return {
     dispose() {
       slot.dispose()
-      context.logger.info('[terminal-session] host page domain deactivated')
+      context.logger.info('[BedCode] host page domain deactivated')
     },
   }
 }

@@ -106,7 +106,7 @@ function fallback(): TerminalHostServices {
   return {
     t: (key) => key,
     invoke: (command) =>
-      Promise.reject(new Error(`[terminal-session] host not initialized, command rejected: ${command}`)),
+      Promise.reject(new Error(`[BedCode] host not initialized, command rejected: ${command}`)),
     storage: {
       get: (key) => Promise.resolve(memory.get(key)),
       set: (key, value) => {
@@ -139,11 +139,11 @@ function fallback(): TerminalHostServices {
       }
     })(),
     logger: {
-      log: (...a) => console.log('[terminal-session]', ...a),
-      debug: (...a) => console.debug('[terminal-session]', ...a),
-      info: (...a) => console.info('[terminal-session]', ...a),
-      warn: (...a) => console.warn('[terminal-session]', ...a),
-      error: (...a) => console.error('[terminal-session]', ...a),
+      log: (...a) => console.log('[BedCode]', ...a),
+      debug: (...a) => console.debug('[BedCode]', ...a),
+      info: (...a) => console.info('[BedCode]', ...a),
+      warn: (...a) => console.warn('[BedCode]', ...a),
+      error: (...a) => console.error('[BedCode]', ...a),
     },
     toast: {
       success: () => {},

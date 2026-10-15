@@ -34,7 +34,7 @@
  *
  * 票 2026-10-10 批次 D1：原清单里的 DeviceCard / SessionListItem / RepeatableToggle /
  * PluginIcon 已**从宿主删除**——它们在 wasm-apps 下各有自持副本，宿主侧是死代码。
- * 会话/设备域 UI 归 terminal-session（spec §2），文件域按裁决留宿主但走
+ * 会话/设备域 UI 归 bedcode 应用（spec §2），文件域按裁决留宿主但走
  * `bedcodeHostComponents` 注入（见 src/App.vue），不进壳的公共组件面。
  */
 

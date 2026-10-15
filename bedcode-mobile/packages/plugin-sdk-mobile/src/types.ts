@@ -328,7 +328,7 @@ export interface MobileHostApi {
   writeSetting(key: string, value: string): Promise<void>
   /** 会话/连接生命周期事件（断线 / 会话状态 / 停止 / 移除）；Disposable.dispose = 取消订阅 */
   onSessionEvent(handler: (event: MobileHostSessionEvent) => void): Disposable
-  // ── 连接引擎面（票 2026-10-09：宿主页下沉 terminal-session，引擎事实与动作）──
+  // ── 连接引擎面（票 2026-10-09：宿主页下沉 bedcode 应用，引擎事实与动作）──
 
   /** 连接引擎状态（disconnected/connecting/connected/pairing/paired/error） */
   connectionStatus: import('vue').Ref<MobileConnectionStatus>

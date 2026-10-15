@@ -29,7 +29,7 @@
 
 <script setup lang="ts">
 /**
- * 宿主壳首页快捷卡片（terminal-session 贡献的「活跃会话数」槽位）
+ * 宿主壳首页快捷卡片（bedcode 应用贡献的「活跃会话数」槽位）
  *
  * 壳 Home 直接渲染（不经 PluginViewHost），不依赖 pluginContext——只读
  * mobileApi.activeSessions（宿主连接域投影）计数。文案一律走宿主共享 i18n
