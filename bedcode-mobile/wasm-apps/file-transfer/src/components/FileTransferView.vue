@@ -240,21 +240,24 @@ onMounted(() => {
   tasks.start()
   devices.start()
   void settings.load()
-  disposeBackPress = context.ui.onBackPressed(({ canGoBack }) => {
-    // 返回键接管顺序：浏览 tab 逐级退目录 → 回到传输 tab → 交还宿主
+  disposeBackPress = context.ui.onBackPressed(() => {
+    // 返回键接管顺序：浏览 tab 逐级退目录 → 回到传输 tab → 交还平台。
+    // 已处理的分支返回 true（消费本次返回）：不消费则宿主壳兜底会同时退一屏，
+    // 一次返回变成「退目录 + 离开应用」；走到最后（传输 tab 根）返回 false 交还平台
+    // ——壳按屏栈退回主屏，主屏则由系统退出应用（而不是留在应用里按返回无反应）。
     if (tab.value === 'browse' && fs.crumbs.value.length > 1) {
       void fs.up()
-      return
+      return true
     }
     if (tab.value === 'browse' && fs.crumbs.value.length === 1) {
       void fs.goRoot()
-      return
+      return true
     }
     if (tab.value !== 'transfers') {
       tab.value = 'transfers'
-      return
+      return true
     }
-    if (canGoBack) history.back()
+    return false
   })
   // 挂载晚于设备事件时主动探测一次
   if (!tasks.peerOnline.value) void tasks.queryPeer()

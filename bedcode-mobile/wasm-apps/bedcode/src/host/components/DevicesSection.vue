@@ -698,6 +698,8 @@ let authFlowActive = false
  * 页面同时冒出配对弹窗与扫码认证两条路径。
  */
 let qrFlowActive = false
+/** 本页发起的连接流程在飞（含连接后的静默认证窗口）：兜底认证入口 watch 在此期间让位 */
+let connectFlowActive = false
 /** 本次连接的目标（页头状态小字 / 连接弹窗文案用；与引擎 currentDevice 区分） */
 const pendingDevice = ref<HostDeviceTarget | null>(null)
 
@@ -798,12 +800,14 @@ watch(isAuthenticated, (authenticated, wasAuthenticated) => {
     .catch((e) => logger.warn(`[host] refresh sessions after auth failed: ${errText(e)}`))
 })
 
-// 「已连未认证」兜底入口：重连成功 / 启动恢复 JWT 失效等未走本页连接流程的场景，
+// 「已连未认证」兜底入口：重连成功 / 启动恢复 JWT 失效等**未走本页连接流程**的场景，
 // 旧实现在此无任何认证入口（受保护端点全 401）。按首选认证方式弹入口，保证配对口可达。
+// 本页自己发起的连接（connectFlowActive）与扫码流程（qrFlowActive）自行决定认证入口，
+// 本 watch 一律让位——否则会在静默换新 JWT 未返回的窗口里抢先弹配对口。
 watch(
   [connectionStatus, isAuthenticated],
   ([status, authenticated]) => {
-    if (authenticated || isConnecting.value || qrFlowActive) return
+    if (authenticated || isConnecting.value || qrFlowActive || connectFlowActive) return
     if (status !== 'connected' && status !== 'pairing') return
     if (showPairing.value || showBiometricDialog.value || authFlowActive) return
     // 本页未发起过连接（重连 / 启动恢复场景）时，用引擎当前设备作认证目标
@@ -826,10 +830,16 @@ async function startConnection(device: HostDeviceTarget, skipPairing = false): P
   pendingDevice.value = device
   connectionError.value = ''
   showConnectLoading.value = true
+  // 本页连接流程在飞：期间由本函数决定认证入口，兜底 watch（专为重连/挂载场景而设）
+  // 不得插手——否则它在「已连上、静默换新还没返回」的窗口里抢先请求配对码
+  connectFlowActive = true
 
   try {
-    await ctrl.connectDevice(device, { silentAuth: skipPairing })
-    if (isAuthenticated.value) return // watch(isAuthenticated) 负责收尾
+    const { authenticated } = await ctrl.connectDevice(device, { silentAuth: skipPairing })
+    // 以本次静默认证的结果为准（不读状态位：认证成功与 ws_paired 事件到达之间
+    // 存在窗口，读状态位会把「已静默换新成功」误判成需配对）；watch(isAuthenticated)
+    // 负责后续收尾（记历史 / 拉会话）
+    if (authenticated || isAuthenticated.value) return
 
     showConnectLoading.value = false
     // 状态 watch 可能已领先一步发起认证（openAuthEntry 已把弹窗打开）：不重复请求配对码
@@ -843,6 +853,7 @@ async function startConnection(device: HostDeviceTarget, skipPairing = false): P
     // 连接失败时确保前后端状态一致：断开后端连接 + 重置前端状态
     await ctrl.disconnect().catch(() => {})
   } finally {
+    connectFlowActive = false
     showConnectLoading.value = false
     showPairingLoading.value = false
   }

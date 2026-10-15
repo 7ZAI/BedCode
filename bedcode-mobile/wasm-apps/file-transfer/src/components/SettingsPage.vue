@@ -1,14 +1,19 @@
 <script setup lang="ts">
 /**
- * SettingsPage — 设置二级页 (Mobile)
+ * SettingsPage — 设置页（Mobile，宿主设置二级页形态）
  *
- * 自行渲染页头（返回 + 标题），不使用宿主 SettingsSubPage 包裹，
- * 避免与 ToolboxView 已有的 < 文件传输 页头叠加产生双重 header。
+ * 页面骨架交给宿主 `SettingsSubPage`（PluginRouteView 的 `header: true` 模式）：
+ * 页头（返回 + 标题）、平台底色、顶部/底部安全区都由平台提供——插件自绘页头时
+ * 拿不到 Android 的环境变量安全区（`env(safe-area-inset-*)` 在 Android WebView
+ * 恒为 0，宿主用 JS 注入值），标题会压在系统状态栏下；底色的蓝灰 app 主题也会
+ * 与宿主设置流跳色（2026-10-15 真机反馈）。
  *
- * 宿主 PluginRouteView 以无 props 方式渲染组件（header: false 裸渲染模式），
- * 本组件负责实例化 useSettings 并把 settingsApi + t 注入 SettingsSection。
- * 入口：FileTransferView 齿轮经 context.ui.openPage('settings') 整体路由跳转，
- * 返回按钮经 context.ui.goBack() 回到浏览页。
+ * 内容仍套 `.ft-app.ft-host-page`：保留应用强调色（--ft-accent*），结构色重绑到
+ * 宿主 token（见 styles.css 的「平台设置页变体」段），与宿主设置页视觉一致。
+ *
+ * 宿主 PluginRouteView 以无 props 方式渲染组件，本组件负责实例化 useSettings
+ * 并把 settingsApi + t 注入 SettingsSection。入口：FileTransferView 齿轮与
+ * 宿主壳设置的「文件传输」项，都经 context.ui.openPage('settings') 整体路由跳转。
  */
 import { inject, onMounted } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
@@ -25,23 +30,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-[var(--ft-bg-primary)] ft-app">
-    <!-- 页头：自行渲染，避免与 ToolboxView 的页头叠加 -->
-    <header class="flex-shrink-0 flex items-center gap-3 px-4 pt-3 pb-2 bg-[var(--ft-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--ft-border)]">
-      <button
-        class="flex-shrink-0 p-1 -ml-1 text-[var(--ft-text-secondary)] active:opacity-80 transition-colors"
-        @click="context.ui.goBack()"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-      <h1 class="flex-1 min-w-0 page-title truncate">{{ t('transfer.settings.title') }}</h1>
-    </header>
-
-    <!-- 设置内容 -->
-    <div class="flex-1 overflow-y-auto overflow-x-hidden">
-      <SettingsSection :settings-api="settingsApi" :t="t" />
-    </div>
+  <div class="ft-app ft-host-page">
+    <SettingsSection :settings-api="settingsApi" :t="t" />
   </div>
 </template>

@@ -56,12 +56,14 @@ export async function activate(context: PluginContext): Promise<void> {
   //    accent = 应用主题色（Folder blue #2563EB，与 styles.css .ft-app token 段同源）
   context.ui.registerSurface({ component: FileTransferView, accent: '#2563EB' })
 
-  // 4. 设置二级页动态路由：header: false — 插件自行渲染页头（FileTransferView 齿轮入口）
+  // 4. 设置二级页动态路由：header: true — 用宿主的 SettingsSubPage 页头（返回 + 标题
+  //    + 平台底色 + 安全区）。插件自绘页头拿不到 Android 安全区，标题会压进系统状态栏，
+  //    蓝灰 app 底色也与宿主设置流跳色（2026-10-15 真机反馈）。
   context.ui.registerRoute({
     id: 'settings',
     title: context.i18n.t('transfer.settings.title'),
     component: SettingsPage,
-    header: false,
+    header: true,
   })
 
   // 5. 壳内设置入口（旧宿主「设置区」随阶段 B 退役：壳设置屏按 settingsEntries 渲染，

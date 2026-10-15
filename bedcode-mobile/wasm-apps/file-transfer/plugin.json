@@ -175,7 +175,7 @@
         "id": "settings",
         "title": "文件传输设置",
         "component": "SettingsPage",
-        "header": false
+        "header": true
       }
     ]
   }

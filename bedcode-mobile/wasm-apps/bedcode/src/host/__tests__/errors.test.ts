@@ -178,7 +178,6 @@ describe('C-ERR-7 机制引用的 key 双语在场', () => {
     // 会话页（区块 / 二次确认 / 准备中）
     'hub.sessionTitle',
     'hub.refreshConfig',
-    'hub.refreshSessions',
     'hub.maxReached',
     'hub.confirmStop',
     'hub.confirmStopMsg',

@@ -1,28 +1,12 @@
 <template>
   <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
-    <!-- ==================== Header（旧 SessionsView 页头：标题 + 刷新） ==================== -->
+    <!-- ==================== Header（旧 SessionsView 页头：仅标题） ====================
+         刷新入口只有一处：会话配置区块头的刷新按钮（与它职责重叠的页头刷新已于
+         2026-10-15 移除——两个刷新图标并排出现，用户无法判断该点哪个） -->
     <div class="page-header flex-shrink-0">
       <div class="page-header-row">
         <div class="min-w-0 flex-1">
           <h1 class="page-title">{{ t('hub.sessionTitle') }}</h1>
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            v-if="isAuthenticated"
-            class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
-            style="color: var(--mobile-accent)"
-            :title="t('hub.refreshSessions')"
-            @click="refreshSessions"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-          </button>
         </div>
       </div>
     </div>

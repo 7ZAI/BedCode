@@ -80,21 +80,27 @@ export function useHostPage(provided?: PluginContext) {
    * token，不换新则永远停在 connected（事件通道建不起来、受保护端点 401），返回用户
    * 还得重新配对。`silentAuth=false` 跳过：扫码连接自带一次性 token，先试旧凭据只会
    * 多跑一次注定被拒的请求。
+   *
+   * 返回值 `authenticated` **以本次静默认证的结果为准**，而不是读 `api.isPaired`：
+   * 认证成功与 `ws_paired` 事件到达宿主是两步，调用方若拿状态位做判据会在竞态里
+   * 把「已静默换新成功」误判成「未认证」而弹出配对口。
    */
   async function connectDevice(
     device: HostDeviceTarget,
     options: { silentAuth?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<{ authenticated: boolean }> {
     deviceError.value = ''
     connectingName.value = device.name || device.address
     try {
       await api.connectDevice(device)
-      if (options.silentAuth !== false && !api.isPaired.value) {
-        const ok = await api.authenticateWithStoredToken()
-        if (!ok) {
+      let authenticated = api.isPaired.value
+      if (options.silentAuth !== false && !authenticated) {
+        authenticated = await api.authenticateWithStoredToken()
+        if (!authenticated) {
           logger.info(`[host] stored credentials unusable, pairing required: ${device.address}`)
         }
       }
+      return { authenticated }
     } catch (e) {
       deviceError.value = connectionErrorKey(errText(e))
       logger.error(

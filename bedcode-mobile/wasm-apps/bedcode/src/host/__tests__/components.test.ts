@@ -136,6 +136,54 @@ describe('C-C1/C-C2/C-C3/C-C7/C-C8 连接页形态与流程契约', () => {
     wrapper.unmount()
   })
 
+  // 回归锁（2026-10-15 真机：背景卡片连接每次都要重新输入配置码）：历史 / 发现连接允许
+  // 用宿主持有的存量凭据静默换新；换新成功必须**不再**弹配对口——否则 JWT 还在有效期内，
+  // 用户却被要求重新配对。
+  it('should_skipPairingDialog_when_historyConnectSilentlyReauths', async () => {
+    api.connectionHistory.value = [
+      { address: '10.0.0.9:8765', name: 'desk-9', lastConnected: new Date().toISOString() },
+    ]
+    const connectDevice = vi.fn(async () => {})
+    api.connectDevice = connectDevice
+    // 静默换新成功，但 ws_paired 事件尚未到达（isPaired 仍为 false）——竞态窗口
+    api.authenticateWithStoredToken = vi.fn(async () => true)
+    api.isPaired.value = false
+    api.connectionStatus.value = 'disconnected'
+
+    const wrapper = mountSection(DevicesSection)
+    const row = wrapper.findAll('button').find((b) => b.text().includes('desk-9'))
+    expect(row, '未找到连接历史卡片').toBeTruthy()
+    await row!.trigger('click')
+    await settle()
+
+    expect(connectDevice).toHaveBeenCalledWith({ address: '10.0.0.9', port: 8765, name: 'desk-9' })
+    expect(api.authenticateWithStoredToken).toHaveBeenCalledTimes(1)
+    expect(ctx.commands.execute).not.toHaveBeenCalledWith('terminal-session.request-pairing')
+    expect(document.body.textContent).not.toContain('hub.pairingCodeTitle')
+    wrapper.unmount()
+  })
+
+  it('should_openPairingDialog_when_historyConnectHasNoUsableStoredCredential', async () => {
+    api.connectionHistory.value = [
+      { address: '10.0.0.9:8765', name: 'desk-9', lastConnected: new Date().toISOString() },
+    ]
+    api.connectDevice = vi.fn(async () => {})
+    // 存量凭据被拒 / 不存在：必须回落到配对口，不能静默失败
+    api.authenticateWithStoredToken = vi.fn(async () => false)
+    api.isPaired.value = false
+    api.connectionStatus.value = 'disconnected'
+
+    const wrapper = mountSection(DevicesSection)
+    const row = wrapper.findAll('button').find((b) => b.text().includes('desk-9'))
+    expect(row, '未找到连接历史卡片').toBeTruthy()
+    await row!.trigger('click')
+    await settle()
+
+    expect(ctx.commands.execute).toHaveBeenCalledWith('terminal-session.request-pairing')
+    expect(document.body.textContent).toContain('hub.pairingCodeTitle')
+    wrapper.unmount()
+  })
+
   it('should_connectWithDefaultPort_when_manualAddressHasNoPort', async () => {
     const connectDevice = vi.fn(async () => {})
     api.connectDevice = connectDevice

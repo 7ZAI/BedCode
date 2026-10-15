@@ -1154,6 +1154,31 @@ html:not(.dark) .ft-app {
   transition: width 1s linear;
 }
 
+/* ==================== 平台设置页变体（.ft-app.ft-host-page） ==================== */
+/* 设置页是**平台设置二级页**（宿主 SettingsSubPage 提供页头 / 底色 / 安全区），
+   不是应用自持运行面：结构色跟着宿主设置流走，只保留应用的强调色与锚点对比色，
+   否则一页蓝灰底色插在宿主暖色设置流里会明显跳色（2026-10-15 真机反馈）。
+   选择器写两条：浅色主题由 `html:not(.dark) .ft-app` 定义，特异性比 `.ft-app` 高，
+   不跟一条同结构的浅色选择器就压不住它。重绑后的值全部是主题感知的宿主 token，
+   深浅两套解析结果一致。 */
+.ft-app.ft-host-page,
+html:not(.dark) .ft-app.ft-host-page {
+  --ft-bg-primary: var(--mobile-bg-primary);
+  --ft-bg-secondary: var(--mobile-bg-secondary);
+  --ft-bg-tertiary: var(--mobile-bg-elevated);
+  --ft-bg-card: var(--mobile-bg-card);
+  --ft-bg-elevated: var(--mobile-bg-elevated);
+  --ft-border: var(--mobile-border);
+  --ft-group-divider: var(--mobile-group-border);
+  --ft-group-row-active: var(--mobile-bg-tertiary);
+  --ft-text-primary: var(--mobile-text-primary);
+  --ft-text-secondary: var(--mobile-text-secondary);
+  --ft-text-muted: var(--mobile-text-muted);
+  --ft-text-disabled: var(--mobile-text-disabled);
+  --ft-error: var(--mobile-error);
+  --ft-error-muted: var(--mobile-error-muted);
+}
+
 /* ==================== 宿主结构类的 .ft-app 主题覆写 ==================== */
 /* 设置页（SettingsSection / SettingsPage / TrustedPeersSection）沿用宿主的
    结构类（settings-group / settings-row / settings-label / settings-desc /

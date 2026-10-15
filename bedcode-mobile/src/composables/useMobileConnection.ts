@@ -236,20 +236,31 @@ async function init() {
       isConnecting.value = false
       logger.log('[MobileConnection] Paired')
 
-      // 认证成功时更新已配对设备信息
-      logger.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
-      logger.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
-
-      if (currentDevice.value && authCredentials.value) {
-        addPairedDevice({
-          address: currentDevice.value.address,
-          port: currentDevice.value.port,
-          name: currentDevice.value.name,
-          fingerprint: authCredentials.value.fingerprint,
-        })
-      } else {
-        logger.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
-      }
+      // 先回读宿主凭据再落已配对设备：认证成功路径已整体迁插件命令面
+      // （terminal-session.verify-pairing-code / authenticate-with-*，不走本 composable
+      // 的 verifyPairingCode / authenticateWithBiometric），宿主不会经过
+      // saveCredentials；localStorage 镜像与内存 authCredentials 因此必须在**本回调**
+      // 补齐——否则镜像永空，连接历史走「存量凭据静默换新」时 authenticate() 拿不到
+      // token 必失败（表现为每次连接都重新要求配对码），重启后 wsSetToken 也无源。
+      void (async () => {
+        try {
+          await refreshCredentialMirror()
+          // 认证成功时更新已配对设备信息（指纹取自回读后的镜像）
+          if (currentDevice.value && authCredentials.value) {
+            addPairedDevice({
+              address: currentDevice.value.address,
+              port: currentDevice.value.port,
+              name: currentDevice.value.name,
+              fingerprint: authCredentials.value.fingerprint,
+            })
+          } else {
+            logger.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
+          }
+        } catch (e) {
+          // 镜像回读/已配对设备写入失败不改变认证结果（宿主真源已就绪），但必须可观测
+          logger.error('[MobileConnection] onPaired post-auth bookkeeping failed:', e)
+        }
+      })()
       autoStartForegroundService()
 
       // 终端订阅由页面驱动（进入终端页 / 会话恢复运行时 fresh subscribe）：

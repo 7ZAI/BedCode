@@ -262,6 +262,36 @@ describe('连接后静默换新 JWT（返回用户免配对）', () => {
     expect(host.needsAuth.value).toBe(true)
   })
 
+  it('thost_reportsAuthenticatedFromThisSilentAuth_when_pairedEventNotYetLanded', async () => {
+    const api = installMockMobileApi({
+      connectDevice: async () => {},
+      // 换新成功，但 ws_paired 事件尚未到达宿主：isPaired 仍为 false
+      authenticateWithStoredToken: async () => true,
+    })
+    api.connectionStatus.value = 'connected'
+    const host = makeHost()
+
+    const result = await host.connectDevice({ address: '10.0.0.7', port: 8765 })
+
+    // 状态位仍为未认证（事件未落地），但返回值必须反映「本次静默换新成功」
+    // ——调用方（连接流程）据它裁决是否弹配对口，读状态位会误弹。
+    expect(host.isAuthenticated.value).toBe(false)
+    expect(result).toEqual({ authenticated: true })
+  })
+
+  it('thost_reportsNotAuthenticated_when_storedCredentialsRejected', async () => {
+    const api = installMockMobileApi({
+      connectDevice: async () => {},
+      authenticateWithStoredToken: async () => false,
+    })
+    api.connectionStatus.value = 'connected'
+    const host = makeHost()
+
+    await expect(host.connectDevice({ address: '10.0.0.8', port: 8765 })).resolves.toEqual({
+      authenticated: false,
+    })
+  })
+
   it('thost_skipsSilentAuth_when_disabledForQrFlow（扫码自带一次性 token）', async () => {
     let called = 0
     const api = installMockMobileApi({
