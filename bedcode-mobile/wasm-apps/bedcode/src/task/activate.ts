@@ -233,7 +233,7 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
   const mobileApi = getMobileApi()
   const api = getAutoTaskApi()
 
-  /** 拉取适配 agent 白名单并缓存（未连接时对端不可达，失败保持旧值） */
+  /** 拉取适配 agent 白名单并缓存（未认证时受保护端点必被拒，失败保持旧值） */
   async function refreshSupportedAgents() {
     try {
       const result = await api.httpListSupportedAgents()
@@ -246,18 +246,18 @@ export async function activateTaskDomain(context: PluginContext): Promise<void> 
     }
   }
 
-  // 启动时未连接则跳过首次请求（对空 baseUrl 发起 REST 调用只会命中宿主的
-  // "No base URL set" 错误日志）；连接建立后再拉取
-  if (mobileApi.isConnected?.value) {
+  // supported-agents 是 JWT 保护端点：必须等认证完成（paired）后拉取。
+  // 传输层刚连上（connected）就发请求会吃 401，而 isConnected 此后不再翻转
+  // （connected → paired 仍是「已连接」），白名单会永远为空。
+  if (mobileApi.isPaired?.value) {
     await refreshSupportedAgents()
   }
 
-  // 连接建立后白名单才有意义：监听连接状态，连上时拉取
-  // （避免 connect 后 supportedAgents 仍为空）
+  // 认证成功后白名单才有意义：监听认证态，paired 时拉取
   stopConnectionWatch = watch(
-    () => mobileApi.isConnected?.value,
-    (connected) => {
-      if (!connected) return
+    () => mobileApi.isPaired?.value,
+    (paired) => {
+      if (!paired) return
       void refreshSupportedAgents()
     },
   )

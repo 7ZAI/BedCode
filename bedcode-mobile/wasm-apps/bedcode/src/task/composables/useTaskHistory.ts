@@ -155,8 +155,13 @@ export function useTaskHistory(context: PluginContext) {
     debouncedReloadCallbacks.push(cb)
   }
 
-  /** 建立事件订阅 + 首次加载（组件 onMounted 调用） */
-  function start(): void {
+  /**
+   * 建立事件订阅 + 首次加载（组件 onMounted 调用）
+   *
+   * `initialLoad=false` 时只建订阅不拉数据：端点是 JWT 保护的，未认证时
+   * 请求只会吃 401；待认证成功由调用方的 watch 再 refresh。
+   */
+  function start(options: { initialLoad?: boolean } = {}): void {
     stop()
     disposables = [
       // 定时任务变更（创建/触发/失败/错过，job_id 可为空串的批量广播）
@@ -166,7 +171,7 @@ export function useTaskHistory(context: PluginContext) {
       // 任务状态变更（执行中/完成/中断等，驱动历史页状态刷新）
       context.events.on('ws_sync_task_status_changed', onAnyTaskEvent),
     ]
-    void load(true)
+    if (options.initialLoad !== false) void load(true)
   }
 
   /** 摘除事件订阅（组件 onUnmounted 调用） */

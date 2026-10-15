@@ -10,9 +10,10 @@
  * | C-T2 | registerCapsuleItem | 壳内应用菜单项（id `task-page`，文案走 `context.i18n`） | 入参形状 |
  * | C-T3 | onSelect 副作用 | 胶囊项点击 → `ui.openPage('tasks')` | 调用一次且路由 id 正确 |
  * | C-T4 | 停用回收 | 路由 / 胶囊 / 工具箱 / 工具栏 disposable 各回收一次 | dispose 各 1 次 |
+ * | C-T5 | supported-agents 门控 | 受保护端点只在**已认证（paired）**时请求（401 回归） | 未配对 0 次 / 配对 1 次 / 认证后补拉 1 次 |
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { activateTaskDomain, deactivateTaskDomain } from '../activate'
 import AutoTaskToolboxView from '../components/AutoTaskToolboxView.vue'
@@ -119,5 +120,56 @@ describe('C-T4 停用回收', () => {
 
     expect(fake.counters.route).toBe(1)
     expect(fake.counters.capsule).toBe(1)
+  })
+})
+
+describe('C-T5 适配 agent 白名单门控（受保护端点）', () => {
+  /** 计数 supported-agents 请求（其余路径不计数） */
+  function makeCounter() {
+    const state = { count: 0 }
+    return {
+      state,
+      httpRequest: async (path: string) => {
+        if (path.includes('/supported-agents')) state.count += 1
+        return { code: 0, message: 'ok', data: { agents: ['claude-code'] } }
+      },
+    }
+  }
+
+  it('should_skipSupportedAgents_when_activatedBeforeAuthentication', async () => {
+    // 回归：旧实现看 isConnected（传输层刚连上即 true）就在 activate 期发请求，
+    // 桌面端因无 JWT 回 401，且 isConnected 不再翻转 → 白名单永远为空
+    const counter = makeCounter()
+    installMockMobileApi({ isConnected: true, isPaired: false, httpRequest: counter.httpRequest })
+
+    await activateTaskDomain(fake.ctx)
+
+    expect(counter.state.count).toBe(0)
+  })
+
+  it('should_fetchSupportedAgents_when_activatedAlreadyAuthenticated', async () => {
+    const counter = makeCounter()
+    installMockMobileApi({ isConnected: true, isPaired: true, httpRequest: counter.httpRequest })
+
+    await activateTaskDomain(fake.ctx)
+
+    expect(counter.state.count).toBe(1)
+  })
+
+  it('should_fetchAgain_when_authenticationCompletesAfterActivation', async () => {
+    const counter = makeCounter()
+    const api = installMockMobileApi({
+      isConnected: true,
+      isPaired: false,
+      httpRequest: counter.httpRequest,
+    })
+    await activateTaskDomain(fake.ctx)
+    expect(counter.state.count).toBe(0)
+
+    // 认证完成（connected → paired）→ watch 补拉
+    api.isPaired.value = true
+    await nextTick()
+
+    expect(counter.state.count).toBe(1)
   })
 })

@@ -124,14 +124,16 @@ history.onDebouncedReload(() => {
 let stopConnectionWatch: (() => void) | null = null
 
 onMounted(() => {
-  history.start()
-  void scheduled.load()
-  // 断线重连兜底：断开期间 WS 事件可能丢失，重连后两页整体重拉
-  // （仿 index.ts 现有连接 watch 范式）
+  // 首屏加载由认证态门控：任务端点是 JWT 保护的，认证前拉取只会吃 401
+  // （订阅不依赖认证，仍照常建立，认证后 watch 补拉）
+  const paired = mobileApi.isPaired?.value === true
+  history.start({ initialLoad: paired })
+  if (paired) void scheduled.load()
+  // 断线重连 / 首次认证后兜底：断开期间的 WS 事件可能丢失，恢复后两页整体重拉
   stopConnectionWatch = watch(
-    () => mobileApi.isConnected?.value,
-    (connected) => {
-      if (!connected) return
+    () => mobileApi.isPaired?.value,
+    (pairedNow) => {
+      if (!pairedNow) return
       void history.refresh()
       void scheduled.load()
     },
