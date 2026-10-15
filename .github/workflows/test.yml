@@ -346,10 +346,23 @@ jobs:
         working-directory: bedcode-mobile
         run: pnpm run plugins:build
 
+      # 两进程形态（2026-10-15）：桌面进程 harness（workspace 成员；共享 target 桶，
+      # 依赖图只含桌面侧）。必须先于 two_proc 测试构建——测试进程经 stdio spawn 它。
+      - name: Build desktop harness (two-process rig)
+        working-directory: cross-end-tests
+        run: cargo build -p bedcode-crossend-desktop-harness
+
       # 每个场景 = 一个独立测试二进制（AppContext 进程级单例，场景间靠进程隔离）
       - name: Cross-end tests (real desktop ↔ real mobile plugins)
         working-directory: cross-end-tests
         run: cargo test -- --nocapture
+
+      # 两进程场景住在移动包（依赖图只含移动侧——跨端包依赖桌面 lib 会经 feature 统一
+      # 把 server-crate 的 common-host 绑定编译进来，移动 whitelist 直接红；见 spec §5.1）。
+      # 默认 `#[ignore]`（移动包常规 cargo test 不构建 harness bin），此处显式 --ignored 跑。
+      - name: Two-process cross-end tests (terminal flow + selfcheck)
+        working-directory: bedcode-mobile/src-tauri
+        run: cargo test --test two_proc_selfcheck --test two_proc_terminal_ws -- --ignored --nocapture
 
   # ==================== 前端 vitest ====================
 

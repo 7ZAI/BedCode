@@ -14,6 +14,37 @@ cd cross-end-tests && cargo test
 产物缺失时测试**显性失败**（不是 `[skip]`）——本工程的唯一驱动方式就是真实产物，
 静默跳过会把「未验证」伪装成「通过」。
 
+## 两进程形态（desktop-harness，2026-10-15 起）
+
+单进程 rig 有一个**结构性边界**：`inventory` 是进程级注册，桌面与移动对端差异域
+（host-http / host-websocket / host-peer / host-mdns）各有一份实现，同一进程里只能
+装一套（`HostModule::fallback` 让位）⇒ 移动真插件只能跑在桌面宿主实现上 ⇒ 涉及
+移动 host-http/websocket 语义的 5 个场景 `#[ignore]`（见 `terminal_ws_flow.rs` 头注）。
+
+**两进程形态把这堵墙拆掉**：桌面侧拆成独立进程（`desktop-harness` bin：真 AppContext +
+真认证中心插件 + 真 Actix + 真 PTY，stdin/stdout JSON-RPC 控制面），移动侧测试进程
+只链移动包 ⇒ 移动宿主域实现无竞争安装 ⇒ 移动插件的 WS / 页面窄转发走**移动生产实现**。
+
+```bash
+# 前置（两进程场景额外）
+cd cross-end-tests && cargo build -p bedcode-crossend-desktop-harness
+
+# 两进程场景住在移动包（依赖图只含移动侧——跨端包依赖桌面 lib 会经 cargo feature
+# 统一把 server-crate 的 common-host 绑定编译进来，移动 whitelist 直接红，
+# 见 .scratch/2026-10-15-cross-end-two-process/spec.md §5.1）
+cd bedcode-mobile/src-tauri \
+  && cargo test --test two_proc_terminal_ws --test two_proc_selfcheck -- --ignored --nocapture
+```
+
+- 场景：`two_proc_terminal_ws`（C-001..C-009：桌面命令面建会话 → 移动插件真 WS 链路
+  prewarm/subscribe/send-input/停止传播 → 页面窄转发零丢弃 + 背压压力路径）
+- 自检：`two_proc_selfcheck`（装配守卫 + spawn→READY→rpc→shutdown）
+- 移动插件 host-http 面**无头不可测**（egress 闸门对无 AppHandle 上下文有意 fail-closed，
+  `host_domains/http.rs` 有用例钉着；`tauri::AppHandle` 泛型造不出 mock）——会话生命周期
+  走桌面命令面 `session.ws.control`（生产同一实现），移动 HTTP wire 契约由激活场景
+  `event_channel_flow.rs`（reqwest）+ 移动单端 `session_http_flow.rs`（就地端口 impl）承接。
+  安全相关待裁决项见 spec §5.1（L1 桌面端目标在无头 CI 下是否放行）。
+
 ## 为什么需要它
 
 两端各自的集成测试都用**协议级 mock 对端**：
@@ -36,22 +67,22 @@ cd cross-end-tests && cargo test
 ```text
 cross-end-tests/
 ├── Cargo.toml              # 独立包；同时依赖两端 lib（bedcode-desktop-lib / bedcode-mobile-lib）
+├── desktop-harness/        # 两进程形态的桌面进程（workspace 成员；依赖图只含桌面侧）
+│   ├── src/lib.rs          # 装配面（desktop_ctx 同构）+ rpc_dispatch + 装配守卫
+│   └── src/main.rs         # READY <port> + stdin/stdout JSON-RPC 控制面循环
 ├── src/lib.rs              # 空 lib（crate 级说明）
-└── tests/
-    ├── common/
-    │   ├── desktop_ctx.rs  # 桌面无头装配：AppContext + 真实认证中心产物 + Actix 服务器
-    │   ├── mobile_ctx.rs   # 移动端装配：目标设备 / 全局 token / 输出记录替身
-    │   └── mobile_plugin.rs# 移动**真插件产物**世界（wasm + 无头宿主 + 页面通道 + 窄转发计数）
-    ├── harness_selfcheck.rs    # 台子自检（场景红了先排除台子坏了）
-    ├── pairing_auth_flow.rs    # 配对 / QR / 重认证（正例 + 4 类反例）
-    ├── jwt_rotate_reconnect.rs # 密钥环轮换宽限期（ADR 0033：旧 token 轮换后仍可用）
-    ├── session_http_flow.rs    # 会话 HTTP 面（插件命令信封 + 1002 + remove 幂等）
-    ├── terminal_ws_flow.rs     # 终端闭环（真 PTY ↔ 真移动插件：prewarm/重放/连续性/背压/停止）
-    ├── fail_closed_flow.rs     # fail-closed（无中心在册 / 伪造凭证 / WS 面同闸门）
-    ├── lifecycle_flow.rs       # 桌面停用 / 激活对移动端链路的联动
-    ├── event_channel_flow.rs   # 事件通道 session-control（7 类事件 + 不重放 + 自愈）
-    ├── http_proxy_flow.rs      # HTTP 代理面（Egress + JWT 注入 + 链路加密信封）
-    └── mdns_health_flow.rs     # mDNS 发现/广播 + /api/health 探测
+└── tests/                  # 单进程 rig 场景：
+    ├── common/             # desktop_ctx（桌面无头装配）/ mobile_ctx / mobile_plugin（移动真产物世界）
+    ├── harness_selfcheck.rs    # 台子自检
+    ├── pairing_auth_flow.rs    # 配对 / QR / 重认证
+    ├── jwt_rotate_reconnect.rs # 密钥环轮换宽限期（# [ignore]：单进程装不下两端宿主域实现）
+    ├── session_http_flow.rs    # 会话 HTTP 面（# [ignore]，同因）
+    ├── terminal_ws_flow.rs     # 终端闭环（# [ignore]；两进程版 = bedcode-mobile two_proc_terminal_ws）
+    ├── fail_closed_flow.rs     # fail-closed（# [ignore]，同因）
+    ├── lifecycle_flow.rs       # 停用/激活联动（# [ignore]，同因）
+    ├── event_channel_flow.rs   # 事件通道 session-control（激活）
+    ├── http_proxy_flow.rs      # HTTP 代理面 + 链路加密信封（激活）
+    └── mdns_health_flow.rs     # mDNS 发现/广播 + /api/health（激活）
 ```
 
 **移动侧夹具口径（`common/mobile_plugin.rs`）**：加载 `bedcode-mobile/src-tauri/resources/plugins/mobile/**/*.wasm`

@@ -650,6 +650,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bedcode-crossend-desktop-harness"
+version = "0.0.0"
+dependencies = [
+ "actix-web",
+ "bedcode-desktop",
+ "bedcode-discovery-engine",
+ "bedcode-host-kit",
+ "bedcode-server-core",
+ "bedcode-server-websocket",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "bedcode-crypto-engine"
 version = "0.1.0"
 dependencies = [
