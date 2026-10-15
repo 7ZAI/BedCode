@@ -154,9 +154,15 @@ export const messagesZhCN = {
     "lightMode": "浅色模式"
   },
   "toolbox": {
+    "add": "添加",
     "addTaskTitle": "添加预设任务",
     "editTask": "编辑预设任务",
     "insertAiTemplate": "Prompt模板",
+    "repeatable": "可重复执行",
+    "repeatableOn": "可重复",
+    "repeatableOff": "不可重复",
+    "repeatableOnHint": "可反复加入自动任务队列，不受执行历史限制",
+    "repeatableOffHint": "执行过一次（含手动执行）即锁定，不能再加入队列",
     "selectProject": "选择工程目录",
     "sendFailed": "发送失败",
     "taskContent": "任务内容",
@@ -311,9 +317,15 @@ export const messagesEn = {
     "lightMode": "Light Mode"
   },
   "toolbox": {
+    "add": "Add",
     "addTaskTitle": "Add Preset Task",
     "editTask": "Edit Preset Task",
     "insertAiTemplate": "Prompt Template",
+    "repeatable": "Repeatable",
+    "repeatableOn": "Repeatable",
+    "repeatableOff": "One-shot",
+    "repeatableOnHint": "Can be re-added to the task queue, not limited by execution history",
+    "repeatableOffHint": "Locked after being executed once (including manual), cannot be re-added",
     "selectProject": "Select project dir",
     "sendFailed": "Send failed",
     "taskContent": "Task Content",

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <label class="text-[var(--mobile-text-muted)] text-sm mb-1.5 block">{{ t('mobile.toolbox.repeatable') }}</label>
+    <label class="text-[var(--mobile-text-muted)] text-sm mb-1.5 block">{{ t('toolbox.repeatable') }}</label>
     <div class="flex gap-2">
       <button
         type="button"
@@ -10,7 +10,7 @@
           : 'border border-[var(--mobile-border-hover)] bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)]'"
         @click="emit('update:modelValue', true)"
       >
-        {{ t('mobile.toolbox.repeatableOn') }}
+        {{ t('toolbox.repeatableOn') }}
       </button>
       <button
         type="button"
@@ -20,11 +20,11 @@
           : 'border border-[var(--mobile-border-hover)] bg-[var(--mobile-bg-primary)] text-[var(--mobile-text-secondary)]'"
         @click="emit('update:modelValue', false)"
       >
-        {{ t('mobile.toolbox.repeatableOff') }}
+        {{ t('toolbox.repeatableOff') }}
       </button>
     </div>
     <p class="text-xs mt-1" style="color: var(--mobile-text-disabled)">
-      {{ modelValue ? t('mobile.toolbox.repeatableOnHint') : t('mobile.toolbox.repeatableOffHint') }}
+      {{ modelValue ? t('toolbox.repeatableOnHint') : t('toolbox.repeatableOffHint') }}
     </p>
   </div>
 </template>
