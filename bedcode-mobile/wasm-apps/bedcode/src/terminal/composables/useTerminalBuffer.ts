@@ -104,32 +104,38 @@ export function useTerminalBuffer() {
     terminal: Terminal,
     onRawOutput?: (data: Uint8Array) => void,
   ): RealtimeHandlerRegistration {
-    // 链路调试：渲染管线挂载（拼接历史 → 消费实时帧的入口）
+    // 链路调试：渲染管线挂载（回放（历史）→ 消费实时帧的入口）
     logger.debug(`[useTerminalBuffer] register realtime handler (${sessionId})`)
-    const writeCoalescer = createWriteCoalescer(terminal)
-    // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
-    // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
-    // 不设正统门控：onWriteParsed 触发即证明本端正在消费写入管线，任何订阅端
-    // 的确认都代表 PTY 字节被消化。此前依赖 isCanonicalRenderer 导致「桌面启动
-    // 会话、手机观看」等 resize 未 applied 场景 ack 永不回发 → 服务端 unacked
-    // 超高位水 → PTY 读整体暂停 → 输出卡死（2.1.x 修复）。mock 会话/未连接时
-    // store.ackRendered → socket.ackRendered 内部空转安全
+    // 写入管线：分块 parse **完成**回调 → ack 水位（背压唯一推进点）。
+    // 为什么不在收到字节时推进：桌面端按 ack 记账放行（未确认窗口 128 KiB 滞回），
+    // 以收妥量为水位会让 WebView 解析跟不上时上游照旧全速灌入——真实缓冲退化为
+    // WebView 消息队列（背压失效，2026-10-15 修复）。
+    const writeCoalescer = createWriteCoalescer(terminal, {
+      onParsed: (bytes) => store.noteParsedBytes(sessionId, bytes),
+    })
+    // 渲染进度对账监听（2s 节流日志）：只记事实，不推任何状态。
+    // 历史教训仍在：ack 不得设正统渲染端（isCanonicalRenderer）门控——任何订阅端
+    // 的确认都代表 PTY 字节被消化，曾因该门控导致「桌面启动会话、手机观看」等
+    // resize 未 applied 场景 ack 永不回发 → 服务端 unacked 触顶 → PTY 读整体暂停
+    // → 输出卡死（2.1.x 修复）。mock 会话/未连接时 noteParsedBytes 经
+    // store 门控空转安全。
     writeParsedDisposables.get(sessionId)?.dispose()
     writeParsedDisposables.set(sessionId, terminal.onWriteParsed(() => {
-      // 链路调试（背压对账）：onWriteParsed 触发即回发 ack——计数 + 节流打点，
-      // offset 与终端插件 ack 回发日志对照验证反馈环（票 12）
+      // 渲染进度对账日志（2s 节流）：parsed = 已解析字节（ack 水位），received =
+      // 已收到字节；两者差值即仍在渲染管线内排队的字节（背压窗口观测量）。
+      // ack 本身由 writeCoalescer 的 onParsed 回调驱动，不在这里发。
       const stats = ackStats.get(sessionId) ?? { count: 0, lastLogAt: 0 }
       stats.count++
       const now = Date.now()
       if (now - stats.lastLogAt >= ACK_LOG_INTERVAL_MS) {
         stats.lastLogAt = now
+        const buffer = store.getBuffer(sessionId)
         logger.debug(
-          `[useTerminalBuffer] render ack #${stats.count} (${sessionId}): ` +
-            `offset=${store.getBuffer(sessionId)?.lastRenderedOffset ?? '-'}`,
+          `[useTerminalBuffer] render progress #${stats.count} (${sessionId}): ` +
+            `parsed=${buffer?.lastRenderedOffset ?? '-'} received=${buffer?.receivedBytes ?? '-'}`,
         )
       }
       ackStats.set(sessionId, stats)
-      store.ackRendered(sessionId)
     }))
 
     // 回放静止全量重绘兜底：回放起点若落在被 LRU 裁剪的转义序列中段，

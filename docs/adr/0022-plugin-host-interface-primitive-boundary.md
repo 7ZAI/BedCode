@@ -130,7 +130,7 @@ WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/�
 4. **属主隔离 + 停用回收（D2）**：全部函数先查属主（`not owner of pty handle`，同 mdns / ws 先例）；插件 deactivate 时宿主 `purge_for_plugin` kill 并摘除其全部 PTY、逐条补发 `<owner>::pty:exit`（reason=killed），只碰本人。
 5. **终止与摘除的单一发布者不变量（D4）**：`kill()` 只发起终止；句柄摘除与事件发布统一由 spawn 时起动的退出监听在「读线程 EOF + 子进程回收」齐备（`PtyTerminationGate`）时完成，且只有从注册表 `remove` 成功的一方发布 → 自然退出 / 主动 kill / 停用回收三条路径交汇时每条 PTY 恰好一条 `pty:exit`。事件面只有这一条（spawn 成败在返回值、错误直接上抛）。
 6. **权限两域（D8）**：`pty:spawn`（创建/终止，任意命令执行的高风险面）与 `pty:io`（数据面）独立授予与审计——合并成一个 `pty` 会迫使「只想观测的插件」获得在宿主机执行任意命令的能力。五同步点（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / 宿主权限门 `wasm_core/host_api/pty.rs`，锁在 `host_api/tests/pty.rs::permission_sync_points_all_know_pty_domains`）由该漂移锁钉住。
-7. **限额分级与声明式环容量（D9）**：创建类失败一律 `Err`（每插件在册条数超上限、`ringBytes` 为 0 或超宿主上限），不排队、不静默夹取、不淘汰插件自己已有的句柄；数据面只有**读侧截断**（单次 `ring-fetch` 截到 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`，余下续拉），写侧是拒绝（超 `PLUGIN_PTY_MAX_WRITE_BYTES` 一个字节都不写入——半条命令喂进交互进程比失败更糟）。环容量不做全局档位之争：它是 spawn 的**插件声明参数**（宿主默认 256 KiB，上限 4 MiB），因为业务侧 `channels.global_queue_max_bytes` 的 50 MB 是「每条会话队列」的量级，插件环随句柄存活、每插件可到 8 条，字面对齐即单插件最坏 400 MB 常驻；常驻上界改由「条数 × 容量上限」表达。
+7. **限额分级与声明式环容量（D9）**：创建类失败一律 `Err`（每插件在册条数超上限、`ringBytes` 为 0 或超宿主上限），不排队、不静默夹取、不淘汰插件自己已有的句柄；数据面只有**读侧截断**（单次 `ring-fetch` 截到 `PLUGIN_PTY_RING_FETCH_MAX_BYTES`，余下续拉），写侧是拒绝（超 `PLUGIN_PTY_MAX_WRITE_BYTES` 一个字节都不写入——半条命令喂进交互进程比失败更糟）。环容量不做全局档位之争：它是 spawn 的**插件声明参数**（宿主默认 256 KiB，上限 **10 MiB**——2026-10-15 由 4 MiB 修订，理由与内存预算见文末「环容量上限修订」），因为业务侧 `channels.global_queue_max_bytes` 的 50 MB 是「每条会话队列」的量级，插件环随句柄存活、每插件可到 8 条，字面对齐即单插件最坏 400 MB 常驻；常驻上界改由「条数 × 容量上限」表达。
 
 ### 会话语义下沉批次（v18 + v19，2026-09-20 桌面端）
 
@@ -989,3 +989,21 @@ interface、不改裁剪线，只改归属与契约面。
 - 同批落 Part A（WIT v17 接口清单锁 / 权限词汇五同步锁 / WIT↔host_impl 73 函数接线
   对照锁）与 Part B（双端机制核对称结构锁 + 移动 code-map 防回接锁索引登记）——
   票 18 抽共享核后 fork 面收缩的防回接与漂移防线（ABI 演进先改锁再改 WIT，ADR 0019）
+
+## 环容量上限修订（2026-10-15，4 MiB → 10 MiB）
+
+- **改面**：`PLUGIN_PTY_RING_MAX_BYTES` 4 MiB → **10 MiB**（`packages/bedcode-server-base/src/constants.rs`）；
+  消费端 `com.bedcode.terminal-session` 的 `SESSION_PTY_RING_BYTES` 同步 4 MiB → 10 MiB
+  （`launch.rs`，按上限声明）。**D9 其余口径不变**：仍是插件声明参数、超限 `spawn` 直接 `Err`
+  不夹取、读侧单次 16 KiB 截断续拉、写侧超限整条拒绝。
+- **理由**：环同时承担「页面不在场（离开终端页 / 断线重连中）期间的产出留存」与
+  「fresh subscribe 的整段重放窗口」（移动端历史回看的唯一来源，无落盘）。TUI 类会话一次
+  全屏重绘可达数百 KB，4 MiB 在弱网 / 后台 / 弱机解析慢的场景下只够几分钟；10 MiB 把回看
+  深度提到可用量级。内存**按需增长**（`PtyRing` 的 `VecDeque` 随产出增长，空闲会话不占容量），
+  最坏上界由「条数 × 容量」表达（默认并发 8 → 80 MiB；声明式配额上限 64 → 640 MiB，
+  均以「同时产生且未被拉取」为前提），见 `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` 文档。
+- **同批的机制修复（不改 wire 形状，仅记账）**：移动端 ack 水位由「已接收字节」改为
+  「xterm **解析完成**字节」（前端 `writeCoalescer.onParsed` → `noteParsedBytes`；插件按
+  「较上次回发推进 ≥64 KiB」回发 ack 帧）。此前收妥即计数会让 WebView 解析跟不上时上游
+  照旧全速灌入，桌面端 128 KiB 未确认窗口的背压被绕过（真实缓冲退化为 WebView 消息队列）。
+  offset 仍是「本地累计字节」，只是推进节奏改为解析速率，双端**双向兼容**（无 WIT / ABI 变更）。

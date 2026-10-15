@@ -17,6 +17,9 @@ use bedcode_plugin_api::host::{pty_event_topic, PTY_EXIT};
 use tokio::sync::{Mutex, RwLock};
 
 use bedcode_desktop_lib::wasm_core::host_api::context::PermissionScope;
+// 宿主环容量上限真源：用常量而不是字面量，上限调整时本用例的「超限拒绝」语义
+// 仍成立（2026-10-15 4 MiB → 10 MiB 时曾因字面量静默失效）
+use bedcode_desktop_lib::system::constants::PLUGIN_PTY_RING_MAX_BYTES;
 use support::*;
 /// 端到端（最高 seam）：WIT 契约 → 宿主实现 → 组件接线 → 权限两域 → SDK → 真 PTY 输出
 ///
@@ -482,8 +485,8 @@ fn test_pty_declared_ring_backpressure_roundtrip() {
                     &serde_json::json!({
                         "command": "/bin/sh",
                         "args": ["-c", "read go"],
-                        // 宿主上限 4 MiB（PLUGIN_PTY_RING_MAX_BYTES）
-                        "ringBytes": 4 * 1024 * 1024 + 1,
+                        // 宿主上限（PLUGIN_PTY_RING_MAX_BYTES）之上 1 字节
+                        "ringBytes": PLUGIN_PTY_RING_MAX_BYTES + 1,
                     })
                     .to_string(),
                 )

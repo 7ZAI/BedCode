@@ -23,6 +23,10 @@
  * DEC 2026 同步输出不再由应用侧包裹：xterm.js 6.0 已内置该协议（解析 BSU/ESU
  * 序列并按帧统一提交渲染），应用侧包裹反而会与 TUI 应用自身的 2026 序列嵌套。
  *
+ * 背压水位上报（`onParsed`）：每块经 xterm 解析**完成**（write 回调）后上报字节数，
+ * 是 `terminal-session.ack-rendered` 的唯一数据源——上游（桌面插件）按此放行下一批，
+ * 故禁止改成「入队即计数」（那会让背压退化为无界 WebView 队列）。
+ *
  * 单次 write 上限 MAX_WRITE_CHUNK：超过则拆块（writeInChunks），让 xterm
  * parser 在块间让出主线程，避免单帧解析超大字符串导致 UI 卡顿。
  *
@@ -79,6 +83,15 @@ export interface WriteCoalescer {
 export interface WriteCoalescerOptions {
   /** rAF 合并调试开关（默认 ENABLE_RAF_COALESCE）；测试可显式开启以覆盖合并路径 */
   enableRafCoalesce?: boolean
+  /**
+   * 解析完成回调（**分块粒度**，字节数 = 该块长度）
+   *
+   * 背压水位（`terminal-session.ack-rendered`）的唯一推进点：必须是「xterm 解析
+   * 完成」而不是「收到字节」，否则 WebView 解析跟不上时上游照旧全速灌入（真实
+   * 缓冲退化为 WebView 消息队列，背压失效）。世代失效（dispose 清屏/重锚）后
+   * 在飞分块的完成回调不再上报——那块字节属于旧世代。
+   */
+  onParsed?: (bytes: number) => void
 }
 
 export function createWriteCoalescer(
@@ -87,6 +100,7 @@ export function createWriteCoalescer(
 ): WriteCoalescer {
   // rAF 合并关闭时每个事件直接写入（调试/对比路径）
   const rafCoalesce = options.enableRafCoalesce ?? ENABLE_RAF_COALESCE
+  const onParsed = options.onParsed
   let pending: Uint8Array[] = []
   let totalBytes = 0
   let flushRaf = 0
@@ -125,12 +139,27 @@ export function createWriteCoalescer(
     )
   }
 
+  /**
+   * 写出一块并上报解析完成（背压水位推进点）。
+   *
+   * 传 xterm 的 write 回调而不是在上层假设同步完成：xterm 的解析是异步的
+   * （WriteBuffer 在积压时会暂停 parser，靠 timeouts/idle 恢复），只有回调
+   * 触发才代表该块真的进了终端解析器。世代失效（dispose）后回调不再上报。
+   */
+  function writeChunk(chunk: Uint8Array, chunkEpoch: number) {
+    terminal.write(chunk, () => {
+      if (chunkEpoch !== epoch) return
+      onParsed?.(chunk.byteLength)
+    })
+  }
+
   /** 写入单块字节（仅 rAF 合并关闭的调试直写路径使用；合并路径走 writeInChunks） */
   function writeBytes(data: Uint8Array) {
     // terminal 可能已 dispose（页面切换/会话关闭）：与合并路径 flush 的守卫一致
     if (!terminal.element) return
+    const writeEpoch = epoch
     for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
-      terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
+      writeChunk(data.subarray(i, i + MAX_WRITE_CHUNK), writeEpoch)
     }
   }
 
@@ -148,7 +177,8 @@ export function createWriteCoalescer(
       // 会话关闭）：让出点期间两种失效都要拦
       if (writeEpoch !== epoch) return
       if (!terminal.element) return
-      terminal.write(buf.subarray(i, i + MAX_WRITE_CHUNK))
+      const chunk = buf.subarray(i, i + MAX_WRITE_CHUNK)
+      writeChunk(chunk, writeEpoch)
       written += MAX_WRITE_CHUNK
       if (written >= WRITE_YIELD_THRESHOLD) {
         written = 0
@@ -206,7 +236,7 @@ export function createWriteCoalescer(
         statsFlushes++
         statsFlushBytes += combined.byteLength
         if (combined.byteLength <= MAX_WRITE_CHUNK) {
-          terminal.write(combined)
+          writeChunk(combined, flushEpoch)
         } else {
           await writeInChunks(combined, flushEpoch)
         }

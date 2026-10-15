@@ -22,8 +22,11 @@
 //!   断开 → 宿主退避重建 → `ws:open`（新句柄 + `reconnectedFrom` 旧句柄）→
 //!   本状态机重新订阅（prewarm 未订阅过的链路不重订阅——无订阅可恢复）；
 //!   `session_missing` 重试复用同一循环（主动 close → 宿主退避 → 重连重订阅）。
-//! - ack 空闲兜底（250ms 轮询）退役：前端 onWriteParsed/rAF 持续推进 ack，
-//!   64KB 阈值节流保留。
+//! - ack 空闲兜底（250ms 轮询）退役：ack 由前端**解析完成回调**（writeCoalescer
+//!   的分块 parse 完成）推进，插件按「推进量 ≥ 64KB」节流回发（`should_send_ack`）。
+//!   为什么是「解析完成」而不是「已接收」：桌面端按 ack 记账放行（未确认窗口
+//!   128 KiB 滞回），以收妥量为水位会让 WebView 解析跟不上时上游照旧全速灌入，
+//!   真实缓冲退化为 WebView 消息队列（背压失效，2026-10-15 修复）。
 //! - 「页面订阅门控」（段2 frontend_subscribed）由宿主窄转发层承载：
 //!   `terminal_stream_forward_output` 对未订阅页面返回 Err，字节就地丢弃
 //!   （与原门控丢弃语义一致，重进页面经重订阅回放补齐）。
@@ -39,16 +42,21 @@ use crate::protocol::{
     build_ack_frame, build_subscribe_frame, build_input_text_frame, classify_server_error,
     plan_input_frames, should_send_ack, InputFrame, ServerErrorClass, MAX_SESSION_MISSING_STRIKES,
 };
-use crate::{read_primary_target, PLUGIN_ID};
+use crate::read_primary_target;
 
 // ==================== 事件名（前端 listen；payload 形状与退役前逐字段一致） ====================
+//
+// 命名空间用短名 `terminal-session`（`plugin:terminal-session:<action>`，与
+// `plugin:file-transfer:*` 同约定），**不能**直接拼插件 id：`PLUGIN_ID` 是
+// reverse-DNS（`com.bedcode.terminal-session`），Tauri 事件名校验只允许
+// alphanumeric / `-` / `/` / `:` / `_`，`.` 会被拒绝——宿主 `emit_event` 发不出、
+// 前端 `listen` 抛 `invalid args event`，状态事件静默断链（终端输入被 subscribed
+// 门控全拒）。契约锁见文件末尾 `event_names_tauri_legal_and_match_frontend_contract`。
 
 /// 状态变更事件（phase / detail / retry_in_ms）
-pub(crate) static EVENT_TERMINAL_STATE: LazyLock<String> =
-    LazyLock::new(|| format!("plugin:{PLUGIN_ID}:terminal-state"));
+pub(crate) const EVENT_TERMINAL_STATE: &str = "plugin:terminal-session:terminal-state";
 /// 重锚事件（重放世代切换 / 环淘汰：前端清屏 + 本地计数归零 + 一次性提示）
-pub(crate) static EVENT_TERMINAL_RESYNC: LazyLock<String> =
-    LazyLock::new(|| format!("plugin:{PLUGIN_ID}:terminal-resync"));
+pub(crate) const EVENT_TERMINAL_RESYNC: &str = "plugin:terminal-session:terminal-resync";
 
 /// 自动重连 config（宿主退避参数；数值对齐退役前 `DEFAULT_INITIAL_DELAY_MS` /
 /// `DEFAULT_MAX_DELAY_MS`，下限钳制在宿主侧强制——1s 下限是自愈风暴教训）
@@ -91,17 +99,14 @@ pub(crate) struct LinkState {
     /// 已收到 `subscribed`：门控——此前到达的输出帧一律丢弃（fresh subscribe
     /// 前的旧流残留，重播会覆盖全部内容）
     subscribe_ack: bool,
-    /// 本地已收字节（统计 + ack 记账；subscribed/ring_resync 后归零）
+    /// 本地已收字节（统计 + 对账；subscribed/ring_resync 后归零）
     cursor: u64,
-    /// 前端已渲染字节（ack-rendered 命令推进；ack 帧 offset 值）
+    /// 前端**解析完成**水位（ack-rendered 命令推进；ack 帧 offset 值）
     frontend_rendered: u64,
-    /// 累计待 ack 字节（64KB 阈值节流）
-    pending_ack: u64,
+    /// 上次回发 ack 时的解析水位（64KB 推进量阈值的比较基准；重订阅/重锚归零）
+    last_acked_offset: u64,
     /// 会话不存在连续重试计数
     session_missing: u32,
-    /// 本次 `subscribed` 回包后需发 terminal-resync（重订阅/重连/停止后重建）：
-    /// 前端可能已有在屏内容，重播前必须清屏 + 本地计数基准重置
-    pending_resync: bool,
     /// 断开等待宿主重连中（close 事实已到、open 尚未到）
     waiting_reconnect: bool,
     /// 只建连未订阅（`prewarm`）：恢复路径不发 subscribe 帧（无订阅可恢复，
@@ -121,9 +126,8 @@ impl LinkState {
             subscribe_ack: false,
             cursor: 0,
             frontend_rendered: 0,
-            pending_ack: 0,
+            last_acked_offset: 0,
             session_missing: 0,
-            pending_resync: false,
             waiting_reconnect: false,
             prewarmed: false,
         }
@@ -134,7 +138,7 @@ impl LinkState {
         self.subscribe_ack = false;
         self.cursor = 0;
         self.frontend_rendered = 0;
-        self.pending_ack = 0;
+        self.last_acked_offset = 0;
     }
 }
 
@@ -341,21 +345,29 @@ impl LinkManager {
         Ok(())
     }
 
-    /// 渲染背压 ack：前端本地已渲染字节数推进；插件按 64KB 阈值节流回发
-    /// `{"type":"ack","offset":N}`（桌面插件据此触发 drain）。ack 是尽力
-    /// 投递的渲染进度确认，失败留痕不报错（丢失由重连恢复补上）
+    /// 渲染背压 ack：前端**解析完成水位**推进；插件按 64KB **推进量**节流回发
+    /// `{"type":"ack","offset":N}`（桌面插件据此记账并触发 drain）。
+    ///
+    /// 三点契约：
+    /// - 水位**单调**：`frontend_rendered = max(旧值, offset)`——重锚清屏后旧世代的
+    ///   解析回调可能晚到，回退值不得把水位往回拨；
+    /// - 阈值判据是「较上次回发推进了多少」（`should_send_ack`），不是「收到多少」：
+    ///   桌面端放行的是「xterm 真正消化的量」；
+    /// - ack 是尽力投递的进度确认，发送失败只留痕不报错（丢失由后续推进
+    ///   或重连恢复补上）。
     pub(crate) fn ack_rendered(h: &WasmHost, session_id: &str, offset: u64) {
         let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
         let Some(link) = mgr.links.get_mut(session_id) else {
             return;
         };
-        link.frontend_rendered = offset;
-        if !should_send_ack(link.pending_ack) {
+        link.frontend_rendered = link.frontend_rendered.max(offset);
+        if !should_send_ack(link.frontend_rendered, link.last_acked_offset) {
             return;
         }
-        link.pending_ack = 0;
+        link.last_acked_offset = link.frontend_rendered;
+        let ack_offset = link.frontend_rendered;
         if let Some(handle) = link.handle.clone() {
-            if let Err(e) = h.ws_send_text(&handle, &build_ack_frame(offset)) {
+            if let Err(e) = h.ws_send_text(&handle, &build_ack_frame(ack_offset)) {
                 h.log_warn(&format!("terminal ack frame send failed (session {session_id}): {}", e.message));
             }
         }
@@ -531,7 +543,7 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
                 link.session_missing = 0;
                 link.cursor = 0;
                 link.frontend_rendered = 0;
-                link.pending_ack = 0;
+                link.last_acked_offset = 0;
                 link.prewarmed = false;
             }
             // 重放世代判定：页面已收到过该会话的输出 ⇒ 桌面端这轮从环窗口起点
@@ -557,7 +569,7 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
                 if let Some(link) = mgr.links.get_mut(session_id) {
                     link.cursor = 0;
                     link.frontend_rendered = 0;
-                    link.pending_ack = 0;
+                    link.last_acked_offset = 0;
                 }
             }
             h.log_warn(&format!(
@@ -641,11 +653,14 @@ fn handle_control_text(h: &WasmHost, session_id: &str, text: &str) {
     }
 }
 
-/// 收输出字节：计数 + ack 记账 + 门控转发。
+/// 收输出字节：计数 + 门控转发。
 ///
 /// 门控 = `subscribe_ack`（已收 subscribed）；门控未通过的字节丢弃（fresh
 /// subscribe 前的旧流残留，重播覆盖）。页面未订阅由宿主窄转发层 Err 表达，
-/// 字节同样丢弃——重进页面经重订阅回放补齐
+/// 字节同样丢弃——重进页面经重订阅回放补齐。
+///
+/// ack 水位不在此处推进：它是**前端解析完成**水位（`ack_rendered` 命令推送），
+/// 收妥即计数会让背压失效（见 `protocol.rs::ACK_BYTES_THRESHOLD` 注释）。
 fn ingest_output(h: &WasmHost, session_id: &str, data: &[u8]) {
     let len = data.len() as u64;
     let mut mgr = LINK_MANAGER.lock().expect("link manager lock");
@@ -657,7 +672,6 @@ fn ingest_output(h: &WasmHost, session_id: &str, data: &[u8]) {
             return; // fresh subscribe 前的旧流残留
         }
         link.cursor += len;
-        link.pending_ack += len;
         h.terminal_stream_forward_output(session_id, data).is_ok()
     };
     if forwarded {
@@ -675,7 +689,7 @@ fn ingest_output(h: &WasmHost, session_id: &str, data: &[u8]) {
 /// session_id / phase / cursor / detail；emit 失败由宿主留痕）
 fn emit_state(h: &WasmHost, session_id: &str, phase: LinkPhase, cursor: u64, detail: &str) {
     h.emit_event(
-        &EVENT_TERMINAL_STATE,
+        EVENT_TERMINAL_STATE,
         &serde_json::json!({
             "session_id": session_id,
             "phase": phase.as_api_str(),
@@ -695,7 +709,7 @@ fn emit_state_with_retry(
     retry_in_ms: u64,
 ) {
     h.emit_event(
-        &EVENT_TERMINAL_STATE,
+        EVENT_TERMINAL_STATE,
         &serde_json::json!({
             "session_id": session_id,
             "phase": phase.as_api_str(),
@@ -716,7 +730,7 @@ fn emit_state_with_retry(
 /// 旧客户端忽略未知字段 `reason`（默认按 truncated 处理，行为不回归）。
 fn emit_resync(h: &WasmHost, session_id: &str, offset: u64, reason: &str) {
     h.emit_event(
-        &EVENT_TERMINAL_RESYNC,
+        EVENT_TERMINAL_RESYNC,
         &serde_json::json!({
             "session_id": session_id,
             "offset": offset,
@@ -724,4 +738,45 @@ fn emit_resync(h: &WasmHost, session_id: &str, offset: u64, reason: &str) {
         }),
     );
     emit_state(h, session_id, LinkPhase::Live, 0, "resync");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tauri 事件名合法字符集：alphanumeric / `-` / `/` / `:` / `_`
+    fn tauri_legal(name: &str) -> bool {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_'))
+    }
+
+    /// 事件名契约锁（2026-10-15 回归）：宿主 `emit_event` 原样透传事件名、无映射，
+    /// 且 Tauri 事件名校验只允许 alphanumeric / `-` / `/` / `:` / `_`。插件 id 是
+    /// reverse-DNS（`com.bedcode.terminal-session`），直接拼进事件名会含 `.`：
+    /// 宿主 `app_handle.emit()` 被拒（只记 error，guest 收不到失败），前端
+    /// `listen()` 抛 `invalid args event` —— 终端订阅状态永不到达，
+    /// `buffer.subscribed` 恒 false，任何输入都被 `sendInput` 门控拒绝。
+    /// 故事件名用短命名空间 `plugin:terminal-session`，并与 `store.ts` 逐字一致。
+    #[test]
+    fn event_names_tauri_legal_and_match_frontend_contract() {
+        for name in [EVENT_TERMINAL_STATE, EVENT_TERMINAL_RESYNC] {
+            assert!(
+                tauri_legal(name),
+                "事件名含 Tauri 非法字符（含 `.` 即非法）: {name}"
+            );
+        }
+
+        // 前端订阅键逐字对齐（宿主无名字映射；漂移 = 状态事件静默丢失）
+        let root = env!("CARGO_MANIFEST_DIR");
+        let store_ts = std::fs::read_to_string(format!("{root}/../src/terminal/store.ts"))
+            .expect("读取插件前端 store.ts 失败");
+        for name in [EVENT_TERMINAL_STATE, EVENT_TERMINAL_RESYNC] {
+            assert!(
+                store_ts.contains(&format!("'{name}'")),
+                "store.ts 必须逐字订阅事件名 {name}"
+            );
+        }
+    }
 }

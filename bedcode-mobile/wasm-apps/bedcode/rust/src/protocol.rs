@@ -7,7 +7,12 @@ use crate::keys::KeyCombo;
 
 // ==================== 协议常量 ====================
 
-/// 流控 ack 回发节流：累计待 ack 字节达阈值即回发（桌面插件 ack 触发 drain）
+/// 流控 ack 回发节流：前端**解析完成水位**较上次回发推进达阈值即回发
+///
+/// 为什么以「解析推进量」而不是「收到字节量」为判据：ack 是桌面端放行下一批
+/// 数据的唯一依据（未确认窗口 128 KiB 滞回）。以收妥量为判据时，WebView 解析
+/// 落后但字节已进内存，上游照旧全速灌入——背压名存实亡（真实缓冲退化为
+/// WebView 侧消息队列）。推进量判据保证「ack 多少 = xterm 真正消化了多少」。
 pub(crate) const ACK_BYTES_THRESHOLD: u64 = 64 * 1024;
 
 /// 会话不存在（启动中/已停止）连续重试上限，超出后停止等待外部恢复
@@ -89,14 +94,20 @@ pub(crate) fn plan_input_frames(data: &str, special_key: Option<&str>) -> Result
 
 // ==================== ack 节流 ====================
 
-/// ack 回发节流判定（64KB 阈值；250ms 空闲兜底已随迁移退役——空闲定时器在
-/// WASM 插件内不可得，前端 onWriteParsed/rAF 的持续 ack 推进覆盖该场景，
-/// 极端静默由重连兜底。偏差记录见票 12 §6.3）。
+/// ack 回发节流判定（64 KiB **推进量**阈值）。
 ///
-/// `pending == 0` 一律不发：pending 在收帧时累计，为 0 即表示自上次回发后
-/// 没有新收到的字节，重发不推进桌面插件侧记账。
-pub(crate) fn should_send_ack(pending: u64) -> bool {
-    pending != 0 && pending >= ACK_BYTES_THRESHOLD
+/// `rendered` = 前端解析完成水位（本地累计字节；`subscribed` / `ring_resync` 时
+/// 归零），`last_acked` = 上次回发时的同一值。判据是两者之差：
+/// - 未推进（重复上报 / 回退 / 旧世代回调晚到）→ 不发：重发不推进桌面端记账，
+///   反而白占一个入站帧（桌面端 `note_acked_local` 取单调 max，重复值无效）；
+/// - 推进量不足一个阈值 → 暂不发（攒够再发，避免每块 64 KiB 都回一帧）；
+/// - 恰达阈值及以上 → 发。
+///
+/// 与桌面端窗口的配合：一个阈值（64 KiB）恰是 `LOW_WATER_BYTES`，桌面端驻留态
+/// 下至少需要两次推进才能退出迟滞带（`HIGH − ack ≤ LOW` 的保守界），而推进来源
+/// 是解析中的真实数据，故不会出现「等 ack 就永远等不到」的自锁。
+pub(crate) fn should_send_ack(rendered: u64, last_acked: u64) -> bool {
+    rendered.saturating_sub(last_acked) >= ACK_BYTES_THRESHOLD
 }
 
 // ==================== 服务端错误分类 ====================
@@ -231,11 +242,27 @@ mod tests {
 
     #[test]
     fn ack_threshold_semantics() {
-        assert!(!should_send_ack(0), "pending=0 一律不发（重发不推进对端记账）");
-        assert!(!should_send_ack(1), "未达阈值不发");
-        assert!(!should_send_ack(ACK_BYTES_THRESHOLD - 1));
-        assert!(should_send_ack(ACK_BYTES_THRESHOLD), "恰达阈值回发");
-        assert!(should_send_ack(ACK_BYTES_THRESHOLD + 1));
+        // 正例：恰达阈值 / 超过阈值 → 发
+        assert!(should_send_ack(ACK_BYTES_THRESHOLD, 0), "恰达阈值回发");
+        assert!(should_send_ack(ACK_BYTES_THRESHOLD + 1, 0));
+        assert!(should_send_ack(4 * ACK_BYTES_THRESHOLD, 3 * ACK_BYTES_THRESHOLD));
+        // 反例：未推进 / 未达阈值 / 回退（旧世代回调晚到）→ 不发
+        assert!(!should_send_ack(0, 0), "零推进不发");
+        assert!(!should_send_ack(1, 1), "重复上报不发");
+        assert!(!should_send_ack(ACK_BYTES_THRESHOLD, ACK_BYTES_THRESHOLD));
+        assert!(!should_send_ack(ACK_BYTES_THRESHOLD - 1, 1), "差 1 字节不发");
+        assert!(!should_send_ack(1, ACK_BYTES_THRESHOLD), "回退不发（饱和）");
+        // 边界：每段推进恰为一个阈值 → 每段各发一次（不会跳段漏发）
+        let mut last = 0u64;
+        let mut sent = 0u32;
+        for _ in 0..3 {
+            let next = last + ACK_BYTES_THRESHOLD;
+            if should_send_ack(next, last) {
+                last = next;
+                sent += 1;
+            }
+        }
+        assert_eq!(sent, 3, "三段各 64 KiB 推进必须三次回发");
     }
 
     // ==================== 错误分类 ====================

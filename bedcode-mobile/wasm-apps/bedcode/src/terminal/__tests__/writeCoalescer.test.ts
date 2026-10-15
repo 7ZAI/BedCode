@@ -44,6 +44,28 @@ function makeMockTerminal(): Terminal {
   } as unknown as Terminal
 }
 
+/** 解析回调替身：write 时同步触发第 2 参回调（模拟 xterm 解析完成） */
+function makeParsingTerminal(): Terminal {
+  const writeMock = vi.fn((_data: Uint8Array, cb?: () => void) => {
+    cb?.()
+  })
+  return {
+    write: writeMock,
+    element: document.createElement('div'),
+  } as unknown as Terminal
+}
+
+/** 延迟解析替身：把回调收集到 sink，由用例显式触发（验证「解析未完成不推进」） */
+function makeDeferredParsingTerminal(sink: (() => void)[]): Terminal {
+  const writeMock = vi.fn((_data: Uint8Array, cb?: () => void) => {
+    if (typeof cb === 'function') sink.push(cb)
+  })
+  return {
+    write: writeMock,
+    element: document.createElement('div'),
+  } as unknown as Terminal
+}
+
 /**
  * 测试用 helper：登记创建的 coalescer，用例结束后由 afterEach 统一 dispose。
  *
@@ -359,5 +381,95 @@ describe('createWriteCoalescer', () => {
     rafCallbacks[rafCallbacks.length - 1](0)
     await waitForWrites(term, 3)
     expectRaw(term.write, [9, 9, 9])
+  })
+
+  // ==================== onParsed（背压水位推进点） ====================
+  //
+  // 契约：ack 水位必须来自「xterm 解析完成」，而不是「入队/写出」。
+  // 若改成入队即计数，WebView 解析跟不上时上游照旧全速灌入 → 真实缓冲退化为
+  // WebView 消息队列（桌面端 128 KiB 未确认窗口背压失效）。以下用例钉住该契约。
+
+  it('onParsed：分块解析完成后按块上报字节数（64KB + 尾块）', () => {
+    const term = makeParsingTerminal()
+    const parsed: number[] = []
+    const coalescer = makeCoalescer(term, {
+      enableRafCoalesce: true,
+      onParsed: (b) => parsed.push(b),
+    })
+
+    // 96KB → 2 块（64KB + 32KB），每块解析完成各上报一次
+    coalescer(new Uint8Array(MAX_WRITE_CHUNK + 32 * 1024))
+    rafCallbacks[0](0)
+
+    expect(parsed).toEqual([MAX_WRITE_CHUNK, 32 * 1024])
+    expect(parsed.reduce((a, b) => a + b, 0)).toBe(MAX_WRITE_CHUNK + 32 * 1024)
+    // 上报与写出同序（ack 水位单调的必要条件：乱序上报会把水位拨回/跳变）
+    expect(term.write).toHaveBeenCalledTimes(parsed.length)
+  })
+
+  it('onParsed：xterm 未回调（尚未解析完成）时不上报——禁止入队即计数', () => {
+    const pendingCallbacks: (() => void)[] = []
+    const term = makeDeferredParsingTerminal(pendingCallbacks)
+    const parsed: number[] = []
+    const coalescer = makeCoalescer(term, {
+      enableRafCoalesce: true,
+      onParsed: (b) => parsed.push(b),
+    })
+
+    coalescer(new Uint8Array([1, 2, 3]))
+    rafCallbacks[0](0)
+
+    expect(term.write).toHaveBeenCalledTimes(1)
+    expect(parsed).toEqual([]) // 已写出但解析未完成 → 水位不动
+
+    for (const cb of pendingCallbacks) cb()
+    expect(parsed).toEqual([3])
+  })
+
+  it('onParsed：dispose（清屏/重锚）后旧世代在飞分块的完成回调不上报', () => {
+    const pendingCallbacks: (() => void)[] = []
+    const term = makeDeferredParsingTerminal(pendingCallbacks)
+    const parsed: number[] = []
+    const coalescer = makeCoalescer(term, {
+      enableRafCoalesce: true,
+      onParsed: (b) => parsed.push(b),
+    })
+
+    coalescer(new Uint8Array(500 * 1024))
+    rafCallbacks[0](0)
+    const inFlight = pendingCallbacks.length
+    expect(inFlight).toBeGreaterThan(0)
+
+    // 重放世代切换：清屏先 dispose，旧世代剩余分块的解析完成不得推进新基准
+    coalescer.dispose()
+    for (const cb of pendingCallbacks) cb()
+    expect(parsed).toEqual([])
+  })
+
+  it('onParsed：小数据合并块（≤64KB）解析完成后上报一次', () => {
+    const term = makeParsingTerminal()
+    const parsed: number[] = []
+    const coalescer = makeCoalescer(term, {
+      enableRafCoalesce: true,
+      onParsed: (b) => parsed.push(b),
+    })
+
+    coalescer(new Uint8Array([1, 2]))
+    coalescer(new Uint8Array([3, 4, 5]))
+    rafCallbacks[0](0)
+    expect(parsed).toEqual([5]) // 同帧合并为一块，一次上报
+  })
+
+  it('onParsed：rAF 关闭的直写路径同样上报（A/B 调试路径不得丢水位）', () => {
+    const term = makeParsingTerminal()
+    const parsed: number[] = []
+    const coalescer = makeCoalescer(term, {
+      enableRafCoalesce: false,
+      onParsed: (b) => parsed.push(b),
+    })
+
+    coalescer(new Uint8Array([1, 2, 3]))
+    coalescer(new Uint8Array([4]))
+    expect(parsed).toEqual([3, 1])
   })
 })

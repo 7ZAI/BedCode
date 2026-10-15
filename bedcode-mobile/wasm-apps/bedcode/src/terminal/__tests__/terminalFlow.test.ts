@@ -131,14 +131,14 @@ function emitRaw(sessionId: string, data: string) {
 
 /** 模拟移动端 Rust 链路状态事件 */
 function emitState(sessionId: string, phase: string, detail?: string) {
-  for (const h of eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] ?? []) {
+  for (const h of eventHandlers['plugin:terminal-session:terminal-state'] ?? []) {
     h({ session_id: sessionId, phase, detail })
   }
 }
 
 /** 模拟移动端 Rust 重锚事件（ring_resync） */
 function emitResync(sessionId: string, offset: number) {
-  for (const h of eventHandlers['plugin:com.bedcode.terminal-session:terminal-resync'] ?? []) {
+  for (const h of eventHandlers['plugin:terminal-session:terminal-resync'] ?? []) {
     h({ session_id: sessionId, offset })
   }
 }
@@ -173,8 +173,11 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     await flushAsync()
 
     expect(writtenText(terminal)).toBe('helloworld')
-    // 本地字节计数（仅用于 ack 水位）
+    // 本地字节计数：**解析完成**水位（xterm write 回调驱动，不是收到字节）
     expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(10)
+    expect(store.getBuffer('s1')!.receivedBytes).toBe(10)
+    // 解析完成即上报 ack（桌面端背压放行依据）
+    expect(mocks.cmd.terminalAckRendered).toHaveBeenCalledWith('s1', 10)
   })
 
   it('回放（历史）与实时同一条流：subscribed 后按序渲染，无独立拼接、无缺口误报', async () => {

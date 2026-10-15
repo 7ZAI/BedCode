@@ -250,7 +250,7 @@ pub const PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN: usize = 8;
 /// **不夹取到上限**（与 [`PLUGIN_PTY_RING_MAX_BYTES`] 同一口径）：静默降级会让插件按
 /// 自己声明的并发数规划业务、实际却少得多。
 ///
-/// 取值 64：一条会话 PTY 的常驻成本主要是输出环（默认 256 KB，可声明至 4 MiB），
+/// 取值 64：一条会话 PTY 的常驻成本主要是输出环（默认 256 KB，可声明至 10 MiB），
 /// 64 条 × 默认档 = 16 MiB 上界；单插件会话产品的实际并发远不到此值，留出的余量
 /// 是给「批量起任务」类用法的，而不是给内核背无限的债。
 pub const PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN: usize = 64;
@@ -267,9 +267,16 @@ pub const PLUGIN_PTY_RING_BYTES: u64 = 256 * 1024;
 /// 插件可声明的 `ringBytes` 上限：超过即 `spawn` 返回 `Err`
 ///
 /// **不夹取到上限**——静默降级会让插件按自己声明的深度规划上下文、实际却少得多，
-/// 与「配额失败要可见」的分级一致（spec D9）。取值依据：单插件 8 条 PTY 全开即
-/// 32 MiB 常驻上界，仍显著小于业务线单条会话队列的 50 MB 档。
-pub const PLUGIN_PTY_RING_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// 与「配额失败要可见」的分级一致（spec D9）。取值依据：单插件默认并发
+/// （`PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN` = 8）全开即 80 MiB 常驻上界，仍显著
+/// 小于业务线单条会话队列的 50 MB 档；声明式配额（最多
+/// `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` = 64 条）下的上界 640 MiB 由「条数 ×
+/// 容量」共同约束，且环**按需增长**（空闲会话不占容量）。
+///
+/// 2026-10-15 由 4 MiB 提到 10 MiB：消费端（`com.bedcode.terminal-session`）按
+/// 本上限声明会话环，10 MiB 用于承载「页面不在场期间的产出留存 + fresh subscribe
+/// 整段重放窗口」（移动端整段重放受解析速率驱动，环深直接决定回看深度）。
+pub const PLUGIN_PTY_RING_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 /// 单次 `ring-fetch` 返回字节上限：限制一次 wasm 边界拷贝的量
 /// （插件传入的 `max-bytes` 超过本值即**截断**——读侧是数据面，截断不是错误，

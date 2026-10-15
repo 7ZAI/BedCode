@@ -33,19 +33,20 @@ use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 
 use bedcode_desktop_lib::wasm_core::host_api::context::PermissionScope;
+use bedcode_desktop_lib::system::constants::PLUGIN_PTY_RING_MAX_BYTES;
 use support::*;
 
 use bedcode_pty_engine::PtyRing;
 
-/// 确定性输出体量（P2 使用；1 MiB，环容量 4 MiB 下无淘汰干扰）
+/// 确定性输出体量（P2 使用；1 MiB，环容量取宿主上限下无淘汰干扰）
 const PROBE_BYTES: u64 = 1024 * 1024;
-/// P3 追赶场景输出体量（3 MiB：环容量声明受宿主上限 `PLUGIN_PTY_RING_MAX_BYTES`=4 MiB
-/// 约束，环必须严格大于输出（PtyRing push 在 `resident + len > capacity` 时淘汰最旧块），
+/// P3 追赶场景输出体量（3 MiB：环容量声明取宿主上限 `PLUGIN_PTY_RING_MAX_BYTES`，
+/// 环必须严格大于输出（PtyRing push 在 `resident + len > capacity` 时淘汰最旧块），
 /// 故输出取 3 MiB 保证追赶全程无等级淘汰）
 const CATCHUP_BYTES: u64 = 3 * 1024 * 1024;
-/// spawn 环容量声明（取宿主上限 `PLUGIN_PTY_RING_MAX_BYTES`=4 MiB；
+/// spawn 环容量声明（取宿主上限 `PLUGIN_PTY_RING_MAX_BYTES` 真源；
 /// 声明必须 ≤ 上限，超限 spawn 直接 Err——本探针不挑战配额）
-const PROBE_RING_BYTES: u64 = 4 * 1024 * 1024;
+const PROBE_RING_BYTES: u64 = PLUGIN_PTY_RING_MAX_BYTES;
 
 /// 探针专用插件 ID（不与其他测试实例冲突）
 const TERM_PERF_PLUGIN: &str = "com.bedcode.term-perf";

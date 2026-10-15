@@ -907,18 +907,27 @@ pub fn create_via_host(draft_json: &serde_json::Value) -> Result<serde_json::Val
 /// `truncated` → 客户端清屏重锚。移动端经 WiFi + WebView 渲染，秒级卡顿
 /// （JS GC / 切前后台 / 弱网重传）就能吃掉 256 KiB——也就是说**正常操作就能
 /// 触发一次清屏**，而清屏对 TUI 类会话（vim / htop / Claude Code）等于现场
-/// 丢失上下文。故按宿主上限 `PLUGIN_PTY_RING_MAX_BYTES` = 4 MiB 声明（超限
+/// 丢失上下文。故按宿主上限 `PLUGIN_PTY_RING_MAX_BYTES` = 10 MiB 声明（超限
 /// `spawn` 直接报错，不会静默夹取）。
+///
+/// 为什么从 4 MiB 提到 10 MiB（2026-10-15）：环承担两件事——① 页面不在场
+/// （离开终端页 / 断线重连中）期间的产出留存，② fresh subscribe 时的整段重放
+/// 窗口。移动端 ack 改为**解析完成水位**后，重放节奏由前端解析速度驱动，慢机
+/// 上「拉取窗口 128 KiB + 环容量」共同决定页面进入时还能回看多少内容；4 MiB
+/// 对 TUI 类高频重绘会话（一次全屏重绘可达数百 KB）只够几分钟，10 MiB 把回看
+/// 深度提到可用量级，同时仍显著小于「64 条 × 50 MB 业务队列档」的旧上界。
 ///
 /// 与背压窗口的关系（两条约束一起看）：
 /// - 内存**按需增长**：`PtyRing` 的 `VecDeque` 随产出增长，空闲会话不占内存。
-///   最坏上界 = 宿主 PTY 配额（`PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN` = 64）
-///   × 4 MiB = 256 MiB，且需 64 条会话同时各产生 4 MiB 未被拉取的输出；
-///   背压窗口（`output::HIGH_WATER_BYTES` = 128 KiB）把「已拉走但未确认」的量
-///   钉在 128 KiB，真实驻留远低于上界。
+///   最坏上界 = 本插件声明的 PTY 配额（`plugin.json` 的 `ptyQuota` = 8）
+///   × 10 MiB = 80 MiB，且需 8 条会话同时各产生 10 MiB 未被拉取的输出；
+///   宿主侧通用上限仍是「插件在册条数上限 64 × 10 MiB」（见
+///   `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`）。背压窗口
+///   （`output::HIGH_WATER_BYTES` = 128 KiB）把「已拉走但未确认」的量钉在
+///   128 KiB，真实驻留远低于上界。
 /// - **窗口必须远小于环**（编译期断言）：否则「抑制」毫无意义——数据先被环
 ///   淘汰，客户端永远 ack 不到该水位，背压退化成静默丢数据。
-pub const SESSION_PTY_RING_BYTES: u64 = 4 * 1024 * 1024;
+pub const SESSION_PTY_RING_BYTES: u64 = 10 * 1024 * 1024;
 
 // 水位参数不变量（编译期自检，spawn 侧接入校验）：背压窗口 ≤ 环容量的一半。
 // 取一半是保守界：抑制时数据仍可完整驻留到客户端追平。

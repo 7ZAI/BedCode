@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => {
       disposed: boolean
       dispose: () => void
     }[],
+    /** 页面通道登记落定控制：true = 登记挂起，由用例显式落定（验证「登记→订阅」序） */
+    deferStreamRegistration: false,
+    pendingStreamResolvers: [] as (() => void)[],
   }
 })
 
@@ -69,7 +72,7 @@ vi.mock('../host', () => ({
 vi.mock('@binblink/bedcode-plugin-sdk-mobile', () => ({
   getMobileApi: () => ({
     mockSessionId: null,
-    openTerminalStream: async (sessionId: string, onBytes: (b: Uint8Array) => void) => {
+    openTerminalStream: (sessionId: string, onBytes: (b: Uint8Array) => void) => {
       const entry: {
         sessionId: string
         onBytes: (b: Uint8Array) => void
@@ -84,7 +87,13 @@ vi.mock('@binblink/bedcode-plugin-sdk-mobile', () => ({
         },
       }
       mocks.streamCalls.push(entry)
-      return { dispose: entry.dispose }
+      const handle = { dispose: entry.dispose }
+      if (mocks.deferStreamRegistration) {
+        return new Promise<typeof handle>((resolve) => {
+          mocks.pendingStreamResolvers.push(() => resolve(handle))
+        })
+      }
+      return Promise.resolve(handle)
     },
   }),
 }))
@@ -93,10 +102,11 @@ const { cmd, eventHandlers } = mocks
 
 import { useTerminalBufferStore } from '../store'
 
-// 票 12：事件源 = com.bedcode.terminal-session 插件 emit（事件名带插件命名空间）。
+// 票 12：事件源 = com.bedcode.terminal-session 插件 emit（事件名用短命名空间
+// `terminal-session`——Tauri 事件名不允许 `.`，插件 reverse-DNS id 不能直接进事件名）。
 // 与 store 内常量保持字面同步（store 不导出这两个常量，此处按事件名字面锁）
-const TERMINAL_STATE_EVENT = 'plugin:com.bedcode.terminal-session:terminal-state'
-const TERMINAL_RESYNC_EVENT = 'plugin:com.bedcode.terminal-session:terminal-resync'
+const TERMINAL_STATE_EVENT = 'plugin:terminal-session:terminal-state'
+const TERMINAL_RESYNC_EVENT = 'plugin:terminal-session:terminal-resync'
 
 /** 取会话最近一次经 openTerminalStream 登记的页面流 */
 function pageStream(sessionId: string) {
@@ -137,6 +147,8 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
     vi.clearAllMocks()
     for (const key of Object.keys(eventHandlers)) delete eventHandlers[key]
     mocks.streamCalls.length = 0
+    mocks.deferStreamRegistration = false
+    mocks.pendingStreamResolvers.length = 0
     // 预注册事件监听：subscribeSession（任意路径触发）即 ensureEventListeners，
     // 挂载/测试中 emitState/emitRaw 依赖监听已就位（惰性注册是异步的）
     await store.subscribeSession('s1')
@@ -145,6 +157,27 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
   })
 
   describe('订阅触发（fresh subscribe 语义：已订阅也重播）', () => {
+    it('subscribeSession 等在途页面通道登记落定后才发订阅（否则整段重放被无通道丢弃）', async () => {
+      // 页面通道登记（terminal_page_subscribe）与订阅（terminal-session.subscribe）
+      // 是两条独立异步调用：订阅先落地时桌面端立即整段重放，而宿主窄转发表还没有
+      // 通道 → 全部重放字节被 dropped_no_channel 丢弃且无自愈路径（历史缺失）。
+      // 先让 beforeEach 那条在途订阅落定（否则重复意图去重会拦下本次调用）
+      emitState('s1', 'live', 'subscribed')
+      cmd.terminalSubscribe.mockClear()
+      mocks.deferStreamRegistration = true
+      store.markPageEntered('s1')
+      const pending = store.subscribeSession('s1')
+      await flushAsync()
+      // 登记未落定：订阅不得先发
+      expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
+
+      // 登记落定 → 订阅随即发出
+      for (const resolve of mocks.pendingStreamResolvers.splice(0)) resolve()
+      await pending
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
+      expect(mocks.streamCalls.length).toBe(1) // 通道确实先登记
+    })
+
     it('subscribeSession 触发 terminalSubscribe；terminal-state 事件同步 subscribed', async () => {
       // beforeEach 的第一条订阅已在途：先让链路落定（subscribed）再清账，
       // 否则新的一页一代去重会把本次调用当成重复意图跳过
@@ -273,14 +306,41 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
       store.registerRealtimeHandler('s1', { onOutput })
     }
 
-    it('裸字节按到达序渲染：本地计数推进 + hasRenderedContent', () => {
-      mountHandler()
+    it('裸字节按到达序渲染：接收计数推进 + hasRenderedContent', () => {
+      const onOutput = vi.fn()
+      mountHandler(onOutput)
       emitState('s1', 'live', 'subscribed')
       emitRaw('s1', 'hello')
       emitRaw('s1', ' world')
       const buffer = store.getBuffer('s1')!
-      expect(buffer.lastRenderedOffset).toBe(11) // 5 + 6，本地字节计数
+      expect(buffer.receivedBytes).toBe(11) // 5 + 6，已接收字节
       expect(buffer.hasRenderedContent).toBe(true)
+      expect(onOutput.mock.calls.map((c) => new TextDecoder().decode(c[0] as Uint8Array))).toEqual([
+        'hello',
+        ' world',
+      ])
+    })
+
+    it('接收不等于解析：帧到达不推进 ack 水位（背压不得被收妥量绕过）', () => {
+      mountHandler()
+      emitState('s1', 'live', 'subscribed')
+      emitRaw('s1', 'received but not parsed')
+      const buffer = store.getBuffer('s1')!
+      expect(buffer.receivedBytes).toBe(23) // 'received but not parsed'
+      expect(buffer.lastRenderedOffset).toBeNull() // 解析未完成 → 水位不动
+      expect(cmd.terminalAckRendered).not.toHaveBeenCalled()
+    })
+
+    it('解析完成推进 ack 水位并上报（writeCoalescer 分块回调路径）', () => {
+      mountHandler()
+      emitState('s1', 'live', 'subscribed')
+      emitRaw('s1', 'hello world')
+      store.noteParsedBytes('s1', 5)
+      store.noteParsedBytes('s1', 6)
+      const buffer = store.getBuffer('s1')!
+      expect(buffer.lastRenderedOffset).toBe(11)
+      expect(cmd.terminalAckRendered).toHaveBeenNthCalledWith(1, 's1', 5)
+      expect(cmd.terminalAckRendered).toHaveBeenNthCalledWith(2, 's1', 11)
     })
 
     it('页面未挂载（无 handler）：字节丢弃计数（重进由重订阅回放补齐）', () => {
@@ -289,6 +349,7 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
       emitRaw('s1', 'dropped')
       const buffer = store.getBuffer('s1')!
       expect(buffer.lastRenderedOffset).toBeNull()
+      expect(buffer.receivedBytes).toBe(0)
       expect(cmd.terminalUnsubscribe).toHaveBeenCalledWith('s1')
     })
 
@@ -312,9 +373,10 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
       expect(onTruncated).toHaveBeenCalledWith(4096)
       expect(buffer.hasRenderedContent).toBe(false)
 
-      // 重锚后新流从 0 续计
-      emitRaw('s1', 'new')
+      // 重锚后新流从 0 续计（解析完成回调推进）
+      store.noteParsedBytes('s1', 3)
       expect(buffer.lastRenderedOffset).toBe(3)
+      expect(buffer.receivedBytes).toBe(0)
     })
 
     it('无在屏内容（首次挂载空屏）：不清屏、不提示（清屏无意义）', () => {
@@ -499,11 +561,14 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
       expect(cmd.terminalSendInput).not.toHaveBeenCalled()
     })
 
-    it('ackRendered：按本地渲染字节计数推进 Rust 水位', () => {
+    it('ackRendered：按**解析完成**字节计数推进 Rust 水位', () => {
       store.registerRealtimeHandler('s1', { onOutput: () => {} })
       emitState('s1', 'live', 'subscribed')
-      emitRaw('s1', 'abc')
+      emitRaw('s1', 'abc') // 仅接收：不推进
       store.ackRendered('s1')
+      expect(cmd.terminalAckRendered).not.toHaveBeenCalled()
+      // 解析完成（xterm 分块回调）才是水位推进点
+      store.noteParsedBytes('s1', 3)
       expect(cmd.terminalAckRendered).toHaveBeenCalledWith('s1', 3)
     })
   })
@@ -518,7 +583,7 @@ describe('terminalBuffer store（票 05：新协议 + 本地字节计数）', ()
       emitRaw('s1', 'part1')
       emitRaw('s1', 'part2')
       expect(onOutput).toHaveBeenCalledTimes(2)
-      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(10)
+      expect(store.getBuffer('s1')!.receivedBytes).toBe(10)
     })
   })
 })

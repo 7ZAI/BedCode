@@ -81,7 +81,7 @@ import { useTerminalBuffer } from '../composables/useTerminalBuffer'
 import type { Terminal } from '@xterm/xterm'
 
 function emitState(sessionId: string, phase: string, detail?: string, retryInMs?: number) {
-  for (const fn of eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] ?? []) {
+  for (const fn of eventHandlers['plugin:terminal-session:terminal-state'] ?? []) {
     fn({ session_id: sessionId, phase, detail, retry_in_ms: retryInMs })
   }
 }

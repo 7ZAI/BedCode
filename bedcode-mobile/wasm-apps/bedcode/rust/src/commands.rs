@@ -84,7 +84,7 @@ pub(crate) fn dispatch(name: &str, args: &serde_json::Value) -> anyhow::Result<s
             LinkManager::send_input(&h, &session_id, data, special_key)?;
             Ok(serde_json::json!({ "ok": true }))
         }
-        // 渲染背压 ack：前端本地已渲染字节数推进（插件 64KB 阈值节流回发）
+        // 渲染背压 ack：前端**解析完成水位**推进（插件按 64KB 推进量节流回发 ack 帧）
         "terminal-session.ack-rendered" => {
             let session_id = require_str(args, "sessionId")?;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);

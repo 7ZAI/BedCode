@@ -7,9 +7,12 @@
  *   `terminalUnsubscribe`（关闭连接，不得后台常拉）；意外断开 → 宿主自动
  *   退避重连并重新订阅（无续传语义；环淘汰由 `ring_resync` 如实告知）
  * - 输出帧 = **裸字节**（无 TB v3 16B 头、无 per-frame offset）：段2 页面级
- *   Channel 的原始字节消息，按到达序直接渲染；本地接收字节计数（
+ *   Channel 的原始字节消息，按到达序直接渲染；本地**解析完成**字节计数（
  *   `lastRenderedOffset`）**仅用于 ack 水位**（`terminalAckRendered` → Rust
- *   节流回发 `{"type":"ack","offset":<本地已渲染字节数>}`）
+ *   按 64KB 推进量节流回发 `{"type":"ack","offset":<解析完成字节数>}`）。
+ *   为什么是解析完成而不是已接收：桌面端按 ack 记账放行（未确认窗口 128 KiB），
+ *   以收妥量为水位会让 WebView 解析跟不上时上游照旧全速灌入（背压失效，
+ *   2026-10-15 修复）。推进点 = writeCoalescer 分块 parse 完成回调。
  * - `ring_resync` 是**唯一**重锚信号（终端插件发 `terminal-resync` 事件，票 12）：
  *   清屏 + 本地计数基准重置 + 一次性提示；重锚后到达的重播帧从新基准续
  * - 无缺口判定 / 无去重 / 无跨帧裁剪：字节连续性由 WS 帧序保证，缺口只经
@@ -64,8 +67,17 @@ export interface SessionBuffer {
   subscribed: boolean
   /** 订阅建立中（Rust 连接握手未完成前） */
   subscribing: boolean
-  /** 本地已渲染字节数（自上次重锚起；仅用于 ack 水位） */
+  /**
+   * 本地**解析完成**字节数（自上次重锚起；ack 水位唯一来源）
+   *
+   * 推进点 = `noteParsedBytes`（writeCoalescer 的分块 parse 完成回调）——
+   * **不得**在收到字节时推进：桌面端按此值放行后续输出，收妥即计数等于
+   * 放弃背压（真实缓冲退化为 WebView 消息队列）。重锚（resync/重放世代切换/
+   * 页面重进）后归 null（下一个解析块从 0 重新计数）。
+   */
   lastRenderedOffset: number | null
+  /** 本地已**接收**字节数（统计/对账用；不进 ack 水位） */
+  receivedBytes: number
   /** 会话是否已停止 */
   sessionStopped: boolean
   /**
@@ -125,10 +137,17 @@ const PHASE_RANK: Record<SessionBuffer['phase'], number> = {
 
 // ==================== Store ====================
 
-/** 终端状态事件名（票 12：事件源 = `com.bedcode.terminal-session` 插件 emit） */
-const TERMINAL_STATE_EVENT = 'plugin:com.bedcode.terminal-session:terminal-state'
+/**
+ * 终端状态事件名（事件源 = `com.bedcode.terminal-session` 插件 emit）。
+ *
+ * 命名空间用短名 `terminal-session`（`plugin:terminal-session:<action>`，与
+ * `plugin:file-transfer:*` 同约定），**不能**直接用插件 id：Tauri 事件名只允许
+ * alphanumeric / `-` / `/` / `:` / `_`，reverse-DNS id 里的 `.` 会被 Tauri 拒绝
+ * （emit 静默失败 + `listen` 抛 `invalid args event`）。
+ */
+const TERMINAL_STATE_EVENT = 'plugin:terminal-session:terminal-state'
 /** 重锚事件名（ring_resync / 重订阅回包） */
-const TERMINAL_RESYNC_EVENT = 'plugin:com.bedcode.terminal-session:terminal-resync'
+const TERMINAL_RESYNC_EVENT = 'plugin:terminal-session:terminal-resync'
 
 export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   // ==================== State ====================
@@ -153,6 +172,21 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   const pageStreams = new Map<string, { dispose(): void }>()
   /** sessionId → 页面代际号（异步登记完成前校验） */
   const pageTokens = new Map<string, number>()
+  /**
+   * sessionId → 页面通道登记落定信号（markPageEntered 写入，settle 即删）
+   *
+   * 为什么需要：通道登记（`terminal_page_subscribe`）与订阅（`terminal-session.subscribe`）
+   * 是两条独立异步调用——若订阅先落地，桌面端会立即从环窗口起点**整段重放**，
+   * 而宿主的窄转发表里还没有通道 → 全部重放字节被 `dropped_no_channel` 丢弃；
+   * 此时插件已回 `subscribed`（subscribe_ack 置真），订阅意向去重会阻止重发，
+   * 页面就只剩后续实时字节（历史缺失且无自愈路径）。订阅前等登记落定即可
+   * 让两条链路的时序变成确定性关系。
+   */
+  const pageChannelReady = new Map<string, Promise<void>>()
+
+  /** 等页面通道登记落定的上限（登记是本地 IPC 往返，正常毫秒级；超时则按现状继续，
+   *  不阻塞订阅与重试路径） */
+  const PAGE_CHANNEL_READY_TIMEOUT_MS = 2000
 
   /** 已知订阅阶段（key = sessionId → phase）：onStateEvent 在 buffer 未创建时
    *  也记录——live 事件早于页面挂载（直接进页面路径）时若被丢弃，buffer 挂载后
@@ -167,7 +201,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     framesReceived: number
     /** 收流字节（Channel 走 Raw 字节，与 bytesRendered 同口径） */
     bytesReceived: number
-    /** 页面未挂载被丢弃的帧数（设计行为：Rust 缓存兜底，重进回补） */
+    /** 页面未挂载被丢弃的帧数（设计行为：宿主不缓存，靠重进页面的重订阅整段重放补齐） */
     framesNoHandler: number
     /** 实际交给渲染管线的字节（精确值） */
     bytesRendered: number
@@ -198,20 +232,22 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   }
 
   /** 周期打点（5s 且游标有推进才打）：与终端插件收帧统计对账（票 12），
-   * bytesReceived ≈ bytesRendered + noHandler 差值即无丢帧 */
+   * bytesReceived ≈ bytesRendered 差值即页面未挂载丢弃；parsed 落后 received
+   * 的部分即仍在渲染管线内排队的字节（背压窗口观测量） */
   function maybeLogFrameStats(sessionId: string) {
     const s = frameStats.get(sessionId)
     if (!s) return
     const now = Date.now()
     if (now - s.lastLogAt < FRAME_STATS_INTERVAL_MS) return
-    const cursor = buffers.get(sessionId)?.lastRenderedOffset ?? -1
+    const buffer = buffers.get(sessionId)
+    const cursor = buffer?.lastRenderedOffset ?? -1
     if (cursor === s.lastLogCursor && s.lastLogAt !== 0) return
     s.lastLogAt = now
     s.lastLogCursor = cursor
     logger.debug(
       `[terminalBuffer] frame stats (${sessionId}): frames=${s.framesReceived} ` +
         `bytesReceived=${s.bytesReceived} rendered=${s.bytesRendered} ` +
-        `noHandler=${s.framesNoHandler} cursor=${cursor}`,
+        `noHandler=${s.framesNoHandler} parsed=${cursor} received=${buffer?.receivedBytes ?? -1}`,
     )
   }
 
@@ -256,6 +292,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     } else {
       // 无在屏内容：不清屏（无意义），但基准重置是协议语义，与清屏无关
       buffer.lastRenderedOffset = null
+      buffer.receivedBytes = 0
     }
     knownPhases.set(payload.session_id, 'live')
     if (PHASE_RANK[buffer.phase] < PHASE_RANK.live) buffer.phase = 'live'
@@ -284,6 +321,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (!buffer) return
     buffer.hasRenderedContent = false
     buffer.lastRenderedOffset = null
+    buffer.receivedBytes = 0
     realtimeHandlers.get(sessionId)?.onClear?.()
   }
 
@@ -300,10 +338,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   }
 
   /**
-   * 交付一段输出字节：本地计数推进 + 渲染。
+   * 交付一段输出字节：本地接收计数 + 渲染。
    *
    * 无去重 / 无缺口判定 / 无跨帧裁剪（旧 TB v3 语义退役）：字节连续性由 WS
-   * 帧序保证，缺口只经 `ring_resync` 显性表达——缺口号不再误报
+   * 帧序保证，缺口只经 `ring_resync` 显性表达——缺口号不再误报。
+   * ack 水位（`lastRenderedOffset`）**不在此推进**：那是解析完成水位，由
+   * writeCoalescer 的分块回调经 `noteParsedBytes` 推进。
    */
   function deliverRawBytes(sessionId: string, data: Uint8Array) {
     const buffer = buffers.get(sessionId)
@@ -318,13 +358,26 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       maybeLogFrameStats(sessionId)
       return
     }
-    // 本地渲染字节计数（仅用于 ack 水位；重锚后由 onResyncEvent 归零）
-    buffer.lastRenderedOffset = (buffer.lastRenderedOffset ?? 0) + data.byteLength
+    buffer.receivedBytes += data.byteLength
     buffer.hasRenderedContent = true
     stats.bytesRendered += data.byteLength
     maybeLogFrameStats(sessionId)
 
     handler.onOutput(data)
+  }
+
+  /**
+   * 解析完成推进（writeCoalescer 分块回调）：ack 水位的唯一推进点。
+   *
+   * 前端不做节流计数——每次解析完成都上报事实（命令调用），节流（64KB 推进量）
+   * 归插件协议层（`should_send_ack`）。重锚清屏后旧世代在飞分块的回调已被
+   * writeCoalescer 的世代守卫拦下，不会污染新基准。
+   */
+  function noteParsedBytes(sessionId: string, bytes: number) {
+    const buffer = buffers.get(sessionId)
+    if (!buffer || buffer.sessionStopped || bytes <= 0) return
+    buffer.lastRenderedOffset = (buffer.lastRenderedOffset ?? 0) + bytes
+    ackRendered(sessionId)
   }
 
 /** Rust 链路状态事件：同步 phase/subscribed/停止等 */
@@ -390,6 +443,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.subscribing = false
       buffer.sessionStopped = true
       buffer.lastRenderedOffset = null
+      buffer.receivedBytes = 0
       // 链路已放弃（strikes 耗尽 / 会话停止）：Rust 不再发事件，不清除会让
       // 横幅永久卡「正在重连/30s 后重连」（2026-10-04 OCR M-03）
       buffer.reconnecting = false
@@ -420,6 +474,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         subscribed: known === 'live',
         subscribing: false,
         lastRenderedOffset: null,
+        receivedBytes: 0,
         sessionStopped: false,
         // 重连态**不**从 knownPhases 继承：继承的是 phase，而 phase=connecting
         // 分不清「首次订阅中」与「断线退避中」，必须由 reconnecting 事件单独置位
@@ -525,6 +580,9 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
     buffer.subscribing = true
     buffer.phase = 'connecting'
+    // 登记→订阅的确定序：见 `pageChannelReady` 注释（通道未登记时的整段重放会被
+    // 宿主窄转发层丢弃且当前无自愈路径）
+    await waitForPageChannel(sessionId)
     let invoked = true
     await invokeTerminal('terminal-session.subscribe', { sessionId }).catch((e) => {
       logger.warn(`[terminalBuffer] subscribe ${sessionId} failed:`, e)
@@ -547,7 +605,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
    *  （重播帧从新基准续，无需旧游标续传） */
   function resetCursor(sessionId: string) {
     const buffer = buffers.get(sessionId)
-    if (buffer) buffer.lastRenderedOffset = null
+    if (buffer) {
+      buffer.lastRenderedOffset = null
+      buffer.receivedBytes = 0
+    }
   }
 
   function getBuffer(sessionId: string): SessionBuffer | undefined {
@@ -559,7 +620,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.subscribed = true
   }
 
-  /** 渲染背压 ack：本地已渲染字节数推进 Rust 侧 ack 水位（Rust 节流回发桌面端） */
+  /**
+   * 渲染背压 ack：上报本地**解析完成水位**（Rust 侧按 64KB 推进量节流回发桌面端）。
+   * 由 `noteParsedBytes`（writeCoalescer 分块 parse 回调）驱动——不是收到字节时。
+   */
   function ackRendered(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (!buffer || buffer.lastRenderedOffset === null) return
@@ -600,7 +664,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     }
     const token = (pageTokens.get(sessionId) ?? 0) + 1
     pageTokens.set(sessionId, token)
-    void getMobileApi()
+    const ready = getMobileApi()
       .openTerminalStream(sessionId, (bytes) => {
         if (pageTokens.get(sessionId) !== token) return
         onChannelMessage(sessionId, bytes)
@@ -616,6 +680,30 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       .catch((e) => {
         logger.warn(`[terminalBuffer] page subscribe ${sessionId} failed:`, e)
       })
+    // 登记落定信号（成功/失败都落定）：订阅路径据此把「登记 → 订阅」排成确定序；
+    // 落定后清表——后续 subscribeSession 不再等待（重订阅走 fresh subscribe 语义，
+    // 通道已在表里）
+    pageChannelReady.set(sessionId, ready)
+    void ready.finally(() => {
+      if (pageChannelReady.get(sessionId) === ready) pageChannelReady.delete(sessionId)
+    })
+  }
+
+  /** 等在途的页面通道登记落定（有上限；无在途登记或已落定则立即返回） */
+  async function waitForPageChannel(sessionId: string): Promise<void> {
+    const ready = pageChannelReady.get(sessionId)
+    if (!ready) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      await Promise.race([
+        ready,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, PAGE_CHANNEL_READY_TIMEOUT_MS)
+        }),
+      ])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+    }
   }
 
   /** 标记未订阅（手动取消）：关闭链路 + 清订阅信念，保留游标 */
@@ -651,6 +739,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.phase = 'idle'
       buffer.subscribing = false
       buffer.lastRenderedOffset = null
+      buffer.receivedBytes = 0
     }
     invokeTerminal('terminal-session.unsubscribe', { sessionId }).catch(() => {})
   }
@@ -757,6 +846,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markSessionRunning,
     resetCursor,
     ackRendered,
+    noteParsedBytes,
     clearBuffer,
     clearAllBuffers,
     registerRealtimeHandler,

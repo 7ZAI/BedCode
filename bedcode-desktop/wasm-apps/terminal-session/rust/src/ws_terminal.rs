@@ -44,7 +44,8 @@
 //!
 //! ## 背压（客户端交付水位窗口，与插件前端拉取路径同口径）
 //!
-//! 移动端按**渲染水位**回发 `ack`（`onWriteParsed` → `terminal_ack_rendered`），
+//! 移动端按 **xterm 解析完成水位**回发 `ack`（writeCoalescer 分块 parse 完成回调 →
+//! `terminal_ack_rendered`），
 //! 插件据此记账：未确认积压达上沿（`output::HIGH_WATER_BYTES`）即**抑制**本轮
 //! drain，数据留在宿主环内等 ack 回落（迟滞下沿 `LOW_WATER_BYTES` 才恢复），
 //! 与插件自己前端 `session.output.pull` 的双水位迟滞**同一对常量、同一裁决
@@ -437,7 +438,11 @@ fn handle_text_frame(
             conn.cursor = 0;
             Ok(false)
         }
-        // 流控信号：客户端按**渲染水位**确认已消费的本地累计字节。
+        // 流控信号：客户端按 **xterm 解析完成水位**确认已消费的本地累计字节。
+        //
+        // 为什么强调「解析完成」：水位是上游放行的唯一依据——若客户端用「已接收」
+        // 计数，WebView 解析落后时上游仍会全速下发，远端真实缓冲退化为对端
+        // WebView 消息队列（背压名存实亡，2026-10-15 移动端修复）。
         //
         // offset 是**本地计数**（客户端在 `subscribed` / `ring_resync` 时归零），
         // 不是环绝对偏移——`Watermark::note_acked_local` 持 `base` 做换算。

@@ -5405,7 +5405,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>字节连续性</h3>
         </div>
         <ul>
-          <li>PtyRing 每个 PTY 句柄一条有界环：单生产者（PtyReader）写入、多消费者按游标拉取；容量是 `host-pty.spawn` 的插件声明参数（terminal-session 声明 4 MiB，未声明取内核默认 256 KiB，上限 4 MiB）</li>
+          <li>PtyRing 每个 PTY 句柄一条有界环：单生产者（PtyReader）写入、多消费者按游标拉取；容量是 `host-pty.spawn` 的插件声明参数（terminal-session 声明 10 MiB，未声明取内核默认 256 KiB，上限 10 MiB）</li>
           <li>拉取区间为 [游标, next_offset)，续拉只拿新增字节不重复已消费段；`min_offset` 标记驻留最旧字节，环满淘汰最旧而不阻塞写入</li>
           <li>游标落后于 `min_offset` 即如实上报 `truncated` + `resync`——不静默补洞、不假装连续，前端清屏重锚后从现存段起播</li>
         </ul>

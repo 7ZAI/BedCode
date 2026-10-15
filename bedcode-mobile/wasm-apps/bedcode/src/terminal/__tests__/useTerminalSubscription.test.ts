@@ -77,7 +77,7 @@ const toastMock = mocks.toast
 
 /** 注入 terminal-state 事件（store 的 events.on 回调直接收 payload） */
 function emitState(payload: Record<string, unknown>): void {
-  for (const fn of eventHandlers['plugin:com.bedcode.terminal-session:terminal-state'] ?? []) fn(payload)
+  for (const fn of eventHandlers['plugin:terminal-session:terminal-state'] ?? []) fn(payload)
 }
 
 function makeCtx(overrides?: Partial<TerminalKernelContext>): TerminalKernelContext {

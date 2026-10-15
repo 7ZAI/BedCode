@@ -20,7 +20,7 @@
 PTY 进程输出
   ↓ (os pipe)
 host-pty 引擎（输入即写、输出入环）
-  · 输出环 = 按会话内存环（SESSION_PTY_RING_BYTES = 4 MiB；拉取模型唯一缓冲）
+  · 输出环 = 按会话内存环（SESSION_PTY_RING_BYTES = 10 MiB；拉取模型唯一缓冲）
   · 新字节 → 属主私有通知 <owner>::pty:output（≥50ms 限频，只带句柄不带数据）
         │
         ├── 插件自己的前端（session.output.pull，双水位滞回）
@@ -35,7 +35,7 @@ host-pty 引擎（输入即写、输出入环）
 host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
   → ws:message 二进制信封（kind 字节 + 原始帧）→ 插件 link.rs
         │                                             │
-        │  ack(64 KiB 阈值) / input / subscribe 帧 ←──┤
+        │  ack(解析完成水位，推进 ≥64 KiB 回发) / input / subscribe 帧 ←──┤
         │                                             ↓ host-terminal-stream.forward-output
         └──────── 宿主窄转发表（页面 Channel）←────────┘
                         ↓ Raw 字节（零 JSON / 零 base64）
@@ -49,8 +49,11 @@ host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
 ### 1.1 输出环与通知（宿主机制）
 
 - `packages/bedcode-pty-engine`：PTY 输出入**按会话内存环**（默认宿主上限
-  `PLUGIN_PTY_RING_BYTES` = 256 KiB，终端会话按 `SESSION_PTY_RING_BYTES` = 4 MiB
-  声明——见 `launch.rs`，环是拉取模型下唯一的缓冲）。
+  `PLUGIN_PTY_RING_BYTES` = 256 KiB，终端会话按 `SESSION_PTY_RING_BYTES` = 10 MiB
+  声明——见 `launch.rs`，环是拉取模型下唯一的缓冲）。宿主可声明的上限
+  `PLUGIN_PTY_RING_MAX_BYTES` = 10 MiB（2026-10-15 由 4 MiB 提高：环同时承担
+  「页面不在场期间的产出留存」与「fresh subscribe 整段重放窗口」，10 MiB 把
+  TUI 类高频重绘会话的回看深度提到可用量级；环按需增长，空闲会话不占容量）。
 - 新字节只发**通知**（`<owner>::pty:output`，≥50 ms 限频，payload 只有句柄）：
   消费者按自己的游标 `pty_ring_fetch(handle, from, ≤16 KiB)` 拉取，
   `truncated=true` 表示请求游标已被淘汰（缺口）。
@@ -84,7 +87,8 @@ host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
 
 - 水位常量与插件自己前端拉取路径**同源**（`output.rs`）：
   高位水 `HIGH_WATER_BYTES = 128 KiB` / 低位水 `LOW_WATER_BYTES = 64 KiB`（滞回）。
-- 客户端 ack 的 `offset` 是**本地累计字节**（客户端在 `subscribed` / `ring_resync` 时归零），
+- 客户端 ack 的 `offset` 是**本地累计字节**（客户端在 `subscribed` / `ring_resync` 时归零；
+  移动端的推进点是 xterm **解析完成**而不是收妥——见 §2.3），
   插件侧 `Watermark.base` 记「本地计数归零那一刻的环游标」，`acked = base + ack_local`
   （单调 max，旧 ack 天然忽略）。
 - 抗记账错位：连续抑制 `PARK_MAX_CYCLES = 4` 轮仍无 ack 回落 → 强制放行一轮并 **warn**
@@ -104,7 +108,7 @@ host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
 | `subscribe` | fresh subscribe：建连（无链路时）或重发 subscribe 帧（有链路时）→ 桌面端整段重放 |
 | `unsubscribe` / `unsubscribe-all` / `remove` | 关连接（显式 close 同时取消宿主 auto-reconnect）/ 清理 |
 | `send-input` | 文本 + 特殊键（帧序即写入序；不支持键显性报错且不半投递） |
-| `ack-rendered` | 前端渲染水位；插件按 `ACK_BYTES_THRESHOLD = 64 KiB` 节流回发 ack 帧 |
+| `ack-rendered` | 前端**解析完成水位**；插件按「较上次回发推进 ≥ `ACK_BYTES_THRESHOLD` = 64 KiB」回发 ack 帧 |
 | `get-state` | 链路快照（phase/cursor/acked/stopped/subscribed）供前端对账 |
 
 事件面（`plugin:com.bedcode.terminal-session:terminal-*`）：
@@ -141,12 +145,18 @@ host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
 - `store.ts`（`terminalBuffer`）：
   - 页面进入 `markPageEntered` 登记页面字节流（`registerRealtimeHandler` 复位本代屏幕状态）；
   - 裸字节按到达序直写（**无去重、无 offset 判定**——协议侧不提供 offset）；
+    接收计数（`receivedBytes`，统计）与**解析完成水位**（`lastRenderedOffset`，ack 值）
+    分开：后者由 `writeCoalescer` 的分块 parse 完成回调（`noteParsedBytes`）推进；
   - **重放世代**：每个 `detail=subscribed` 记一代；第 2 代起若屏上有内容 ⇒ 先清屏再渲染新重放；
     首代不清（事件与字节是两条投递通道，首代即便事件晚到也不得吞掉重放头部）；
   - `terminal-resync`：清屏 + 本地计数归零；`reason=truncated` 才上报「历史截断」；
   - 订阅意图去重：`subscribing` / `reconnecting` / （`subscribed` 且本代已有内容）时不再发
-    subscribe 帧——桌面端每次 subscribe 都整段重放，重复意图只带来重复传输 + 一次多余清屏。
-- `useTerminalBuffer.ts`：`onWriteParsed → ackRendered`（渲染背压 ack）；`onClear` =
+    subscribe 帧——桌面端每次 subscribe 都整段重放，重复意图只带来重复传输 + 一次多余清屏；
+  - **登记→订阅的确定序**：`subscribeSession` 会先等页面通道登记（`terminal_page_subscribe`）
+    落定（上限 2 s）再发订阅——两条独立异步 invoke 若订阅先落地，桌面端的整段重放会因
+    窄转发表还没有通道而被 `dropped_no_channel` 丢弃，页面只剩后续实时字节（历史缺失且无自愈）。
+- `useTerminalBuffer.ts`：`writeCoalescer.onParsed → noteParsedBytes → ackRendered`
+  （**ack 的唯一推进点**；`onWriteParsed` 只留进度日志）；`onClear` =
   `writeCoalescer.dispose()` + `terminal.clear()`；回放静止 250ms 补一次全量重绘。
 - `utils/writeCoalescer.ts`：rAF 合并（同帧单次 `terminal.write`）、单块 ≤64 KiB、
   每 128 KiB 让出主线程一次、累积 ≥512 KiB 立即 flush、100 ms 兜底定时器；
@@ -163,7 +173,7 @@ host-websocket 客户端（连接/心跳/退避重连/jwt-auth 首帧代发）
 | 字节连续 | 缺口只经 `ring_resync` 显式表达（+ 前端清屏重锚） | 环淘汰、页面未订阅丢弃、通道发送失败三条路径都会留缺口 |
 | 重复 | 协议侧不承诺去重；前端按「重放世代」清屏保证**渲染**不重复 | 每次 subscribe 必整段重放；前端订阅去重避免重复传输 |
 | 丢失 | ① 页面未订阅丢弃（无缓存，靠重进重放）② 通道发送失败丢弃并摘槽 ③ 环淘汰（有重锚） | 三类都有计数/日志；③ 是数据真丢（有 `gapFrom` 可诊断） |
-| ack 水位 | `acked = base + ack_local`；客户端归零点与插件 `base` 重锚**一一对应** | 偏大=多发（安全），偏小由 `PARK_MAX_CYCLES` 逃生阀兜底 |
+| ack 水位 | `acked = base + ack_local`；`ack_local` = 前端**xterm 解析完成**字节数（writeCoalescer 分块回调推进）；客户端归零点与插件 `base` 重锚**一一对应** | 偏大=多发（安全），偏小由 `PARK_MAX_CYCLES` 逃生阀兜底；解析完成水位是 2026-10-15 修复（此前为收妥水位，背压会被 WebView 队列绕过） |
 | 事件 vs 字节的投递序 | 设计依赖「同一宿主调用序 ⇒ 前端投递序」（跨 transport 未在无头环境验证） | 清屏事件先于新重放字节被 emit；writeCoalescer 的 rAF 缓冲收窄失败窗口 |
 
 ---

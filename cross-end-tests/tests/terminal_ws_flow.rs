@@ -218,7 +218,7 @@ async fn real_pty_output_reaches_mobile_plugin_page_channel() {
         outputs.bytes().len() > bytes_before_resub
     })
     .await;
-    // 等待重放推进到 head marker（环窗口含它；环容量 4MiB ≫ 本次输出量 ⇒ 必须包含）
+    // 等待重放推进到 head marker（环窗口含它；环容量 10 MiB（宿主上限）≫ 本次输出量 ⇒ 必须包含）
     let deadline = Instant::now() + WAIT;
     loop {
         let delta = String::from_utf8_lossy(&outputs.bytes()[bytes_before_resub..]).to_string();
@@ -245,9 +245,9 @@ async fn real_pty_output_reaches_mobile_plugin_page_channel() {
 
     // ==================== C-009 压力：客户端不 ack 也不丢字节（环 + 逃生阀） ====================
     //
-    // 本 harness 的页面通道不会回发 ack（真机由前端 onWriteParsed 驱动）⇒ 桌面端
+    // 本 harness 的页面通道不会回发 ack（真机由前端 xterm 解析完成回调驱动）⇒ 桌面端
     // 水位永远不会回落，必然会进入驻留并在连续 4 轮抑制后走**抗死锁强制放行**。
-    // 这条路径下字节仍必须完整到达（环 4 MiB 未淘汰；背压的失败模式是「多发」不是「不发」）。
+    // 这条路径下字节仍必须完整到达（环 10 MiB 未淘汰；背压的失败模式是「多发」不是「不发」）。
     const PSEQ_N: usize = 400;
     let pseq_begin = outputs.bytes().len();
     world
