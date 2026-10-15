@@ -159,7 +159,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
       <!-- 系统目录树选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
       <button
-        class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--mobile-text-on-accent)] bg-[var(--mobile-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
+        class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--ft-on-accent)] bg-[var(--ft-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
         :disabled="picking"
         @click="handlePickRoot()"
       >
@@ -180,7 +180,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
           class="settings-row"
         >
           <div class="flex items-center gap-2 flex-1 min-w-0">
-            <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 flex-shrink-0 text-[var(--ft-accent-text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
             <div class="flex-1 min-w-0">
@@ -213,7 +213,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
       <div class="settings-group">
         <div class="settings-row">
           <div class="flex items-center gap-2 flex-1 min-w-0">
-            <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4 flex-shrink-0 text-[var(--ft-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
             <span class="settings-value flex-1 min-w-0 truncate" :class="{ 'ft-settings-unset': !(settingsApi?.settings.value.downloadDir) }">
@@ -340,7 +340,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 /* 设置区次级说明文字 */
 .ft-settings-hint {
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-text-muted);
+  color: var(--ft-text-muted);
 }
 
 /* 设置按钮流式字号 */
@@ -353,7 +353,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 .ft-root-uri {
   margin-top: 0.125rem;
   font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
-  color: var(--mobile-text-muted);
+  color: var(--ft-text-muted);
 }
 
 /* 免授权特殊条目徽标 */
@@ -362,9 +362,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   border-radius: 9999px;
   font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
   font-weight: 500;
-  background: var(--mobile-bg-tertiary);
-  border: 1px solid var(--mobile-border);
-  color: var(--mobile-text-secondary);
+  background: var(--ft-bg-tertiary);
+  border: 1px solid var(--ft-border);
+  color: var(--ft-text-secondary);
 }
 
 /* 下载目录「打开」按钮：行内右侧次级按钮（44px 触控目标） */
@@ -372,9 +372,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   padding: 0.5rem 0.875rem;
   border-radius: 0.5rem;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-accent);
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
+  color: var(--ft-accent-text);
+  border: 1px solid var(--ft-border);
+  background: var(--ft-bg-elevated);
   transition: opacity 0.15s ease;
   display: inline-flex;
   align-items: center;
@@ -394,8 +394,8 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   padding: 0.25rem 0.625rem;
   border-radius: 0.5rem;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-error);
-  border: 1px solid var(--mobile-error-muted);
+  color: var(--ft-error);
+  border: 1px solid var(--ft-error-muted);
   background: transparent;
   transition: opacity 0.15s ease;
 }
@@ -409,9 +409,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   width: 2.75rem;
   height: 2.75rem;
   border-radius: 0.625rem;
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-primary);
+  border: 1px solid var(--ft-border);
+  background: var(--ft-bg-elevated);
+  color: var(--ft-text-primary);
   font-size: var(--font-size-xl);
   display: flex;
   align-items: center;
@@ -431,11 +431,11 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   align-items: center;
   justify-content: center;
   border-radius: 0.625rem;
-  background: var(--mobile-bg-tertiary);
+  background: var(--ft-bg-tertiary);
   text-align: center;
   font-size: clamp(1rem, 1.0625rem + (100vw - 360px) / 800, 1.125rem);
   font-weight: 600;
-  color: var(--mobile-text-primary);
+  color: var(--ft-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -445,9 +445,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   align-items: center;
   padding: 0.25rem 0.625rem;
   border-radius: 0.5rem;
-  background: var(--mobile-bg-tertiary);
+  background: var(--ft-bg-tertiary);
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-text-muted);
+  color: var(--ft-text-muted);
 }
 
 /* 接收策略行：分段控件与说明同行（窄屏允许换行） */
@@ -461,7 +461,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   display: inline-flex;
   padding: 0.1875rem;
   border-radius: 0.625rem;
-  background: var(--mobile-bg-tertiary);
+  background: var(--ft-bg-tertiary);
   gap: 0.1875rem;
 }
 
@@ -471,7 +471,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   border-radius: 0.5rem;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
   font-weight: 500;
-  color: var(--mobile-text-secondary);
+  color: var(--ft-text-secondary);
   background: transparent;
   transition: background-color 0.15s ease, color 0.15s ease;
   -webkit-tap-highlight-color: transparent;
@@ -483,8 +483,8 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 }
 
 .ft-segmented-item--active {
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-accent);
+  background: var(--ft-bg-elevated);
+  color: var(--ft-accent-text);
 }
 
 /* 同意超时数字输入：完全自绘外观（token 边框/圆角/字号，无系统控件观感） */
@@ -492,9 +492,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   width: 4.5rem;
   height: 2.75rem;
   border-radius: 0.625rem;
-  border: 1px solid var(--mobile-border);
-  background: var(--mobile-bg-elevated);
-  color: var(--mobile-text-primary);
+  border: 1px solid var(--ft-border);
+  background: var(--ft-bg-elevated);
+  color: var(--ft-text-primary);
   text-align: center;
   font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
   font-weight: 600;
@@ -507,7 +507,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
 .ft-timeout-input:focus {
   outline: none;
-  border-color: var(--mobile-accent);
+  border-color: var(--ft-accent-text);
 }
 
 .ft-timeout-input::-webkit-outer-spin-button,

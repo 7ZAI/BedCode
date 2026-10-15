@@ -8,6 +8,10 @@
  *      嵌入旧宿主——票 2026-10-09-mobile-host-into-wasm-apps）
  *   4. 保留设置动态路由与设置区贡献（设置仍可达；退役随旧宿主同批）
  *
+ * 应用主题：registerSurface 的 accent 声明本应用的主题色（文件夹蓝，与
+ * styles.css 的 .ft-app token 段同源）——壳可消费（应用图标色调等），应用
+ * 内部界面由 .ft-app 作用域自持，不写回平台 --mobile-* token。
+ *
  * 主视图 FileTransferView 采用三段式布局：传输列表默认可见、浏览与设备
  * 折叠为 tab，底栏按多选/活跃/上传三态收敛唯一入口，齿轮进设置。领域逻辑
  * （useTasks / usePeerDevices / useRemoteFs / useSettings）由组件内 setup 启动，
@@ -49,7 +53,8 @@ export async function activate(context: PluginContext): Promise<void> {
   }
 
   // 3. 宿主壳运行面：独立页面（不再是旧宿主工具箱页；appId = 插件 id 由宿主代填）
-  context.ui.registerSurface({ component: FileTransferView })
+  //    accent = 应用主题色（Folder blue #2563EB，与 styles.css .ft-app token 段同源）
+  context.ui.registerSurface({ component: FileTransferView, accent: '#2563EB' })
 
   // 4. 设置二级页动态路由：header: false — 插件自行渲染页头（FileTransferView 齿轮入口）
   context.ui.registerRoute({

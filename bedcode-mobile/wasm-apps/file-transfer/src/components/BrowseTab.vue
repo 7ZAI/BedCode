@@ -257,7 +257,7 @@ const pullLabel = computed(() => {
         <svg
           v-else
           class="w-5 h-5 flex-shrink-0"
-          :style="{ transform: pullState === 'ready' ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease', color: pullState === 'ready' ? 'var(--mobile-accent)' : 'var(--mobile-text-secondary)' }"
+          :style="{ transform: pullState === 'ready' ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease', color: pullState === 'ready' ? 'var(--ft-accent-text)' : 'var(--ft-text-secondary)' }"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -296,7 +296,7 @@ const pullLabel = computed(() => {
             'fv2-file--selected': !entry.isDir && selected.has(entry.name),
             'group-card-divider': false,
           }"
-          :style="idx > 0 ? { borderTop: '1px solid var(--mobile-group-divider)' } : undefined"
+          :style="idx > 0 ? { borderTop: '1px solid var(--ft-group-divider)' } : undefined"
           @click="onRowTap(entry)"
         >
           <!-- 类型图标（按扩展名匹配，目录/未知回退） -->
@@ -316,7 +316,7 @@ const pullLabel = computed(() => {
           <svg
             v-else
             class="w-4 h-4 flex-shrink-0"
-            style="color: var(--mobile-row-sub)"
+            style="color: var(--ft-text-muted)"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -337,7 +337,7 @@ const pullLabel = computed(() => {
   justify-content: center;
   gap: 0.5rem;
   overflow: hidden;
-  color: var(--mobile-text-secondary);
+  color: var(--ft-text-secondary);
   transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 </style>

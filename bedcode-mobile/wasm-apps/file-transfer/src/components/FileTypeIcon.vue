@@ -3,7 +3,8 @@
  * FileTypeIcon — 按文件扩展名匹配类型图标（模仿常规文件系统）
  *
  * 常用类型（音乐/视频/图片/PDF/文档/表格/演示/压缩包/代码/安装包/光盘镜像）
- * 各配专属线性图标 + chip 底色（宿主 --mobile-chip-* 变量）；未知扩展名回退通用文件图标。
+ * 各配专属线性图标 + chip 底色（chip-* 结构沿用宿主 icon-chip，颜色由 styles.css
+ * 的 .ft-app 作用域覆写成应用主题语义色）；未知扩展名回退通用文件图标。
  * 目录固定文件夹图标。图标沿用 heroicons 24 线性描边风格，与宿主 icon-chip 语言一致。
  */
 import { computed } from 'vue'
@@ -13,7 +14,7 @@ const props = defineProps<{ name: string; isDir: boolean }>()
 interface TypeSpec {
   /** 图标类型键（模板分支匹配） */
   kind: string
-  /** chip 底色类（宿主 --mobile-chip-* 变量） */
+  /** chip 底色类（.ft-app 主题覆写，见 styles.css 尾部 chip 段） */
   chip: string
 }
 

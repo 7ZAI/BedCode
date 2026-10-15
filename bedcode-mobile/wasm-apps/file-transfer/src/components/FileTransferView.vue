@@ -269,7 +269,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="fv2-view mobile-ui">
+  <div class="fv2-view mobile-ui ft-app">
 
     <!-- 顶栏：活跃对端 + 连接状态 + 设置入口 -->
     <PeerHeader

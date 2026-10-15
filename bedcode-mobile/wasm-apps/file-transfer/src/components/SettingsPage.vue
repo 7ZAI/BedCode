@@ -25,11 +25,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col bg-[var(--ft-bg-primary)] ft-app">
     <!-- 页头：自行渲染，避免与 ToolboxView 的页头叠加 -->
-    <header class="flex-shrink-0 flex items-center gap-3 px-4 pt-3 pb-2 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)]">
+    <header class="flex-shrink-0 flex items-center gap-3 px-4 pt-3 pb-2 bg-[var(--ft-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--ft-border)]">
       <button
-        class="flex-shrink-0 p-1 -ml-1 text-[var(--mobile-text-secondary)] active:opacity-80 transition-colors"
+        class="flex-shrink-0 p-1 -ml-1 text-[var(--ft-text-secondary)] active:opacity-80 transition-colors"
         @click="context.ui.goBack()"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

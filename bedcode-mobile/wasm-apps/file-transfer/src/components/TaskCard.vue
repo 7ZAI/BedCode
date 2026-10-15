@@ -7,7 +7,7 @@
  * 卡内不做 i18n 之外的逻辑判断，便于将来平移到接收策略变更或暗色主题。
  *
  * 状态色仍走 spec 9.3 四色体系（父级已通过 state-class 传 class，不再硬编码）。
- * 方向 chip：上传 ↑ / 下载 ↓，方向反色时复用基色 --mobile-accent / --mobile-info。
+ * 方向 chip：上传 ↑ = 文件夹蓝（.ft-app 主题 --ft-accent-text），下载 ↓ = 琥珀。
  */
 import { computed } from 'vue'
 import type { TaskAction } from '../types'

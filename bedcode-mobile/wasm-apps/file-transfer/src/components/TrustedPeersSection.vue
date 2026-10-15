@@ -8,7 +8,7 @@
  * 重试入口，不吞成空白。
  *
  * 编排逻辑在 useTrustedPeers；本组件只负责渲染与确认框调用。
- * 样式复用宿主 settings-group/settings-row 设计语言 + --mobile-* token，
+ * 样式复用宿主 settings-group/settings-row 设计语言 + 应用主题 --ft-* token，
  * 触控目标 ≥44px。
  */
 import { computed, inject, onMounted, ref } from 'vue'
@@ -106,7 +106,7 @@ onMounted(() => {
     <div v-else-if="loadState === 'error'" class="ft-trusted-error">
       <span class="ft-trusted-error-text">{{ t(errorKey) }}</span>
       <button
-        class="ft-touch-btn ft-trusted-retry rounded-xl border border-[var(--mobile-border)] bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-primary)] active:opacity-80 transition-opacity"
+        class="ft-touch-btn ft-trusted-retry rounded-xl border border-[var(--ft-border)] bg-[var(--ft-bg-elevated)] text-[var(--ft-text-primary)] active:opacity-80 transition-opacity"
         @click="refresh"
       >
         {{ t('transfer.trusted.retry') }}
@@ -124,7 +124,7 @@ onMounted(() => {
         <div v-for="peerItem in peers" :key="peerItem.nodeId" class="settings-row">
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <svg
-              class="w-4 h-4 flex-shrink-0 text-[var(--mobile-accent)]"
+              class="w-4 h-4 flex-shrink-0 text-[var(--ft-accent-text)]"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -170,7 +170,7 @@ onMounted(() => {
   padding: 2rem 1rem;
   text-align: center;
   font-size: var(--font-size-sm);
-  color: var(--mobile-text-muted);
+  color: var(--ft-text-muted);
 }
 
 /* 加载失败错误条：危险色如实呈现 + 行内重试（44px 触控目标） */
@@ -180,15 +180,15 @@ onMounted(() => {
   gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-radius: 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--mobile-error) 40%, transparent);
-  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ft-error) 40%, transparent);
+  background: color-mix(in srgb, var(--ft-error) 8%, transparent);
 }
 
 .ft-trusted-error-text {
   flex: 1;
   min-width: 0;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-text-primary);
+  color: var(--ft-text-primary);
 }
 
 .ft-trusted-retry {
@@ -202,7 +202,7 @@ onMounted(() => {
 .ft-trusted-fp {
   font-family: Consolas, Monaco, monospace;
   font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
-  color: var(--mobile-text-secondary);
+  color: var(--ft-text-secondary);
 }
 
 /* 行内撤销按钮：44px 触控目标 + danger 配色（与设置页删除按钮同语言，
@@ -216,8 +216,8 @@ onMounted(() => {
   padding: 0 0.875rem;
   border-radius: 0.5rem;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-error);
-  border: 1px solid var(--mobile-error-muted);
+  color: var(--ft-error);
+  border: 1px solid var(--ft-error-muted);
   background: transparent;
   transition: opacity 0.15s ease;
 }
@@ -239,6 +239,6 @@ onMounted(() => {
 .ft-trusted-revoke-failed {
   margin: 0;
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-error);
+  color: var(--ft-error);
 }
 </style>

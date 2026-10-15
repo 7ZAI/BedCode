@@ -56,7 +56,7 @@ defineEmits<{
 
       <!-- 活跃传输：总体进度，整体可点回到传输 tab -->
       <button v-else-if="mode === 'active'" key="active" class="fv2-mini" @click="$emit('open-queue')">
-        <svg class="w-5 h-5 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5 flex-shrink-0 text-[var(--ft-accent-text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
         </svg>
         <div class="flex-1 min-w-0">
@@ -68,10 +68,10 @@ defineEmits<{
             <div class="fv2-progress-fill ft-progress-active" :style="{ width: overallPercent + '%' }"></div>
           </div>
         </div>
-        <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--mobile-text-muted)">
+        <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--ft-text-muted)">
           {{ viewQueueLabel }}
         </span>
-        <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 flex-shrink-0" style="color: var(--ft-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
         </svg>
       </button>

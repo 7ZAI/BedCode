@@ -67,7 +67,7 @@ function metaText(row: DeviceRow): string {
     <div v-if="rows.length > 0" class="flex-shrink-0 flex items-center gap-2 px-4 pt-1 pb-2">
       <h3 class="page-title flex-shrink-0" style="font-size: var(--font-size-lg)">
         {{ t('transfer.devices.title') }}</h3>
-      <span class="flex-1 min-w-0 truncate" style="font-size: var(--font-size-xs); color: var(--mobile-text-muted)">
+      <span class="flex-1 min-w-0 truncate" style="font-size: var(--font-size-xs); color: var(--ft-text-muted)">
         {{ t('transfer.v2.devices.subtitle') }}</span>
       <button class="fv2-btn-tint flex-shrink-0" :disabled="scanning" @click="emit('scan')">
         <svg
@@ -123,7 +123,7 @@ function metaText(row: DeviceRow): string {
               <!-- 设备名 + 短指纹 -->
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="fv2-device-name truncate">{{ row.deviceName }}</span>
-                <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--mobile-text-disabled)">
+                <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--ft-text-disabled)">
                   {{ shortFingerprint(row.nodeId) }}
                 </span>
               </div>

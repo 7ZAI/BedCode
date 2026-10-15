@@ -30,7 +30,7 @@ defineEmits<{
   <div class="flex-shrink-0 flex items-center gap-2 px-4 pt-2.5 pb-2">
     <!-- 对端选择器：整块可点，展开设备列表 -->
     <button class="fv2-peer-chip" @click="$emit('peer-tap')">
-      <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-4 h-4 flex-shrink-0 text-[var(--ft-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           stroke-linecap="round"
           stroke-linejoin="round"

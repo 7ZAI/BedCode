@@ -3,7 +3,7 @@
  *
  * 契约来源（用户报障）：
  * 1) 活跃态（传输中 / 排队 / 已暂停）进度条一律取主题色（`ft-progress-active`
- *    → var(--mobile-accent)）——暂停/排队意味着「进度仍在」，不是「禁用」；
+ *    → var(--ft-accent)）——暂停/排队意味着「进度仍在」，不是「禁用」；
  * 2) 终态保留各自语义色，不得被改成主题色；
  * 3) 配色表必须覆盖全部状态（漏键会在渲染侧回退成无底色 = 只剩灰轨道）。
  */
@@ -26,7 +26,7 @@ const ALL_STATES: TaskStateName[] = [
   'interrupted',
 ]
 
-/** 灰底 class（--mobile-text-disabled）：活跃态不得出现 */
+/** 灰底 class（.ft-app 的 --ft-text-disabled）：活跃态不得出现 */
 const GREY_CLASS = 'ft-progress-cancelled'
 
 const ACTIVE_STATES: TaskStateName[] = ['transferring', 'pending', 'paused']

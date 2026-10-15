@@ -135,7 +135,7 @@ export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
  * 任务状态 → 进度条底色 class（与文本色分离，进度条需实色底）
  *
  * 活跃态（传输中/排队/已暂停）一律用主题色：进度条是「进度」的可视化，
- * 已暂停/排队不代表无进度；灰色底（--mobile-text-disabled）会被误读成
+ * 已暂停/排队不代表无进度；灰色底（.ft-app 的 --ft-text-disabled）会被误读成
  * 「进度丢失/禁用」。状态语义由卡上状态 chip 承担。
  */
 export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
