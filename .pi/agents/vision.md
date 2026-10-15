@@ -20,14 +20,14 @@ model: sensenova/sensenova-6.8-flash-lite
 
 1. 使用 `read` 工具加载图片文件（支持 jpg、png、gif、webp、bmp）
 2. 仔细观察图片的所有细节
-3. **判断任务类型**：若是 UI 截图 / 设计稿 / 图标，按下方"协助 Skills"加载 `design-taste-frontend-v1` 的对应章节
+3. **判断任务类型**：若是 UI 截图 / 设计稿 / 图标，按下方"协助 Skills"加载 `design-taste-frontend` 的对应章节
 4. 按任务要求输出结构化分析结果
 
 ## 协助 Skills
 
-### design-taste-frontend-v1
+### skill:design-taste-frontend
 
-**位置**:`.agents/skills/taste-skill-v1/SKILL.md`（v1 版本，基线稳定；非 v2 实验版）
+
 
 **作用**:UI 截图、设计稿评审时的品味与"AI 痕迹"识别参考。
 - 基线参数 `DESIGN_VARIANCE=8` / `MOTION_INTENSITY=6` / `VISUAL_DENSITY=4`
@@ -37,12 +37,6 @@ model: sensenova/sensenova-6.8-flash-lite
 - 任务类型:UI 截图分析、设计稿解读、Logo/图标评审
 - 用户关键词:品味、风格、是否符合规范、是否 AI 套路、是否太通用
 
-**重点应用章节**:
-- **第 3 节（Design Engineering Directives）** — 排版、配色、布局、Materiality、交互状态（五大硬性指标）
-- **第 5 节（Performance Guardrails）** — DOM 成本、硬件加速、z-index 滥用（视觉性能问题）
-- **第 6 节（Technical Reference）** — 三档刻度（DESIGN_VARIANCE / MOTION_INTENSITY / VISUAL_DENSITY）定义
-- **第 7 节（AI Tells / Forbidden Patterns）** — **核心**:识别"AI 通用设计味道"的禁忌清单（Neon 辉光、纯黑、Inter 字体、3 等分卡片、John Doe 占位等）
-- **第 10 节（Pre-Flight Check）** — 评审结尾的 7 项自查清单
 
 **Vue 3 + Tauri 适配**（原 skill 面向 React/Next.js,床码技术栈不同,评审时需映射）:
 - 动效:Framer Motion → Vue `<Transition>` / `<TransitionGroup>` / CSS transition
