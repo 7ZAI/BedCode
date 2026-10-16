@@ -187,6 +187,11 @@ impl WsClient {
                                 Some(Ok(WsMsg::Text(text))) => {
                                     debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
+                                    // 任意入站帧都证明链路还通：业务帧同样刷新心跳活动基准
+                                    // （on_activity），避免「事件通道空闲但链路活着」因收不到 Pong
+                                    // 被误判死（Pong 通路异常时，持续的业务流量就是兜底判活信号）
+                                    heartbeat.on_activity().await;
+
                                     // 1. 尝试匹配 pending 请求：三态裁决（见 request_response.rs）
                                     //    · Matched = 响应已按 id 投递，无需处理
                                     //    · Push = 可解析的业务推送帧 → 广播 + 交给 handler
@@ -249,6 +254,8 @@ impl WsClient {
                                 }
                                 Some(Ok(WsMsg::Binary(data))) => {
                                     debug!("[WsClient] <<< RECV Binary: {} bytes", data.len());
+                                    // 二进制业务帧同样算链路活跃（与 Text 分支同口径）
+                                    heartbeat.on_activity().await;
                                     // Binary 消息交给 handler 处理
                                     if let Some(h) = &handler {
                                         h.handle(
@@ -283,6 +290,10 @@ impl WsClient {
                                     break;
                                 }
                                 Some(Ok(WsMsg::Ping(data))) => {
+                                    // 收到服务端 Ping 本身就是**最密的保活信号**（桌面端每 5s 一发，
+                                    // 而客户端自发的 Ping 每 30s 一发）：即使服务端对客户端 Ping 的
+                                    // 回复不可达，持续到来的服务端 Ping 也能维持判活基准
+                                    heartbeat.on_activity().await;
                                     // 经发送 channel 回复 Pong（write 由 sender 任务独占）
                                     let Some(sender) = ws_sender.as_ref() else { break };
                                     if let Err(e) = sender.send(WsMsg::Pong(data)).await {
@@ -343,9 +354,36 @@ impl WsClient {
                                 Some(WsMsg::Close(_)) => {
                                     break;
                                 }
+                                // 控制帧必须真正上环（2026-10-16 定位断线根因：此前走 `_ => {}`
+                                // 被静默丢弃，客户端 Ping 从未到达服务端 → 服务端无从回 Pong →
+                                // 90s 无响应判死，每 2.5 分钟断线重连一次）
+                                Some(WsMsg::Ping(data)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Ping(data)).await {
+                                        error!("[WsClient] Send ping error: {}", e);
+                                        break;
+                                    }
+                                }
+                                // 对服务端 Ping 的回复：钨丝网会自动应答一帧，但此处
+                                // receiver 分支显式回发的 Pong 也要如实写出（双份无碍、
+                                // 路径语义完整）
+                                Some(WsMsg::Pong(data)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Pong(data)).await {
+                                        error!("[WsClient] Send pong error: {}", e);
+                                        break;
+                                    }
+                                }
+                                // 原始帧同样如实写出，不静默丢弃
+                                Some(WsMsg::Frame(frame)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Frame(frame)).await {
+                                        error!("[WsClient] Send frame error: {}", e);
+                                        break;
+                                    }
+                                }
                                 // 所有发送方已关闭：队列排空完毕，优雅退出
                                 None => break,
-                                _ => {}
                             }
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_millis(SENDER_POLL_INTERVAL_MS)) => {
@@ -634,5 +672,6 @@ mod tests {
     fn test_config(addr: std::net::SocketAddr) -> WsClientConfig {
         WsClientConfig::new("127.0.0.1", addr.port())
     }
+    mod keepalive_activity;
     mod send_high_frequency;
 }

@@ -120,8 +120,12 @@ impl HeartbeatManager {
     /// 记录**任意入站活动**（Pong / Ping / 业务帧 / 控制帧）
     ///
     /// 与 `on_pong_received` 的记账完全相同，区别只是语义：**任何**入站帧都
-    /// 证明这条链路还通。终端链路（`terminal_link.rs`）据此判活——静默 shell
-    /// 不产生 Pong，若只认 Pong 会把「终端空闲」误判成「连接已死」。
+    /// 证明这条链路还通。调用点：
+    /// - 终端链路（`terminal_link.rs`）：静默 shell 不产生 Pong，若只认 Pong
+    ///   会把「终端空闲」误判成「连接已死」
+    /// - 主 WS receiver（`ws_client.rs`）：Text / Binary / Ping / Pong 全部刷新
+    ///   ——Pong 通路异常时，业务帧与服务端 5s 一发的 Ping 就是兜底判活信号，
+    ///   避免「链路活着但收不到 Pong」的误判死（2026-10-16 每 2.5 分钟断线定位）
     ///
     /// 注意：同 `on_pong_received`，必须在 async 上下文中调用。
     pub async fn on_activity(&self) {
