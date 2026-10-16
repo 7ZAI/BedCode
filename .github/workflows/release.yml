@@ -527,7 +527,7 @@ jobs:
 
   # ==================== SDK 发布包（独立产物 job） ====================
   # 构建两端插件 SDK（TS 前端 + Rust crate）并打包为 release 附件：
-  #   dist/sdk-packages/<target>/{*.tgz, *.crate, SHA256SUMS, <sdk>-<ver>.zip}
+  #   dist/sdk-packages/<target>/{*.tgz, *.crate, SHA256SUMS-<target>, <sdk>-<ver>.zip}
   # 构建/打包逻辑见 scripts/package-sdks.mjs；与平台构建 / 插件打包 job 并行执行。
   # 产物以 SDK 自身版本命名（package.json，与 Cargo.toml 一致性由脚本校验），与应用版本无关。
   package-sdks:
@@ -589,7 +589,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 构建（TS 构建 + vitest + cargo check 宿主/wasm guest）并打包（pnpm pack / cargo package），
-      # 输出 dist/sdk-packages/<target>/：原始 .tgz / .crate + SHA256SUMS + 聚合 zip
+      # 输出 dist/sdk-packages/<target>/：原始 .tgz / .crate + SHA256SUMS-<target> + 聚合 zip
       - name: Build & package SDKs (npm + crates -> dist/sdk-packages)
         run: node scripts/package-sdks.mjs --rust-wasm
 

@@ -14,7 +14,7 @@
  *
  * 产物即 release 的独立附件（见 .github/workflows/release.yml 的 package-sdks job），
  * 与 scripts/package-plugins.mjs 输出的插件 zip 平级，按端分目录：
- *   dist/sdk-packages/<target>/<sdk>-<sdk-version>.zip + 原始 .tgz / .crate + SHA256SUMS
+ *   dist/sdk-packages/<target>/<sdk>-<sdk-version>.zip + 原始 .tgz / .crate + SHA256SUMS-<target>
  *
  * 版本约定：产物以各 SDK 自身版本命名（package.json version，CI 强制与 Cargo.toml 一致），
  * 与应用版本无关（sdk-publish.yml 的 verify job 同样做 npm/cargo 一致性校验）。
@@ -25,7 +25,7 @@
  * 选项：
  *   --target <desktop|mobile|all>  打包目标端（默认 all）
  *   --out <dir>                    输出目录（默认 dist/sdk-packages，相对仓库根）
- *   --no-zip                       只收集原始产物（.tgz/.crate/SHA256SUMS），不聚合 zip
+ *   --no-zip                       只收集原始产物（.tgz/.crate/SHA256SUMS-<target>），不聚合 zip
  *   --skip-build                   跳过构建与测试（tsup / vitest / cargo check），
  *                                  仅重新打包（pnpm pack / cargo package）
  *   --skip-npm                     跳过 TS 包（build/test/pack）
@@ -464,13 +464,18 @@ function makeZip(entries, outFile, label) {
   console.log(`  ${label}: ${outFile} (${fmtSize(buf.length)}, ${entries.length} 文件)`)
 }
 
-/** 生成 SHA256SUMS（文件名 + 空格 + 哈希，unix sha256sum -c 兼容），返回文件路径 */
-function writeChecksums(files, destDir) {
+/** 生成 SHA256SUMS-<target>（文件名 + 空格 + 哈希，unix sha256sum -c 兼容），返回文件路径
+ *
+ * 文件名带端后缀的原因：两端校验和都作为同一 release 的独立附件上传，而 GitHub 同一
+ * release 内资产名必须唯一——同名 `SHA256SUMS` 第二份会上传失败（实测报
+ * `Not Found - releases/assets#update-a-release-asset`，把 package-sdks job 拖红）。
+ */
+function writeChecksums(files, destDir, target) {
   const lines = files
     .map((f) => `${sha256File(f)}  ${basename(f)}`)
     .sort()
     .join('\n')
-  const out = join(destDir, 'SHA256SUMS')
+  const out = join(destDir, `SHA256SUMS-${target}`)
   writeFileSync(out, lines + '\n')
   return out
 }
@@ -525,8 +530,8 @@ for (const t of targets()) {
   for (const f of collected) {
     cpSync(f, join(tgtOut, basename(f)))
   }
-  // 4. SHA256 校验和
-  writeChecksums(collected, tgtOut)
+  // 4. SHA256 校验和（附件名带端后缀，见 writeChecksums 注释）
+  writeChecksums(collected, tgtOut, t)
 
   // 5. 聚合 zip（npm + crates + README + WIT + 校验和 + 索引说明）
   const zipEntries = collected.map((f) => ({
@@ -582,6 +587,6 @@ if (!args.keepStage) {
 console.log(`\n[package-sdks] 完成。产物目录: ${outDir}`)
 for (const t of targets()) {
   const tgtOut = join(outDir, t)
-  console.log(`  ${t}: ${tgtOut}（.tgz / .crate / SHA256SUMS${args.noZip ? '' : ' / 聚合 zip'}）`)
+  console.log(`  ${t}: ${tgtOut}（.tgz / .crate / SHA256SUMS-${t}${args.noZip ? '' : ' / 聚合 zip'}）`)
 }
 if (zips.length > 0) console.log(`  聚合 zip: ${zips.join(', ')}`)

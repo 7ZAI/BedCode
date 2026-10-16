@@ -107,7 +107,8 @@ git push origin master --tags
    - `dist/plugin-packages/{desktop,mobile}/*.zip`（插件 zip 分发包，见 `docs/commands.md`；
      打包范围由 `scripts/plugin-package-list.json` 控制，增删插件改该文件即可）
    - `dist/sdk-packages/{desktop,mobile}/*`（两端 SDK 发布包：npm `.tgz` + crates.io `.crate`
-     + 聚合 zip + SHA256SUMS，见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
+     + 聚合 zip + `SHA256SUMS-<target>`（文件名带端后缀，避免同一 release 内附件重名），
+     见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
 2. 编辑 Release Body（可选）：默认 body 由流水线自动生成（见下方「Release Body 格式」），如手改请保持其结构
 3. 点击 **Publish release** 发布
 
