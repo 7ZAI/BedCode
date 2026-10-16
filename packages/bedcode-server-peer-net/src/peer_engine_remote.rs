@@ -178,6 +178,28 @@ pub(crate) async fn resume_pull(ctx: &PeerCtx, batch_id: &str) -> bool {
     }
 }
 
+/// 用例夹具：登记一条在册的 pull 会话（仅 `#[cfg(test)]`）
+///
+/// 生产路径的登记只在 [`run_pull_queue`] 里（每条会话先拨号再落表），单测不起
+/// 两节点 ⇒ 路由用例经此入口装配一条“会话在册”的最小事实，返回该会话的暂停
+/// 句柄供断言门控位变化（`pulls` 表是模块私有，生产面无直接登记原语）。
+#[cfg(test)]
+pub(crate) fn register_pull_for_test(ctx: &PeerCtx, batch_id: &str) -> Arc<PauseSlot> {
+    let pause = PauseSlot::new();
+    ctx.remote
+        .pulls
+        .lock()
+        .expect("peer remote pulls lock poisoned")
+        .insert(
+            batch_id.to_string(),
+            PullSession {
+                token: CancelToken::new(),
+                pause: Some(Arc::clone(&pause)),
+            },
+        );
+    pause
+}
+
 // ==================== 内部辅助 ====================
 
 /// 解析拨号记录并建立到对端的新连接（浏览/拉取共用前置）

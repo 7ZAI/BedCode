@@ -322,11 +322,13 @@ name = "bedcode-server-peer-net"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bedcode-host-kit",
  "bedcode-peer-net",
  "bedcode-server-base",
  "chrono",
  "inventory",
+ "mdns-sd",
  "serde",
  "serde_json",
  "tempfile",

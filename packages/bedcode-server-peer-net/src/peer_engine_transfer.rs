@@ -226,24 +226,55 @@ pub async fn pause_peer_transfer(ctx: Arc<PeerCtx>, batch_id: String) -> PeerRes
         return Ok(true);
     }
     // serve 供流批：门控入口在 SharedDirHandler 的 serve 暂停注册表
-    match super::peer_engine_receive::handler_and_config(&ctx).await {
-        Some((handler, _)) if handler.set_serve_paused(&batch_id, true).await => {
-            tracing::info!(batch_id = %batch_id, "pull serve transfer paused");
-            Ok(true)
-        }
-        _ => Ok(false),
+    let hit = set_serve_paused(&ctx, &batch_id, true).await;
+    if hit {
+        tracing::info!(batch_id = %batch_id, "pull serve transfer paused");
+    }
+    Ok(hit)
+}
+
+/// serve 供流批的暂停/恢复门控入口（pause 与 resume 共用一张登记表——同一批
+/// 在两个方向上是同一供流会话的两端视角，暂停态也共享）
+///
+/// 未命中（节点未起 / 无 handler / 该批不是本端供流的批）返回 `false` 而非
+/// 报错：暂停与恢复都只按批 id 寻址，批 id 落在发送句柄表、serve 登记表、
+/// pull 会话表、接收会话表中的哪一张由**传输方向**决定，本函数无从判别，
+/// 方向回退由调用链的其余分支完成（见 [`pause_peer_transfer`] /
+/// [`resume_peer_transfer`] 的路由说明与绑定层的接收侧回退）。
+async fn set_serve_paused(ctx: &PeerCtx, batch_id: &str, paused: bool) -> bool {
+    match super::peer_engine_receive::handler_and_config(ctx).await {
+        Some((handler, _)) => handler.set_serve_paused(batch_id, paused).await,
+        None => false,
     }
 }
 
-/// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断（重启/断线残留）
-/// 的以句柄表记忆的源清单重新拨号续传（断点真源在接收端落盘侧，保留已传
-/// 字节——引擎 Progress 首帧会重设偏移）。
+/// 恢复暂停的传输批：路由与 [`pause_peer_transfer`] 同款——发送句柄表 →
+/// serve 供流登记表 → 两者皆未命中即返回 `false`，由绑定层回退接收侧路由。
+///
+/// - **发送会话**（本端在对端拉取中推流）：活跃会话写 Resume 帧续流；会话已
+///   中断（重启/断线残留）的以句柄表记忆的源清单重新拨号续传（断点真源在
+///   接收端落盘侧，保留已传字节——引擎 Progress 首帧会重设偏移）；
+/// - **serve 供流批**（对端在本端拉取）：写 Resume 帧解除对端门控；
+/// - **pull 会话 / push 接收批**（本端是接收方）：本函数无命中，由
+///   `plugin_binding::peer_resume_transfer` 回退 `resume_peer_receiving`
+///   按 pull / 接收会话表下发。
+///
+/// **为什么「不是发送会话」必须回退而不是报错**：四个方向共用一个
+/// pause/resume 原语入口，批 id 归属哪张表由传输方向决定、入口无从判别。
+/// 把「不在发送句柄表」报成 InvalidInput 会让错误直接上抛、**吃掉绑定层的
+/// 接收侧回退分支**——结果是接收方向（手机端拉取下载、桌面端拉取手机文件）
+/// 暂停后点恢复必然失败，真机事故原文即
+/// `peer_resume_transfer: Invalid input: resume transfer: no send session
+/// with that id (pull-…)`。已登记但确实无法恢复的发送会话（源清单为空、
+/// 节点未起、对端离线）仍显性报错/结算失败，不在回退范围内。
 pub async fn resume_peer_transfer(ctx: Arc<PeerCtx>, batch_id: String) -> PeerResult<bool> {
     let state = &ctx.transfer;
     if !state.has_session(&batch_id) {
-        return Err(AppError::InvalidInput(format!(
-            "resume transfer: no send session with that id ({batch_id})"
-        )));
+        let hit = set_serve_paused(&ctx, &batch_id, false).await;
+        if hit {
+            tracing::info!(batch_id = %batch_id, "pull serve transfer resumed");
+        }
+        return Ok(hit);
     }
     let slot_sent = match state.pause_slot_of(&batch_id) {
         Some(slot) => slot.send(PauseCmd::Resume).await,
@@ -623,9 +654,142 @@ pub(crate) async fn drive_serve_events(ctx: Arc<PeerCtx>, mut rx: mpsc::Receiver
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ctx::headless_ctx;
 
     fn sources(n: usize) -> Vec<OutgoingFile> {
         (0..n).map(|i| OutgoingFile::new(format!("C:/f-{i}.bin"))).collect()
+    }
+
+    // ==================== 暂停/恢复的四表路由（方向不可判时的回退契约） ====================
+    //
+    // 一个 pause/resume 原语入口管四个方向，批 id 落在哪张表由传输方向决定：
+    // 发送句柄表（本端推流）/ serve 供流登记表（对端在本端拉取）/ pull 会话表
+    // （本端拉取）/ 接收会话表（对端 push）。入口无从判别方向 ⇒「本表未命中」
+    // **必须**是回退信号而不是错误，否则方向回退分支永远到不了（真机事故：
+    // 手机端暂停下载后点恢复报 `no send session with that id (pull-…)`）。
+
+    /// 反例（回归锁）：不在发送句柄表的批（pull / serve / 接收批 / 未知共用的
+    /// 路由分支）必须返回 `Ok(false)` 让调用链继续回退，**不得**报错
+    #[tokio::test]
+    async fn resume_on_non_send_session_returns_false_instead_of_error() {
+        let ctx = headless_ctx();
+        let outcome = resume_peer_transfer(ctx, "pull-1792143196774125420".to_string()).await;
+        assert_eq!(
+            outcome.expect("非发送会话必须回退而不是报错"),
+            false,
+            "无 serve 供流会话可命中 ⇒ 交接收侧回退"
+        );
+    }
+
+    /// 同分支对称性：暂停侧同一 miss 同样只回退（两侧路由形状不得再分叉）
+    #[tokio::test]
+    async fn pause_on_non_send_session_returns_false_instead_of_error() {
+        let ctx = headless_ctx();
+        let outcome = pause_peer_transfer(ctx, "pull-1792143196774125420".to_string()).await;
+        assert_eq!(
+            outcome.expect("非发送会话必须回退而不是报错"),
+            false,
+            "无 serve 供流会话可命中 ⇒ 交接收侧回退"
+        );
+    }
+
+    /// 正例：在册发送会话——暂停置位数据面门控，恢复清门控 + 清控制面 paused
+    /// （“恢复”不等于“返回 true”：门控位必须真被清掉，否则续流无从发生）
+    #[tokio::test]
+    async fn resume_live_send_session_clears_pause_gate() {
+        let ctx = headless_ctx();
+        ctx.transfer
+            .register_session("send-1", sources(1), "n".into(), false, 8);
+        let slot = ctx.transfer.pause_slot_of("send-1").expect("在册会话必有暂停句柄");
+
+        assert!(pause_peer_transfer(ctx.clone(), "send-1".to_string())
+            .await
+            .expect("pause 发送会话"));
+        assert!(slot.is_paused(), "暂停必须置位数据面门控");
+
+        assert!(resume_peer_transfer(ctx.clone(), "send-1".to_string())
+            .await
+            .expect("resume 发送会话"));
+        assert!(!slot.is_paused(), "恢复必须清除数据面门控");
+        let handle_paused = ctx
+            .transfer
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .get("send-1")
+            .expect("在册会话")
+            .paused;
+        assert!(
+            !handle_paused,
+            "控制面 paused 事实必须随恢复清除（active-transfers 投影判据）"
+        );
+    }
+
+    /// 反例（不得过度回退/报错）：已登记但**会话仍活**的发送会话一律走 live
+    /// 分支写 Resume 帧并返回 `true`——即使句柄表里的源清单为空。源清单缺失
+    /// 只在“会话已死需 redial”时才成立（该形态的判据是 Resume 帧下发失败，
+    /// 只有真实会话循环取走命令通道后终结才会出现，单测夹具起不来），
+    /// **不得**把那条报错提成无条件的入参校验（否则空清单会话连 live 恢复都失败）
+    #[tokio::test]
+    async fn resume_live_send_session_with_empty_remembered_sources_still_succeeds() {
+        let ctx = headless_ctx();
+        ctx.transfer
+            .register_session("send-2", Vec::new(), "n".into(), false, 0);
+
+        assert!(
+            resume_peer_transfer(ctx.clone(), "send-2".to_string())
+                .await
+                .expect("会话仍活时不得报错"),
+            "live 分支命中即成功"
+        );
+        let slot = ctx.transfer.pause_slot_of("send-2").expect("在册会话必有暂停句柄");
+        assert!(!slot.is_paused(), "live 恢复清门控");
+    }
+
+    /// 反向销定：同一批 id 在**发送句柄表已登记**时，路由不得去看 serve 登记表
+    /// （无 handler ⇒ 若误走 serve 分支会返回 false）——发送会话优先命中
+    #[tokio::test]
+    async fn registered_send_session_wins_over_serve_registry_lookup() {
+        let ctx = headless_ctx();
+        ctx.transfer
+            .register_session("send-3", sources(1), "n".into(), false, 4);
+        assert!(resume_peer_transfer(ctx, "send-3".to_string())
+            .await
+            .expect("发送会话优先命中"));
+    }
+
+    /// 设计不变量锁（非行为替身）：serve 供流登记表是**本端在对端拉取时**唯一的
+    /// 暂停/恢复门控入口，pause 与 resume 必须经同一入口、两个方向都不得绕过它。
+    ///
+    /// **为什么需要源码锁**：serve 登记表在引擎 `SharedDirHandler` 内部，只在真实
+    /// 供流会话存续期间有条目；单测夹具（无 handler、不起两节点）造不出“serve 批
+    /// 在册”形态 ⇒ 行为用例区分不了「查了 serve 登记表」与「跳过它直接 false」
+    /// （删掉 resume 的 serve 回退，全部行为用例仍全绿）。这里只钉结构不变量；
+    /// serve 侧的 wire 语义（Pause/Resume 真能门控供流）由 `peer-net` 的
+    /// `pause_symmetry` 集成套件覆盖。
+    #[test]
+    fn serve_registry_entry_is_shared_by_pause_and_resume() {
+        let src = include_str!("peer_engine_transfer.rs");
+        // 只统计**生产段**：`include_str!` 读的是本文件全文，不切分则本用例的匹配
+        // 串也算进去（自指），删实现反而让计数对上
+        let (production, _tests) = src
+            .split_once("// ==================== 测试 ====================")
+            .expect("生产代码与测试模块的分界注释必须保留");
+        assert_eq!(
+            production.matches("async fn set_serve_paused").count(),
+            1,
+            "serve 门控入口必须单一定义（pause/resume 共用）"
+        );
+        assert_eq!(
+            production.matches("set_serve_paused(&ctx, &batch_id, true)").count(),
+            1,
+            "pause 必须经 serve 登记表门控"
+        );
+        assert_eq!(
+            production.matches("set_serve_paused(&ctx, &batch_id, false)").count(),
+            1,
+            "resume 必须经同一 serve 登记表门控（删掉即回退：serve 批无法恢复）"
+        );
     }
 
     // ==================== 会话句柄表（票 3 终态） ====================

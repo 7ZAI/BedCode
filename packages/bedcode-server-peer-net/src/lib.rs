@@ -52,6 +52,10 @@ pub mod wire;
 
 #[cfg(test)]
 mod dependency_direction_lock;
+/// 无头引擎上下文夹具（仅用例：四张会话表的暂停/恢复路由需要造得出
+/// [`PeerCtx`]，而五个宿主端口实现属宿主 crate，见模块文档）
+#[cfg(test)]
+mod test_ctx;
 
 use bedcode_server_base::error::{AppError, Result};
 

@@ -17,6 +17,8 @@ use super::ports::{BoxedBlocked, PeerPorts};
 pub(super) struct FakePorts {
     /// 已授权的 `(plugin_id, permission)` 对
     granted: HashSet<(String, String)>,
+    /// 注入的引擎上下文（`None` = 无头；只有需触达引擎的路由用例才自备一份）
+    ctx: Option<Arc<PeerCtx>>,
 }
 
 impl FakePorts {
@@ -30,6 +32,20 @@ impl FakePorts {
                 .iter()
                 .map(|(plugin, permission)| (plugin.to_string(), permission.to_string()))
                 .collect(),
+            ctx: None,
+        })
+    }
+
+    /// 同 [`with`](Self::with)，但带一份引擎上下文：暂停/恢复按批 id 在四张
+    /// 会话表上寻址，只有拿到上下文才走得到引擎（夹具为无头上下文，不起节点、
+    /// 不连网，见 [`crate::test_ctx`]）
+    pub(super) fn with_ctx(grants: &[(&str, &str)], ctx: Arc<PeerCtx>) -> Arc<dyn PeerPorts> {
+        Arc::new(FakePorts {
+            granted: grants
+                .iter()
+                .map(|(plugin, permission)| (plugin.to_string(), permission.to_string()))
+                .collect(),
+            ctx: Some(ctx),
         })
     }
 }
@@ -42,11 +58,14 @@ impl PeerPorts for FakePorts {
     }
 
     /// 无头口径：迁移前是 `require_app` 拿不到 `AppHandle` 的那条报错，逐字保留。
-    /// 本组用例不构造真实 [`PeerCtx`]（它要四个引擎状态 + 端口聚合），故一律走
-    /// 「不可得」分支——需要触达引擎的用例请另立组装型夹具（不要在本夹具里造
-    /// 半真引擎状态）。
+    /// 未注入上下文的用例一律走「不可得」分支；需要触达引擎的用例经
+    /// [`with_ctx`](FakePorts::with_ctx) 注入无头上下文，不要在无上下文的夹具里
+    /// 造半真引擎状态。
     fn peer_ctx(&self) -> Result<Arc<PeerCtx>, String> {
-        Err(super::ports::HEADLESS_UNAVAILABLE.to_string())
+        match &self.ctx {
+            Some(ctx) => Ok(Arc::clone(ctx)),
+            None => Err(super::ports::HEADLESS_UNAVAILABLE.to_string()),
+        }
     }
 
     /// 同步↔异步桥（测试替身）：新线程 + 独立 multi-thread runtime 驱动。

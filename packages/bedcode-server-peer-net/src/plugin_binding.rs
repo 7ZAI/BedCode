@@ -340,7 +340,7 @@ pub fn peer_set_receive_policy(
 /// 任务保留（含已传字节）不落历史。本端发起的活跃会话查句柄表、serve 供流
 /// 批查 handler 注册表。**发送批未命中回落接收方向**（拉取会话 / push 接收批
 /// 的 Pause 帧下发）——两端同集 19 原语下「单一原语管双向」的统一语义
-/// （移动端历史组合语义由 crate 单点承载）；两向都未命中返回错误（原文案逐字保留）。
+/// （移动端历史组合语义由 crate 单点承载）；两向都未命中返回错误。
 pub fn peer_pause_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !ports.check_permission(plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
         return Err(denied());
@@ -358,15 +358,16 @@ pub fn peer_pause_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id
         crate::peer_engine_receive::pause_peer_receiving(ctx, batch_id),
     ))?;
     if !hit {
-        return Err("pause transfer: no running send batch with that id".to_string());
+        return Err("pause transfer: no running transfer with that id".to_string());
     }
     Ok(())
 }
 
-/// 恢复暂停的发送批：活跃会话写 Resume 帧续流；会话已中断的以句柄表记忆
+/// 恢复暂停的传输批：活跃发送会话写 Resume 帧续流；会话已中断的以句柄表记忆
 /// 的源清单重新拨号续传（v31：批量恢复编排归插件，resume-all-transfers
 /// 已退役）。**发送批未命中回落接收方向**（同 pause 的统一语义）；两向都
-/// 未命中返回错误（WIT 契约「无命中返回错误」，文案与移动历史版逐字一致）。
+/// 未命中返回错误（WIT 契约「无命中返回错误」）——文案不点方向：批 id 归属
+/// 哪张会话表由传输方向决定，此时四个方向都已排除。
 pub fn peer_resume_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_id: &str) -> Result<(), String> {
     if !ports.check_permission(plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
         return Err(denied());
@@ -384,7 +385,7 @@ pub fn peer_resume_transfer(ports: &Arc<dyn PeerPorts>, plugin_id: &str, batch_i
         crate::peer_engine_receive::resume_peer_receiving(ctx, batch_id),
     ))?;
     if !hit {
-        return Err("resume transfer: no paused send batch with that id".to_string());
+        return Err("resume transfer: no paused transfer with that id".to_string());
     }
     Ok(())
 }
