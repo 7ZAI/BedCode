@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { createNoiseFilter, parseDevProxyTarget } from '../../../scripts/lib/dev-log-filter.js'
+import { createNoiseFilter, parseDevProxyTarget, withYearPrefix } from '../../../scripts/lib/dev-log-filter.js'
 
 const DEV_URL = 'http://localhost:1423'
 
@@ -281,5 +281,32 @@ describe('createNoiseFilter noFilter', () => {
     ).toBe(false)
     expect(f.isNoise(logcat('BedCode', 'cranelift_codegen::machinst::compile: x'))).toBe(false)
     expect(f.isNoise(logcat('ActivityManager', 'Start proc com.bedcode.mobile'))).toBe(false)
+  })
+})
+
+describe('withYearPrefix', () => {
+  it('logcat 行补当前年_当时间戳是 MM-DD 形态', () => {
+    const line = '10-15 08:27:50.712 18937 19852 D BedCode : msg'
+    expect(withYearPrefix(line, 2026)).toBe('2026-10-15 08:27:50.712 18937 19852 D BedCode : msg')
+  })
+
+  it('已带年的 logcat 行（YYYY-MM-DD）不再重复补_回归保护', () => {
+    const line = '2026-10-15 08:27:50.712 18937 19852 D BedCode : msg'
+    // 非 MM-DD 开头 → 不匹配 LOGCAT_LINE，原样返回
+    expect(withYearPrefix(line, 2026)).toBe(line)
+  })
+
+  it('非 logcat 行（主机侧构建噪音）原样返回_不加年', () => {
+    expect(withYearPrefix('$ vite optimize && vite', 2026)).toBe('$ vite optimize && vite')
+    expect(withYearPrefix('[dev-run] adb reverse tcp:1423 已建立', 2026)).toBe(
+      '[dev-run] adb reverse tcp:1423 已建立',
+    )
+  })
+
+  it('缺省年份参数用当前年_行为可预期', () => {
+    const line = '12-31 23:59:59.999 1 2 I BedCode : x'
+    const prefixed = withYearPrefix(line)
+    const year = new Date().getFullYear()
+    expect(prefixed.startsWith(`${year}-12-31`)).toBe(true)
   })
 })

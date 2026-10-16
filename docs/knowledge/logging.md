@@ -48,5 +48,7 @@
 - token 只记长度不落明文（`token.length()` 模式）
 - 心跳/WS 日志克制：Pong 低频、无帧级日志
 - 前端 console relay 两端一致（16KB 截断 + 批量 + release 剥离）
+- 桌面文件层带线程 id：`with_thread_ids(true)`（`ThreadId(N)` 介于级别与 target 之间，text / json 两模式都有；并发 bug 按线程维度定位）
 - 移动端 dev 两级降噪：① 源头层 `system/logging.rs`（写 logcat 前丢弃 dev 服务代理回环连接 + wasmtime/cranelift·`mdns_sd` 内部 debug，保护设备环形缓冲）② 宿主脚本层 `scripts/lib/dev-log-filter.js`（控制台 / 落盘，按 `devUrl` host:port 匹配）；两级都保留连 LAN 对端的链路日志
+- 移动端 dev 落盘 logcat 行补年份前缀（`withYearPrefix`：`MM-DD HH:MM:SS` → `YYYY-MM-DD HH:MM:SS`，脚本本地年与文件日期线一致）；控制台保持原始形态
 - dev 落盘无 ANSI 可 grep

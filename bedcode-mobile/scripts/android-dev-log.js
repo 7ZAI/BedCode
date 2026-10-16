@@ -40,7 +40,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StringDecoder } from 'node:string_decoder'
 
-import { createNoiseFilter, isContinuation, parseDevProxyTarget } from './lib/dev-log-filter.js'
+import { createNoiseFilter, isContinuation, parseDevProxyTarget, withYearPrefix } from './lib/dev-log-filter.js'
 import { createLineRouter } from './lib/dev-log-router.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -138,7 +138,7 @@ function flushLine(row, fd) {
   }
   filterStats.kept += 1
   process[fd].write(row.raw + '\n') // 控制台（原文：保留颜色与 \r 覆盖）
-  stream.write(row.clean + '\n') // 落盘（纯文本）
+  stream.write(withYearPrefix(row.clean) + '\n') // 落盘（纯文本 + logcat 行补年份）
 }
 function flushPendingLines(fd) {
   const row = router.flush(fd)

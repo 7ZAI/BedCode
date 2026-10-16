@@ -25,6 +25,16 @@
  */
 const LOGCAT_LINE = /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\s+\d+\s+\d+\s+[VDIWEF]\s+/
 
+/**
+ * logcat 行补年份前缀（落盘用）：设备 logcat 时间戳是 `MM-DD HH:MM:SS.mmm`，
+ * 无年份；落盘文件按本地日期命名，跨年/归档后时间线断裂。本函数给 logcat 行
+ * 首加 `YYYY-`（年份 = 脚本本地年，与文件日期线一致）；非 logcat 行原样返回
+ * （主机侧构建噪音等无此格式，不应加）。仅用于落盘路径，控制台保持原始形态。
+ */
+export function withYearPrefix(line, year = new Date().getFullYear()) {
+  return LOGCAT_LINE.test(line) ? `${year}-${line}` : line
+}
+
 /** 从 logcat 行提取 tag；非 logcat 行返回 null（主机侧输出无 tag） */
 function logcatTag(line) {
   const m = LOGCAT_LINE.exec(line)
