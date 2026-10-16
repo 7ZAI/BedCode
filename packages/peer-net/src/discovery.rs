@@ -5,19 +5,37 @@
 //!
 //! 服务类型 `_bedcode-peer._tcp.local.` 与旧 `_bedcode._tcp.local.` 刻意错开：
 //! 两套发现靠**服务类型**隔离，彼此不会收到对方的 browse 结果。但它们**不是**
-//! 各自独立的守护进程——本模块的浏览侧（[`spawn_peer_mdns_daemon`]）已收敛到宿主
-//! 的**全局共享守护**（mDNS 基础能力服务收敛，spec v2 / ticket 04）：守护句柄由
-//! 宿主壳经 `MdnsPort` 端口层**注入**本函数，本模块不再自建 `ServiceDaemon`
-//! （端口 trait 定义见 `bedcode-server-base` 的 `MdnsPort`）。因此「多实例共存」
-//! 不是本模块可依赖的性质：新增发现服务必须走同一个共享守护，否则会出现两个守护
-//! 争抢同一组播端口。本模块不触碰旧链路与 file_service announce（冻结区）。
+//! 各自独立的守护进程——mDNS 基础能力服务收敛（spec v2 / ticket 04）后，守护句柄
+//! 由宿主壳经 `MdnsPort` 端口层**注入**本模块（[`spawn_peer_mdns_daemon`] 的
+//! `daemon` 参数），本模块不再自建 `ServiceDaemon`（端口 trait 定义见
+//! `bedcode-server-base` 的 `MdnsPort`）。因此「多实例共存」不是本模块可依赖的
+//! 性质：新增发现服务必须走同一个共享守护，否则会出现两个守护争抢同一组播端口。
+//! 本模块不触碰旧链路与 file_service announce（冻结区）。
 //!
-//! 另：[`spawn_peer_mdns_advertiser`]（仅广告、无浏览）曾是本模块内**仍自建**
+//! ## 浏览面走类型中枢订阅（ADR 0054）
+//!
+//! mdns-sd 对每个服务类型只保留**一个** listener，重复 `browse` 会静默覆盖前一个
+//! （旧 listener 既不收事件也不断开），因此同进程内多方各自 `daemon.browse` 必然
+//! 互相杀死事件流。「全进程同类型只允许一次 browse / stop_browse」的机制收敛在
+//! 宿主发现引擎的**类型中枢**里，本模块据此改造：
+//!
+//! - 浏览面收宿主注入的值形态 [`PeerMdnsBrowse`]（fan-out receiver + 退订守卫 +
+//!   重查闭包）：本模块**不再** `daemon.browse` / `stop_browse`，也不再自建
+//!   receiver 换绑机器；退订随句柄释放（守卫 Drop ⇒ 中枢移除发送端 ⇒ 通道断开）
+//!   即完成，事件循环据此退出；
+//! - 重查（30s 周期 + 即时刷新）只经 [`DiscoveryDaemon::request_requery`]（转调
+//!   闭包）请求中枢统一执行：中枢重发唯一 browse + 缓存重放 fan-out 给全部订阅者，
+//!   节奏仍由本模块掌握（业务节奏属消费方，机制归中枢）；
+//! - 广播面（register / unregister / 周期 re-announce）不受影响，仍用注入的
+//!   `daemon`。
+//!
+//! 另：`spawn_peer_mdns_advertiser`（仅广告、无浏览）曾是本模块内**仍自建**
 //! `ServiceDaemon` 的那一个，且无生产调用方——已随双端共享 lib spec M4（2026-10-09）
 //! 删除：广告面由宿主自播（owner=host）/ 插件 `host-mdns` advertise 覆盖。
 //! ## 「同一通路」注入缝（issue 03 核心验收点）
 //!
-//! mDNS 守护回调与单测喂入统一收敛到 [`DiscoveryCache::observe`]：守护任务在
+//! mDNS 事件（经中枢 fan-out 的浏览订阅）与单测喂入统一收敛到
+//! [`DiscoveryCache::observe`]：守护任务在
 //! `ServiceResolved` 时构造 [`DiscoveredPeerRecord`] 后调用 `observe()`，单测以
 //! 完全相同的调用形态注入手工记录——不存在守护专属的第二条插入路径。
 //! 产物经 [`DiscoveredPeerRecord::to_static_peer_record`] 即可直接拨号。
@@ -35,6 +53,7 @@
 //! crate 层保持平台无关：MulticastLock 是 Android 宿主职责，由移动端在启动
 //! 守护前经 Kotlin 插件 acquire；本模块不做平台开关。
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -364,23 +383,26 @@ pub struct DiscoveryConfig {
 ///
 /// 由 [`spawn_peer_mdns_daemon`] 产出；drop 句柄**不会**停止守护（任务已移交
 /// 运行时），显式关停必须调用 [`DiscoveryDaemon::stop`]（Graceful Shutdown
-/// 架构决策：退订浏览 → 注销广播 → join 事件循环；共享守护归 MdnsService，
+/// 架构决策：退订浏览订阅 → 注销广播 → join 事件循环；共享守护归 MdnsService，
 /// 本句柄不 shutdown——见 stop() 文档）。
 pub struct DiscoveryDaemon {
     /// 底层 mdns-sd 守护句柄；stop 中 take 掉，drop 最终触发守护线程退出
     daemon: Option<ServiceDaemon>,
     /// 自身服务的完整实例名（注销必需：unregister 按全名寻址）
     fullname: String,
-    /// 事件循环停机标志（stop_browse 失败时的兜底退出通道）
+    /// 事件循环停机标志（退订未即时生效时的兜底退出通道）
     shutdown_tx: watch::Sender<bool>,
     /// 事件循环任务句柄（join 用）
     event_task: Option<tokio::task::JoinHandle<()>>,
     /// 周期 re-announce 任务句柄（join 用）
     reannounce_task: Option<tokio::task::JoinHandle<()>>,
-    /// 即时重查请求通道（宿主手动刷新触发，不等下一个周期 tick）
-    requery_tx: tokio::sync::mpsc::Sender<()>,
     /// 周期 requery 任务句柄（join 用）
     requery_task: Option<tokio::task::JoinHandle<()>>,
+    /// 浏览订阅退订守卫：本模块**不解释**其内容（中枢实现细节），只在句柄存续期
+    /// 持有、在 [`DiscoveryDaemon::stop`] 中释放——释放即退订（事件循环随之断连）
+    browse_guard: Option<Box<dyn Any + Send + Sync>>,
+    /// 中枢类型级重查闭包（即时刷新转调它；周期任务持同一闭包的克隆）
+    request_requery: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl std::fmt::Debug for DiscoveryDaemon {
@@ -397,28 +419,28 @@ impl DiscoveryDaemon {
         &self.fullname
     }
 
-    /// 优雅关停：退订浏览 → 注销广播（让对端即时移除本机）→ join
+    /// 优雅关停：退订浏览订阅 → 注销广播（让对端即时移除本机）→ join
     ///
     /// 共享守护收敛后（spec v2 / ticket 04）守护线程归 MdnsService 所有，
-    /// 本句柄**不** shutdown 共享 daemon——只退订自己的浏览、注销自己的
+    /// 本句柄**不** shutdown 共享 daemon——只退订自己的浏览订阅、注销自己的
     /// 广播，其余插件浏览/广播不受影响。
     ///
     /// 清理中途遇到的首个错误会延迟到最后返回：半关闭状态下泄漏一个 mDNS
     /// 守护线程比返回部分错误更难排查，剩余清理步骤必须继续执行完。
     pub async fn stop(mut self) -> Result<()> {
-        // ① 请求事件循环退出：正常路径由 ② stop_browse 断开 channel 触发；
-        //    此标志保证 stop_browse 失败时循环仍能在至多一个 SWEEP_INTERVAL 内收尾
+        // ① 请求事件循环退出：正常路径由 ② 释放订阅守卫（通道断开）触发；
+        //    此标志保证退订未即时生效时循环仍能在至多一个 SWEEP_INTERVAL 内收尾
         if self.shutdown_tx.send(true).is_err() {
             tracing::debug!("peer discovery event loop already exited before stop");
         }
 
         let mut first_err: Option<PeerNetError> = None;
+        // ② 释放浏览订阅守卫：中枢据 Drop 退订本订阅者 → fan-out 发送端移除 →
+        //    通道关闭 → 事件循环的 recv_async 断连退出（与旧 stop_browse 断联同形）。
+        //    只释放本订阅者，同类型的其他订阅者（插件 host-mdns）不受影响
+        drop(self.browse_guard.take());
         // 共享守护克隆（不 shutdown；drop 后仅释放本句柄对 daemon 的引用）
         if let Some(daemon) = self.daemon.take() {
-            // ② 退订浏览：browse channel 发送端随订阅销毁，事件循环随即看到断连
-            if let Err(source) = daemon.stop_browse(SERVICE_TYPE) {
-                first_err.get_or_insert(PeerNetError::MdnsStopBrowse { source });
-            }
             // ③ 注销自身广播：对端收到 goodbye 即时移除本机（不等 TTL 过期）；
             //    NotFound 属幂等重入，视为成功
             match daemon.unregister(&self.fullname) {
@@ -472,24 +494,38 @@ impl DiscoveryDaemon {
         }
     }
 
-    /// 请求立即重查：重新 browse 触发查询突发 + 缓存重放（对端设备列表
-    /// 手动刷新用，不等下一个 [`REQUERY_INTERVAL`] 周期）。
-    /// 同步 try_send（通道满即丢弃）：调用方可能持宿主状态锁，禁止 await
+    /// 请求立即重查：转调中枢重查闭包（对端设备列表手动刷新用，不等下一个
+    /// [`REQUERY_INTERVAL`] 周期）。
+    ///
+    /// 重查机制（重发唯一 browse + receiver 缓存重放 + 广播给全部订阅者）归类型
+    /// 中枢，本模块只投递请求；闭包必须是非阻塞同步调用（中枢内部按合并窗吞并
+    /// 突发请求）——调用方可能持宿主状态锁，禁止在此 await
     pub fn request_requery(&self) {
-        if let Err(e) = self.requery_tx.try_send(()) {
-            tracing::debug!("peer mDNS requery request dropped: {e}");
-        }
+        (self.request_requery)();
     }
 }
 
-/// 启动对等网络 mDNS 发现守护：注册自身广播 + 浏览他人 + 事件循环入缓存
+/// 宿主注入的浏览订阅（纯值形态）：类型中枢 fan-out 的接收端 + 退订守卫 + 重查闭包
 ///
-/// 必须在 tokio 运行时上下文中调用（内部 spawn 依赖 Handle::current）：生产侧
-/// 为宿主异步环境，测试侧为 `#[tokio::test]`。节点必须已通过
-/// [`PeerNetNode::with_discovery`] 挂载缓存——守护回调与外部喂入共用该实例。
+/// 三字段同源同生命周期，必须整份移交（不存在「只要 receiver 或只要守卫」的用法）：
+/// - `receiver`：中枢 fan-out 的事件通道（flume，容量由中枢定），移交事件循环消费；
+/// - `guard`：退订守卫。本模块**不解释**其内容（中枢实现细节，可能含 receiver 的
+///   发送端、订阅 id 等），只随 [`DiscoveryDaemon`] 生命周期持有，
+///   [`DiscoveryDaemon::stop`] 中释放——释放即退订（通道断开，事件循环退出）；
+/// - `request_requery`：绑到中枢 `request_type_requery(SERVICE_TYPE)` 的闭包，
+///   周期/即时重查都转调它（中枢按合并窗统一重发唯一 browse + 缓存重放 fan-out）。
 ///
-/// 广播端口取宿主移交 listener 的实际端口（`running`），广播地址走 addr_auto
-/// 由 mdns-sd 枚举本机全部接口（多网卡/IP 变化免手工维护）。
+/// 本模块据此**不再** `daemon.browse` / `stop_browse`：全进程同类型 browse 唯一性
+/// 由中枢保证（ADR 0054），peer-net 的旧「重查换绑 receiver」机制随之删除。
+pub struct PeerMdnsBrowse {
+    /// 中枢 fan-out 接收端（移交事件循环）
+    pub receiver: flume::Receiver<ServiceEvent>,
+    /// 退订守卫：持有期间订阅有效，Drop 即退订（本模块不解释其内容）
+    pub guard: Box<dyn Any + Send + Sync>,
+    /// 中枢类型级重查闭包（同步非阻塞：内部只投递控制消息）
+    pub request_requery: Arc<dyn Fn() + Send + Sync>,
+}
+
 /// 常见虚拟/回环网卡名片段（不区分大小写子串匹配）
 ///
 /// mDNS 多接口监听会在这些网卡上空等解析响应：Windows VMware/Hyper-V/WSL
@@ -526,11 +562,24 @@ pub fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
     }
 }
 
+/// 启动对等网络 mDNS 发现守护：注册自身广播 + 消费中枢浏览订阅 + 事件循环入缓存
+///
+/// 必须在 tokio 运行时上下文中调用（内部 spawn 依赖 Handle::current）：生产侧
+/// 为宿主异步环境，测试侧为 `#[tokio::test]`。节点必须已通过
+/// [`PeerNetNode::with_discovery`] 挂载缓存——守护回调与外部喂入共用该实例。
+///
+/// 广播端口取宿主移交 listener 的实际端口（`running`），广播地址走 addr_auto
+/// 由 mdns-sd 枚举本机全部接口（多网卡/IP 变化免手工维护）。
+///
+/// 浏览面由宿主壳铸造 [`PeerMdnsBrowse`]（中枢订阅）后注入：本函数**不**发起
+/// `daemon.browse`——subscribe 时中枢已建立该类型唯一浏览（新订阅者享中枢的
+/// 「加入触发后缘重查」缓存重放），本模块只消费 fan-out 事件。
 pub fn spawn_peer_mdns_daemon(
     node: &PeerNetNode,
     running: &RunningNode,
     config: DiscoveryConfig,
     daemon: ServiceDaemon,
+    browse: PeerMdnsBrowse,
 ) -> Result<DiscoveryDaemon> {
     let own_node_id = node.node_id().clone();
     let short = own_node_id.short_fingerprint();
@@ -541,8 +590,15 @@ pub fn spawn_peer_mdns_daemon(
 
     let cache = node.discovery().ok_or(PeerNetError::DiscoveryNotAttached)?;
 
+    // 浏览订阅三字段同一生命周期：receiver 给事件循环，守卫与闭包留本句柄
+    let PeerMdnsBrowse {
+        receiver,
+        guard,
+        request_requery,
+    } = browse;
+
     // mDNS 基础能力服务收敛（spec v2 / ticket 04）：不再自建 ServiceDaemon，
-    // 使用宿主 MdnsService 的全局共享守护（register / browse / cache 逻辑不动）；
+    // 使用宿主 MdnsService 的全局共享守护（register / re-announce 广播面不动）；
     // disable_virtual_interfaces 由 MdnsService 初始化执行一次，此处不重复
     let properties = encode_txt_properties(
         &own_node_id,
@@ -565,20 +621,13 @@ pub fn spawn_peer_mdns_daemon(
     daemon
         .register(service_info.clone())
         .map_err(|source| PeerNetError::MdnsRegister { source })?;
-    let receiver = daemon
-        .browse(SERVICE_TYPE)
-        .map_err(|source| PeerNetError::MdnsBrowse { source })?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    // 重查换绑通道：周期/即时 requery 把新 browse receiver 移交事件循环
-    let (swap_tx, swap_rx) = tokio::sync::mpsc::channel::<mdns_sd::Receiver<ServiceEvent>>(4);
-    let (requery_tx, requery_rx) = tokio::sync::mpsc::channel::<()>(8);
     let event_task = tokio::spawn(run_discovery_loop(
         receiver,
         cache,
         own_node_id,
         shutdown_rx.clone(),
-        swap_rx,
     ));
     // 周期 re-announce：mdns-sd 注册后不主动周期广播，须手动续期（见常量注释）
     let reannounce_task = tokio::spawn(run_reannounce_loop(
@@ -586,18 +635,17 @@ pub fn spawn_peer_mdns_daemon(
         service_info,
         shutdown_rx.clone(),
     ));
-    // 周期主动重查：被动 announce 真机环境不可靠，查询→应答是唯一稳定刷新路径
+    // 周期主动重查：被动 announce 真机环境不可靠，查询→应答是唯一稳定刷新路径；
+    // 重查本身由中枢统一执行，本任务只按节奏转调闭包（同一个闭包即时刷新也用）
     let requery_task = tokio::spawn(run_requery_loop(
-        daemon.clone(),
-        requery_rx,
-        swap_tx,
+        Arc::clone(&request_requery),
         shutdown_rx,
     ));
     tracing::info!(
         service = %fullname,
         port = listen_port,
         device = %config.device_name,
-        "peer mDNS discovery daemon started (shared daemon)"
+        "peer mDNS discovery daemon started (shared daemon, type-hub subscription)"
     );
     Ok(DiscoveryDaemon {
         daemon: Some(daemon),
@@ -605,8 +653,9 @@ pub fn spawn_peer_mdns_daemon(
         shutdown_tx,
         event_task: Some(event_task),
         reannounce_task: Some(reannounce_task),
-        requery_tx,
         requery_task: Some(requery_task),
+        browse_guard: Some(guard),
+        request_requery,
     })
 }
 
@@ -650,22 +699,23 @@ async fn run_reannounce_loop(
     tracing::debug!("peer mDNS re-announce loop exited");
 }
 
-/// 守护事件循环：三相事件处理 + 周期性过期清扫
+/// 守护事件循环：消费中枢 fan-out 事件 + 周期性过期清扫
 ///
-/// 退出条件（任一）：① `stop_browse` 断开 channel；② 停机标志置位
-/// （stop_browse 失败时的兜底，最迟一个 SWEEP_INTERVAL 后生效）。
-/// 浏览 receiver 支持换绑（`swap_rx`）：周期重查任务重新 browse 时把新
-/// receiver 移交过来（mdns-sd 同类型重复 browse 覆盖内部 querier，旧
-/// receiver 随之失效）。
+/// 退出条件（任一）：① 中枢退订致通道断开（守卫释放路径：`recv_async` 返回
+/// Disconnected）；② 停机标志置位（退订未即时生效时的兜底，最迟一个
+/// SWEEP_INTERVAL 后生效）。
+///
+/// receiver 由宿主注入的中枢订阅移交（[`PeerMdnsBrowse::receiver`]），本模块不再
+/// 自己 browse、也没有 receiver 换绑——重查换绑与缓存重放都在中枢内部完成，事件
+/// 按订阅者 fan-out 过来（同类型其他订阅者各收一份，互不影响）。
 ///
 /// 事件只进引擎内部 DiscoveryCache（spec v2 D1：面向插件的全局发现桥接
 /// 已退役——插件改经 host-mdns 自建 browse 收定向事件）
 async fn run_discovery_loop(
-    mut receiver: mdns_sd::Receiver<ServiceEvent>,
+    receiver: flume::Receiver<ServiceEvent>,
     cache: Arc<DiscoveryCache>,
     own_node_id: NodeId,
     mut shutdown_rx: watch::Receiver<bool>,
-    mut swap_rx: tokio::sync::mpsc::Receiver<mdns_sd::Receiver<ServiceEvent>>,
 ) {
     let mut last_sweep = Instant::now();
     loop {
@@ -680,18 +730,6 @@ async fn run_discovery_loop(
                     break;
                 }
             }
-            new_receiver = swap_rx.recv() => {
-                match new_receiver {
-                    Some(rx) => {
-                        receiver = rx;
-                        tracing::debug!("peer mDNS browse receiver swapped (periodic requery)");
-                    }
-                    // requery 任务已退出（drop 了 swap_tx，仅停机路径）：事件
-                    // 循环同步退出——若继续运行，关闭的 channel 会令本分支在
-                    // 每次 select! 立即就绪，持续抢占事件消费
-                    None => break,
-                }
-            }
             // flume 0.12 无 recv_async_timeout：用 tokio 超时包裹 recv_async 同义实现
             event = tokio::time::timeout(SWEEP_INTERVAL, receiver.recv_async()) => {
                 match event {
@@ -704,7 +742,7 @@ async fn run_discovery_loop(
                             last_sweep = now;
                         }
                     }
-                    // 断连 = stop_browse 退订（守护停机路径）
+                    // 断连 = 中枢退订本订阅者（守卫释放 / 归属者退出）
                     Ok(Err(_recv_err)) => break,
                     // 超时 = 本周期无事件，正好执行周期性过期清扫
                     Err(_elapsed) => {
@@ -718,22 +756,21 @@ async fn run_discovery_loop(
     tracing::debug!("peer mDNS discovery event loop exited");
 }
 
-/// 周期主动重查任务：每 [`REQUERY_INTERVAL`] 重新 browse 一次服务类型
+/// 周期主动重查任务：每 [`REQUERY_INTERVAL`] 转调中枢重查闭包一次
 ///
-/// mdns-sd 对同类型重复 browse 会覆盖内部 querier（立即重发查询突发）并
-/// 重放内部缓存记录到新 receiver；新 receiver 经 `swap_tx` 移交事件循环
-/// 换绑。被动 announce 在真机 WiFi 环境不可靠（见 [`REQUERY_INTERVAL`]），
-/// 主动查询是唯一稳定的对端刷新路径。宿主可经 [`DiscoveryDaemon::
-/// request_requery`] 发起即时重查（设备列表手动刷新）。
+/// 被动 announce 在真机 WiFi 环境不可靠（见 [`REQUERY_INTERVAL`]），主动查询是
+/// 唯一稳定的对端刷新路径；重查机制（重发唯一 browse + receiver 换绑 + 缓存重放
+/// fan-out）全在类型中枢，本任务只负责节奏——业务节奏属消费方，机制归中枢。
+/// 宿主可经 [`DiscoveryDaemon::request_requery`] 发起即时重查（设备列表手动刷新），
+/// 与周期路径转调同一闭包，突发由中枢的合并窗吞并。
 async fn run_requery_loop(
-    daemon: ServiceDaemon,
-    mut requery_rx: tokio::sync::mpsc::Receiver<()>,
-    swap_tx: tokio::sync::mpsc::Sender<mdns_sd::Receiver<ServiceEvent>>,
+    request_requery: Arc<dyn Fn() + Send + Sync>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let mut interval = tokio::time::interval(REQUERY_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // 首个 tick 立即到期：跳过（spawn_peer_mdns_daemon 启动时已 browse 过一次）
+    // 首个 tick 立即到期：跳过（订阅建立时中枢已 browse 并触发缓存重放，
+    // 启动即重查属重复请求）
     interval.tick().await;
     loop {
         tokio::select! {
@@ -744,22 +781,13 @@ async fn run_requery_loop(
                     break;
                 }
             }
-            _ = requery_rx.recv() => {}
             _ = interval.tick() => {}
         }
         if *shutdown_rx.borrow() {
             break;
         }
-        match daemon.browse(SERVICE_TYPE) {
-            Ok(new_receiver) => {
-                if swap_tx.send(new_receiver).await.is_err() {
-                    // 事件循环已退出（停机中）：无消费方，退出
-                    break;
-                }
-                tracing::debug!("peer mDNS periodic requery issued");
-            }
-            Err(e) => tracing::warn!(error = %e, "peer mDNS periodic requery browse failed"),
-        }
+        (request_requery)();
+        tracing::debug!("peer mDNS periodic requery issued");
     }
     tracing::debug!("peer mDNS requery loop exited");
 }
@@ -1050,5 +1078,219 @@ mod tests {
         for key in ["node_id", "addr", "device_name", "protocol_version", "capabilities"] {
             assert!(obj.contains_key(key), "payload field {key} must serialize");
         }
+    }
+
+    // ---- 中枢订阅形态（ADR 0054：浏览面注入 + 事件循环 / 停机语义）----
+
+    /// 有界轮询等待异步条件成立（无固定 sleep；超时即失败并给出定位信息）
+    async fn wait_for(what: &str, cond: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cond() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// 中枢 fan-out 可注入的「对端已解析服务」事件（事件形状与 mdns-sd 投递一致：
+    /// `ServiceResolved` 内为 ResolvedService）
+    fn synthetic_resolved_event(node_id: &NodeId, ip: &str, port: u16) -> ServiceEvent {
+        let instance = format!("{INSTANCE_PREFIX}{}", node_id.short_fingerprint());
+        let properties = encode_txt_properties(
+            node_id,
+            "对端设备",
+            DISCOVERY_PROTOCOL_VERSION,
+            CAP_FILE_TRANSFER,
+        );
+        let info = ServiceInfo::new(
+            SERVICE_TYPE,
+            &instance,
+            &format!("{instance}.local."),
+            ip,
+            port,
+            properties,
+        )
+        .expect("synthetic service info builds");
+        ServiceEvent::ServiceResolved(Box::new(info.as_resolved_service()))
+    }
+
+    /// goodbye 事件（只带服务类型 + 全名的形状）
+    fn synthetic_removed_event(node_id: &NodeId) -> ServiceEvent {
+        ServiceEvent::ServiceRemoved(
+            SERVICE_TYPE.to_string(),
+            format!("{INSTANCE_PREFIX}{}.{SERVICE_TYPE}", node_id.short_fingerprint()),
+        )
+    }
+
+    /// 单测夹具：不带真实守护 / 后台任务的空句柄，字段由各用例按需补齐
+    /// （真实守护只经 [`spawn_peer_mdns_daemon`]，单测一律不触网）
+    fn daemon_fixture() -> DiscoveryDaemon {
+        let (shutdown_tx, _) = watch::channel(false);
+        DiscoveryDaemon {
+            daemon: None,
+            fullname: format!("{INSTANCE_PREFIX}00000000.{SERVICE_TYPE}"),
+            shutdown_tx,
+            event_task: None,
+            reannounce_task: None,
+            requery_task: None,
+            browse_guard: None,
+            request_requery: Arc::new(|| {}),
+        }
+    }
+
+    /// 退订探针：模拟中枢订阅守卫（Drop = 退订，同时释放内部持有的发送端）
+    struct SubscriptionProbe {
+        /// 持有 fan-out 发送端：守卫存活期间通道不断开（与中枢行为同形）
+        _tx: flume::Sender<ServiceEvent>,
+        releases: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Drop for SubscriptionProbe {
+        fn drop(&mut self) {
+            self.releases
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// 契约：`request_requery` 每次调用都转调注入的中枢重查闭包
+    /// （合并窗吞并突发请求是中枢职责，peer-net 侧不得自行节流或丢弃）
+    #[test]
+    fn request_requery_forwards_every_call_to_hub_closure() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let mut daemon = daemon_fixture();
+        daemon.request_requery = Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        daemon.request_requery();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "即时重查必须转调中枢闭包"
+        );
+        daemon.request_requery();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "连续请求逐次转调（不自行吞并）"
+        );
+    }
+
+    /// 契约：事件循环消费宿主注入的中枢 fan-out 事件——自播过滤、goodbye 即时移除、
+    /// 通道断开（= 中枢退订）即退出
+    ///
+    /// 多线程运行时：事件循环在独立 worker 上跑，断言侧的超时/轮询永远不会被
+    /// 「循环空转不 yield」这类回归拖成悬挂（回归表现为确定的超时失败）
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn event_loop_consumes_hub_fanin_events_and_exits_on_disconnect() {
+        let cache = Arc::new(DiscoveryCache::new());
+        let own = test_node_id(0x10);
+        let peer = test_node_id(0x20);
+
+        let (tx, rx) = flume::bounded::<ServiceEvent>(8);
+        // 停机通道全程存活（Sender 一旦 drop，事件循环会视为停机立即退出）
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let loop_task = tokio::spawn(run_discovery_loop(
+            rx,
+            Arc::clone(&cache),
+            own.clone(),
+            shutdown_rx,
+        ));
+
+        // ① 自播回显与对端事件同走一条 FIFO 通道：等到对端记录出现，即可断定
+        //    自播那条已被处理并过滤（无需 sleep）
+        tx.send(synthetic_resolved_event(&own, "192.168.1.9", 40000))
+            .expect("send self-broadcast event");
+        tx.send(synthetic_resolved_event(&peer, "192.168.1.20", 40001))
+            .expect("send peer event");
+        wait_for("peer record cached", || cache.list().len() == 1).await;
+        let cached = cache.list();
+        assert_eq!(cached[0].node_id, peer, "自播回显不得入缓存");
+        assert_eq!(cached[0].device_name, "对端设备");
+        assert_eq!(
+            cached[0].addr,
+            "192.168.1.20:40001".parse::<SocketAddr>().expect("addr")
+        );
+
+        // ② goodbye：经同一 fan-out 通道抵达 → 缓存即时移除（不等 TTL 清扫）
+        tx.send(synthetic_removed_event(&peer))
+            .expect("send goodbye event");
+        wait_for("peer record removed", || cache.list().is_empty()).await;
+
+        // ③ 通道断开（守卫释放 / 中枢停机）⇒ 事件循环退出，无需停机标志
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(5), loop_task)
+            .await
+            .expect("event loop must exit when subscription channel disconnects")
+            .expect("event loop must not panic");
+        drop(shutdown_tx);
+    }
+
+    /// 契约：停机标志（退订未即时生效时的兜底通道）能立即终止事件循环
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn event_loop_exits_on_shutdown_flag() {
+        let cache = Arc::new(DiscoveryCache::new());
+        let (_tx, rx) = flume::bounded::<ServiceEvent>(4);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let loop_task = tokio::spawn(run_discovery_loop(
+            rx,
+            cache,
+            test_node_id(0x11),
+            shutdown_rx,
+        ));
+
+        shutdown_tx.send(true).expect("receiver alive");
+        // 4s < SWEEP_INTERVAL(5s)：正确实现立即（微秒级）退出，而「丢掉停机分支」
+        // 的变异只能靠兜底超时脱离，必超 4s → 必红
+        tokio::time::timeout(Duration::from_secs(4), loop_task)
+            .await
+            .expect("event loop must exit on shutdown flag")
+            .expect("event loop must not panic");
+    }
+
+    /// 契约：订阅守卫随句柄生命周期——`stop()` 释放守卫恰一次（释放即退订），
+    /// 并在同一调用内 join 掉事件循环（不悬挂、不重复释放）
+    #[tokio::test]
+    async fn stop_releases_subscription_guard_once_and_joins_event_loop() {
+        let releases = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cache = Arc::new(DiscoveryCache::new());
+        let (tx, rx) = flume::bounded::<ServiceEvent>(4);
+        // 探针：本测试另持一个发送端克隆，事件循环退出（receiver 释放）后即断连
+        let probe_tx = tx.clone();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let event_task = tokio::spawn(run_discovery_loop(
+            rx,
+            cache,
+            test_node_id(0x30),
+            shutdown_rx,
+        ));
+
+        let mut daemon = daemon_fixture();
+        daemon.browse_guard = Some(Box::new(SubscriptionProbe {
+            _tx: tx,
+            releases: Arc::clone(&releases),
+        }));
+        daemon.shutdown_tx = shutdown_tx;
+        daemon.event_task = Some(event_task);
+
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "守卫在句柄存续期保持持有（订阅未提前释放）"
+        );
+        tokio::time::timeout(Duration::from_secs(5), daemon.stop())
+            .await
+            .expect("stop must not hang on event loop join")
+            .expect("stop succeeds without a shared-daemon handle");
+        assert_eq!(
+            releases.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "守卫在 stop 中释放恰一次（无二次释放）"
+        );
+        // stop 返回时事件循环必须已被 join：receiver 随之释放，探针发送端断连
+        assert!(
+            probe_tx.is_disconnected(),
+            "stop 必须 join 掉事件循环（receiver 已释放）"
+        );
     }
 }
