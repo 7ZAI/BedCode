@@ -20,6 +20,11 @@
 #
 # 用法：scripts/refresh-tauri-plugin-permissions.sh [--dry-run] <app 目录>
 #   <app 目录> 含 Cargo.toml 的应用目录（如 bedcode-desktop/src-tauri、cross-end-tests）
+#
+# 注意：本脚本只做「清理」，**绝不解析/改写依赖**——所有 cargo 调用带 `--locked`。
+# 不带 `--locked` 时，缓存恢复后 cargo 会重建索引并重解析（CI 实测：`cargo tree` 把
+# lock 里的 `tauri` 2.11.1 升到 2.12.4），而 JS 侧 `@tauri-apps/*` 由 pnpm lock 固定在
+# 2.11.x → tauri-cli 的「Rust crate ↔ JS 包 版本一致性」检查直接把构建卡死。
 set -euo pipefail
 
 dry_run=0
@@ -39,10 +44,13 @@ if [ ! -f "$app_dir/Cargo.toml" ]; then
 fi
 cd "$app_dir"
 
+# 只读守护：本步骤只允许删产物，不得碰 Cargo.lock（见头部注释）。
+lock_before="$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || true)"
+
 # 取**当前平台/feature 实际依赖图**里的插件（不是 lock 全量：平台专属插件不在图里时
 # `cargo clean -p` 会报 "did not match any packages"）。用 name@version 规格避免同名多版本歧义。
 mapfile -t specs < <(
-  cargo tree --prefix none 2>/dev/null |
+  cargo tree --locked --prefix none 2>/dev/null |
     awk '/^tauri-plugin-/ {print $1 "@" substr($2, 2)}' |
     sort -u
 )
@@ -54,9 +62,17 @@ fi
 
 for spec in "${specs[@]}"; do
   if [ "$dry_run" = "1" ]; then
-    echo "cargo clean -p $spec"
+    echo "cargo clean --locked -p $spec"
   else
-    cargo clean -p "$spec"
+    cargo clean --locked -p "$spec"
   fi
 done
+
+if [ "$dry_run" != "1" ]; then
+  lock_after="$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ "$lock_before" != "$lock_after" ]; then
+    echo "[refresh-tauri-plugin-permissions] ::error::Cargo.lock 被本步骤改写了（本步骤只应清理产物）；请确认 cargo 调用带 --locked" >&2
+    exit 1
+  fi
+fi
 echo "[refresh-tauri-plugin-permissions] $app_dir：已刷新 ${#specs[@]} 个插件包（${specs[*]}）"

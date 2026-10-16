@@ -506,6 +506,10 @@ jobs:
       - name: Vitest (desktop)
         working-directory: bedcode-desktop
         run: pnpm run test:run
+        env:
+          # 桌面套件（含 wasm 应用）峰值堆已贴默认 4GB 上限：同一提交前一轮通过、
+          # 下一轮就报 "JavaScript heap out of memory"（2026-10-17 CI 实测）→ 显式抬高。
+          NODE_OPTIONS: --max-old-space-size=6144
 
   frontend-mobile:
     runs-on: ubuntu-latest
@@ -556,3 +560,6 @@ jobs:
       - name: Vitest (mobile)
         working-directory: bedcode-mobile
         run: pnpm run test:run
+        env:
+          # 同 desktop：套件含全部 wasm 应用用例，抬高堆上限防同因 OOM
+          NODE_OPTIONS: --max-old-space-size=6144
