@@ -203,6 +203,12 @@ base64 -d <<< "$ANDROID_KEY_BASE64" | file -
 > （`packages/plugin-sdk-{desktop,mobile}`）：wasm 应用测试 import SDK 包入口（`main` → `dist/index.js`），
 > 而 `dist/` 不入库——不先构建就只有 CI 会红（本地因遗留 dist 在场而假绿）。同理，
 > `package-sdks` 需先装 mobile SDK dev-shell 的依赖（独立 workspace），否则其单测报找不到 `vue-i18n`。
+>
+> 编 tauri 宿主（含 `cross-end-tests`）的 job 都先跑
+> `scripts/refresh-tauri-plugin-permissions.sh <app 目录>`：插件权限清单经 `DEP_*`／build script 产物
+> 交给宿主 `tauri-build`，而 rust-cache 恢复后插件 build script 可能是 fresh（不重跑）、
+> `registry/src` 又是重新解包的——不刷新就会报「Permission `wdio:default` not found」（Windows）
+> 或「failed to read plugin permissions ... `disable.toml`」（移动）。脚本头部有完整成因。
 
 ### release.yml 的 job 图
 
