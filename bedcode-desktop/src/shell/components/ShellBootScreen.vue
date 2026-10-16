@@ -6,17 +6,24 @@
         class="fixed inset-0 z-[100] bg-page flex flex-col items-center justify-center gap-4"
         @click="state.boot.value = false"
       >
-        <span class="glyph">
-          <svg width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
-            <g stroke="currentColor" stroke-width="13" stroke-linecap="round" fill="none">
-              <line x1="23.2" y1="33" x2="36.8" y2="67" />
-              <line x1="39.3" y1="67.1" x2="48.7" y2="46.9" />
-              <line x1="51.3" y1="46.9" x2="60.7" y2="67.1" />
-              <line x1="63.2" y1="67" x2="76.8" y2="33" />
-            </g>
-            <path d="M50 36.5 L56.5 43 L50 49.5 L43.5 43 Z" fill="#FF9E2C" />
-          </svg>
-        </span>
+        <!-- 品牌标志：与应用图标（src-tauri/icons/icon.svg）逐字同源——暖炭斜向渐变底
+             + 白色 `>` 提示符 + 光标横线（旧标志是四笔画 W + 琥珀菱形，已退役）。
+             底与图形都走品牌层固定色，不跟主题反转为浅底白字。 -->
+        <svg
+          class="boot-logo [--logo-bg-start:#2E2A22] [--logo-bg-end:#0A0907] [--logo-fg:#FFFFFF] dark:[--logo-bg-start:#FAF9F7] dark:[--logo-bg-end:#E7E4DC] dark:[--logo-fg:#1C1917]"
+          viewBox="0 0 100 100"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id="boot-logo-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="var(--logo-bg-start)" />
+              <stop offset="100%" stop-color="var(--logo-bg-end)" />
+            </linearGradient>
+          </defs>
+          <rect width="100" height="100" rx="18" fill="url(#boot-logo-bg)" />
+          <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" fill="var(--logo-fg)" />
+          <path d="M 51 60 L 84 62 L 53 65 Z" fill="var(--logo-fg)" />
+        </svg>
         <div class="line">{{ t('shell.boot.line') }}</div>
         <div class="bar"><i :style="{ width: progress + '%' }"></i></div>
         <div class="log">
@@ -138,15 +145,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.glyph {
+/* 启动屏品牌标志：尺寸与图标的满幅圆角方一致（图标底板 rx=18 / 100 网格 = 18%），
+   底与图形由 SVG 自绘（品牌固定色），不再用主题色的 .glyph 底板包一层 */
+.boot-logo {
   width: 52px;
   height: 52px;
-  border-radius: var(--radius-app-icon);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
+  flex-shrink: 0;
 }
 .line {
   font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace);
