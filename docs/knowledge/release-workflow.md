@@ -94,7 +94,7 @@ git push origin master --tags
 - **build-android**: ~15-25 分钟（APK）
 - **package-plugins**: 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（独立 job，与平台构建并行）
 - **package-sdks**: 构建两端插件 SDK（TS 前端 + Rust crate）并打包 npm tarball / crates.io 产物（独立 job，与平台构建并行）
-- **finalize-release**: 收尾（同步双语 release body + 校验 `latest.json` 已上传）
+- **finalize-release**: 收尾（先定位本次发布的 draft release 并把占位 tag 归一到 `v<版本>`——首次推 tag 时 draft 可能被记成 `untagged-<hash>`，不归一会让后续按 tag 查找全部落空；之后同步双语 release body、校验 `latest.json` 已上传。定位到的 release id 经 job output 交给 publish-release，避免它按 tag 重新查找时另建一个没有产物的 release）
 
 ### 4. 审核并发布 Release
 
