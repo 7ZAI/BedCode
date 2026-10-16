@@ -26,7 +26,10 @@
 //!   `expect_host_module!` 与自报同处（漏一处即装载期 `missing` / `unlisted` 点名）。
 
 pub(crate) mod http;
-pub(crate) mod mdns;
+// mdns 对外可见（其余三域 pub(crate)）：宿主开机期要装一次**进程级**发现端口
+// （`mdns::register_process_ports`，类型中枢的泵任务经它派生），无头探针
+// （`tests/shared_artifact_probe`）也要走同一条生产装配入口
+pub mod mdns;
 pub(crate) mod peer;
 pub(crate) mod support;
 pub(crate) mod ws;

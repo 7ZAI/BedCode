@@ -13,10 +13,12 @@
 //! （本文件 `peer_ctx`：托管四状态 + 端口 + 平台缝）；**(c) 产品语义薄壳**
 //! （插件激活外壳 `FILE_TRANSFER_PLUGIN_ID` / 节点生命周期与引擎入口委托）。
 //!
-//! mDNS 复用：`MdnsPort`（`peer::ports`）直接接 `bedcode-discovery-engine::engine`
-//! 共享守护三函数（`shared_daemon` / `register_host_service` / `stop_host_service`）
-//! ——宿主零第二份 mDNS 代码；Android 多播锁随共享守护常驻（setup 的 init hook，
-//! 见 `lib.rs`）。
+//! mDNS 复用：`MdnsPort`（`peer::ports`）直接接 `bedcode-discovery-engine` 的
+//! 共享守护与类型中枢出口（`shared_daemon` / `register_host_service` /
+//! `stop_host_service` + `subscribe_type` / `request_type_requery`）——宿主零第二份
+//! mDNS 代码；浏览面经中枢（ADR 0054）：全进程同服务类型只允许一条 `daemon.browse`，
+//! peer-net 与插件 browse 订阅同一 fan-out。Android 多播锁随共享守护常驻（setup 的
+//! init hook，见 `lib.rs`）。
 //!
 //! 发现刷新订阅（`peer:discovery-refresh`）由能力域自持（
 //! `request_discovery_refresh`）；就绪判据经 `BusPort::is_ready` 下移到

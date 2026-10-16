@@ -12,7 +12,7 @@
 //! | [`EventSink`] | 前端事件 emit（连接态 / 首连确认） | `ServerPorts::event_sink` | `app.emit` |
 //! | [`PathsPort`] | 数据目录 + 下载目录解析 | `ServerPorts::paths` | app 数据目录 / 私有下载目录 |
 //! | [`SystemInfoPort`] | 节点广播设备名 | `ServerPorts::system_info` | 宿主 SystemInfo |
-//! | [`MdnsPort`] | mDNS 共享守护 + 宿主广播登记 | `ServerPorts::mdns` | `bedcode-discovery-engine::engine` 三函数 |
+//! | [`MdnsPort`] | mDNS 共享守护 + 宿主广播登记 + 浏览类型中枢订阅（`subscribe_type` / `request_type_requery`） | `ServerPorts::mdns` | `bedcode-discovery-engine::engine` 与 `type_hub` 出口 |
 //!
 //! **为什么不直接用 `ServerPorts`（12 端口全量）**：那是桌面 server 族的聚合面，
 //! 含 peer 引擎永不使用的端口（`plugin_invoker` / `auth_center` / `power` /
@@ -22,10 +22,11 @@
 //! `bedcode-server-base::ports`，不新造第二套。
 //!
 //! **mDNS 复用（用户指令「mdns 能力面尽量复用」）**：`mdns` 端口的实现方接
-//! `bedcode-discovery-engine` 的共享守护——桌面见 `server/ports_impl.rs` 的
-//! `HostMdnsPort`；移动端实现即 `engine::shared_daemon` /
-//! `engine::register_host_service` / `engine::stop_host_service` 三函数。
-//! 本 crate 自身零 mDNS 依赖（依赖方向锁保持，不引 discovery-engine）。
+//! `bedcode-discovery-engine` 的共享守护与类型中枢——桌面见
+//! `server/ports_impl.rs` 的 `HostMdnsPort`；移动端实现即 `engine::shared_daemon` /
+//! `engine::register_host_service` / `engine::stop_host_service` 三函数 + 中枢出口
+//! `subscribe_type` / `request_type_requery`。本 crate 自身零 mDNS 依赖
+//! （依赖方向锁保持，不引 discovery-engine）。
 
 use std::sync::Arc;
 

@@ -126,3 +126,15 @@ mdns_reannounce_interval}` 退役（守护真源移出端口层，端口不再�
 - ADR 0018（移动契约独立）：host-mdns 函数签名不变，仅 wire topic 对齐，不构成契约变更；
   移动端 fork crate 仍自持 `HostEnginePorts`（仅退役守护投影三方法）。
 - 本 ADR 不触发 ABI bump（host-mdns WIT 面零变化）。
+
+## 执行记录（后续收口）
+
+- **2026-10-16 · listener 级不变量由 ADR 0054 收口**：本 ADR 只完成**守护级**共享
+  （一个进程一个 `ServiceDaemon`）；mdns-sd 对每个服务类型只有**一个 listener 槽**
+  且重复 `browse` 是「后到覆盖先到」，共享守护因此把 peer-net 的周期重查与各插件
+  browse 放进同一槽，peer-net 每次重查静默杀死插件事件流（双端 file-transfer 互相
+  发现失败的根因）。ADR 0054 补齐 listener 级不变量：同类型 `daemon.browse` /
+  `stop_browse` 只由发现引擎的**类型中枢**代持，消费者改挂进程内 fan-out 订阅；
+  源码锁 `packages/bedcode-discovery-engine/src/mdns_browse_singleton_lock.rs` 与
+  `packages/bedcode-server-peer-net/src/dependency_direction_lock.rs` 钉死该不变量。
+  本 ADR 的 D1–D7 决策与守护唯一创建点口径**维持不变**。

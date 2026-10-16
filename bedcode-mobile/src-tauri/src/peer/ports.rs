@@ -15,7 +15,9 @@ use std::sync::OnceLock;
 use async_trait::async_trait;
 use tauri::{AppHandle, Emitter};
 
-use bedcode_server_base::ports::{BusMessageHandler, BusPort, EventSink, MdnsPort, PathsPort, SystemInfoPort};
+use bedcode_server_base::ports::{
+    BusMessageHandler, BusPort, EventSink, MdnsPort, MdnsTypeSubscription, PathsPort, SystemInfoPort,
+};
 
 use super::net::app_data_dir;
 
@@ -219,7 +221,13 @@ impl SystemInfoPort for MobileSystemInfoPort {
 }
 
 /// mDNS 端口：共享守护 + 宿主身份广播登记——**直接复用** `bedcode-discovery-engine`
-/// 引擎三函数（与桌面 `HostMdnsPort` 同源实现，零第二份 mDNS 代码）
+/// 引擎函数（与桌面 `HostMdnsPort` 同源实现，零第二份 mDNS 代码）
+///
+/// **浏览面归类型中枢**（ADR 0054 / 票 04）：`subscribe_type` /
+/// `request_type_requery` 直转引擎的类型中枢出口——全进程对该服务类型的
+/// `daemon.browse` 只由中枢发起（peer-net 的重查不再覆盖插件 browse 的 listener）。
+/// 两个值形态（引擎 `MdnsBrowseSubscription` / 端口 `MdnsTypeSubscription`）只在
+/// 这里转换，receiver 与退订守卫**整份移交**（`into_parts`），不得分家。
 pub(crate) struct MobileMdnsPort;
 
 impl MdnsPort for MobileMdnsPort {
@@ -233,5 +241,15 @@ impl MdnsPort for MobileMdnsPort {
 
     fn stop_host_service(&self, advertise_id: &str) -> std::result::Result<bool, String> {
         bedcode_discovery_engine::engine::stop_host_service(advertise_id)
+    }
+
+    fn subscribe_type(&self, service_type: &str) -> std::result::Result<MdnsTypeSubscription, String> {
+        let subscription = bedcode_discovery_engine::subscribe_type(service_type)?;
+        let (receiver, guard) = subscription.into_parts();
+        Ok(MdnsTypeSubscription::new(receiver, guard))
+    }
+
+    fn request_type_requery(&self, service_type: &str) {
+        bedcode_discovery_engine::request_type_requery(service_type);
     }
 }

@@ -8,6 +8,8 @@
 //!
 //! ```text
 //!   engine.rs      机制：共享守护 + 浏览/广播双句柄表（零宿主依赖）
+//!   type_hub.rs    机制：类型中枢（每服务类型唯一 daemon 浏览 + 进程内 fan-out +
+//!                  统一重查合并窗；engine 的 browse 挂它，见模块头「为什么需要它」）
 //!   advertiser.rs  机制：宿主自播面（`MdnsAdvertiser`；登记/停播走 engine 共享守护，
 //!                   owner=host，与插件 advertise / peer-net 身份同守护）
 //!   types.rs       契约：`SERVICE_TYPE` 常量 + `AdvertiseConfig` + `AdvertiserError`（自持错误，不反向依赖宿主）
@@ -39,6 +41,9 @@ pub mod engine;
 pub mod ports;
 /// 能力路由词汇自持（票 02 批次 03：能力名 / 方法族前缀 / 提供者导出表；内核零字面量）
 pub mod routing;
+/// 类型中枢：全进程对同一服务类型只保留一条 `daemon.browse`（单 listener 槽不变量，
+/// ADR 0054）。出口 [`subscribe_type`] / [`request_type_requery`]
+pub mod type_hub;
 /// wire 契约词汇自持副本（能力域脱绑 P2：发现事件名 / topic 命名规则，
 /// 与桌面 SDK 原版逐字一致由 `wire::drift_lock` 钉死）
 pub mod wire;
@@ -52,6 +57,18 @@ pub mod types;
 
 pub use advertiser::MdnsAdvertiser;
 pub use ports::{install_ports, DiscoveryPorts, DiscoveryTask};
+/// 类型中枢出口（宿主 glue：`subscribe_type` 的值经 `MdnsBrowseSubscription::into_parts`
+/// 转成端口侧 `MdnsTypeSubscription`；见 `bedcode-server-base::ports`）
+pub use type_hub::{
+    request_type_requery, subscribe_type, MdnsBrowseSubscription, TaskSpawner, TypeDaemon,
+    TypeHubSet,
+};
+
+/// mDNS 浏览单例源码锁（票 05）：全进程对同一服务类型只允许类型中枢调
+/// `daemon.browse` / `stop_browse`，守护实例只允许 `engine` 创建一次——扫描
+/// `packages/**/src` + 双端 `src-tauri/src` 钉死这两条不变量（ADR 0054）
+#[cfg(test)]
+mod mdns_browse_singleton_lock;
 
 // ==================== 模块描述符词汇（常编译 pub：宿主 adapter 引用） ====================
 //
