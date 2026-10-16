@@ -152,6 +152,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 </script>
 
 <template>
+  <!-- container-type：.ft-touch-btn 的 cqw 流式高度以本区宽度为基准 -->
   <div class="ft-settings px-4 py-4 pb-8 space-y-6">
     <!-- ==================== 共享目录 ==================== -->
     <section class="space-y-3">
@@ -159,7 +160,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
       <!-- 系统目录树选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
       <button
-        class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--ft-on-accent)] bg-[var(--ft-accent)] active:opacity-80 transition-opacity disabled:opacity-50 ft-settings-btn"
+        class="ft-touch-btn w-full gap-2 rounded-xl text-[var(--ft-on-accent)] bg-[var(--ft-accent)] active:opacity-80 active:scale-[0.98] transition-all disabled:opacity-50 ft-settings-btn"
         :disabled="picking"
         @click="handlePickRoot()"
       >
@@ -337,22 +338,28 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 </template>
 
 <style scoped>
-/* 设置区次级说明文字 */
+/* 查询容器：.ft-touch-btn 的 cqw 流式高度以本区自身宽度为基准 */
+.ft-settings {
+  container-type: inline-size;
+}
+
+/* 设置区次级说明文字（字号走宿主流式 token：跟随系统字体缩放档位，
+   不再用裸 clamp——那会让设置里的「字体大小」对本页无效） */
 .ft-settings-hint {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-text-muted);
 }
 
 /* 设置按钮流式字号 */
 .ft-settings-btn {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  font-size: var(--font-size-base);
   font-weight: 500;
 }
 
 /* 共享目录条目 URI（次级信息行） */
 .ft-root-uri {
   margin-top: 0.125rem;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-size: var(--font-size-xs);
   color: var(--ft-text-muted);
 }
 
@@ -360,7 +367,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 .ft-free-badge {
   padding: 0.125rem 0.5rem;
   border-radius: 9999px;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-size: var(--font-size-xs);
   font-weight: 500;
   background: var(--ft-bg-tertiary);
   border: 1px solid var(--ft-border);
@@ -369,13 +376,14 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
 /* 下载目录「打开」按钮：行内右侧次级按钮（44px 触控目标） */
 .ft-settings-open-btn {
+  min-height: 2.75rem;
   padding: 0.5rem 0.875rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-accent-text);
   border: 1px solid var(--ft-border);
   background: var(--ft-bg-elevated);
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -383,25 +391,28 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
 .ft-settings-open-btn:active {
   opacity: 0.8;
+  transform: scale(0.96);
 }
 
 .ft-settings-open-btn:disabled {
   opacity: 0.5;
 }
 
-/* 删除按钮 */
+/* 删除按钮（44px 触控目标） */
 .ft-settings-remove-btn {
+  min-height: 2.75rem;
   padding: 0.25rem 0.625rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-error);
   border: 1px solid var(--ft-error-muted);
   background: transparent;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
 .ft-settings-remove-btn:active {
   opacity: 0.8;
+  transform: scale(0.96);
 }
 
 /* 步进按钮（并发数）：44px 触控目标 */
@@ -416,11 +427,12 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
 .ft-step-btn:active {
   opacity: 0.8;
+  transform: scale(0.92);
 }
 
 /* 步进数值：独立 chip 背景，避免「孤儿数字」感 */
@@ -433,7 +445,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   border-radius: 0.625rem;
   background: var(--ft-bg-tertiary);
   text-align: center;
-  font-size: clamp(1rem, 1.0625rem + (100vw - 360px) / 800, 1.125rem);
+  font-size: var(--font-size-xl);
   font-weight: 600;
   color: var(--ft-text-primary);
   font-variant-numeric: tabular-nums;
@@ -446,7 +458,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   padding: 0.25rem 0.625rem;
   border-radius: 0.5rem;
   background: var(--ft-bg-tertiary);
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-text-muted);
 }
 
@@ -466,20 +478,21 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 }
 
 .ft-segmented-item {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0 0.75rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--ft-text-secondary);
   background: transparent;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
   -webkit-tap-highlight-color: transparent;
   white-space: nowrap;
 }
 
 .ft-segmented-item:active {
   opacity: 0.8;
+  transform: scale(0.96);
 }
 
 .ft-segmented-item--active {
@@ -487,7 +500,9 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   color: var(--ft-accent-text);
 }
 
-/* 同意超时数字输入：完全自绘外观（token 边框/圆角/字号，无系统控件观感） */
+/* 同意超时数字输入：完全自绘外观（token 边框/圆角/字号，无系统控件观感）。
+   appearance 用标准属性：Tauri v2 的 Android System WebView 为 Chromium 84+，
+   无需 -webkit-/-moz- 前缀（旧前缀还会被 stylelint property-no-vendor-prefix 拦） */
 .ft-timeout-input {
   width: 4.5rem;
   height: 2.75rem;
@@ -496,13 +511,11 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   background: var(--ft-bg-elevated);
   color: var(--ft-text-primary);
   text-align: center;
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-size: var(--font-size-base);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   transition: border-color 0.15s ease;
-  -webkit-appearance: none;
   appearance: none;
-  -moz-appearance: textfield;
 }
 
 .ft-timeout-input:focus {
@@ -512,7 +525,7 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 
 .ft-timeout-input::-webkit-outer-spin-button,
 .ft-timeout-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
+  appearance: none;
   margin: 0;
 }
 </style>

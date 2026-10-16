@@ -6,7 +6,7 @@
  *   select  — 浏览 tab 有勾选：取消选择 / 批量下载（主 CTA）
  *   active  — 有传输中的任务：总体进度条 + 速度，整体可点回到传输 tab
  *   upload  — 默认：上传文件（主 CTA）+ 队列残留提示
- * 三态按优先级互斥，切换只动 opacity（.fv2-fade），底栏高度恒定不跳动。
+ * 三态按优先级互斥，切换只动 opacity，底栏高度恒定不跳动。
  */
 import type { FooterMode } from '../types'
 
@@ -71,7 +71,7 @@ defineEmits<{
         <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--ft-text-muted)">
           {{ viewQueueLabel }}
         </span>
-        <svg class="w-4 h-4 flex-shrink-0" style="color: var(--ft-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 flex-shrink-0" style="color: var(--ft-text-muted)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
         </svg>
       </button>
@@ -89,18 +89,18 @@ defineEmits<{
           class="fv2-btn-neutral flex-shrink-0"
           @click="$emit('open-queue')"
         >
-        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
-        </svg>
-        {{ queueHint }}
-      </button>
-    </div>
+          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+          </svg>
+          {{ queueHint }}
+        </button>
+      </div>
     </Transition>
   </div>
 </template>
 
 <style scoped>
-/* 底栏三态交叉渐变：compositor 友好（仅 opacity），150ms 与全局 .fv2-fade 同节奏；
+/* 底栏三态交叉渐变：compositor 友好（仅 opacity），150ms 与全局过渡同节奏；
    离场分支绝对定位（相对 .fv2-footer 的 padding 盒）避免双分支堆叠挤高容器 */
 .fv2-bar-swap-enter-active,
 .fv2-bar-swap-leave-active {

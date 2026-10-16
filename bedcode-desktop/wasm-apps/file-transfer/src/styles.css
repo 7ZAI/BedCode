@@ -1210,15 +1210,18 @@
 
 /* ==================== v2 队列 4 tab（自绘分段，禁原生 select） ==================== */
 
-/* 分段栏包住标签本身，与 agent-hub 的分段栏一致。
-   早前是 .ft-tab{flex:1}，四个标签被均分撑满抽屉宽度，读起来像四块「按钮」而不是
-   一组筛选标签，视觉重量也高于其导航作用。
-   注意：只写 inline-flex 不够——.ft-queue-body 是 flex column 容器，flex 项的
-   inline-flex 会被 blockify 成 flex 并沿交叉轴 stretch 回满宽；必须显式
-   align-self: flex-start 才真正包住内容。 */
+/* 队列 4 tab 满宽分段控件（用户要求：tabs 区域整体宽度 = 传输列表侧边栏宽度）。
+   容器 display:flex（块级）随 .ft-queue-body 拉伸到侧边栏全宽，四项 flex:1
+   均分——与 terminal-session DeviceCenterView/TaskHistoryView 的满宽分段控件
+   同款（容器 flex + 单项 flex-1 等分，页签导航而非工具按钮）。
+   早前是 inline-flex + align-self:flex-start 收缩条（整条约 180px 浮在面板
+   左侧，tabs 区域宽度小于侧边栏）；按用户需求改为满宽。flex 项在 flex column
+   容器里默认沿交叉轴 stretch，display:flex 即满宽，无需再写 align-self。
+   移除 overflow-x:auto/max-width：满宽 + 各项 flex:1 后条不再超过容器，
+   滚动失效（F-01 收缩条场景已被本形态取代）；zh/en 标签均短，项内 nowrap
+   单行即可，超长文案仅在项盒内溢出（当前无实际影响）。 */
 .ft-tabs {
-  display: inline-flex;
-  align-self: flex-start;
+  display: flex;
   gap: 2px;
   padding: 3px;
   margin-bottom: 6px;
@@ -1226,16 +1229,10 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-btn);
   flex-shrink: 0;
-  max-width: 100%;
-  /* 本地化长标签（如德语/日文）超出容器时给出水平滚动，而不是被
-     .ft-queue{overflow:hidden} 裁掉（2026-10-04 OCR F-01）。不用 wrap：
-     换行会把分段栏撕成两行，失去「一组筛选标签」的形态；单行 + 滚动
-     保留分段语义，长文案仍可读。 */
-  overflow-x: auto;
 }
 
 .ft-tab {
-  flex: 0 0 auto;
+  flex: 1 1 0;
   min-width: 0;
   padding: 5px 10px;
   border: none;

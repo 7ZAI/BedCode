@@ -8,6 +8,8 @@
  * TaskCard 的纯展示 props（文案格式化在此完成，卡内不含逻辑）。
  *
  * 状态呈现仍走 spec 9.3 四色体系（ft-color-* / ft-progress-*）。
+ * 列表入场走 TransitionGroup 错峰浮入（fv2-card-in-*），筛选切换时剩余
+ * 卡片平滑让位；位移/透明度之外的属性不动，减弱动效下退化为直显。
  */
 import { computed, ref } from 'vue'
 import type { Task, ReceivingTask, HistoryEntry } from '../types'
@@ -305,8 +307,10 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
       <button
         v-for="f in FILTERS"
         :key="f.key"
+        type="button"
         class="fv2-filter"
         :class="{ 'fv2-filter--active': filter === f.key }"
+        :aria-pressed="filter === f.key"
         @click="filter = f.key"
       >
         {{ t(f.labelKey) }}
@@ -316,21 +320,27 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
     <!-- 全部继续（存在已暂停任务时；独立操作按钮） -->
     <div v-if="hasPaused(tasks)" class="fv2-resume-all">
       <button type="button" class="fv2-resume-all-btn" @click="emit('resumeAll')">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+        </svg>
         {{ t('transfer.task.resumeAll') }}
       </button>
     </div>
 
     <div class="flex-1 min-h-0 overflow-y-auto overscroll-behavior-none px-4 pb-2">
-      <!-- 全部 / 发送 / 接收：活动传输区（全部 = 发送队列 ∪ 接收中） -->
+      <!-- 全部 / 发送 / 接收：活动传输区（全部 = 发送队列 ∪ 接收中）。
+           TransitionGroup：卡片错峰浮入 + 列表变化平滑让位（样式见 styles.css
+           .fv2-card-in-*；--card-i 为错峰索引，第 7 张起不再递增避免长列表久等） -->
       <template v-if="filter !== 'history'">
         <div v-if="listEmpty" class="h-full flex flex-col">
           <EmptyState :icon="emptyIcon" :title="emptyTitle" :hint="t('transfer.minibar.noActive')" />
         </div>
-        <template v-else>
+        <TransitionGroup v-else tag="div" name="fv2-card-in" appear class="flex flex-col">
           <TaskCard
-            v-for="task in visibleQueue"
-            :key="task.id"
+            v-for="(task, i) in visibleQueue"
             :id="task.id"
+            :key="task.id"
+            :style="{ '--card-i': Math.min(i, 6) }"
             :direction="task.direction"
             :name="basename(task.remotePath)"
             :meta="taskMeta(task)"
@@ -343,9 +353,10 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             @action="onCardAction"
           />
           <TaskCard
-            v-for="task in receivingCards"
-            :key="task.sessionId"
+            v-for="(task, i) in receivingCards"
             :id="task.sessionId"
+            :key="task.sessionId"
+            :style="{ '--card-i': Math.min(i, 6) }"
             direction="download"
             :name="basename(task.remotePath)"
             :meta="task.size > 0 ? `${formatBytes(task.offset ?? 0, t)} / ${formatBytes(task.size, t)}` : formatBytes(task.size, t)"
@@ -358,7 +369,7 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :actions="receivingActions(task)"
             @action="onCardAction"
           />
-        </template>
+        </TransitionGroup>
       </template>
 
       <!-- 历史：只读 + 清空 -->
@@ -375,20 +386,23 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
               {{ t('transfer.history.clear') }}
             </button>
           </div>
-          <TaskCard
-            v-for="entry in history"
-            :key="entry.id"
-            :id="entry.id"
-            :direction="entry.direction"
-            :name="entry.fileName"
-            :meta="historyMeta(entry)"
-            :state-label="t(historyStateKey(entry.state))"
-            :state-class="historyStateClass(entry.state)"
-            :progress="null"
-            :reason="historyReason(entry)"
-            :actions="historyActions(entry)"
-            @action="onCardAction"
-          />
+          <TransitionGroup tag="div" name="fv2-card-in" appear class="flex flex-col">
+            <TaskCard
+              v-for="(entry, i) in history"
+              :id="entry.id"
+              :key="entry.id"
+              :style="{ '--card-i': Math.min(i, 6) }"
+              :direction="entry.direction"
+              :name="entry.fileName"
+              :meta="historyMeta(entry)"
+              :state-label="t(historyStateKey(entry.state))"
+              :state-class="historyStateClass(entry.state)"
+              :progress="null"
+              :reason="historyReason(entry)"
+              :actions="historyActions(entry)"
+              @action="onCardAction"
+            />
+          </TransitionGroup>
         </template>
       </template>
     </div>

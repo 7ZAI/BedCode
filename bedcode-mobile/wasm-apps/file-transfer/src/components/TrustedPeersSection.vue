@@ -106,7 +106,7 @@ onMounted(() => {
     <div v-else-if="loadState === 'error'" class="ft-trusted-error">
       <span class="ft-trusted-error-text">{{ t(errorKey) }}</span>
       <button
-        class="ft-touch-btn ft-trusted-retry rounded-xl border border-[var(--ft-border)] bg-[var(--ft-bg-elevated)] text-[var(--ft-text-primary)] active:opacity-80 transition-opacity"
+        class="ft-touch-btn ft-trusted-retry rounded-xl border border-[var(--ft-border)] bg-[var(--ft-bg-elevated)] text-[var(--ft-text-primary)] active:opacity-80 active:scale-[0.97] transition-all"
         @click="refresh"
       >
         {{ t('transfer.trusted.retry') }}
@@ -187,21 +187,21 @@ onMounted(() => {
 .ft-trusted-error-text {
   flex: 1;
   min-width: 0;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-text-primary);
 }
 
 .ft-trusted-retry {
   min-height: 2.75rem;
   padding: 0 1rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   font-weight: 500;
 }
 
 /* 短指纹（等宽字体核对区） */
 .ft-trusted-fp {
   font-family: Consolas, Monaco, monospace;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-size: var(--font-size-xs);
   color: var(--ft-text-secondary);
 }
 
@@ -215,15 +215,16 @@ onMounted(() => {
   justify-content: center;
   padding: 0 0.875rem;
   border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-error);
   border: 1px solid var(--ft-error-muted);
   background: transparent;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
 .ft-trusted-revoke-btn:active {
   opacity: 0.8;
+  transform: scale(0.96);
 }
 
 .ft-trusted-revoke-btn:disabled {
@@ -238,7 +239,7 @@ onMounted(() => {
 /* 撤销失败就地提示（条目保留，可再次点击行内撤销重试） */
 .ft-trusted-revoke-failed {
   margin: 0;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-sm);
   color: var(--ft-error);
 }
 </style>

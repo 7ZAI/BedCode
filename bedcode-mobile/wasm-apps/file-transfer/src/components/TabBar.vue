@@ -47,8 +47,10 @@ const TABS: Array<{ key: MainTab; icon: string }> = [
       <button
         v-for="tab in TABS"
         :key="tab.key"
+        type="button"
         class="fv2-tab"
         :class="{ 'fv2-tab--active': modelValue === tab.key }"
+        :aria-pressed="modelValue === tab.key"
         @click="$emit('update:modelValue', tab.key)"
       >
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -57,12 +59,12 @@ const TABS: Array<{ key: MainTab; icon: string }> = [
         <span>{{
           tab.key === 'transfers' ? transfers : tab.key === 'browse' ? browse : devices
         }}</span>
-        <!-- 传输中角标：仅 >0 时渲染，避免空占位 -->
+        <!-- 传输中角标：仅 >0 时渲染，避免空占位。
+             两个角标相互独立（非 else-if）：有活跃传输时设备数仍应可见 -->
         <span v-if="tab.key === 'transfers' && activeCount > 0" class="fv2-tab-badge">
           {{ activeCount }}
         </span>
-        <!-- 附近设备角标：仅 >0 时渲染 -->
-        <span v-else-if="tab.key === 'devices' && deviceCount > 0" class="fv2-tab-badge">
+        <span v-if="tab.key === 'devices' && deviceCount > 0" class="fv2-tab-badge">
           {{ deviceCount }}
         </span>
       </button>

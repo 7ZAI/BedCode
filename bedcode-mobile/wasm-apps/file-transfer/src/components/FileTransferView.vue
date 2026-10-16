@@ -37,6 +37,26 @@ const settings = useSettings(context)
 /** 主分段（传输列表默认可见——传输是第一目标） */
 const tab = ref<MainTab>('transfers')
 
+/** 主分段顺序（滑动方向判定基准） */
+const TAB_ORDER: MainTab[] = ['transfers', 'browse', 'devices']
+
+/**
+ * 分段切换方向：next = 向右前进（新页自右推入、旧页向左退出），prev = 回退反向。
+ * 点击 TabBar 与左右滑都经 tab 变化统一推断，动画方向始终与手势语义一致。
+ */
+const slideDir = ref<'next' | 'prev'>('next')
+watch(tab, (next, prev) => {
+  if (prev === next) return
+  slideDir.value = TAB_ORDER.indexOf(next) >= TAB_ORDER.indexOf(prev) ? 'next' : 'prev'
+})
+
+/** 方向位移量经 CSS 变量注入过渡类（styles.css .fv2-tab-*），一套类服务两个方向 */
+const slideVars = computed(() =>
+  slideDir.value === 'next'
+    ? { '--fv2-enter-x': '16px', '--fv2-leave-x': '-16px' }
+    : { '--fv2-enter-x': '-16px', '--fv2-leave-x': '16px' },
+)
+
 /** 可发送性：自建设备缓存中存在具备传输能力的节点（与旧版同构） */
 watch(
   () => devices.devices.value,
@@ -48,9 +68,8 @@ watch(
 
 /** 左右滑切换主分段（内容区手势，不与浏览 tab 内列表滚动冲突） */
 function switchTab(dir: 'left' | 'right'): void {
-  const order: MainTab[] = ['transfers', 'browse', 'devices']
-  const next = order.indexOf(tab.value) + (dir === 'left' ? 1 : -1)
-  if (next >= 0 && next < order.length) tab.value = order[next]!
+  const next = TAB_ORDER.indexOf(tab.value) + (dir === 'left' ? 1 : -1)
+  if (next >= 0 && next < TAB_ORDER.length) tab.value = TAB_ORDER[next]!
 }
 const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs(switchTab)
 
@@ -310,10 +329,13 @@ onUnmounted(() => {
     />
 
     <!-- 主内容区（左右滑切换分段）：data-swipe-zone 声明横滑区供宿主仲裁边界，
-         区在首尾边界时交还外层翻页（MobileSwipeContainer 协议，与 auto-task 同构） -->
+         区在首尾边界时交还外层翻页（MobileSwipeContainer 协议，与 auto-task 同构）。
+         :style 注入分段切换方向位移量；Transition 为方向性推入（styles.css .fv2-tab-*），
+         不用 out-in——离场分支绝对定位退出文档流，进场分支同帧接管，无空窗塌陷 -->
     <div
       class="flex-1 min-h-0 flex flex-col fv2-swipe-zone"
       data-swipe-zone
+      :style="slideVars"
       :data-zone-at-start="tab === 'transfers'"
       :data-zone-at-end="tab === 'devices'"
       @touchstart.passive="onTouchStart"
@@ -325,7 +347,7 @@ onUnmounted(() => {
       @pointerup="onMouseUp"
       @pointercancel="onMouseUp"
     >
-      <Transition name="fv2-fade" mode="out-in">
+      <Transition name="fv2-tab">
         <!-- 传输列表（默认，直接铺出） -->
         <TransfersTab
           v-if="tab === 'transfers'"

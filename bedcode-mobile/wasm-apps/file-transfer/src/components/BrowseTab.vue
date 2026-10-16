@@ -198,6 +198,21 @@ const pullLabel = computed(() => {
   if (pullState.value === 'ready') return t('transfer.pull.ready')
   return t('transfer.pull.pull')
 })
+
+/**
+ * 下拉指示器容器样式：高度跟随位移（手感 1:1），并按位移淡入；
+ * 松手（非拖动态）加 snap 类启用回弹过渡——拖动中开过渡会产生阻尼迟滞。
+ */
+const pullBoxStyle = computed(() => ({
+  height: pullDistance.value + 'px',
+  opacity: Math.min(1, pullDistance.value / 24),
+}))
+
+/** 箭头角度跟手：每像素 2.6°，达到阈值（56px）时正好 180° 翻转朝上 */
+const pullArrowStyle = computed(() => ({
+  transform: `rotate(${Math.min(pullDistance.value * 2.6, 180)}deg)`,
+  color: pullState.value === 'ready' ? 'var(--ft-accent-text)' : 'var(--ft-text-secondary)',
+}))
 </script>
 
 <template>
@@ -252,16 +267,18 @@ const pullLabel = computed(() => {
       @touchend="onPullEnd"
       @touchcancel="onPullEnd"
     >
-      <!-- 下拉刷新指示器：随位移露出，刷新中常驻 -->
+      <!-- 下拉刷新指示器：随位移露出，刷新中常驻。snap 类控制松手回弹过渡 -->
       <div
         class="fv2-pull"
-        :style="{ height: pullDistance + 'px' }"
+        :class="{ 'fv2-pull--snap': !pullingActive }"
+        :style="pullBoxStyle"
       >
         <span v-if="pullState === 'refreshing'" class="fv2-spinner fv2-spinner--sm"></span>
         <svg
           v-else
-          class="w-5 h-5 flex-shrink-0"
-          :style="{ transform: pullState === 'ready' ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease', color: pullState === 'ready' ? 'var(--ft-accent-text)' : 'var(--ft-text-secondary)' }"
+          class="fv2-pull-arrow"
+          :class="{ 'fv2-pull-arrow--snap': !pullingActive }"
+          :style="pullArrowStyle"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -308,7 +325,7 @@ const pullLabel = computed(() => {
 
           <div class="flex-1 min-w-0">
             <p class="fv2-file-name truncate">{{ entry.name }}</p>
-            <p v-if="!entry.isDir && entry.size > 0" class="fv2-task-meta">{{ formatBytes(entry.size, t) }}</p>
+            <p v-if="!entry.isDir && entry.size > 0" class="fv2-file-meta">{{ formatBytes(entry.size, t) }}</p>
           </div>
 
           <!-- 勾选框（仅文件） / 进入箭头（目录） -->
@@ -334,7 +351,8 @@ const pullLabel = computed(() => {
 </template>
 
 <style scoped>
-/* 下拉刷新指示器：贴滚动容器顶部，高度随位移露出 */
+/* 下拉刷新指示器：贴滚动容器顶部，高度随位移露出。
+   过渡只挂在 .fv2-pull--snap（全局样式，松手后启用）——拖动中开过渡会阻尼迟滞 */
 .fv2-pull {
   display: flex;
   align-items: center;
@@ -342,6 +360,5 @@ const pullLabel = computed(() => {
   gap: 0.5rem;
   overflow: hidden;
   color: var(--ft-text-secondary);
-  transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 </style>

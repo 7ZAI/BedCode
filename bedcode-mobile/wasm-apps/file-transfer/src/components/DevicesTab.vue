@@ -120,10 +120,11 @@ function metaText(row: DeviceRow): string {
             <span class="fv2-dev-dot flex-shrink-0" :class="dotClass(row)"></span>
 
             <div class="flex-1 min-w-0">
-              <!-- 设备名 + 短指纹 -->
+              <!-- 设备名 + 短指纹（指纹用 muted 而非 disabled：小字号下
+                   disabled 对比度不足 4.5:1，指纹是需核对的信息不是装饰） -->
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="fv2-device-name truncate">{{ row.deviceName }}</span>
-                <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--ft-text-disabled)">
+                <span class="flex-shrink-0" style="font-size: var(--font-size-xs); color: var(--ft-text-muted)">
                   {{ shortFingerprint(row.nodeId) }}
                 </span>
               </div>
