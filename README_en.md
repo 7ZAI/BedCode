@@ -226,13 +226,9 @@ The mobile end shares the same architecture as desktop (both are a WASM componen
 
 ### Roadmap
 
-**In development (unreleased)**
-
-- **Agent Hub plugin** — unified visual management for Agent CLIs (claude / codex / opencode / pi): environment detection & one-click install / uninstall, Skills management, unified provider configuration, usage statistics and session-log parsing. Already bundled with the desktop app at 0.1.0, under active development.
-
-**Planned**
-
-- **NAT traversal / internet access** — realized as a desktop-side plugin: route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption (shelved until a server budget exists 😭)
+> **This repository is no longer updated**: **3.0.0 is the final BedCode release** — no further features,
+> fixes or dependency updates will be published. Ongoing development has moved to the WasmNest series of
+> projects (see "Important change" above). The repository and its existing release artifacts are kept for reference.
 
 **Architecture evolution**
 
