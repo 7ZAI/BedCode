@@ -522,12 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_arrow_legacy() {
-        let combo = KeyCombo::parse("arrow_up").unwrap();
-        assert_eq!(combo.key, KeyCode::Up);
-    }
-
-    #[test]
     fn test_parse_invalid() {
         assert!(KeyCombo::parse("").is_none());
         assert!(KeyCombo::parse("invalid_key").is_none());
@@ -546,15 +540,6 @@ mod tests {
         assert_eq!(KeyCombo::parse("ctrl+d").unwrap().to_pty_bytes(), Some(vec![0x04]));
         // Ctrl+Z = 0x1A
         assert_eq!(KeyCombo::parse("ctrl+z").unwrap().to_pty_bytes(), Some(vec![0x1a]));
-    }
-
-    #[test]
-    fn test_ctrl_legacy_compat() {
-        // 旧格式 "ctrl_c" 应生成与 "ctrl+c" 相同的字节
-        assert_eq!(
-            KeyCombo::parse("ctrl_c").unwrap().to_pty_bytes(),
-            KeyCombo::parse("ctrl+c").unwrap().to_pty_bytes()
-        );
     }
 
     #[test]
@@ -763,14 +748,6 @@ mod tests {
         assert_eq!(parsed, combo);
     }
 
-    #[test]
-    fn test_serde_legacy_format() {
-        // 反序列化也支持旧格式
-        let parsed: KeyCombo = serde_json::from_str("\"ctrl_c\"").unwrap();
-        assert!(parsed.ctrl());
-        assert_eq!(parsed.key, KeyCode::Char('c'));
-    }
-
     // ==================== to_str 测试 ====================
 
     #[test]
@@ -785,20 +762,34 @@ mod tests {
         assert_eq!(KeyCombo::parse("f5").unwrap().to_str(), "f5");
     }
 
-    // ==================== 旧格式兼容测试 ====================
+    // ==================== 旧格式退役（b438bb81f） ====================
 
+    /// 旧格式（`ctrl_c` / `arrow_up`）已随 `b438bb81f` 退役：解析器只认 `+` 分隔格式。
+    /// 这是退役决策的**正面锁**——若有人把旧格式兼容分支加回来（parse 的 `ctrl_` 前缀
+    /// 分支 / from_str 的 `arrow_*` 别名），这里会红，而不是让沉默兼容悄悄回归。
     #[test]
-    fn test_all_legacy_formats() {
-        // 确保所有旧格式都能解析
-        assert!(KeyCombo::parse("ctrl_c").is_some());
-        assert!(KeyCombo::parse("ctrl_d").is_some());
-        assert!(KeyCombo::parse("ctrl_z").is_some());
-        assert!(KeyCombo::parse("ctrl_l").is_some());
-        assert!(KeyCombo::parse("arrow_up").is_some());
-        assert!(KeyCombo::parse("arrow_down").is_some());
-        assert!(KeyCombo::parse("arrow_left").is_some());
-        assert!(KeyCombo::parse("arrow_right").is_some());
-        assert!(KeyCombo::parse("esc").is_some());
-        assert!(KeyCombo::parse("del").is_some());
+    fn test_legacy_formats_are_rejected() {
+        for legacy in [
+            "ctrl_c",
+            "ctrl_d",
+            "ctrl_z",
+            "ctrl_l",
+            "arrow_up",
+            "arrow_down",
+            "arrow_left",
+            "arrow_right",
+        ] {
+            assert!(KeyCombo::parse(legacy).is_none(), "旧格式 {legacy} 不应再可解析");
+            assert!(
+                serde_json::from_str::<KeyCombo>(&format!("\"{legacy}\"")).is_err(),
+                "旧格式 {legacy} 不应再可反序列化"
+            );
+        }
+        // 退役只砍旧拼写，不动语义：新格式照旧可用
+        assert_eq!(
+            KeyCombo::parse("ctrl+c").unwrap().to_pty_bytes(),
+            Some(vec![0x03])
+        );
+        assert_eq!(KeyCombo::parse("shift+up").unwrap().key, KeyCode::Up);
     }
 }
