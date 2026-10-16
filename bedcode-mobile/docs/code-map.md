@@ -195,6 +195,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 | 能力模块描述符零产品名词（移动扫描点） | `src-tauri/tests/host_module_desc_noun_lock.rs`（词表真源 `packages/bedcode-host-kit/src/registry.rs`） |
 | 契约归属边界三把锁（跨端） | `bedcode-desktop/src-tauri/tests/domain_contract_structure_locks.rs` |
 | 对等网络能力域集中化 / mDNS 广播死面退役 | `src-tauri/tests/{peer_engine_consolidation_lock,retired_mobile_mdns_advertise_lock}.rs` |
+| **mDNS 浏览单例（每服务类型唯一 `daemon.browse` / 唯一 `ServiceDaemon::new`；server-peer-net 不引 discovery-engine）** | `packages/bedcode-discovery-engine/src/mdns_browse_singleton_lock.rs`（源码锁）+ `packages/bedcode-server-peer-net/src/dependency_direction_lock.rs`（依赖方向） |
 | 移动 WIT 分片拼装组合（包名 / 版本行 / include 集） | `src-tauri/tests/mobile_wit_composition_lock.rs` + 根 `pnpm run check:wit` |
 | Tauri 命令面注册完备性（`#[tauri::command]` 须进 `generate_handler!`） | `src-tauri/tests/command_registration_completeness_lock.rs` |
 | 出站 HTTP egress 闸门覆盖（reqwest 客户端可追到 egress 引用） | `src-tauri/tests/outbound_egress_gate_coverage_lock.rs` |
