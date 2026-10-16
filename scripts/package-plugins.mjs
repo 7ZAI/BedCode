@@ -63,7 +63,7 @@ const ROOT = resolve(__dirname, '..')
 const DESKTOP_ROOT = resolve(ROOT, 'bedcode-desktop')
 const MOBILE_ROOT = resolve(ROOT, 'bedcode-mobile')
 const DESKTOP_PLUGINS = resolve(DESKTOP_ROOT, 'wasm-apps')  // 桌面端语义（2026-09-25）：wasm 应用源码目录
-const MOBILE_PLUGINS = resolve(MOBILE_ROOT, 'plugins')
+const MOBILE_PLUGINS = resolve(MOBILE_ROOT, 'wasm-apps') // 移动端语义（2026-10-17）：wasm 应用源码目录（原 plugins/，与桌面端同步改名；写成 'plugins' 时打包 job 在 resolvePlugin 处 ENOENT 秒挂）
 const DEFAULT_CONFIG = resolve(__dirname, 'plugin-package-list.json')
 const IS_WIN = platform() === 'win32'
 
