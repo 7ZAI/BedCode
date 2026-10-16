@@ -1,6 +1,6 @@
 # 票 02 — 发现引擎类型中枢：type_hub.rs + 注入缝 + engine browse 切换
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: 01
 
@@ -46,3 +46,65 @@ Blocked by: 01
 
 - `cd packages/bedcode-discovery-engine && cargo test` 全绿（既有用例零回归）
 - 变异自检（第 1 条 + 至少再一条）结果记入票面 Comments
+
+## Comments
+
+### 交付
+- 新模块 `packages/bedcode-discovery-engine/src/type_hub.rs`（机制 + 单测同文件）：
+  `TypeHubSet`（`HashMap<service_type, Arc<Hub>>` 注册表）+ 泵任务 `run_hub`（控制命令 /
+  listener 事件 / 后缘补齐到期三路 `tokio::select!` 收口，单 await 点）+ 惰性 fan-out +
+  100ms 合并窗（前缘吞并 / 后缘补齐）+ 守卫同步退订 + R7 僵尸重建。
+- 注入缝：`TypeDaemon`（只 `browse` / `stop_browse` 两条）与 `TaskSpawner`（派生泵任务）；
+  生产实现 `SharedDaemonSeam`（惰性取 `engine::shared_daemon`，不订阅不拉起守护）/
+  `PortsSpawner`。单测经 `TypeHubSet::with_parts` 建独立实例，进程级静态表不参与。
+- 接口按 spec §2.3：`subscribe_type(&str) -> Result<MdnsBrowseSubscription, String>`、
+  `request_type_requery(&str)`；`MdnsBrowseSubscription` 与票 01 的 `MdnsTypeSubscription`
+  逐字对齐（私有字段 + `new` / `into_parts()`，不实现 `Clone`，receiver 与守卫同生共死）。
+- `engine.rs` 切换：`browse()` 改挂中枢订阅并把守卫托管进 `BrowserEntry._subscription`；
+  `stop_browser_inner` 删 `daemon.stop_browse`（条目移除即守卫 Drop = 退订），共用
+  `mdns browse loop exited` 退出形态；模块头 + `shared_daemon` 注释补 listener 级不变量
+  （ADR 0054）。`publish_dir_event` / 属主仲裁 / `is_self_broadcast` / 句柄表 / 权限门未动。
+- `lib.rs`：`pub mod type_hub` + 模块图 + 出口 re-export。
+- `Cargo.toml`：`+ flume = "0.12"`；tokio features `+ macros`（`select!` 用，先例：peer-net）。
+
+### 命令与结果
+- 基线（改动前）：`CARGO_BUILD_JOBS=2 cargo test` → **34 passed / 0 failed**（票面预告 ~31）。
+- 改动后：`CARGO_BUILD_JOBS=2 cargo test`（cwd `packages/bedcode-discovery-engine`）→
+  **42 passed / 0 failed / 0 ignored**（新增 8 个，全在 `type_hub::tests`）。既有 34 例零回归。
+- `type_hub::tests` 连跑 5 轮均 8 passed（纯时序用例无抖动）。
+- 本 crate 无 `tests/` 集成测试目录（只有 lib 单测），故无集成面增补。
+- `cargo fmt --check`：本任务文件（type_hub / engine / lib）clean；`wire.rs` /
+  `wire/drift_lock.rs` 的既有格式差异是 HEAD 基线遗留、与本任务无关，已还原不碰。
+- `cargo clippy --all-targets`：4 条 warning 全在 HEAD 既有文件（advertiser.rs:92 /
+  engine.rs:82 `map(|d| d.clone())` / wire.rs:36,49），新增代码 0 warning。
+
+### 单测矩阵（spec §7）
+覆盖 1、2、3、4、5、7（第 6 条属 peer-net 票 03）：
+1. `two_subscribers_share_one_browse_and_both_receive_the_event` — 唯一 browse + 全员同事件。
+2. `requery_rebinds_listener_and_replays_to_every_subscriber` — 换绑 + 缓存重放广播全员。
+3. `merge_window_absorbs_requeries_and_coalesces_joining_subscribers` — 前缘吞并 + 后缘合并。
+4. `dropping_subscriptions_removes_rows_and_drains_hub_exactly_once` — 守卫退订 + 归零摘除 + 重建幂等。
+5. `lazy_eviction_drops_dead_subscribers_and_drains_when_last` — 惰性剔除 + 晚到守卫幂等。
+7. `subscribe_rebuilds_hub_after_pump_task_exit` — 泵退出后按 drained 同路径重建。
+附加（票面未列、契约补强）：`empty_service_type_is_rejected_before_touching_daemon`（触网前拒绝）、
+`full_subscriber_channel_drops_events_without_evicting_or_blocking_others`（R1/D2 慢消费者只丢不阻塞不剔除）。
+
+### 变异自检结论（三条，均先红后绿并还原）
+1. **退回「每订阅者各自 browse（后到覆盖）」**（在 reuse 分支加一次 `daemon.browse`）：
+   矩阵 1 红——`browse_calls` 变两条（`新增订阅者不得再触发 browse` 断言失败）。
+2. **关闭惰性剔除**（`Disconnected` 分支改为保留订阅者）：矩阵 5 红——`subscriber_count`
+   为 2 而非 1（`死订阅者被惰性剔除` 断言失败）。
+3. **关闭后缘补齐**（`arm_join_window` 不再置 `join_deadline`）：矩阵 2、矩阵 3 均红——
+   新订阅者拿不到自己的缓存重放（`next_event` 2s 超时）。
+变异均已 `git diff` / `grep MUTATION` 确认零残留。
+
+### 偏离与开放项
+- 基线用例数 34（票面预告 ~31）——晚于票面又并入的既有用例，非本次新增。
+- 合并窗生产值 = `MERGE_WINDOW = 100ms`（spec D3）；单测注入 20ms 短窗，另有用例用 60s
+  长窗以隔离「后缘补齐不得干扰计数」。
+- `futures-util` 未引入：泵任务单 await 点用 `tokio::select!` + `std::future::pending()` 实现，
+  不新增依赖。
+- 下游 glue（票 04）经 `subscribe_type(..).into_parts()` 取 `(receiver, guard)` 转
+  `bedcode-server-base::ports::MdnsTypeSubscription`；本票未触该端口。
+- 锁白名单（`type_hub.rs` 唯一 browse/stop_browse 的结构性封口）与 ADR 0054 / code-map 登记
+  属票 05 门禁面，本票只交付机制。

@@ -5,6 +5,14 @@
 //! `owner: plugin_id`）。与 peer-net 引擎共享同一守护——消灭「双 daemon 同绑
 //! 5353 互抢多播包」的结构性病灶（真机实证：只发现自己、发现不了对端）。
 //!
+//! **listener 级不变量（ADR 0054）**：共享守护只是第一层——mdns-sd 对每个服务类型
+//! 只有**一个 listener 槽**且重复 `browse` 是「后到覆盖先到」，所以本进程对同一服务
+//! 类型的 `daemon.browse` / `stop_browse` **只能由类型中枢**
+//! （[`crate::type_hub`]）代持：任意数量的消费者（含 peer-net 与移动旧链路）在其中枢
+//! 上挂进程内 fan-out 订阅，重查也经中枢统一执行。本模块的浏览原语因此只挂订阅，
+//! **不再自己 `daemon.browse`**（那正是「插件 browse 被 peer-net 重查顶成死信道」的
+//! 病灶，见 `type_hub` 模块头）。
+//!
 //! - **事件定向投递**：browse 事件按属主发布到私有 topic `<owner>::mdns:found` /
 //!   `<owner>::mdns:lost`（owner = 发起 browse 的插件 id），非属主插件的订阅被
 //!   总线命名空间门禁拒绝——业务隔离；
@@ -81,11 +89,15 @@ const REANNOUNCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(
 
 // ==================== 句柄表 ====================
 
-/// 单条浏览订阅：共享守护 + 服务类型（stop_browse 按类型退订）+ 事件任务句柄
+/// 单条浏览订阅：服务类型 + 事件任务句柄 + 中枢退订守卫
 struct BrowserEntry {
     service_type: String,
     #[allow(dead_code)] // 事件循环退出以 receiver 断开为准；句柄保留只为表内生命周期可见性
     task: Arc<dyn DiscoveryTask>,
+    /// 类型中枢订阅守卫（不透明）：**条目移除即 Drop ⇒ 中枢退订**（该浏览通道关闭、
+    /// 浏览任务 recv 断开退出）；同类型其他订阅者不受影响，归零则中枢自行
+    /// `stop_browse` 并移除（spec §2.1-④）。字段不读取，纯生命周期托管
+    _subscription: Box<dyn std::any::Any + Send + Sync>,
     /// 所属插件（停用时按属主回收全部句柄）
     owner: String,
 }
@@ -119,6 +131,11 @@ const NOT_OWNER: &str = "not owner of mdns handle";
 /// **全仓共享守护的创建点只有 [`init_daemon`] 一处**——本函数是它的唯一出口，
 /// peer-net 引擎与全部插件浏览都经此拿同一个 `ServiceDaemon` 实例。切勿在别处
 /// 另建守护：两个守护会争抢同一组播端口（真机实证：只发现自己、发现不了对端）。
+///
+/// **浏览侧另有一层不变量**：同一服务类型的 `daemon.browse` / `stop_browse` 只允许
+/// 类型中枢（[`crate::type_hub`]）调用——共享守护让 peer-net 与插件落到同一个
+/// listener 槽上，谁重复 `browse` 谁就把对方的事件流顶成死信道（ADR 0054）。
+/// 需要浏览事件请改用 [`crate::type_hub::subscribe_type`]。
 pub fn shared_daemon() -> ServiceDaemon {
     daemon().clone()
 }
@@ -126,6 +143,11 @@ pub fn shared_daemon() -> ServiceDaemon {
 // ==================== 浏览原语 ====================
 
 /// 浏览某服务类型：铸造 browser-id（`mdnsbr-<uuid>`）并启动事件定向投递循环
+///
+/// 浏览**建立**走类型中枢（[`crate::type_hub::subscribe_type`]）：同类型的多个插件
+/// 共享该类型唯一的一条 `daemon.browse`，本模块只挂 fan-out 订阅并把退订守卫托管进
+/// [`BrowserEntry`]——不再自己 `daemon.browse`（否则会覆盖别处 listener，
+/// 见模块头「listener 级不变量」）。
 pub fn browse(
     ports: &Arc<dyn DiscoveryPorts>,
     plugin_id: &str,
@@ -143,9 +165,8 @@ pub fn browse(
     if service_type.is_empty() {
         return Err("mdns browse: service type must not be empty".to_string());
     }
-    let receiver = daemon()
-        .browse(&service_type)
-        .map_err(|e| format!("mdns browse: subscribe failed: {e}"))?;
+    let (receiver, subscription_guard) =
+        crate::type_hub::subscribe_type(&service_type)?.into_parts();
 
     let browser_id = format!("mdnsbr-{}", uuid::Uuid::new_v4());
     let task_browser_id = browser_id.clone();
@@ -230,6 +251,7 @@ pub fn browse(
             BrowserEntry {
                 service_type: service_type.clone(),
                 task: task_handle,
+                _subscription: subscription_guard,
                 owner: plugin_id.to_string(),
             },
         );
@@ -255,8 +277,11 @@ pub fn stop_browse(
 
 /// 取出并停止单条浏览订阅（属主校验：非属主拒绝；幂等：未知句柄 false）
 ///
-/// 共享守护不 shutdown——`stop_browse` 断开事件 channel 即完成退订，守护线程
-/// 随进程存活（其余浏览/广播订阅不受影响）
+/// 退订动作就是**条目移除**：条目里的中枢订阅守卫随之 Drop ⇒ 该浏览的中枢订阅被移除、
+/// 通道关闭 ⇒ 浏览事件循环 `recv` 断开退出（日志 `mdns browse loop exited`，与旧的
+/// `daemon.stop_browse` 断联形态一致）。该类型的 listener 归零时由中枢自行
+/// `stop_browse`；仍有其他订阅者（别的插件 / peer-net）时 listener 不动——这正是
+/// 本模块不再直接 `daemon.stop_browse` 的原因（旧写法会摘掉整类型、杀掉别人的浏览）。
 fn stop_browser_inner(owner: &str, browser_id: &str) -> Result<bool, String> {
     let mut table = BROWSERS.lock().expect("mdns browser table lock poisoned");
     let Some(entry) = table.remove(browser_id) else {
@@ -266,13 +291,11 @@ fn stop_browser_inner(owner: &str, browser_id: &str) -> Result<bool, String> {
         table.insert(browser_id.to_string(), entry);
         return Err(NOT_OWNER.to_string());
     }
+    let service_type = entry.service_type.clone();
     drop(table);
-    if let Some(daemon) = daemon_if_initialized() {
-        if let Err(e) = daemon.stop_browse(&entry.service_type) {
-            tracing::warn!(browser_id = %browser_id, "mdns stop_browse failed: {e}");
-        }
-    }
-    tracing::info!(browser_id = %browser_id, "mdns browse stopped");
+    // 显式释放守卫（退订）后再落日志：退出时序与日志同序，便于排障对照
+    drop(entry);
+    tracing::info!(browser_id = %browser_id, service_type = %service_type, "mdns browse stopped");
     Ok(true)
 }
 
@@ -788,6 +811,8 @@ mod tests {
             BrowserEntry {
                 service_type: service_type.to_string(),
                 task: Arc::new(NoopTask),
+                // 单测只验表与门禁语义，不接真中枢：空守卫（`()` 无 Drop 副作用）
+                _subscription: Box::new(()),
                 owner: owner.to_string(),
             },
         );
