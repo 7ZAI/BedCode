@@ -113,9 +113,12 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 票 03：桌面插件全量 wasm32-wasip3（构建经 pinned nightly，见下方 wasip3
-          # 工具链步骤）；宿主构建用宿主 target。wasm32-wasip2 仅 plugin-wasi-test 需要。
-          targets: wasm32-wasip2
+          # 桌面插件构建目标两种：agent-hub / ai-chatbox / terminal-session 是
+          # wasm32-wasip3（由下方 pinned nightly 提供）；file-transfer 是
+          # wasm32-unknown-unknown + 仓库级组件化（packages/bedcode-componentize，
+          # 见其 scripts/build.js 头注）。宿主构建用宿主 target；wasm32-wasip2 仅
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
+          targets: wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
         # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
@@ -285,16 +288,14 @@ jobs:
         run: pnpm run build
 
       # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
-      # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
+      # 插件清单由 wasm-apps/ 实际内容推导（原手写名单与目录漂移：已退役的 `ocr`
+      # 仍在名单里靠「目录不存在就跳过」掩盖，新增 app 忘登记则会在构建期以缺依赖报错）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox bedcode file-transfer ocr; do
-            if [ ! -d "wasm-apps/$p" ]; then
-              echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing wasm-apps/$p =="
-            (cd wasm-apps/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build Android APK
@@ -354,9 +355,12 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 票 03：桌面插件全量 wasm32-wasip3（构建经 pinned nightly，见下方 wasip3
-          # 工具链步骤）；宿主构建用宿主 target。wasm32-wasip2 仅 plugin-wasi-test 需要。
-          targets: wasm32-wasip2
+          # 桌面插件构建目标两种：agent-hub / ai-chatbox / terminal-session 是
+          # wasm32-wasip3（由下方 pinned nightly 提供）；file-transfer 是
+          # wasm32-unknown-unknown + 仓库级组件化（packages/bedcode-componentize，
+          # 见其 scripts/build.js 头注）。宿主构建用宿主 target；wasm32-wasip2 仅
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
+          targets: wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
         # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
@@ -445,9 +449,20 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 WASM 产物 target：桌面 ai-chatbox 已迁移 WASI preview2（wasip2），
-          # 其余桌面插件与移动端用 wasm32-unknown-unknown
-          targets: wasm32-unknown-unknown, wasm32-wasip2
+          # 移动端插件与桌面 file-transfer 用 wasm32-unknown-unknown（后者再经
+          # packages/bedcode-componentize 组件化）；桌面 agent-hub / ai-chatbox /
+          # terminal-session 用 wasm32-wasip3，见下方 pinned nightly 步骤
+          targets: wasm32-unknown-unknown
+
+      # 桌面 agent-hub / ai-chatbox / terminal-session 的构建链注入
+      # RUSTUP_TOOLCHAIN=nightly-2026-09-16 并编 wasm32-wasip3（真源
+      # scripts/plugin-wasm-config.mjs 与 scripts/wasip3-toolchain.sh）。缺这一步时
+      # `pnpm run build` 直接失败，本 job 的插件 zip 永远产不出——build-windows /
+      # build-linux 已有同款步骤，本 job 曾漏装。
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
 
       # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
       # 仅 job 内缓存（不写 GHA cache 配额）。
@@ -484,16 +499,13 @@ jobs:
         run: pnpm run build
 
       # mobile 插件是独立目录（无 workspace），bedcode-plugin CLI 需各插件自己的依赖；
-      # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
+      # 同 build-android：移动插件清单由目录推导，不再手写（防名单与目录漂移）
       - name: Install mobile plugin dependencies
         run: |
-          for p in ai-chatbox bedcode file-transfer; do
-            if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
-              echo "bedcode-mobile/wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing bedcode-mobile/wasm-apps/$p =="
-            (cd bedcode-mobile/wasm-apps/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       # 构建两端插件（前端 + WASM）并打 zip；插件清单默认 scripts/plugin-package-list.json

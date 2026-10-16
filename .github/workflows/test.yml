@@ -11,6 +11,13 @@ on:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
       - 'cross-end-tests/**'
+      # 根 packages/** 是机制内核 / 能力域 crate（wasm-core 的 57 个带测试源文件、
+      # pty-engine、host-kit…）：只改它们的 PR 过去不触发任何 Rust 测试，而移动纯度锁、
+      # WIT 版本锁与 cross-end-tests 依赖图都落在这些 crate 上。
+      - 'packages/**'
+      # 契约版本真源（WIT 包版本单点，compose-wit.mjs 读它注入 package 行）：
+      # 改了必须重拼，落进本 workflow 才能被 wit_package_version_lock 与漂移锁看守。
+      - 'contracts/**'
       - '.github/workflows/test.yml'
   pull_request:
     branches-ignore:
@@ -19,6 +26,13 @@ on:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
       - 'cross-end-tests/**'
+      # 根 packages/** 是机制内核 / 能力域 crate（wasm-core 的 57 个带测试源文件、
+      # pty-engine、host-kit…）：只改它们的 PR 过去不触发任何 Rust 测试，而移动纯度锁、
+      # WIT 版本锁与 cross-end-tests 依赖图都落在这些 crate 上。
+      - 'packages/**'
+      # 契约版本真源（WIT 包版本单点，compose-wit.mjs 读它注入 package 行）：
+      # 改了必须重拼，落进本 workflow 才能被 wit_package_version_lock 与漂移锁看守。
+      - 'contracts/**'
       - '.github/workflows/test.yml'
 
 permissions:
@@ -64,10 +78,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # 票 03：桌面插件/fixture 已全量 wasm32-wasip3（构建经 pinned nightly，
-          # 见下方 wasip3 工具链步骤）；宿主测试仍用 stable。wasm32-wasip2 仅
-          # plugin-wasi-test（WASI preopen E2E）需要；wasm32-unknown-unknown 已无消费者。
-          targets: wasm32-wasip2
+          # 本 job 要 plugins:build 全部四个桌面插件，目标分两种：agent-hub /
+          # ai-chatbox / terminal-session 是 wasm32-wasip3（pinned nightly，见下方步骤），
+          # file-transfer 是 wasm32-unknown-unknown + componentize（packages/
+          # bedcode-componentize）；宿主测试仍用 stable。wasm32-wasip2 是 wasm-core
+          # 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
+          targets: wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
         # 单一事实来源 scripts/wasip3-toolchain.sh（WASIP3_NIGHTLY）；
@@ -114,20 +130,10 @@ jobs:
       - name: Cargo test (desktop plugin SDK)
         run: cargo test --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
 
-      # server-lib-split 票 02-06：error/constants/加密引擎/内核（supervisor·filter·
-      # link_crypto·metrics·组合装配）、两个传输面（HTTP：registry·gateway·controllers·
-      # middleware·dtos；WS：conn·channel·registry·endpoint·routes·manager）与对等网络
-      # 引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）的 194 项测试随代码
-      # 迁出宿主 crate（票 06 起 peer-net 再 +28），src-tauri 的 cargo test 不再执行它们——
-      # 不补这一步，拆出来的层在合并门禁上无人看守。
-      # **必须 cd 进 crate 根**（AGENTS §3）：各 crate 的 .cargo/config.toml 把 target 指向
-      # 仓库根 target/server-libs（相对 crate 根 `../../`），而 cargo 只从 cwd 向上找 config——
-      # 用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进 `<crate>/target`。
-      - name: Cargo test (desktop server libs)
-        run: |
-          for lib in bedcode-server-base bedcode-crypto-engine bedcode-server-core bedcode-server-http bedcode-server-websocket bedcode-server-peer-net; do
-            (cd "packages/$lib" && cargo test)
-          done
+      # 根 `packages/bedcode-*` 各 crate 的单测统一由 `rust-capability-crates` job 跑
+      # （清单由 `packages/*/` 目录推导）。此处原有一个 6-crate 手写循环（server-libs /
+      # 加密引擎 / 传输面 / 对等网络引擎域），2026-10-16 迁到该 job——手写名单是漂移源，
+      # 而且它没跟上后续拆出的机制内核与能力域 crate（覆盖面静默归零）。
 
       - name: Verify wasm-apps target-dir (cargo metadata regression guard)
         # B-02（2026-10-04 OCR）：`wasm-apps/.cargo/config.toml` 的 target-dir 一旦
@@ -169,6 +175,98 @@ jobs:
       - name: Cargo test (desktop)
         working-directory: bedcode-desktop/src-tauri
         run: cargo test
+
+  # ==================== 能力域 / 机制 crate 单测 ====================
+  #
+  # 仓库根 `packages/bedcode-*` 是各自独立的 crate（无根 workspace），宿主 `cargo test`
+  # **不会**执行它们自己的 `#[cfg(test)]` 模块——只改机制内核 / 能力域 crate 的 PR，
+  # 在合并门禁上无人看守（单是 wasm-core 就有 588 例，含两个 WASI 夹具 E2E）。
+  #
+  # 为什么独立成 job：这些 crate 的 target 落点分散（3 个共享桶 + 8 个各自 `target/`），
+  # 全部塞进 rust-desktop 会与其宿主 target 一起撑爆 runner（ubuntu-latest 仅 ~14G）。
+  # 独占 runner 后磁盘隔离，且与其它 job 并行 → 总时长几乎不变。
+  #
+  # 磁盘/内存闸门（都不是随手加的，数字是 2026-10-16 本机实测——与 CI 同 OS、同
+  # profile；见下）：
+  #   1. 单一 `CARGO_TARGET_DIR`：18 个 crate 共享一份依赖图产物（tokio / rustls /
+  #      wasmtime / tauri / gtk 只编一次），并只给 rust-cache 一个目录可缓存；
+  #   2. `CARGO_INCREMENTAL=0` + `debug=0`：实测同一循环下 **17G → 8.8G**（增量目录
+  #      本身就 3.2G，DWARF 占 deps 的大头）。**代价：CI 失败栈无行号**（本地开发不受
+  #      影响，本机仍用默认 debug）——换 14G runner 跑得下，且 CI 本来就是冷目录。
+  #      注：`CARGO_INCREMENTAL=0` 还能让 sccache 缓存本地 crate（根 config 头注）。
+  #
+  # 工具链必须装齐：stable 的 `wasm32-wasip2`（wasm-core 的 WASI preopen E2E 夹具）+
+  # pinned nightly 的 `wasm32-wasip3`（p3 夹具 / host import 用例）——**缺 nightly 时
+  # 那些用例会走 `[skip]` 静默降级而不是报错**（见 wasm-core `runtime/tests/preopen_e2e.rs`），
+  # 所以不能省。
+  rust-capability-crates:
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
+      # 18 个 crate 共用一个落点（见上方注释）。夹具构建自带 CARGO_TARGET_DIR
+      # （`bedcode-desktop/target/fixtures`，真源 wasm-core `runtime/fixture_target.rs`），
+      # 不受本覆盖影响。
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-capability-crates
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        # wasm-core 直接依赖 tauri（tray-icon / protocol-asset / test feature）与
+        # tauri-plugin-dialog → 桌面那套系统依赖在这里同样必需
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要
+          targets: wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh（WASIP3_NIGHTLY）
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存单一共享 target 目录。`$workspace -> $target` 的 target 相对 workspace 目录。
+          # 注意两点（读 action 文档核过，不是猜的）：
+          #   1. action 自己会设 `CARGO_INCREMENTAL=0` 并只持久化**依赖**产物（会剔掉
+          #      增量目录与非依赖产物），所以上面的 `CARGO_INCREMENTAL=0` 是冗余的
+          #      （保留只为与本 job 的磁盘口径一致）；cache key 也不是只取 wasm-core 的锁，
+          #      而是仓库内全部 `Cargo.lock`/`Cargo.toml` + rust 环境哈希。
+          #   2. `workspaces` 需要**真实存在的 cargo 工程路径**（action 会跑 cargo metadata），
+          #      所以这里点了一个具体 crate。crate 改名（如 bedcode-* → 其它前缀）时必须
+          #      同步改这一行——改名后路径不存在会让本步显性报错（好过静默丢缓存）。
+          workspaces: packages/bedcode-wasm-core -> ../../target/ci-capability-crates
+
+      # 清单由 `packages/*/` 目录推导——与各防回接锁同一手法：手写名单是零成本后门
+      # （新增 crate 忘登记就让覆盖面静默归零，本 job 取代的那个 6-crate 循环就是这么
+      # 落后的）。**必须 cd 进 crate 根**（AGENTS §3）：各 crate 的 `.cargo/config.toml`
+      # 与相对路径依赖都以 crate 根为基准。
+      - name: Cargo test (all root capability crates)
+        run: |
+          for dir in packages/*/; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            echo "========== cargo test: $dir =========="
+            (cd "$dir" && cargo test) || exit 1
+          done
 
   rust-mobile:
     runs-on: ubuntu-latest
@@ -233,16 +331,14 @@ jobs:
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: pnpm run build
 
-      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）。
+      # 清单由目录推导：原手写名单曾漂移（退役的 `ocr` 仍在列、新增 app 会漏装依赖）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox bedcode file-transfer ocr; do
-            if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
-              echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing wasm-apps/$p =="
-            (cd bedcode-mobile/wasm-apps/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build plugins (WASM artifacts)
@@ -331,15 +427,13 @@ jobs:
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: pnpm run build
 
+      # 同 rust-mobile：清单由目录推导，不手写
       - name: Install mobile plugin dependencies
         run: |
-          for p in ai-chatbox bedcode file-transfer ocr; do
-            if [ ! -d "bedcode-mobile/wasm-apps/$p" ]; then
-              echo "wasm-apps/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing wasm-apps/$p =="
-            (cd "bedcode-mobile/wasm-apps/$p" && pnpm install --frozen-lockfile) || exit 1
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build plugins (mobile WASM artifacts)

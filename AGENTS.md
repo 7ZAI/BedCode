@@ -284,7 +284,7 @@ SDK（plugin-sdk-{desktop,mobile}）
 - 改动落在宿主侧时通过 §5.1 裁决与自检（B1-B6 零命中、未在宿主新增业务类型 / 状态 / 存储 / 路由 / 业务默认值、退役面回接被防回接锁覆盖）；真源搬迁附 fail-visible 三形态证据
 - i18n key 双语同步；公开项有文档注释；错误处理用 `AppError`；单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
 
-CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.yml`（两端 cargo test + vitest）+ `wit-drift-lock.yml`（WIT 拼装漂移锁，与 husky 同判据）。
+CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error + 根 `scripts/*.test.mjs` 的配置结构锁）+ `test.yml`（两端 cargo test + vitest + 根 `packages/*/` 各 crate 单测 + 跨端互连）+ `wit-drift-lock.yml`（WIT 拼装漂移锁，与 husky 同判据）。
 
 ---
 

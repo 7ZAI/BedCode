@@ -20,7 +20,7 @@
 | 桌面插件全量构建 | `bedcode-desktop` | `pnpm run plugins:build` |
 | 移动插件全量构建 | `bedcode-mobile` | `pnpm run plugins:build` |
 | WIT 分片拼装 / 漂移锁 | 仓库根 | `pnpm run check:wit`（只读锁；拼装 = `node scripts/compose-wit.mjs --all`） |
-| 代码质量 | 仓库根 / 各端 | `pnpm exec eslint .` · 各端 `pnpm run lint` · `src-tauri` 内 `cargo clippy` |
+| 代码质量 | 仓库根 / 各端 | `pnpm exec eslint .` · 根 `pnpm run test:run`（`scripts/*.test.mjs`，含 ESLint 锁 glob 一致性锁）· 各端 `pnpm run lint` · `src-tauri` 内 `cargo clippy` |
 
 ---
 
@@ -28,6 +28,11 @@
 
 - **包管理器只有 pnpm**，全局禁止 npm。仓库根与两端各有独立 `pnpm-lock.yaml`。
 - **仓库根没有 vitest 配置**：前端测试**必须在端目录执行**（`cd bedcode-desktop && pnpm run test:run`）。
+- **仓库根另有 node 内置测试套件**（`pnpm run test:run` = `node --test "scripts/*.test.mjs"`）：af
+  测试构建工具与配置的纯函数（`adaptive-run` / `build-profile` / `eslint-lock-globs`），**不得写 vitest**。
+  其中 `scripts/eslint-lock-globs.test.mjs` 是「`eslint.config.js` 的 `frontendSourceGlobs` ↔ 真实目录」
+  结构锁（目录改名后 glob 漂移会让前端零资源访问锁静默失效）；它由 `lint.yml` 随 eslint 一起跑
+  （只有 lint job 装了根依赖）。
 - **Rust 无根 workspace**：没有「在根目录跑 cargo test」这种命令，每个 crate（两端宿主、wasm 应用、移动插件、`cross-end-tests`）都在**自己的根目录**执行，测试也各自跑。
 - **sccache 是全仓 Rust 构建前置**（根 `.cargo/config.toml` 强制 `rustc-wrapper`），未装则一切 cargo 命令直接失败——这是显性失败设计，装法与缓存见 `docs/knowledge/build-process.md`。
 - **可选包装器 `adaptive-run.mjs`**（仓库根 `scripts/`）：采样 CPU / 可用内存 / swap 后按档位注入 `CARGO_BUILD_JOBS`、`GRADLE_OPTS`、`NODE_OPTIONS`，防 OOM 优先；`--` 之后原样接任意命令，不改变其行为。
@@ -72,6 +77,12 @@ cargo test <名称前缀>                            # 针对性过滤，cwd = �
 ```
 
 **宿主 `cargo test` 不覆盖** wasm 应用 / 移动插件 crate，也不覆盖未纳入 vitest include 的目录（以两端 `vitest.config.ts` 的 include 为准）——落在那些目录须自行运行并在交付说明里写明。
+
+**CI 口径**：`test.yml` 的 `rust-capability-crates` job 把根 `packages/*/` 下**全部** crate 逐个跑一遍
+（清单由目录推导，新增 crate 自动纳入；宿主与 wasm-apps 各自另有 job）——改任一能力域 / 机制 crate
+时，它自己的 `cargo test` 就是合并门禁上的等效命令。该 job 用单一 `CARGO_TARGET_DIR` +
+`CARGO_INCREMENTAL=0` + `debug=0` 控磁盘（实测同一循环 17G → 约 7G；代价是 CI 失败栈无行号），
+与本地 per-crate `target` 落点不同（落点不影响判据）。
 
 ### 2.3 跨端互连（`cross-end-tests/`）
 

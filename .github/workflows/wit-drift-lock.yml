@@ -6,6 +6,9 @@ name: WIT Slice Drift Lock
 # + 能力域 / 端 cap 分片，端清单 `compose.json` 驱动拼装）。本 workflow 只读比对：
 # 生成物与真源逐字一致、生成物在场、幂等——手改生成物或改真源不重拼即红。
 #
+# 触发器含 `contracts/**`：WIT 包版本真源 `contracts/bedcode-plugin-package.rs` 由
+# `compose-wit.mjs` 读取并注入 `package bedcode:plugin@<ver>` 行——只改真源不重拼同样是漂移。
+#
 # 独立于 test.yml / lint.yml 的原因：那两个 workflow 的 paths 过滤不含 `packages/**` 与
 # `scripts/**`（真源恰在此两处），挂进去会出现「真源改了但 CI 不触发」的静默窗口。
 on:
@@ -14,6 +17,7 @@ on:
       - 'dev'
     paths:
       - 'packages/**'
+      - 'contracts/**'
       - 'bedcode-desktop/packages/plugin-sdk-desktop/**'
       - 'bedcode-mobile/packages/plugin-sdk-mobile/**'
       - 'scripts/compose-wit.mjs'
@@ -23,6 +27,7 @@ on:
       - 'dev'
     paths:
       - 'packages/**'
+      - 'contracts/**'
       - 'bedcode-desktop/packages/plugin-sdk-desktop/**'
       - 'bedcode-mobile/packages/plugin-sdk-mobile/**'
       - 'scripts/compose-wit.mjs'
