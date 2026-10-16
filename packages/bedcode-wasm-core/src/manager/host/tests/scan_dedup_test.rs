@@ -33,7 +33,7 @@ async fn user_copy_must_not_shadow_builtin_scan_plugin() {
         std::fs::write(
             plugin_dir.join(PLUGIN_MANIFEST_FILE),
             format!(
-                r#"{{"id": "{}", "name": "Shadow Test", "version": "1.0.0", "main": "index.js", "permissions": ["storage"]}}"#,
+                r#"{{"id": "{}", "name": "Shadow Test", "version": "1.0.0", "platform": "both", "main": "index.js", "permissions": ["storage"]}}"#,
                 shadowed_id
             ),
         )

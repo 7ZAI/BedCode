@@ -741,6 +741,11 @@ const VALID_PERMISSIONS = new Set([
 const VALID_PLUGIN_TYPES = new Set(['wasm', 'ts-only', 'rust', 'rust-ts'])
 const WASM_HASH_RE = /^sha256-[0-9a-f]{64}$/i
 
+// 适配平台取值域（manifest `platform`，必填，与 id/name/version 同档）。
+// 真源是 SDK rust/src/types.rs::PluginPlatform（serde rename_all = "lowercase"）；
+// 宿主加载 / 安装期按本端校验：移动拒 desktop、桌面拒 mobile，both 两端均可。
+const VALID_PLATFORMS = new Set(['desktop', 'mobile', 'both'])
+
 function cmdValidate(flags) {
   const dir = resolve(process.cwd(), flags.dir || '.')
   const manifestPath = join(dir, 'plugin.json')
@@ -769,11 +774,18 @@ function cmdValidate(flags) {
     errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
   }
 
-  // 必填字段
-  for (const field of ['name', 'version', 'main', 'pluginType', 'permissions', 'contributes']) {
+  // 必填字段（platform 与 id/name/version 同档：宿主反序列化无缺省，缺失即拒装）
+  for (const field of ['name', 'version', 'platform', 'main', 'pluginType', 'permissions', 'contributes']) {
     if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
       errors.push(`缺少必填字段: ${field}`)
     }
+  }
+
+  // platform 取值域（拼写与宿主端门禁词汇同源；未知取值在宿主反序列化即拒）
+  if (manifest.platform && !VALID_PLATFORMS.has(manifest.platform)) {
+    errors.push(
+      `platform 非法: "${manifest.platform}"（允许: ${[...VALID_PLATFORMS].join(' / ')}）`,
+    )
   }
 
   // pluginType / rustLibrary / wasmHash

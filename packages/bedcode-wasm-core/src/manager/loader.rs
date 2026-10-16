@@ -354,6 +354,7 @@ mod tests {
             "id": "com.test.plugin",
             "name": "Test Plugin",
             "version": "1.0.0",
+            "platform": "both",
             "main": "index.ts",
             "permissions": ["terminal:input", "storage"],
             "contributes": {
@@ -382,6 +383,7 @@ mod tests {
         let manifest_json = serde_json::json!({
             "name": "No ID",
             "version": "1.0.0",
+            "platform": "both",
             "main": "index.ts"
         });
 
@@ -404,6 +406,7 @@ mod tests {
             "id": "com.test.legacy-sandbox",
             "name": "Legacy Sandbox Plugin",
             "version": "1.0.0",
+            "platform": "both",
             "main": "index.ts",
             "sandbox": "isolated"
         });
@@ -425,6 +428,7 @@ mod tests {
             "id": id,
             "name": format!("Test {}", id),
             "version": "1.0.0",
+            "platform": "both",
             "main": "index.js",
         });
         fs::write(

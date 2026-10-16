@@ -649,7 +649,7 @@ async fn test_boot_activates_system_components_before_app_plugins() {
         let dir = plugins_dir.join(id);
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = format!(
-            r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
+            r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "platform": "desktop", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
             id, id, rust_lib, manifest_extra
         );
         std::fs::write(dir.join("plugin.json"), manifest).unwrap();
@@ -725,7 +725,7 @@ fn write_wasm_package(
     let dir = plugins_dir.join(id);
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = format!(
-        r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
+        r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "platform": "desktop", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
         id, id, rust_library, manifest_extra
     );
     std::fs::write(dir.join("plugin.json"), manifest).unwrap();

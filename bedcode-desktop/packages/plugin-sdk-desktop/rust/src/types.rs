@@ -7,9 +7,10 @@ use std::collections::HashMap;
 
 /// 插件描述文件 (plugin.json) 的完整结构
 ///
-/// `Default` 的用途是**测试夹具与合成 manifest 的构造基线**：除 `id` / `name` / `version`
-/// 三个必填项外，每个字段都带 `#[serde(default)]`，因此 `Default` 与「一份只写了必填项的
-/// plugin.json 解析结果」逐字段等价。调用点写成 `PluginManifest { id, name, version, ..Default::default() }`
+/// `Default` 的用途是**测试夹具与合成 manifest 的构造基线**：除 `id` / `name` /
+/// `version` / `platform` 四个必填项外，每个字段都带 `#[serde(default)]`，因此
+/// `Default` 与「一份只写了必填项的 plugin.json 解析结果」逐字段等价。调用点写成
+/// `PluginManifest { id, name, version, ..Default::default() }`
 /// 之后，本类型**追加可选字段不再连带测试编译红**——此前六处结构体字面量把「逐字段列全」
 /// 当隐式契约用，`pty_quota` 追加时就漏修了 `plugin-wasip3-test` 一处（会话引擎下沉票 14）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,6 +22,13 @@ pub struct PluginManifest {
     pub name: String,
     /// 语义化版本号
     pub version: String,
+    /// 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）
+    ///
+    /// **必填项**（与 id/name/version 同档，无 serde 缺省）——声明本应用适配哪一端；
+    /// 宿主在**加载 / zip 安装**时校验声明必须覆盖当前端（`PluginPlatform::supports`），
+    /// 不匹配即 fail-visible 拒绝：把一端的分发包装到另一端后「装了却不工作」
+    /// 比一次显性拒绝难排查得多。
+    pub platform: PluginPlatform,
     /// 插件描述
     #[serde(default)]
     pub description: String,
@@ -182,6 +190,48 @@ pub enum PluginType {
 impl Default for PluginType {
     fn default() -> Self {
         default_plugin_type()
+    }
+}
+
+/// 应用适配平台（manifest `platform` 字段，必填）
+///
+/// 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。宿主在加载 /
+/// 安装时按本端校验（`supports`），单端声明遇到另一端即拒绝装载。
+///
+/// `Default` 取 `Both` **仅服务测试夹具与合成清单**（wire 层该字段必填、无 serde
+/// 缺省）：合成清单对两端都可装载，不把测试夹具钉死在某一个端。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPlatform {
+    /// 仅桌面端
+    Desktop,
+    /// 仅移动端
+    Mobile,
+    /// 双端适配（两端均可加载）
+    #[default]
+    Both,
+}
+
+impl PluginPlatform {
+    /// wire 值（错误文案 / 对比用；与 serde rename 同源）
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+            Self::Both => "both",
+        }
+    }
+
+    /// 本声明是否适用于 `host`（宿主当前端；只应传 `Desktop` / `Mobile`）
+    ///
+    /// `both` 对任一端成立；单端声明只对本端成立。
+    pub const fn supports(self, host: PluginPlatform) -> bool {
+        match (self, host) {
+            (Self::Both, _) => true,
+            (Self::Desktop, Self::Desktop) => true,
+            (Self::Mobile, Self::Mobile) => true,
+            _ => false,
+        }
     }
 }
 
@@ -774,6 +824,7 @@ mod tests {
             "id": "com.bedcode.lock",
             "name": "Lock",
             "version": "0.0.0",
+            "platform": "both",
         }))
         .expect("只写必填项的 manifest 必须可解析");
         let from_default = PluginManifest {
@@ -797,6 +848,7 @@ mod tests {
             "id": "com.bedcode.demo",
             "name": "Demo",
             "version": "0.1.0",
+            "platform": "both",
             "permissions": ["storage", "terminal:input"],
             "pluginType": "rust-ts",
             "contributes": {
@@ -821,10 +873,15 @@ mod tests {
     fn test_manifest_round_trip_fills_defaults() {
         // 宿主加载最小化 plugin.json 后序列化回写：缺省字段应已填充默认值
         // （serde default 在反序列化时生效，序列化反映内存中的实际值）
-        let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0" });
+        let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0", "platform": "both" });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
         let back = serde_json::to_value(&m).unwrap();
         assert_eq!(back["pluginType"], serde_json::json!("ts-only"));
+        assert_eq!(
+            back["platform"],
+            serde_json::json!("both"),
+            "platform 原样回写"
+        );
         assert_eq!(back["description"], serde_json::json!(""));
         // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
         assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
@@ -840,6 +897,7 @@ mod tests {
             "id": "com.bedcode.legacy",
             "name": "Legacy",
             "version": "1.0.0",
+            "platform": "both",
             "sandbox": "isolated"
         });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
@@ -855,6 +913,7 @@ mod tests {
             "id": "com.bedcode.sys-store",
             "name": "Sys Store",
             "version": "1.0.0",
+            "platform": "both",
             "type": "basic-service",
             "dependencies": ["host-storage", "host-log"]
         });
@@ -882,6 +941,7 @@ mod tests {
                 "id": "com.bedcode.legacy-kind",
                 "name": "Legacy Kind",
                 "version": "1.0.0",
+                "platform": "both",
                 "type": legacy,
             });
             let m: PluginManifest = serde_json::from_value(json).unwrap();
@@ -942,6 +1002,7 @@ mod tests {
             "id": "com.bedcode.bad-kind",
             "name": "Bad Kind",
             "version": "1.0.0",
+            "platform": "both",
             "type": "systemm",
         });
         assert!(
@@ -953,7 +1014,7 @@ mod tests {
     /// `lifecycle`：缺省常驻（不序列化落盘）；`ephemeral` 可解析并保留
     #[test]
     fn test_manifest_lifecycle_default_and_ephemeral() {
-        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0" });
+        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0", "platform": "both" });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
         assert!(m.lifecycle.is_persistent());
         let back = serde_json::to_value(&m).unwrap();
@@ -963,6 +1024,7 @@ mod tests {
             "id": "com.bedcode.worker",
             "name": "Worker",
             "version": "1.0.0",
+            "platform": "both",
             "pluginType": "rust",
             "lifecycle": "ephemeral",
         });
@@ -984,6 +1046,7 @@ mod tests {
                 "id": "com.bedcode.worker",
                 "name": "W",
                 "version": "1.0.0",
+                "platform": "both",
                 "lifecycle": bad,
             });
             assert!(
@@ -997,7 +1060,7 @@ mod tests {
     fn test_manifest_kind_and_dependencies_default_for_legacy() {
         // 缺省兼容：旧插件 manifest 无 type/dependencies 字段 → L3 业务应用 + 空依赖，
         // 序列化回写时缺省值不落盘（skip_serializing_if）
-        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0" });
+        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0", "platform": "both" });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
         assert!(m.kind.is_business_app());
         assert!(m.dependencies.is_empty());
@@ -1016,6 +1079,7 @@ mod tests {
             "id": "com.bedcode.heavy",
             "name": "Heavy",
             "version": "1.0.0",
+            "platform": "both",
             "resourceOverrides": {
                 "fuelPerCall": 128_000_000_000u64,
                 "maxMemoryBytes": 512 * 1024 * 1024
@@ -1042,7 +1106,8 @@ mod tests {
         let json = serde_json::json!({
             "id": "com.bedcode.legacy",
             "name": "Legacy",
-            "version": "1.0.0"
+            "version": "1.0.0",
+            "platform": "both"
         });
         let m: PluginManifest = serde_json::from_value(json).unwrap();
         assert!(
@@ -1473,6 +1538,7 @@ mod tests {
             "id": "com.bedcode.demo",
             "name": "Demo",
             "version": "0.1.0",
+            "platform": "both",
             "pluginType": "rust-ts",
             "wasiPreopenDirs": []
         });
@@ -1489,6 +1555,7 @@ mod tests {
             "id": "com.bedcode.demo",
             "name": "Demo",
             "version": "0.1.0",
+            "platform": "both",
             "pluginType": "rust-ts",
             "wasiPreopenDirs": [
                 "${home}/.bedcode/ai-chatbox",

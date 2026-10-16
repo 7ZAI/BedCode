@@ -2,6 +2,7 @@
   "id": "com.bedcode.sdk-test",
   "name": "SDK Test Plugin",
   "version": "0.1.0",
+  "platform": "desktop",
   "description": "SDK component bindings test plugin",
   "author": "BedCode",
   "main": "index.js",

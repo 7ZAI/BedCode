@@ -295,6 +295,17 @@ impl PluginLoader {
             return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
         }
 
+        // 平台适配门禁（platform 必填）：移动端只放行 mobile / both——桌面专属
+        // 插件被复制进本端插件目录时显性拒绝，避免「加载成功却整页不出现」的
+        // 静默乱象（与桌面端 manager/validation.rs::validate_platform 对等）
+        if !manifest.platform.supports(PluginPlatform::Mobile) {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin.json platform=\"{}\" 与移动端不匹配：该插件声明仅适配另一端\
+                 （platform 需为 \"mobile\"；双端适配写 \"both\"），移动端拒绝装载",
+                manifest.platform.as_str()
+            )));
+        }
+
         // TS-only 插件必须有 main 字段
         if manifest.plugin_type == PluginType::TsOnly && manifest.main.is_empty() {
             return Err(crate::AppError::Plugin(
@@ -357,6 +368,7 @@ mod tests {
                     "id": "com.bedcode.terminal-session",
                     "name": "BedCode",
                     "version": "1.0.0-beta",
+                    "platform": "mobile",
                     "pluginType": "wasm",
                     "rustLibrary": "bedcode_plugin_terminal_session",
                     "permissions": ["auth", "bus", "network:http", "session:read", "storage", "terminal:output", "ui:route", "ws:client"]
@@ -403,5 +415,62 @@ mod tests {
                 "组件 AOT 缓存应以 c 前缀命名"
             );
         });
+    }
+
+    /// 平台适配门禁（移动端）：desktop 专属清单必须 fail-visible 拒装载
+    ///
+    /// 行为契约（与桌面端 manager/validation.rs::validate_platform 对等）：
+    /// - `platform="desktop"` → 拒绝，错误点名字段、声明值与 `"both"` 出路；
+    /// - `platform` 缺失 / 未知取值 → 反序列化即拒（wire 无缺省，fail-visible）；
+    /// - `platform="mobile"` / `"both"` → 放行且取值原样保留。
+    #[test]
+    fn test_load_manifest_rejects_non_mobile_platform() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // 每次覆写同一份最小清单（ts-only 形态免 wasm 产物即可过必填校验）
+        let write_manifest = |platform_line: &str| -> std::path::PathBuf {
+            let path = tmp.path().join("plugin.json");
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{
+                        "id": "com.example.platform-probe",
+                        "name": "Platform Probe",
+                        "version": "1.0.0",
+                        {platform_line}
+                        "pluginType": "ts-only",
+                        "main": "index.js",
+                        "permissions": [],
+                        "contributes": {{}}
+                    }}"#
+                ),
+            )
+            .expect("write plugin.json");
+            path
+        };
+
+        // desktop 专属：拒绝，且错误信息点名 platform / desktop / both
+        let err = PluginLoader::load_manifest(&write_manifest(r#""platform": "desktop","#))
+            .expect_err("desktop 专属清单在移动端必须被拒");
+        let msg = err.to_string();
+        assert!(msg.contains("platform"), "错误须点名字段: {msg}");
+        assert!(msg.contains("desktop"), "错误须点名声明值: {msg}");
+        assert!(msg.contains("both"), "错误须给出双端出路: {msg}");
+
+        // platform 缺失：无 serde 缺省，解析即拒
+        let err = PluginLoader::load_manifest(&write_manifest("")).expect_err("缺失 platform 必须解析失败");
+        assert!(err.to_string().contains("platform"), "错误须点名缺失字段: {err}");
+
+        // 未知取值：解析即拒（rename_all = "lowercase" 只认三个 wire 值）
+        let err = PluginLoader::load_manifest(&write_manifest(r#""platform": "linux","#))
+            .expect_err("未知 platform 取值必须解析失败");
+        assert!(err.to_string().contains("linux"), "serde 错误须点名未知取值: {err}");
+
+        // mobile / both：放行（门禁不得误伤本端与双端插件）
+        for platform in ["mobile", "both"] {
+            let manifest = PluginLoader::load_manifest(&write_manifest(&format!(r#""platform": "{platform}","#)))
+                .unwrap_or_else(|e| panic!("platform={platform} 应放行: {e}"));
+            assert_eq!(manifest.platform.as_str(), platform);
+        }
     }
 }

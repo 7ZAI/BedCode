@@ -51,6 +51,31 @@ pub fn validate_manifest_required(manifest: &PluginManifest) -> crate::Result<()
     {
         validate_lifecycle(manifest)?;
         validate_preopen_category(manifest)?;
+        validate_platform(manifest)?;
+    }
+    Ok(())
+}
+
+/// 校验 manifest 的平台适配声明覆盖**桌面端**（`platform` 必填面之行为契约）
+///
+/// `platform` 是必填的 adapt/端声明（wire 层由 serde 拒缺失），本函数补上**门禁**
+/// 语义：单端声明装载到另一端即显性拒绝——桌面端只放行 `desktop` / `both`，
+/// `mobile`（仅移动）在此处 fail-visible，防止把移动端分发包放到桌面 resources /
+/// 用户插件目录后「装了却不出现」或运行期行为错乱。
+///
+/// 为什么门禁住桌面装配面（`desktop-assembly`）：这就是「桌面端如何解释本端」的
+/// 端事实，与 `validate_lifecycle` / `validate_preopen_category` 同档；移动端对等
+/// 门禁住移动宿主（`plugin/loader.rs` / `plugin/downloader.rs`，移动 SDK 的
+/// `PluginPlatform::supports`）。
+#[cfg(feature = "desktop-assembly")]
+pub fn validate_platform(manifest: &PluginManifest) -> crate::Result<()> {
+    use crate::manifest::PluginPlatform;
+    if !manifest.platform.supports(PluginPlatform::Desktop) {
+        return Err(crate::AppError::Plugin(format!(
+            "plugin.json platform=\"{}\" 与桌面端不匹配：该插件声明仅适配另一端\
+             （platform 需为 \"desktop\"；双端适配写 \"both\"），桌面端拒绝装载",
+            manifest.platform.as_str()
+        )));
     }
     Ok(())
 }
@@ -330,7 +355,7 @@ mod tests {
     fn lifecycle_ephemeral_is_rejected_at_load_persistent_and_absent_pass() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {
             parse_manifest_json(&format!(
-                r#"{{"id":"com.bedcode.worker","name":"worker","version":"1.0.0"{extra}}}"#
+                r#"{{"id":"com.bedcode.worker","name":"worker","version":"1.0.0","platform":"both"{extra}}}"#
             ))
         };
 
@@ -376,7 +401,7 @@ mod tests {
     fn wasi_preopen_dirs_on_non_worker_is_rejected_at_load() {
         let parse = |extra: &str| -> crate::Result<PluginManifest> {
             parse_manifest_json(&format!(
-                r#"{{"id":"com.bedcode.po","name":"po","version":"1.0.0"{extra}}}"#
+                r#"{{"id":"com.bedcode.po","name":"po","version":"1.0.0","platform":"both"{extra}}}"#
             ))
         };
 
@@ -422,7 +447,7 @@ mod tests {
     fn manifest_role_spelling_domain_is_closed_at_load() {
         let parse = |kind: &str| -> crate::Result<PluginManifest> {
             parse_manifest_json(&format!(
-                r#"{{"id":"com.bedcode.role","name":"role","version":"1.0.0","type":"{kind}"}}"#
+                r#"{{"id":"com.bedcode.role","name":"role","version":"1.0.0","platform":"both","type":"{kind}"}}"#
             ))
         };
         assert!(parse("basic-service").is_ok());
@@ -435,6 +460,63 @@ mod tests {
         }
     }
 
+    /// `platform` 声明的门禁语义：只放行本端 / 双端，另一端专属声明加载期显性拒绝
+    ///
+    /// 正例：`"desktop"` 与 `"both"` 均照常加载；
+    /// 反例：`"mobile"`（仅移动）必须加载期失败并点名字段与可用取值；
+    /// 异常：缺失（wire 必填，serde 即拒）与未知取值（`"linux"`）都必须失败——
+    /// 不得回落 `Default` 的 `Both`（回落会把「装错端」从显性拒绝变成静默装载）。
+    ///
+    /// 变异判据：把 `validate_platform` 从 `validate_manifest_required` 摘掉，
+    /// `"mobile"` 反例会静默装载成功（转红）；把 enum 的 serde 换成
+    /// `#[serde(default)]` 后缺失用例转红。
+    ///
+    /// 命名说明（ADR 0047 D2「自持标识符零端名」，移动纯净锁
+    /// `mobile_wasm_core_purity_lock.rs` 扫描声明位）：标识符不得含端名，
+    /// 本端语义放注释与断言，函数名保持端中立。
+    #[cfg(feature = "desktop-assembly")]
+    #[test]
+    fn platform_declaration_must_cover_hosting_end() {
+        use crate::manifest::PluginPlatform;
+        let parse = |platform: &str| -> crate::Result<PluginManifest> {
+            parse_manifest_json(&format!(
+                r#"{{"id":"com.bedcode.plat","name":"plat","version":"1.0.0","platform":"{platform}"}}"#
+            ))
+        };
+
+        // 正例：本端专属与双端声明都放行
+        assert_eq!(
+            parse("desktop").expect("desktop 声明").platform,
+            PluginPlatform::Desktop
+        );
+        assert_eq!(
+            parse("both").expect("both 声明").platform,
+            PluginPlatform::Both
+        );
+
+        // 反例：另一端专属 → 显性拒绝，错误点名字段、声明值与可用取值
+        let err = parse("mobile").err().expect("仅移动端声明在桌面端必须拒绝");
+        let text = err.to_string();
+        assert!(
+            text.contains("platform") && text.contains("mobile") && text.contains("both"),
+            "错误必须点名字段、声明值与可用取值（否则作者无从下手），got: {text}"
+        );
+
+        // 异常：缺失字段（wire 必填无缺省，与 id/name/version 同档）与非法取值均在解析期拒绝
+        let missing =
+            parse_manifest_json(r#"{"id":"com.bedcode.plat","name":"plat","version":"1.0.0"}"#)
+                .err()
+                .expect("platform 缺失必须拒绝");
+        assert!(
+            missing.to_string().contains("platform"),
+            "缺失错误必须点名 platform，got: {missing}"
+        );
+        assert!(
+            parse("linux").is_err(),
+            "未知 platform 取值必须失败，不得回落缺省"
+        );
+    }
+
     /// 授权策略档位声明在**加载期显性拒绝**（spec §11 B5：宿主不得替插件决定业务策略）
     ///
     /// 变异判据：把 `reject_policy_declaration` 从 `parse_manifest_json` 里摘掉，
@@ -443,7 +525,7 @@ mod tests {
     fn policy_declaration_in_manifest_is_rejected_at_load() {
         let with = |extra: &str| {
             parse_manifest_json(&format!(
-                r#"{{"id":"com.bedcode.p","name":"p","version":"1.0.0"{extra}}}"#
+                r#"{{"id":"com.bedcode.p","name":"p","version":"1.0.0","platform":"both"{extra}}}"#
             ))
         };
 

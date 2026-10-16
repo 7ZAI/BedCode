@@ -51,6 +51,7 @@ npm run doctor     # 环境自检
   "id": "com.example.my-plugin",
   "name": "My Plugin",
   "version": "0.1.0",
+  "platform": "mobile",
   "description": "示例插件",
   "author": "you",
   "icon": "🧩",

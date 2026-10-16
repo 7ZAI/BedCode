@@ -410,7 +410,7 @@ mod tests {
         std::fs::write(
             plugin_dir.join(crate::system::constants::PLUGIN_MANIFEST_FILE),
             format!(
-                r#"{{"id": "{}", "name": "ResDir Test", "version": "1.0.0", "main": "index.js", "permissions": ["storage"]}}"#,
+                r#"{{"id": "{}", "name": "ResDir Test", "version": "1.0.0", "platform": "both", "main": "index.js", "permissions": ["storage"]}}"#,
                 plugin_id
             ),
         )

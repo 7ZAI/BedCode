@@ -9,6 +9,7 @@ import type {
   PluginState,
   PluginManifest,
   PluginType,
+  PluginPlatform,
   MobilePluginContributes,
   NavTabContribution,
 } from '../src/types'
@@ -30,6 +31,7 @@ describe('PluginManifest 结构', () => {
       id: string
       name: string
       version: string
+      platform: PluginPlatform
       description: string
       author: string
       main: string
@@ -41,6 +43,11 @@ describe('PluginManifest 结构', () => {
 
   it('pluginType 含 wasm（移动端特有）', () => {
     expectTypeOf<PluginType>().toEqualTypeOf<'rust' | 'rust-ts' | 'ts-only' | 'wasm'>()
+  })
+
+  it('platform 仅允许三个 wire 值且必填', () => {
+    expectTypeOf<PluginPlatform>().toEqualTypeOf<'desktop' | 'mobile' | 'both'>()
+    expectTypeOf<PluginManifest>().toHaveProperty('platform').toEqualTypeOf<PluginPlatform>()
   })
 })
 

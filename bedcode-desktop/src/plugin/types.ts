@@ -15,11 +15,27 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
 
+/**
+ * 适配平台（manifest `platform` 字段，必填）
+ *
+ * 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+ * 宿主在加载 / zip 安装期按本端校验：桌面拒 `mobile`、移动拒 `desktop`，
+ * `both` 两端均可装载（真源 SDK `rust/src/types.rs::PluginPlatform`）。
+ */
+export type PluginPlatform = 'desktop' | 'mobile' | 'both'
+
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
   id: string
   name: string
   version: string
+  /**
+   * 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+   *
+   * **必填**（与 id/name/version 同档）：宿主加载 / 安装时校验声明必须覆盖
+   * 当前端，不匹配即 fail-visible 拒绝装载。
+   */
+  platform: PluginPlatform
   description: string
   author: string
   main: string

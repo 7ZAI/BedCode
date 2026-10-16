@@ -306,6 +306,17 @@ mod tests {
     /// 构造一个合法插件 zip：plugin.json + index.js + 可选 wasm 文件
     /// `declares_wasm` 控制 manifest 是否声明 rust_library；`includes_wasm_file` 控制 zip 是否含该文件
     fn build_plugin_zip(dir: &Path, id: &str, declares_wasm: bool, includes_wasm_file: bool) -> PathBuf {
+        build_plugin_zip_with_platform(dir, id, declares_wasm, includes_wasm_file, "both")
+    }
+
+    /// 同上，manifest `platform` 可指定（端门禁用例构造另一端专属声明）
+    fn build_plugin_zip_with_platform(
+        dir: &Path,
+        id: &str,
+        declares_wasm: bool,
+        includes_wasm_file: bool,
+        platform: &str,
+    ) -> PathBuf {
         let zip_path = dir.join(format!("{}.zip", id));
         let file = std::fs::File::create(&zip_path).unwrap();
         let mut writer = zip::ZipWriter::new(file);
@@ -315,6 +326,7 @@ mod tests {
             "id": id,
             "name": "Test Plugin",
             "version": "1.0.0",
+            "platform": platform,
             "main": "index.js",
             "pluginType": if declares_wasm { "rust-ts" } else { "ts-only" },
             "rustLibrary": if declares_wasm { wasm_name.clone() } else { String::new() },
@@ -472,6 +484,38 @@ mod tests {
         assert!(err.to_string().contains("missing plugin.json"));
     }
 
+    /// `platform` 门禁（桌面端）：仅移动端声明的 zip 在安装期显性拒绝
+    ///
+    /// 与目录扫描侧 `validate_platform` 同判据：两条安装入口都经
+    /// `parse_manifest_json` 漏斗，任一侧摘掉门禁即转红。拒绝必须发生在
+    /// 任何落盘之前（目标目录与临时目录都不该出现）。
+    #[cfg(feature = "desktop-assembly")]
+    #[test]
+    fn install_rejects_platform_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let zip_path = build_plugin_zip_with_platform(
+            tmp.path(),
+            "com.test.mobile-only",
+            false,
+            false,
+            "mobile",
+        );
+
+        let err = PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir)
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("platform") && text.contains("mobile") && text.contains("both"),
+            "拒绝必须点名字段、声明值与可用取值，got: {text}"
+        );
+        assert!(!plugins_dir.join("com.test.mobile-only").exists());
+        assert!(!plugins_dir
+            .join(PLUGIN_DOWNLOAD_TEMP_DIR)
+            .join("com.test.mobile-only")
+            .exists());
+    }
+
     /// 构造声明 rust_library + wasmHash 的 rust-ts 插件 zip
     fn build_wasm_zip(dir: &Path, id: &str, wasm_bytes: &[u8], declared_hash: &str) -> PathBuf {
         let zip_path = dir.join(format!("{}.zip", id));
@@ -483,6 +527,7 @@ mod tests {
             "id": id,
             "name": "Test Plugin",
             "version": "1.0.0",
+            "platform": "both",
             "main": "index.js",
             "pluginType": "rust-ts",
             "rustLibrary": wasm_name,

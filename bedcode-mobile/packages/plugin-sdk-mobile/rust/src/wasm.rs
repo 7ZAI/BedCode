@@ -62,7 +62,7 @@ pub trait WasmPlugin: Send + Sync + 'static {
 #[cfg(all(test, feature = "wasm"))]
 mod tests {
     use super::*;
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginPlatform, PluginType};
     use crate::BusMessage;
 
     /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
@@ -76,6 +76,7 @@ mod tests {
                 id: Self::ID.to_string(),
                 name: "Test Wasm".to_string(),
                 version: "0.1.0".to_string(),
+                platform: PluginPlatform::Both,
                 description: String::new(),
                 author: String::new(),
                 main: String::new(),

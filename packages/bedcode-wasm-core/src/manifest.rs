@@ -28,10 +28,10 @@ pub fn from_sdk_json<T: Serialize, U: serde::de::DeserializeOwned>(sdk: &T) -> U
 
 /// 插件描述文件 (plugin.json) 的完整结构（桌面 + 移动字段并集）
 ///
-/// `Default` 是测试夹具与合成 manifest 的构造基线：除 `id` / `name` / `version`
-/// 三个必填项外，每个字段都带 `#[serde(default)]`，因此 `Default` 与「一份只写了
-/// 必填项的 plugin.json 解析结果」逐字段等价（同桌面 SDK 语义，追加可选字段不再
-/// 连带测试编译红）。
+/// `Default` 是测试夹具与合成 manifest 的构造基线：除 `id` / `name` / `version` /
+/// `platform` 四个必填项外，每个字段都带 `#[serde(default)]`，因此 `Default` 与
+/// 「一份只写了必填项的 plugin.json 解析结果」逐字段等价（同桌面 SDK 语义，追加
+/// 可选字段不再连带测试编译红）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
@@ -41,6 +41,13 @@ pub struct PluginManifest {
     pub name: String,
     /// 语义化版本号
     pub version: String,
+    /// 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）
+    ///
+    /// **必填项**（与 id/name/version 同档，无 serde 缺省）——声明本应用适配哪一端；
+    /// 宿主在**加载 / zip 安装**时校验声明必须覆盖当前端（见各端装配面与
+    /// [`PluginPlatform::supports`]），不匹配即 fail-visible 拒绝：把一端的分发包
+    /// 装到另一端后「装了却不工作」比一次显性拒绝难排查得多。
+    pub platform: PluginPlatform,
     /// 插件描述
     #[serde(default)]
     pub description: String,
@@ -126,6 +133,50 @@ pub enum PluginType {
 impl Default for PluginType {
     fn default() -> Self {
         default_plugin_type()
+    }
+}
+
+/// 应用适配平台（manifest `platform` 字段，必填）
+///
+/// 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。宿主在加载 /
+/// 安装时按本端校验（`supports`），单端声明遇到另一端即拒绝装载。
+///
+/// `Default` 取 `Both` **仅服务测试夹具与合成清单**（wire 层该字段必填、无 serde
+/// 缺省）：合成清单对两端都可装载，不把测试夹具钉死在某一个端。端名（desktop /
+/// mobile）在此是**双端共享的 wire 词汇**（与 pluginType 的 wasm 同档）——不是按
+/// 端分叉的机制（ADR 0047 D2 判据只针对自持标识符的声明位，wire 取值不在此列）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPlatform {
+    /// 仅桌面端
+    Desktop,
+    /// 仅移动端
+    Mobile,
+    /// 双端适配（两端均可加载）
+    #[default]
+    Both,
+}
+
+impl PluginPlatform {
+    /// wire 值（错误文案 / 对比用；与 serde rename 同源）
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+            Self::Both => "both",
+        }
+    }
+
+    /// 本声明是否适用于 `host`（宿主当前端；只应传 `Desktop` / `Mobile`）
+    ///
+    /// `both` 对任一端成立；单端声明只对本端成立——宿主加载 / 安装的门禁判据。
+    pub const fn supports(self, host: PluginPlatform) -> bool {
+        match (self, host) {
+            (Self::Both, _) => true,
+            (Self::Desktop, Self::Desktop) => true,
+            (Self::Mobile, Self::Mobile) => true,
+            _ => false,
+        }
     }
 }
 

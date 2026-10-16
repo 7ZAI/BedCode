@@ -14,6 +14,7 @@ import type {
   PluginState,
   PluginManifest,
   PluginType,
+  PluginPlatform,
   PluginContributes,
   ConfigProperty,
 } from '../src/types'
@@ -38,6 +39,7 @@ describe('PluginManifest 结构', () => {
       id: string
       name: string
       version: string
+      platform: PluginPlatform
       description: string
       author: string
       main: string
@@ -50,6 +52,11 @@ describe('PluginManifest 结构', () => {
 
   it('pluginType 仅允许三种取值', () => {
     expectTypeOf<PluginType>().toEqualTypeOf<'rust' | 'rust-ts' | 'ts-only'>()
+  })
+
+  it('platform 仅允许三个 wire 值且必填', () => {
+    expectTypeOf<PluginPlatform>().toEqualTypeOf<'desktop' | 'mobile' | 'both'>()
+    expectTypeOf<PluginManifest>().toHaveProperty('platform').toEqualTypeOf<PluginPlatform>()
   })
 })
 

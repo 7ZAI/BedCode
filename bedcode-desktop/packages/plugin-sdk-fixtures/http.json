@@ -2,6 +2,7 @@
   "id": "com.bedcode.http-test",
   "name": "HTTP Route Registration Test",
   "version": "0.1.0",
+  "platform": "desktop",
   "description": "host-http 服务端域（ABI v29）fixture：动态路由注册 + 模板捕获 + _http_endpoint 回显",
   "author": "BedCode",
   "main": "index.js",

@@ -64,7 +64,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{block_on, MockBusAccess, MockEventEmitter, MockFileAccess, MockSessionQuery, MockStorage};
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginPlatform, PluginType};
     use crate::PermissionManager;
     use std::sync::Arc;
 
@@ -79,6 +79,7 @@ mod tests {
                 id: Self::ID.to_string(),
                 name: "Test Plugin".to_string(),
                 version: "0.1.0".to_string(),
+                platform: PluginPlatform::Both,
                 description: String::new(),
                 author: String::new(),
                 main: String::new(),

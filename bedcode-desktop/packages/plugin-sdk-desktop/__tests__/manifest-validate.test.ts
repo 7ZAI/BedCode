@@ -14,6 +14,11 @@
  * - C-V6 该字段由构建注入**产物**（票 14 裁决 A），源清单写了不会被刷新 → 只告警不报错；
  *   缺省与空串都是合法态（宿主 `wasm_hash.trim().is_empty()` = 未声明，跳过比对）。
  *
+ * `platform` 规则（必填适配平台）：
+ * - C-P1 与 id/name/version 同档必填，缺失即构建失败（宿主反序列化同样拒）；
+ * - C-P2 取值域 `desktop | mobile | both`，未知取值即拒并点名允许值；
+ * - C-P3 三值全部合法（宿主按本端放行，见 SDK `PluginPlatform::supports`）。
+ *
  * `wasiPreopenDirs` 规则（票 07 只读档）：
  * - C-W1 条目两形态并存：裸路径字符串（可写，既有形态）/ `{path, readonly}`，都合法；
  *   `readonly` 缺省 = 可写，所以既有 manifest 零迁移；
@@ -42,6 +47,7 @@ function errorsForHttpEndpoints(httpEndpoints: unknown): string[] {
         id: 'com.example.test',
         name: 'Test Plugin',
         version: '1.0.0',
+        platform: 'desktop',
         main: 'index.js',
         pluginType: 'rust-ts',
         rustLibrary: 'test_plugin',
@@ -148,6 +154,7 @@ function errorsForWsEndpoints(wsEndpoints: unknown): string[] {
         id: 'com.example.test',
         name: 'Test Plugin',
         version: '1.0.0',
+        platform: 'desktop',
         main: 'index.js',
         pluginType: 'rust-ts',
         rustLibrary: 'test_plugin',
@@ -242,6 +249,7 @@ function outcomeForWasmHash(wasmHash: unknown): { errors: string[]; warnings: st
     id: 'com.example.test',
     name: 'Test Plugin',
     version: '1.0.0',
+    platform: 'desktop',
     main: 'index.js',
     pluginType: 'rust-ts',
     rustLibrary: 'test_plugin',
@@ -295,6 +303,7 @@ function errorsForWasiPreopenDirs(dirs: unknown, lifecycle: string | null = 'eph
     id: 'com.example.test',
     name: 'Test Plugin',
     version: '1.0.0',
+    platform: 'desktop',
     main: 'index.js',
     pluginType: 'rust-ts',
     rustLibrary: 'test_plugin',
@@ -431,6 +440,7 @@ describe('分类字段 type / lifecycle 校验（ADR 0032）', () => {
           id: 'com.example.test',
           name: 'Test Plugin',
           version: '1.0.0',
+          platform: 'desktop',
           main: 'index.js',
           pluginType: 'rust',
           rustLibrary: 'test_plugin',
@@ -501,5 +511,57 @@ describe('分类字段 type / lifecycle 校验（ADR 0032）', () => {
     expect(errors.length).toBe(1)
     expect(errors[0]).toContain('forever')
     expect(errors[0]).toContain('persistent')
+  })
+})
+
+/**
+ * platform 校验（必填适配平台，wire 三值 desktop / mobile / both）
+ *
+ * 行为契约（真源：bin/manifest-validate.js + SDK rust/src/types.rs::PluginPlatform）：
+ * - C-P1 `platform` 与 id/name/version 同档必填：缺失 / 空串 / null 即构建失败
+ *   （宿主反序列化同样无缺省，产出「装了必被拒」的包要在构建期先拦）；
+ * - C-P2 取值域只认 `desktop | mobile | both`，大小写敏感；未知取值即拒并点名允许值；
+ * - C-P3 三值全部合法（宿主加载 / 安装期按本端放行 desktop/mobile/both）。
+ */
+describe('platform 校验（必填适配平台）', () => {
+  /** 写一份只关心 platform 的最小 manifest，返回与平台字段相关的错误 */
+  function withPlatform(platform: unknown): string[] {
+    const manifest: Record<string, unknown> = {
+      id: 'com.example.test',
+      name: 'Test Plugin',
+      version: '1.0.0',
+      main: 'index.js',
+      pluginType: 'rust-ts',
+      rustLibrary: 'test_plugin',
+      permissions: [],
+      contributes: {},
+    }
+    if (platform !== undefined) manifest.platform = platform
+    writeFileSync(join(cwd, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf-8')
+    const { errors } = validateManifest(cwd)
+    return errors.filter((e) => e.includes('platform'))
+  }
+
+  it('C-P1 缺失 / 空串 / null 都不可装载，构建期即拒', () => {
+    expect(withPlatform(undefined)).toHaveLength(1)
+    expect(withPlatform('')).toHaveLength(1)
+    expect(withPlatform(null)).toHaveLength(1)
+  })
+
+  it('C-P2 取值域只认 desktop / mobile / both，未知取值点名允许值', () => {
+    for (const bad of ['linux', 'Desktop', 'BOTH', 'desktop,mobile']) {
+      const errors = withPlatform(bad)
+      expect(errors.length, `platform=${bad} 必须被拒`).toBeGreaterThan(0)
+      expect(
+        errors.some((e) => e.includes('desktop') && e.includes('mobile') && e.includes('both')),
+        `错误须点名允许值: ${errors}`,
+      ).toBe(true)
+    }
+  })
+
+  it('C-P3 三值全合法，零 platform 错误', () => {
+    for (const ok of ['desktop', 'mobile', 'both']) {
+      expect(withPlatform(ok), `platform=${ok} 应当合法`).toEqual([])
+    }
   })
 })

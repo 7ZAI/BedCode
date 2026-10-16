@@ -21,6 +21,16 @@ const VOCABULARY_PATH = join(SDK_ROOT, 'bin', 'permission-vocabulary.json')
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])
 
 /**
+ * 适配平台取值域（manifest `platform`，必填，与 id/name/version 同档）
+ *
+ * 真源是 SDK `rust/src/types.rs::PluginPlatform`，此处只抄拼写（与 Rust 侧
+ * serde `rename_all = "lowercase"` 一致）。宿主在加载 / 安装期按本端校验：
+ * 桌面拒 `mobile`、移动拒 `desktop`，`both` 两端均可；构建期先拦拼写错误，
+ * 避免产出「装到目标端必被拒」的包。
+ */
+const VALID_PLATFORMS = new Set(['desktop', 'mobile', 'both'])
+
+/**
  * 装配角色取值域（manifest `type`，ADR 0032）
  *
  * 真源是 SDK `rust/src/types.rs::PluginKind`，此处不手抄第二套语义，只抄拼写
@@ -87,11 +97,18 @@ export function validateManifest(dir) {
     errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
   }
 
-  // 必填字段
-  for (const field of ['name', 'version', 'main', 'pluginType', 'permissions', 'contributes']) {
+  // 必填字段（platform 与 id/name/version 同档：宿主反序列化无缺省，缺失即拒装）
+  for (const field of ['name', 'version', 'platform', 'main', 'pluginType', 'permissions', 'contributes']) {
     if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
       errors.push(`缺少必填字段: ${field}`)
     }
+  }
+
+  // platform 取值域（拼写与宿主端门禁词汇同源；未知取值在宿主反序列化即拒）
+  if (manifest.platform && !VALID_PLATFORMS.has(manifest.platform)) {
+    errors.push(
+      `platform 非法: "${manifest.platform}"（允许: ${[...VALID_PLATFORMS].join(' / ')}）`,
+    )
   }
 
   // pluginType / sandbox / rustLibrary

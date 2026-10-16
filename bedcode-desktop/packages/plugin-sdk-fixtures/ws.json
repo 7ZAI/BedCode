@@ -2,6 +2,7 @@
   "id": "com.bedcode.ws-test",
   "name": "WS Test Plugin",
   "version": "0.1.0",
+  "platform": "desktop",
   "description": "host-websocket（ABI v14）fixture：出站连接 + 入站端点 + owner 作用域状态事件 + events-ws 帧回调",
   "author": "BedCode",
   "main": "index.js",

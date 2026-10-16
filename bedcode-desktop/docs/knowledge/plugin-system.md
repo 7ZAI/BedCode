@@ -146,6 +146,7 @@ Rust 插件通过 `inventory` crate 实现静态注册（编译期链接），TS
   "id": "com.bedcode.example",
   "name": "Example Plugin",
   "version": "1.0.0",
+  "platform": "desktop",
   "description": "An example plugin",
   "author": "BedCode Team",
   "main": "index.ts",
@@ -200,6 +201,7 @@ Rust 插件通过 `inventory` crate 实现静态注册（编译期链接），TS
 | `id` | 唯一标识 | 反向域名格式，如 `com.bedcode.quick-snippets` |
 | `name` | 显示名称 | 任意字符串 |
 | `version` | 语义化版本号 | 如 `1.0.0` |
+| `platform` | 适配平台 | `desktop` \| `mobile` \| `both`；宿主加载 / 安装期按本端校验，不匹配即拒绝 |
 | `main` | 入口文件路径 | 相对于插件根目录，如 `index.ts` |
 
 ### 可选字段

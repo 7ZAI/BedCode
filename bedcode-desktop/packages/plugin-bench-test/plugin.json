@@ -2,6 +2,7 @@
   "id": "com.bedcode.bench",
   "name": "Bridge Bench Probe",
   "version": "0.1.0",
+  "platform": "desktop",
   "description": "桥接基准夹具：wasm↔宿主↔前端 全链路性能探针的被测端（命令面 = bench.* 场景，emit 面 = plugin:bench:* 事件）。仅供 bench 工程加载，不随产品分发。",
   "author": "BedCode",
   "main": "index.js",

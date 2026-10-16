@@ -25,6 +25,48 @@ impl Default for PluginType {
     }
 }
 
+/// 应用适配平台（manifest `platform` 字段，必填）
+///
+/// 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。宿主在加载 /
+/// zip 安装时按本端校验（`supports`），单端声明遇到另一端即拒绝装载。
+///
+/// `Default` 取 `Both` **仅服务测试夹具与合成清单**（wire 层该字段必填、无 serde
+/// 缺省）：合成清单对两端都可装载，不把测试夹具钉死在某一个端。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPlatform {
+    /// 仅桌面端
+    Desktop,
+    /// 仅移动端
+    Mobile,
+    /// 双端适配（两端均可加载）
+    #[default]
+    Both,
+}
+
+impl PluginPlatform {
+    /// wire 值（错误文案 / 对比用；与 serde rename 同源）
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+            Self::Both => "both",
+        }
+    }
+
+    /// 本声明是否适用于 `host`（宿主当前端；只应传 `Desktop` / `Mobile`）
+    ///
+    /// `both` 对任一端成立；单端声明只对本端成立——移动宿主装载 / 安装的门禁判据。
+    pub const fn supports(self, host: PluginPlatform) -> bool {
+        match (self, host) {
+            (Self::Both, _) => true,
+            (Self::Desktop, Self::Desktop) => true,
+            (Self::Mobile, Self::Mobile) => true,
+            _ => false,
+        }
+    }
+}
+
 /// 插件运行时状态
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -54,6 +96,13 @@ pub struct PluginManifest {
     pub id: String,
     pub name: String,
     pub version: String,
+    /// 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）
+    ///
+    /// **必填项**（与 id/name/version 同档，无 serde 缺省）——宿主在**加载 / zip
+    /// 安装**时校验声明必须覆盖当前端（`PluginPlatform::supports`），不匹配即
+    /// fail-visible 拒绝：把一端的分发包装到另一端后「装了却不工作」比一次显性
+    /// 拒绝难排查得多。
+    pub platform: PluginPlatform,
     #[serde(default)]
     pub description: String,
     #[serde(default)]

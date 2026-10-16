@@ -10,6 +10,7 @@ fn test_manifest_parse_with_defaults() {
         "id": "com.bedcode.demo",
         "name": "Demo",
         "version": "0.1.0",
+        "platform": "both",
         "permissions": ["storage", "mdns"]
     });
     let m: PluginManifest = serde_json::from_value(json).unwrap();
@@ -33,6 +34,7 @@ fn test_manifest_preauth_urls_parse() {
         "id": "com.bedcode.ai-chatbox",
         "name": "AI Chatbox",
         "version": "1.0.0",
+        "platform": "both",
         "preauthUrls": ["https://*.openai.com/*", "https://api.deepseek.com/*"]
     });
     let m: PluginManifest = serde_json::from_value(json).unwrap();
@@ -47,11 +49,16 @@ fn test_manifest_preauth_urls_parse() {
 #[test]
 fn test_manifest_round_trip_fills_defaults() {
     // 宿主加载最小化 plugin.json 后序列化回写：缺省字段应已填充默认值
-    let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0" });
+    let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0", "platform": "both" });
     let m: PluginManifest = serde_json::from_value(json).unwrap();
     let back = serde_json::to_value(&m).unwrap();
     assert_eq!(back["pluginType"], serde_json::json!("ts-only"));
     assert_eq!(back["wasmHash"], serde_json::json!(""));
+    assert_eq!(
+        back["platform"],
+        serde_json::json!("both"),
+        "platform 原样回写"
+    );
     // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
     assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
     assert_eq!(back["contributes"]["navTab"], serde_json::Value::Null);
