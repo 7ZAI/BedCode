@@ -153,6 +153,7 @@ version = "0.1.0"
 dependencies = [
  "bedcode-host-kit",
  "bedcode-peer-net",
+ "flume",
  "inventory",
  "mdns-sd",
  "serde",
