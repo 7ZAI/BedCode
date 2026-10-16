@@ -32,6 +32,23 @@ export interface DiscoveredDevice {
 /** 在线缓存 TTL：与引擎 PEER_DISCOVERY_TTL 同值（120s 广播周期口径） */
 export const DEVICE_TTL_MS = 120_000
 
+/**
+ * 快照恢复窗口判定：仅恢复「近期可见」条目（真实 lastSeen 在 TTL 窗口内）。
+ *
+ * 陈旧条目（换网 / 换身份后残留的旧地址）不得作为首屏拨号候选——
+ * 2026-10-16 实机：快照里 9 天前的 `192.168.1.4:47613` 被按当前网络拨号，
+ * TCP 超时表现为「对端无反应」。可拨性由实时 mdns-found 刷新（restored
+ * 置 false）接管；缺失 / 非数值 lastSeenMs 无法证明可见性，同样不可恢复。
+ */
+export function isWithinRestoreWindow(lastSeenMs: unknown, nowMs: number): boolean {
+  return (
+    typeof lastSeenMs === 'number' &&
+    !Number.isNaN(lastSeenMs) &&
+    nowMs - lastSeenMs >= 0 &&
+    nowMs - lastSeenMs <= DEVICE_TTL_MS
+  )
+}
+
 /** mDNS 实例名前缀（引擎 INSTANCE_PREFIX 对齐） */
 const INSTANCE_PREFIX = 'bedcode-peer-'
 

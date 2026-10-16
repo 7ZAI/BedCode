@@ -87,6 +87,7 @@ describe('usePeerDevices orchestration (self-built cache)', () => {
     env.onCommand('file-transfer.get-device-snapshot', () => ({ devices: [] }))
     env.onCommand('file-transfer.save-device-snapshot', () => ({ ok: true }))
     env.onCommand('file-transfer.set-active-peer', () => ({ ok: true }))
+    env.onCommand('file-transfer.refresh-devices', () => ({}))
   })
 
   it('start is idempotent and restores snapshot entries annotated recent', async () => {
@@ -324,5 +325,63 @@ describe('usePeerDevices orchestration (self-built cache)', () => {
     env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: false })
     await dev.refresh()
     expect(dev.devices.value).toHaveLength(0)
+  })
+
+  it('drops stale snapshot entries beyond the restore window', async () => {
+    env.onCommand('file-transfer.get-device-snapshot', () => ({
+      devices: [
+        {
+          nodeId: NODE_A,
+          deviceName: '旧网络残留',
+          addr: '192.168.1.4',
+          port: 47613,
+          capabilitiesHex: '1',
+          // 9 天前可见：换网/换身份后的陈旧条目不得恢复为拨号候选
+          lastSeenMs: Date.now() - 9 * 24 * 60 * 60 * 1000,
+        },
+      ],
+    }))
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+
+    expect(dev.devices.value).toHaveLength(0)
+    expect(dev.rows.value).toHaveLength(0)
+  })
+
+  it('refuses to dial restored entries until live mdns refresh replaces them', async () => {
+    env.onCommand('file-transfer.get-device-snapshot', () => ({
+      devices: [
+        {
+          nodeId: NODE_A,
+          deviceName: '红米K70E',
+          addr: '192.168.1.4', // 快照旧网络残留地址（endpoint 未经本会话验证）
+          port: 47613,
+          capabilitiesHex: '1',
+          lastSeenMs: Date.now() - 30_000, // TTL 窗口内 → 被恢复（recent 标注）
+        },
+      ],
+    }))
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+
+    // 未验证的恢复条目：拒绝拨号（不发 dial-peer），改为触发宿主即时重查
+    expect(await dev.connect(NODE_A)).toBe('unreachable')
+    expect(env.calls.some((c) => c.id === 'file-transfer.dial-peer')).toBe(false)
+    expect(env.calls.some((c) => c.id === 'file-transfer.refresh-devices')).toBe(true)
+    expect(dev.rows.value[0]?.dialError).toBe('unreachable')
+
+    // 实时 mdns-found 接管（restored 清 false、地址更新）后按实时 endpoint 拨号
+    env.onCommand('file-transfer.dial-peer', () => ({ status: 'connected' }))
+    env.emit(
+      'plugin:file-transfer:mdns-found',
+      makeFound(NODE_A, '红米K70E', { addresses: ['10.62.87.97'] }),
+    )
+    expect(await dev.connect(NODE_A)).toBe('connected')
+    expect(env.calls).toContainEqual({
+      id: 'file-transfer.dial-peer',
+      args: { endpoint: { nodeId: NODE_A, addr: '10.62.87.97', port: 47821 } },
+    })
   })
 })

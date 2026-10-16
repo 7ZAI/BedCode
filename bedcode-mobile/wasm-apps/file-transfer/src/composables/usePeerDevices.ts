@@ -14,6 +14,7 @@ import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mob
 import {
   applyLost,
   deriveDeviceRows,
+  isWithinRestoreWindow,
   parseFoundPayload,
   sweepStaleDevices,
   type DeviceRow,
@@ -282,6 +283,15 @@ function createPeerDevices(context: PluginContext) {
   async function connect(nodeId: string): Promise<DialStatus | null> {
     const device = devices.value.find((d) => d.nodeId === nodeId)
     if (!device || !device.fileTransfer) return null
+    // 快照恢复条目尚未被本会话实时 mdns-found 刷新：endpoint 未经本次网络
+    // 验证，直接拨号只会按陈旧地址撞墙（2026-10-16 实机：快照旧网络地址
+    // 拨号 TCP 超时、对端完全无感知）。拒绝并触发宿主即时重查——实时条目
+    // 接管（restored 清 false）后即可正常拨号。
+    if (device.restored) {
+      setDialError(nodeId, 'unreachable')
+      requestHostRefresh()
+      return 'unreachable'
+    }
     if (!device.addr || !device.port) {
       setDialError(nodeId, 'unreachable')
       return 'unreachable'
@@ -351,6 +361,9 @@ function createPeerDevices(context: PluginContext) {
         const list: DiscoveredDevice[] = Array.isArray(snap?.devices)
           ? (snap.devices as SnapshotEntry[])
               .filter((d) => typeof d?.nodeId === 'string' && d.nodeId !== '')
+              // 只恢复「近期可见」条目：陈旧条目（旧网络残留地址 / 旧身份）
+              // 不得成为首屏拨号候选（见 isWithinRestoreWindow 注释）
+              .filter((d) => isWithinRestoreWindow(d.lastSeenMs, Date.now()))
               .map((d) => {
                 const capHex = d.capabilitiesHex ?? ''
                 return {
