@@ -6,6 +6,8 @@
  * 真实加载 oniguruma WASM（shiki/wasm 内联二进制），验证构建产物可用性。
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   highlightCode,
   createShikiHighlightEngine,
@@ -150,5 +152,27 @@ describe('createShikiHighlightEngine（DOM 引擎）', () => {
       ;(globalThis as any).document = savedDocument
       clearHighlightCacheForTest()
     }
+  })
+})
+
+describe('wasm 加载方式防回归锁（构建产物结构门禁）', () => {
+  /**
+   * wasm 引擎二进制必须通过静态 import 内联进主入口：动态 `import('shiki/wasm')`
+   * 会被 vite lib 模式拆成独立 chunk，而宿主只加载插件 manifest.main（index.js），
+   * chunk 在移动端 asset protocol 环境下加载不可靠 → 高亮静默降级纯文本（全灰/全黑）。
+   * 此锁禁止改回动态导入（动态导入在 vitest 下也能通过，行为测试无法发现）。
+   */
+  it('utils/highlight.ts 静态导入 wasmBinary，不含动态 import("shiki/wasm")', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../utils/highlight.ts'),
+      'utf-8',
+    )
+    // 剔除块注释与行注释（注释里允许复述旧写法以说明原因），只对真实代码断言
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+    expect(code).toContain("import { wasmBinary } from 'shiki/wasm'")
+    expect(code).not.toMatch(/import\s*\(\s*['"]shiki\/wasm['"]\s*\)/)
+    expect(code).toMatch(/createOnigurumaEngine\(\s*wasmBinary\s*\)/)
   })
 })

@@ -21,6 +21,11 @@ import {
   type LanguageRegistration,
 } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
+// 静态导入 wasm 二进制：动态 `import('shiki/wasm')` 会被 vite 拆成独立 chunk，
+// 宿主只加载插件 manifest.main（index.js），chunk 的运行时加载在移动端
+// asset protocol / WebView 环境下不可靠（高亮静默降级为纯文本）。
+// wasmBinary 为 Uint8Array，createOnigurumaEngine 接受 ArrayBufferView 直接使用。
+import { wasmBinary } from 'shiki/wasm'
 
 // ==================== Static Language Imports ====================
 // 与宿主 useCodeHighlight 的语言集对齐（聊天代码块常见语言全覆盖）
@@ -193,7 +198,8 @@ function getHighlighter(): Promise<HighlighterCore> {
       // 主题集合与 CodeTheme 选项一一对应（github-light/github-dark/dracula 为具名风格）
       themes: [themeVitesseDark, themeVitesseLight, themeGithubLight, themeGithubDark, themeDracula],
       langs: Object.values(LANG_MODULES).map(normalizeLangModule),
-      engine: createOnigurumaEngine(import('shiki/wasm')),
+      // wasmBinary 静态导入：同步传入 Uint8Array，避免动态 chunk 依赖
+      engine: createOnigurumaEngine(wasmBinary),
     })
   }
   return highlighterPromise
