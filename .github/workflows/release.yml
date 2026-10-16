@@ -635,7 +635,66 @@ jobs:
   finalize-release:
     needs: [prepare-release, build-windows, build-linux, build-android, package-plugins, package-sdks]
     runs-on: ubuntu-latest
+    # 发布阶段必须发布「收到产物的那个 release 本身」，所以把定位结果传给 publish-release 复用
+    outputs:
+      release_id: ${{ steps.resolve.outputs.release_id }}
     steps:
+      # 定位本次发布对应的 release，并把它的 tag 归一到真实标签——后续两个 step 与 publish-release 共用。
+      #
+      # 为什么必须「归一」（v3.0.0 发布实测踩坑）：draft 可能被记为 GitHub 的占位 tag
+      # `untagged-<hash>`（draft 的 name 是 v3.0.0，tag_name 却是 untagged-14d1a87a…）。
+      # 而 `GET /releases/tags/:tag` 对 draft 一律 404（实测），下游只能按 tag_name 定位：
+      #   ① finalize 的 body / assets 校验定位失败 → 误报「latest.json 未上传」→ publish-release 被 skip；
+      #   ② 即便 publish 跑起来，它按 tag_name 找不到 draft，会另建一个「没有产物」的 release；
+      #   ③ latest.json 里各平台下载地址是 `/releases/download/v<版本>/<文件>`，release 的 tag 不对
+      #      会让客户端自动更新直接 404。
+      # 所以这里按 tag_name 或 name 定位（name 由 softprops / tauri-action 设成 tag 名），
+      # 随后把 tag_name PATCH 成真实标签（draft 的 tag_name 可改，2026-10-17 实测：改完
+      # `/releases/download/v3.0.0/...` 即可用）。定位只做一次，顺带把原先两处各 10×3 的分页
+      # 查询收成一处——重复调用 GitHub API 正是这条链 GITHUB_TOKEN rate limit 的老问题。
+      - name: Resolve release id and normalise tag
+        id: resolve
+        shell: bash
+        # GITHUB_TOKEN 不是 runner 默认注入的环境变量（是 secret），必须显式传入，
+        # 否则 $GITHUB_TOKEN 为空 → 401 → curl -f 静默失败（v2.1.0/v2.1.1 均因此栽在此步）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="v${{ needs.prepare-release.outputs.version }}"
+          RID=""
+          # 最多 10 轮重试；curl -f 让 HTTP 错误（403 rate limit / 5xx）直接进重试；
+          # jq 加 type=="array" 守卫——rate limit 响应是单对象，.[] 迭代出字符串会报
+          # "Cannot index string"（exit 5）中断 run
+          for i in $(seq 1 10); do
+            # 分页 3 页（per_page=100）：release 超过 10 个时 per_page=10 的旧写法会定位失败
+            for page in $(seq 1 3); do
+              RESP=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" 2>/dev/null) || { sleep 5; continue; }
+              RID=$(printf '%s' "$RESP" | jq -r --arg v "$V" \
+                'if type=="array" then .[] | select(.tag_name == $v or .name == $v) | .id else empty end' 2>/dev/null | head -1)
+              [ -n "$RID" ] && break
+            done
+            [ -n "$RID" ] && break
+            sleep 3
+          done
+          if [ -z "$RID" ]; then
+            echo "::error::未定位到 $V 的 release（构建 job 是否已建 draft 并上传产物？rate limit 会误报，可重跑）"
+            exit 1
+          fi
+          CUR=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/$RID" | jq -r '.tag_name')
+          if [ "$CUR" != "$V" ]; then
+            echo "release $RID 的 tag_name 是占位名 '$CUR'，归一为 '$V'"
+            curl -sS -f -o /dev/null -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RID" \
+              --data "{\"tag_name\":\"$V\"}"
+          fi
+          echo "已定位 release：id=$RID tag=$V"
+          echo "RELEASE_ID=$RID" >> "$GITHUB_ENV"
+          echo "release_id=$RID" >> "$GITHUB_OUTPUT"
+
       # tauri-action 只在创建 release 时写入 body；若 draft 已存在（重跑、手动预建等），
       # 其源码仅对非 draft 调 updateRelease（避免 updateRelease 改变 draft 的 tag 产生重复 release），
       # 因此已存在 draft 的 body 不会被更新（v2.0.0 发布即因此为空白 body）。
@@ -647,40 +706,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位。
-          # 分页查找（per_page=100 × 3 页）：release 超过 10 个时 per_page=10 的旧写法会定位失败
-          for i in $(seq 1 10); do
-            RID=""
-            # 容错：curl -f 使 HTTP 错误（403 rate limit / 5xx）直接失败进重试；
-            # jq 加 type=="array" 守卫——rate limit 响应是单对象，.[] 迭代出字符串会报
-            # "Cannot index string"（exit 5）中断 run（GITHUB_TOKEN 限额 1000/hr，多 job 并行易触顶）
-            for page in $(seq 1 3); do
-              RESP=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" 2>/dev/null) || { sleep 5; continue; }
-              RID=$(printf '%s' "$RESP" | jq -r 'if type=="array" then .[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id else empty end' 2>/dev/null | head -1)
-              [ -n "$RID" ] && break
-            done
-            if [ -n "$RID" ]; then
-              # prepare-release 是独立 job，/tmp 不跨 job 共享，这里用表达式重建 changelog 文件
-              cat > /tmp/changelog.txt <<'CHANGELOG_EOF'
+          # prepare-release 是独立 job，/tmp 不跨 job 共享，这里用表达式重建 changelog 文件
+          cat > /tmp/changelog.txt <<'CHANGELOG_EOF'
           ${{ needs.prepare-release.outputs.changelog }}
           CHANGELOG_EOF
-              BODY_JSON=$(jq -n --rawfile body /tmp/changelog.txt '{body: $body}')
-              STATUS=$(curl -sS -o /tmp/patch-resp.json -w "%{http_code}" -X PATCH \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${{ github.repository }}/releases/$RID" \
-                --data "$BODY_JSON")
-              if [ "$STATUS" = "200" ]; then
-                echo "release body 已同步 ✓"
-                exit 0
-              fi
-              echo "::warning::release body PATCH 失败 HTTP $STATUS: $(jq -r .message /tmp/patch-resp.json)"
-            fi
-            sleep 3
-          done
-          echo "::error::release body 同步失败（未定位到 release 或 PATCH 报错；若 GITHUB_TOKEN 触发 rate limit 会误报，可稍后重跑）"
-          exit 1
+          BODY_JSON=$(jq -n --rawfile body /tmp/changelog.txt '{body: $body}')
+          STATUS=$(curl -sS -o /tmp/patch-resp.json -w "%{http_code}" -X PATCH \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID" \
+            --data "$BODY_JSON")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::release body 同步失败 HTTP $STATUS: $(jq -r .message /tmp/patch-resp.json)"
+            exit 1
+          fi
+          echo "release body 已同步 ✓"
 
       # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
       # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本。
@@ -691,30 +731,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表（含 draft）按 tag_name 定位再查 assets。
-          # 分页查找（per_page=100 × 3 页）：release 超过 10 个时 per_page=10 会定位失败
-          for i in $(seq 1 10); do
-            RID=""
-            # 容错：curl -f 使 HTTP 错误（403 rate limit / 5xx）直接失败进重试；
-            # jq 加 type=="array" 守卫——rate limit 响应是单对象，.[] 迭代出字符串会报
-            # "Cannot index string" 中断 run（GITHUB_TOKEN 限额 1000/hr，多 job 并行易触顶）
-            for page in $(seq 1 3); do
-              RESP=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" 2>/dev/null) || { sleep 5; continue; }
-              RID=$(printf '%s' "$RESP" | jq -r 'if type=="array" then .[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id else empty end' 2>/dev/null | head -1)
-              [ -n "$RID" ] && break
-            done
-            if [ -n "$RID" ]; then
-              if curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" 2>/dev/null | \
-                jq -r 'if type=="array" then .[].name else empty end' | grep -q '^latest.json$'; then
-                echo "latest.json 已上传 ✓"
-                exit 0
-              fi
+          # 小步重试：assets 列表偶发 rate limit / 5xx 时不要误判为「未上传」
+          for i in $(seq 1 5); do
+            if curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets" 2>/dev/null | \
+              jq -r 'if type=="array" then .[].name else empty end' | grep -q '^latest.json$'; then
+              echo "latest.json 已上传 ✓"
+              exit 0
             fi
             sleep 3
           done
-          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置（若 GITHUB_TOKEN 触发 rate limit 会误报，可稍后重跑）"
+          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置"
           exit 1
 
   # ==================== Publish Release ====================
@@ -739,10 +766,27 @@ jobs:
           fi
           echo "tag 位于 master ✓ 允许发布"
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.prepare-release.outputs.version }}
-          draft: false
+      # 直接发布 finalize-release 定位到的那个 release，而不是让 action 按 tag_name 重新找：
+      # 产物都传在那个 draft 上，按 tag_name 重新找在占位 tag 场景会另建一个「没有产物」的 release。
+      # 用 API PATCH 而非 softprops：这里只把 draft 翻成 published，不碰 body 与 assets。
+      - name: Publish release (draft -> published)
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="v${{ needs.prepare-release.outputs.version }}"
+          RID="${{ needs.finalize-release.outputs.release_id }}"
+          if [ -z "$RID" ]; then
+            echo "::error::finalize-release 未传出 release id，无法发布"
+            exit 1
+          fi
+          STATUS=$(curl -sS -o /tmp/publish-resp.json -w "%{http_code}" -X PATCH \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/$RID" \
+            --data "{\"tag_name\":\"$V\",\"draft\":false}")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::发布 $V 失败 HTTP $STATUS: $(jq -r .message /tmp/publish-resp.json)"
+            exit 1
+          fi
+          echo "已发布 $V ✓（release id=$RID）"
