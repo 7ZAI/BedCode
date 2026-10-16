@@ -1,19 +1,6 @@
 # 更新日志
 
-本文件记录本项目所有值得关注的变更。
-
-格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
-版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
-
-> 本文档为中文版本；英文版见 [`CHANGELOG.md`](./CHANGELOG.md)（GitHub Release 流程读取该文件）。
-
-> **工作流规则**：changelog 条目**只在发布版本前一次性写入**——按上次发布以来的提交记录
-> 总结归纳；日常修改代码不逐次记录 changelog。
-
 ## [3.0.0] - 2026-10-17
-
-> 自 **v2.1.1**（2026-09-18）以来的全部改动高度总结——共 654 个提交，按类别分组，一次性按
-> 提交记录（`git log v2.1.1..HEAD`）归纳写入。
 
 ### 新功能
 
