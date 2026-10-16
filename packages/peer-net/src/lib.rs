@@ -23,6 +23,8 @@
 //!   `_bedcode-peer._tcp.local.` 广播+浏览并存，TXT 携带设备名/协议版本/能力
 //!   位图；发现结果进带 TTL 的在线缓存，「在线」即记录可见、与连接无关。
 //!   守护回调与测试喂入共用 [`DiscoveryCache::observe`] 同一通路（注入缝）；
+//!   浏览面消费宿主注入的类型中枢订阅（[`PeerMdnsBrowse`]，同类型 browse 唯一性
+//!   归中枢，ADR 0054），本 crate 不自行 browse / stop_browse；
 //!   与终端链路旧 `_bedcode._tcp` 完全独立互不感知。
 //!
 //! 设计依据：`docs/adr/0027-peer-network-transport-stack.md`（传输栈方向）、
@@ -52,7 +54,8 @@ pub use cert::{CertDer, generate_self_signed_cert, verify_cert_matches_node_id};
 pub use discovery::{
     CAP_FILE_TRANSFER, DISCOVERY_PROTOCOL_VERSION, DiscoveryCache,
     DiscoveryConfig, DiscoveryDaemon, DiscoveredPeerRecord, PEER_DISCOVERY_TTL,
-    SERVICE_TYPE, SWEEP_INTERVAL, disable_virtual_interfaces, spawn_peer_mdns_daemon,
+    PeerMdnsBrowse, SERVICE_TYPE, SWEEP_INTERVAL, disable_virtual_interfaces,
+    spawn_peer_mdns_daemon,
 };
 pub use error::{PeerNetError, Result};
 pub use frame::{TrustStatus, TrustStatusFrame};

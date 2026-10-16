@@ -307,20 +307,6 @@ pub enum PeerNetError {
         source: mdns_sd::Error,
     },
 
-    /// 发起服务浏览失败（browse）
-    #[error("browse peer-net mDNS service type failed: {source}")]
-    MdnsBrowse {
-        #[source]
-        source: mdns_sd::Error,
-    },
-
-    /// 优雅关停时停止浏览失败（stop_browse）
-    #[error("stop browsing peer-net mDNS service type failed: {source}")]
-    MdnsStopBrowse {
-        #[source]
-        source: mdns_sd::Error,
-    },
-
     /// 优雅关停时注销自身广播失败（unregister）
     #[error("unregister peer-net mDNS service failed: {source}")]
     MdnsUnregister {
