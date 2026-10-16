@@ -273,5 +273,6 @@ wasm-apps/<app-id>/rust/**    业务真源（会话 / 传输 / 配对 / 对话�
 | 拆分 crate 不得长 `tests/` / dev-dependencies 禁拉 bedcode crate | `src-tauri/tests/capability_crates_unit_tests_only.rs` |
 | 权限词汇三副本漂移 | `packages/bedcode-wasm-core/src/permission.rs` |
 | 前端零资源访问三层封锁 / 热路径日志 / 空目录残留 | `src-tauri/tests/{capabilities_lock,hot_path_logging_lock,empty_dir_lock}.rs` |
+| 品牌标志几何漂移（旧 W 标志退役面回接：新壳 `shell/` 与旧布局 `components/` 两套品牌位必须同代） | `src/__tests__/shell/brandMark.test.ts` |
 
 移动端自身的结构见 `bedcode-mobile/docs/code-map.md`。
