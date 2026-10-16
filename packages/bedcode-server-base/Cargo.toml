@@ -48,6 +48,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 async-trait = "0.1"
 # ports：MdnsPort（peer-net 发现守护接入，ServiceDaemon 类型）
 mdns-sd = "0.20"
+# ports：MdnsTypeSubscription 类型中枢订阅通道（版本与 peer-net / mdns-sd 传递依赖同源，spec §0.4）
+flume = "0.12"
 # info：SystemInfo 采集
 sysinfo = "0.33"
 local-ip-address = "0.6"
