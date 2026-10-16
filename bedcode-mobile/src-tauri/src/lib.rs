@@ -89,6 +89,12 @@ pub fn run() {
                 });
             });
 
+            // 进程级发现端口（ADR 0054 / 票 04）：类型中枢的泵任务经
+            // `DiscoveryPorts::spawn` 派生，而中枢进程级出口取 `ports::ports()`——
+            // 移动端不经桌面的 host-kit 域装配链，必须在此显式装一次（幂等）。
+            // 早于任何 `subscribe_type`（老链路 mdns 命令 / peer-net 节点启动）
+            crate::plugin::host_domains::mdns::register_process_ports();
+
             tracing::info!("Plugins initialized");
 
             let app_handle = app.handle();

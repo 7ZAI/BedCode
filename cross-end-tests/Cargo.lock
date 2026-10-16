@@ -766,6 +766,7 @@ version = "0.1.0"
 dependencies = [
  "bedcode-host-kit",
  "bedcode-peer-net",
+ "flume",
  "inventory",
  "mdns-sd",
  "serde",
@@ -944,6 +945,7 @@ dependencies = [
  "async-trait",
  "bedcode-host-api-core",
  "bedcode-link-crypto",
+ "flume",
  "futures-util",
  "local-ip-address",
  "mdns-sd",

@@ -1,6 +1,12 @@
 //! mDNS Service Discovery
 //!
 //! 浏览局域网内的 _bedcode._tcp.local. 服务
+//!
+//! 浏览面经**类型中枢**（ADR 0054：全进程对同一服务类型只允许一条
+//! `daemon.browse`，由中枢代持并进程内 fan-out）：本模块只挂中枢订阅 + 消费
+//! fan-out 事件，`stop` 释放订阅守卫即退订。宿主零 `daemon.browse` /
+//! `stop_browse` 直调——旧实现每次 start 直调 browse，按 mdns-sd 单 listener
+//! 槽语义会**覆盖同类型其他订阅者**（peer-net / 插件 browse）的信道。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,6 +24,11 @@ pub struct MdnsDiscovery {
     services: Arc<RwLock<HashMap<String, DiscoveredService>>>,
     /// 是否正在扫描
     scanning: Arc<RwLock<bool>>,
+    /// 浏览订阅退订守卫（类型中枢，ADR 0054）：`start_inner` 铸造订阅时接管，
+    /// [`MdnsDiscovery::stop`] 取走并释放即退订（中枢移除订阅者 → fan-out 通道
+    /// 关闭 → 事件循环断连退出）。本类型**不解释**守卫内容（中枢实现细节），
+    /// 只做生命周期托管——守卫若丢，订阅会永留中枢表、类型 browse 永不归零。
+    browse_guard: std::sync::Mutex<Option<Box<dyn std::any::Any + Send + Sync>>>,
 }
 
 impl MdnsDiscovery {
@@ -26,6 +37,7 @@ impl MdnsDiscovery {
         Self {
             services: Arc::new(RwLock::new(HashMap::new())),
             scanning: Arc::new(RwLock::new(false)),
+            browse_guard: std::sync::Mutex::new(None),
         }
     }
 
@@ -51,11 +63,15 @@ impl MdnsDiscovery {
             return Ok(());
         }
 
-        // 浏览经全局共享守护（bedcode-discovery-engine，M3）：不再自建 daemon——
-        // 消灭双 daemon 同绑 5353 互抢多播包病灶；共享守护常驻，stop 只退订不 shutdown
-        let receiver = bedcode_discovery_engine::engine::shared_daemon()
-            .browse(SERVICE_TYPE)
-            .map_err(|e| crate::AppError::Internal(format!("Failed to browse mDNS: {e}")))?;
+        // 浏览经类型中枢（ADR 0054 / spec §6-D5）：全进程对 `_bedcode._tcp.local.`
+        // 只允许一条 `daemon.browse`（由中枢代持并 fan-out），本处只挂订阅——
+        // receiver 交给下方事件循环，守卫留在本管理器（stop 时释放 = 退订）
+        let subscription = bedcode_discovery_engine::subscribe_type(SERVICE_TYPE)
+            .map_err(|e| crate::AppError::Internal(format!("Failed to subscribe mDNS type: {e}")))?;
+        let (receiver, guard) = subscription.into_parts();
+        // 覆盖旧守卫（若有）：前次事件循环已退出时其通道本就断开，替换等于顺手退订，
+        // 不会让旧订阅在中枢表里滞留
+        *self.browse_guard.lock().expect("mdns browse guard lock poisoned") = Some(guard);
 
         *scanning = true;
 
@@ -191,10 +207,16 @@ impl MdnsDiscovery {
         *scanning = false;
         drop(scanning); // 释放锁，让后台任务能读到 false
 
-        // 停止守护进程（共享守护常驻不 shutdown，M3）：只退订本浏览
-        if let Some(daemon) = bedcode_discovery_engine::engine::daemon_if_initialized() {
-            let _ = daemon.stop_browse(SERVICE_TYPE);
-        }
+        // 退订靠订阅守卫释放（类型中枢，ADR 0054 / spec §6-D5）：守卫 Drop → 中枢
+        // 移除本订阅者 → fan-out 通道关闭 → 事件循环 recv 断连退出。共享守护常驻
+        // 不 shutdown，也不再直调 `daemon.stop_browse`（那会摘掉**整类型**的
+        // listener，把同类型的 peer-net / 插件订阅一起杀掉）
+        let guard = self
+            .browse_guard
+            .lock()
+            .expect("mdns browse guard lock poisoned")
+            .take();
+        drop(guard);
 
         self.services.write().await.clear();
         tracing::info!("[MdnsDiscovery] Stopped");
