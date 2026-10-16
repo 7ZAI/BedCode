@@ -247,7 +247,7 @@ pub trait MdnsPort: Send + Sync {
 | 端口扩展 | `packages/bedcode-server-base/src/ports.rs` + `Cargo.toml`（flume） |
 | 宿主接线（桌面） | `packages/bedcode-server-peer-net/src/lib.rs:1011-1033`（spawn 处铸造订阅）、`:1459`（requery 转发）；`bedcode-desktop/src-tauri/src/server/ports_impl.rs:318`（MdnsPort 扩实现） |
 | 宿主接线（移动） | `bedcode-mobile/src-tauri/src/peer/ports.rs:226`、`peer/net.rs`（注释同步）；`bedcode-mobile/src-tauri/src/mdns/discovery.rs:54-58,196`（旧链路迁中枢：`subscribe_type` 持有句柄，stop 改 drop；`recv_timeout` 同签名适配，`RECV_TIMEOUT_SECS=1` 常量不变——`system/constants/mdns.rs:6`） |
-| 锁（新） | `packages/bedcode-discovery-engine/tests/mdns_browse_singleton_lock.rs`（§4-T5） |
+| 锁（新） | `packages/bedcode-discovery-engine/src/mdns_browse_singleton_lock.rs`（§4-T5；**实施修订 2026-10-16**：由 `tests/` 改 `src/` 内模块——治理锁 `capability_crates_unit_tests_only` 禁止 `packages/bedcode-*` crate 根 `tests/`，先例 `server-peer-net/src/dependency_direction_lock.rs`） |
 | 锁（扩展） | `packages/bedcode-server-peer-net/src/dependency_direction_lock.rs`（不引 discovery-engine；engine→peer-net 白名单 `disable_virtual_interfaces`） |
 | 文档 | `docs/adr/0054-mdns-single-browse-per-type-and-fanout-hub.md`（新开）、ADR 0042 增补执行记录、两端 `docs/code-map.md` 防回接锁索引 |
 

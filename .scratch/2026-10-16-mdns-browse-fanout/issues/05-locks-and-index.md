@@ -4,9 +4,11 @@ Status: ready-for-agent
 Type: task
 Blocked by: 04
 
-## ① 源码锁（新）`packages/bedcode-discovery-engine/tests/mdns_browse_singleton_lock.rs`
+## ① 源码锁（新）`packages/bedcode-discovery-engine/src/mdns_browse_singleton_lock.rs`（src 内模块）
 
-扫描面：`packages/**/src` + 双端 `src-tauri/src` 的 `.rs` 源文件（排除 target 与生成物）：
+> **实施修订（2026-10-16）**：原定 `tests/` 路径与治理锁冲突——`bedcode-desktop/src-tauri/tests/capability_crates_unit_tests_only.rs` 禁止**所有** `packages/bedcode-*` crate 出现 crate 根 `tests/`（例外桶现仅 `bedcode-host-kit`，不得新增）。改按先例 `packages/bedcode-server-peer-net/src/dependency_direction_lock.rs`：锁住 `src/` 内模块，`src/lib.rs` 接线 `mod mdns_browse_singleton_lock;`。
+
+扫描面：`packages/**/src` + 双端 `src-tauri/src` 的 `.rs` 源文件（排除 target 与生成物；**锁自身文件不参与扫描**，同既有锁的自锁规避口径）：
 
 - `.browse(` / `.stop_browse(`：**仅允许** `packages/bedcode-discovery-engine/src/type_hub.rs`——白名单精确到文件，条目注释写明理由
 - `ServiceDaemon::new`：**仅允许** `packages/bedcode-discovery-engine/src/engine.rs`（守护唯一创建点红线的文本锁延伸）
