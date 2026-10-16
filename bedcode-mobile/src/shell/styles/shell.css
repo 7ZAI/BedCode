@@ -8,7 +8,8 @@
      （BedCode 标志 = 暖炭斜向渐变底 #2E2A22 → #0A0907 + 白色 `>` 终端提示符）
      · 品牌位恒为深底，图形是白字——浅色主题下也不翻转（翻成浅底白字即不可见）
      · 品牌底与图形都不跟 --mobile-accent / data-palette 走
-   品牌层只服务品牌标志，不用于任何可点击控件。
+   品牌层只服务品牌标志，不用于任何可点击控件；系统宫格启动器瓦片（.shell-sys-tile）
+经 --shell-tile-* 复用品牌层两枚固定色作图形色，是真源在下、组件在上的同一套值。
    ============================================================================ */
 
 .shell-ui {
@@ -42,19 +43,36 @@
   --shell-ease-out: cubic-bezier(0, 0, 0.2, 1);
   --shell-ease-in: cubic-bezier(0.4, 0, 1, 1);
   --shell-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  /* 系统宫格图标档案色（零新 hex：color-mix 从既有语义 token 派生）
-     应用管理=绿（内容活跃）、权限管理=琥珀（安全裁决需关注）、设置=暖橄榄派生（中性面，
-     不抢绿/琥珀语义）；与可点击控件一律中性色的纪律不冲突——这三格是平台自有面，
-     色相用来建立入口辨识而非表达危险等级 */
-  --shell-tile-apps-bg: color-mix(in srgb, var(--mobile-success) 15%, transparent);
-  --shell-tile-apps-color: color-mix(in srgb, var(--mobile-success) 78%, var(--mobile-bg-primary));
-  --shell-tile-apps-border: color-mix(in srgb, var(--mobile-success) 38%, transparent);
-  --shell-tile-perms-bg: color-mix(in srgb, var(--mobile-warning) 15%, transparent);
-  --shell-tile-perms-color: color-mix(in srgb, var(--mobile-warning) 78%, var(--mobile-bg-primary));
-  --shell-tile-perms-border: color-mix(in srgb, var(--mobile-warning) 38%, transparent);
-  --shell-tile-settings-bg: color-mix(in srgb, var(--mobile-warning) 24%, var(--mobile-success-muted));
-  --shell-tile-settings-color: color-mix(in srgb, var(--mobile-warning) 62%, var(--mobile-success) 38%);
-  --shell-tile-settings-border: color-mix(in srgb, var(--mobile-success) 28%, var(--mobile-warning) 34%, transparent);
+  /* ==========================================================================
+     系统宫格图标层（启动器风格瓦片）
+     --------------------------------------------------------------------------
+     形态对齐 wasm 应用图标（双端 wasm-apps/<app>/icon.svg 的同一套语言）：满幅圆角方
+     + 135° 斜向渐变底 + 实心块面图形。BLUEPRINTS.md 的 stroke 图标标准不适用
+     于此——那套是 UI 线性图标，这里是启动器位，与旁边满幅贴图的应用图标同层
+     编排，三枚系统入口读起来就是「平台自带的应用」而不是另一种控件。
+     色相沿用入口辨识：应用管理=绿（内容活跃）、权限管理=琥珀（安全裁决需关注）、
+     设置=品牌暖炭（平台本体面，与头部 BrandTile 同族，不引入第三块彩色）。
+     渐变深浅两端按「图形色在整条渐变上 ≥3:1」逐主题选锚：深色主题统一向 bg 混；
+     浅色主题下 bg 是亮锚，绿瓦片改向 accent（浅色下的墨色锚）混深，琥珀瓦片仍向
+     bg 混但收窄混比——白字在亮琥珀上不足 3:1，故琥珀底图形恒用暖墨（"白字在
+     黄底上对比度不足"的同一处置，见 ui-ux-pro-max --domain color）。
+     图形色固定不随主题翻转：渐变底板是恒亮面，与品牌层同理；取值引品牌层两枚
+     固定色（绿/暖炭底=brand-glyph 白，琥珀底=brand-ink 暖墨），零新 hex。
+     ========================================================================== */
+  --shell-tile-apps-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-success) 80%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-success) 46%, var(--mobile-bg-primary))
+  );
+  --shell-tile-apps-glyph: var(--shell-brand-glyph);
+  --shell-tile-perms-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-warning) 88%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-warning) 66%, var(--mobile-bg-primary))
+  );
+  --shell-tile-perms-glyph: var(--shell-brand-ink);
+  --shell-tile-settings-bg: linear-gradient(135deg, var(--shell-brand-ink), var(--shell-brand-ink-deep));
+  --shell-tile-settings-glyph: var(--shell-brand-glyph);
   /* 快捷磁贴 hover 光晕：由强调色派生，随主题与色板变化（原为硬编码青色 rgba） */
   --shell-action-glow: 0 0 15px color-mix(in srgb, var(--mobile-accent) 12%, transparent);
 }
@@ -252,6 +270,61 @@
 .shell-avatar-g3 { background: linear-gradient(135deg, #f59e0b, #ef4444); }
 .shell-avatar-g4 { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
 .shell-avatar-g5 { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+
+/* ============================================================================
+   主屏系统宫格瓦片（启动器风格，.shell-sys-tile）
+   ----------------------------------------------------------------------------
+   形态 = 满幅圆角方 + 斜向渐变底 + 实心块面图形，与 wasm 应用图标同语言
+   （token 定义与取色理由见 .shell-ui 内 --shell-tile-* 注释）。
+   · 无描边：wasm 图标本身无描边，加一条 border 会立刻显出「控件感」；
+     层次由卡片阴影承担，与同屏运行卡一致。
+   · 圆角 10px（--shell-radius-control）≈ 23%：对齐 wasm 图标的 20% 大圆角，
+     比 12px 卡片角更接近启动器形态。
+   · 按压反馈 = 瓦片缩放（0.92）+ 颜色过渡走 fast：启动器的按压语言是「按下去」
+     而不是底色变灰；外层按钮只保留 active 底色，刻意不带 active:opacity——
+     半透明会让渐变底板在壁纸上泛白，缩放本身就是足够的按下语义。
+   ============================================================================ */
+.shell-sys-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--shell-icon-app);
+  height: var(--shell-icon-app);
+  border-radius: var(--shell-radius-control);
+  box-shadow: var(--mobile-card-shadow);
+  transition: transform var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-sys-tile:active {
+  transform: scale(0.92);
+}
+.shell-sys-tile[data-tile='apps'] {
+  background: var(--shell-tile-apps-bg);
+  color: var(--shell-tile-apps-glyph);
+}
+.shell-sys-tile[data-tile='permissions'] {
+  background: var(--shell-tile-perms-bg);
+  color: var(--shell-tile-perms-glyph);
+}
+.shell-sys-tile[data-tile='settings'] {
+  background: var(--shell-tile-settings-bg);
+  color: var(--shell-tile-settings-glyph);
+}
+
+/* 浅色主题：bg 变亮锚后逐瓦片重选混锚（绿向 accent 混深 / 琥珀向 bg 混亮），
+   保持图形色全渐变 ≥3:1；品牌暖炭瓦片固定不翻。详见 --shell-tile-* 注释。 */
+html:not(.dark) .shell-ui {
+  --shell-tile-apps-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-success) 92%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-success) 55%, var(--mobile-accent))
+  );
+  --shell-tile-perms-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-warning) 92%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-warning) 74%, var(--mobile-bg-primary))
+  );
+}
 
 /* ============================================================================
    通知卡（滑动删除 + 点击打开 + 删除动画）
@@ -533,7 +606,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   /* 覆盖壳内全部自带过渡的面：屏幕栈 / 抽屉 / 通知栏 / 多任务卡 / 通知卡拖拽与
-     删除归位 / 分段器 / 图标动作 / 胶囊按钮 / 破坏性按钮 / 遮罩。
+     删除归位 / 分段器 / 图标动作 / 胶囊按钮 / 破坏性按钮 / 遮罩 / 系统宫格瓦片。
      ui-ux-pro-max `--domain ux / Reduced Motion`：用户关闭动效后位移与缩放类
      动画一律收敛为瞬时，只保留不产生位移的状态色变化（不列在此，靠 duration
      极短而非归零，色变仍可见）。 */
@@ -560,7 +633,8 @@
   .shell-icon-action,
   .shell-capsule-btn,
   .shell-btn-danger-outline,
-  .shell-btn-danger-text {
+  .shell-btn-danger-text,
+  .shell-sys-tile {
     transition-duration: 0.01ms;
   }
 }

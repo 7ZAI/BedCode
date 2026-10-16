@@ -16,6 +16,7 @@
  * | C-H9 | 文案纪律 | 不渲染方案期解释（由应用提供 / 平台自带 / 最近使用在前） | 三个退役 key 缺席 |
  * | C-H10 | 自定义壁纸 | custom 档 + 路径 → 壁纸层用 asset URL 铺底 | 图片层 style 含 URL |
  * | C-H11 | 多任务入口 | 运行带分组头带多任务入口（recents 全局可达，不只运行页胶囊） | openSwitcher 被调用 |
+ * | C-H12 | 系统宫格瓦片样式 | 启动器风格：.shell-sys-tile + data-tile=entry.id，SVG 为 24 画框实心块面（fill + evenodd 挖空），不再是 stroke 线稿 | 类名 / data-tile / fill 属性按入口在场 |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -187,6 +188,40 @@ describe('C-H4 系统宫格', () => {
     // 平台面进栈而不是重置栈：系统屏要有可返回的上一级
     expect(mockNavigate.mock.calls.map((c) => c[0])).toEqual(['apps', 'settings'])
     expect(mockOpenPermissions).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('C-H12 系统宫格瓦片样式（启动器风格）', () => {
+  /** 系统宫格按钮（可访问名即入口文案，三个入口三种 key） */
+  const SYS_KEYS = ['shell.home.sysApps', 'shell.home.sysPermissions', 'shell.home.sysSettings']
+  /** entry.id → data-tile → shell.css 的 --shell-tile-* 选色（ids 与 CSS 属性选择器必须一致） */
+  const EXPECTED_TILES = ['apps', 'permissions', 'settings']
+
+  it('should_markEachEntryWithTileId_when_sysGridRendered', () => {
+    const buttons = SYS_KEYS.map((key) =>
+      mount(ShellHomeScreen).find(`button[aria-label="${key}"]`),
+    )
+
+    buttons.forEach((button, i) => {
+      const tile = button.find('.shell-sys-tile')
+      expect(tile.exists(), `${SYS_KEYS[i]} 应渲染启动器瓦片`).toBe(true)
+      expect(tile.attributes('data-tile'), `${SYS_KEYS[i]} 的 data-tile`).toBe(EXPECTED_TILES[i])
+    })
+  })
+
+  it('should_drawFilledGlyphsOnTwentyFourCanvas_when_sysTileRendered', () => {
+    const tile = mount(ShellHomeScreen).find('.shell-sys-tile')
+    const svg = tile.find('svg')
+    const path = svg.find('path')
+
+    // 实心块面：fill=当前色（瓦片按 data-tile 给的颜色），镂空靠 evenodd
+    expect(svg.attributes('fill')).toBe('currentColor')
+    expect(svg.attributes('fill-rule')).toBe('evenodd')
+    // 24 画框 = ShellAppIcon path 态同规格（旧 stroke 版为 20px）
+    expect(svg.attributes('width')).toBe('24')
+    expect(svg.attributes('height')).toBe('24')
+    expect(svg.attributes('stroke')).toBeUndefined()
+    expect(path.attributes('d')).toBeTruthy()
   })
 })
 
