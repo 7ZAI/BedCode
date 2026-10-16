@@ -198,6 +198,11 @@ base64 -d <<< "$ANDROID_KEY_BASE64" | file -
 > `dev` 是本地集成主线：对它的 push 不触发任何 workflow（`branches-ignore: dev`），CI 在合并到
 > `master` / `uat` 时接管。根 `packages/**`、`contracts/**` 只在 `test.yml` / `wit-drift-lock.yml`
 > 的 paths 里——只改机制内核 / 能力域 crate 或契约版本真源的 PR 也必须有门禁。
+>
+> `frontend-desktop` / `frontend-mobile` 在 vitest **之前**先构建各自 SDK 的 `dist/`
+> （`packages/plugin-sdk-{desktop,mobile}`）：wasm 应用测试 import SDK 包入口（`main` → `dist/index.js`），
+> 而 `dist/` 不入库——不先构建就只有 CI 会红（本地因遗留 dist 在场而假绿）。同理，
+> `package-sdks` 需先装 mobile SDK dev-shell 的依赖（独立 workspace），否则其单测报找不到 `vue-i18n`。
 
 ### release.yml 的 job 图
 

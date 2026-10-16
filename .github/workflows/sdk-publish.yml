@@ -74,6 +74,13 @@ jobs:
           pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
           pnpm run test:run --filter @binblink/bedcode-plugin-sdk-desktop
 
+      # dev-shell 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：
+      # SDK 单测会 import dev-shell 源码（i18n 单例 / 壳组件）而不只是 dist，
+      # 不装它的依赖时 vitest 报 "Cannot find package 'vue-i18n'"。
+      - name: Install dev-shell dependencies (plugin-sdk-mobile.dev-shell)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile/dev-shell
+        run: pnpm install --frozen-lockfile
+
       - name: Build & test mobile SDK
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: |

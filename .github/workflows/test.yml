@@ -481,6 +481,13 @@ jobs:
         working-directory: bedcode-desktop
         run: pnpm install --frozen-lockfile
 
+      # wasm 应用测试 import `@binblink/bedcode-plugin-sdk-desktop`（package main → dist/index.js），
+      # dist 不入库：不先构建 SDK，这些用例会报 "Failed to resolve entry for package"。
+      # 本地因 dist 已在场而绿，CI 必红（2026-10-17 dev 内容验证暴露）。
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
       - name: Vitest (desktop)
         working-directory: bedcode-desktop
         run: pnpm run test:run
@@ -505,6 +512,17 @@ jobs:
       - name: Install dependencies
         working-directory: bedcode-mobile
         run: pnpm install --frozen-lockfile
+
+      # mobile SDK 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：根安装
+      # 不会装它的 devDeps（tsup 等），必须先独立安装再构 dist/，否则 wasm-apps/bedcode
+      # 的用例如实报 "Failed to resolve entry for package"（同上，本地不现、CI 必红）。
+      - name: Install SDK dependencies (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-mobile dist)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm run build
 
       - name: Vitest (mobile)
         working-directory: bedcode-mobile
