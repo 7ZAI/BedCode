@@ -509,20 +509,22 @@ jobs:
           cache: pnpm
           cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
 
+      # mobile SDK 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：根安装
+      # 不会装它的 devDeps（tsup 等），必须先独立安装并构建出 dist/。
+      #
+      # **顺序关键**：bedcode-mobile 的 `file:packages/plugin-sdk-mobile` 依赖在安装时
+      # 把 SDK 目录按文件硬链接**快照**进 node_modules——装完再构建 dist 不会刷新快照。
+      # 2026-10-17 CI 实测：先装后构时 dist 构建明明成功，vitest 仍报
+      # "Failed to resolve entry for package @binblink/bedcode-plugin-sdk-mobile"。
+      - name: Install SDK deps and build dist (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
       - name: Install dependencies
         working-directory: bedcode-mobile
         run: pnpm install --frozen-lockfile
-
-      # mobile SDK 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：根安装
-      # 不会装它的 devDeps（tsup 等），必须先独立安装再构 dist/，否则 wasm-apps/bedcode
-      # 的用例如实报 "Failed to resolve entry for package"（同上，本地不现、CI 必红）。
-      - name: Install SDK dependencies (plugin-sdk-mobile)
-        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
-        run: pnpm install --frozen-lockfile
-
-      - name: Build SDK (plugin-sdk-mobile dist)
-        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
-        run: pnpm run build
 
       - name: Vitest (mobile)
         working-directory: bedcode-mobile
