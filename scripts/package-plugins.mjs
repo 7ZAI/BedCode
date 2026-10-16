@@ -9,8 +9,11 @@
  *      构建委托给两端既有构建机制（desktop: manifest-gen + pnpm run build；
  *      mobile: scripts/plugin-build.js），行为与 CI 宿主构建一致。
  *   2. 收集产物（src-tauri/resources/plugins/{desktop,mobile}/<id>/）为每个插件各打一个 zip：
- *      - <out>/<target>/<id>.zip（zip 根 = 插件文件，与移动端 SDK package 分发格式一致），
+ *      - <out>/<target>/<id>-<target>.zip（zip 根 = 插件文件，与移动端 SDK package 分发格式一致），
  *        一个插件一个包，发布后按需单独安装/更新。
+ *        文件名必须带 target：两端各有一份**同名插件**（ai-chatbox / file-transfer /
+ *        terminal-session），而 release 附件是**扁平命名空间**——同名 zip 第二份上传即
+ *        `Not Found - releases/assets#update-a-release-asset`（2026-10-17 CI 实测）。
  *
  * 产物即 release 的独立附件（见 .github/workflows/release.yml 的 package-plugins job）。
  *
@@ -512,11 +515,13 @@ function makeZip(entries, outFile, label) {
 }
 
 function zipPlugins() {
-  // 一个插件一个 zip：<out>/<target>/<id>.zip，zip 根 = 插件文件（与移动端 SDK package 分发格式一致）
+  // 一个插件一个 zip：<out>/<target>/<id>-<target>.zip，zip 根 = 插件文件
+  // （与移动端 SDK package 分发格式一致）。文件名带 target：release 附件是扁平命名空间，
+  // 两端同名插件 zip 不加后缀会互相覆盖（第二份上传报 Not Found - releases/assets）。
   for (const p of plugins) {
     makeZip(
       pluginEntries(p.target, p.id),
-      join(outDir, p.target, `${p.id}.zip`),
+      join(outDir, p.target, `${p.id}-${p.target}.zip`),
       `[${p.target}/${p.id}]`,
     )
   }
@@ -538,4 +543,4 @@ if (!args.keepStage) {
 }
 
 console.log(`\n[package-plugins] 完成。产物目录: ${outDir}`)
-console.log('  - 插件包: <target>/<plugin-id>.zip（一个插件一个 zip）')
+console.log('  - 插件包: <target>/<plugin-id>-<target>.zip（一个插件一个 zip）')

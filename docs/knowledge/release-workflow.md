@@ -104,7 +104,7 @@ git push origin master --tags
    - `BedCode_x.x.x_x64-setup.exe`（Windows NSIS）
    - `*.deb`（Linux）
    - `*.apk`（Android）
-   - `dist/plugin-packages/{desktop,mobile}/*.zip`（插件 zip 分发包，见 `docs/commands.md`；
+   - `dist/plugin-packages/{desktop,mobile}/<plugin-id>-<target>.zip`（插件 zip 分发包：两端同名插件靠端后缀区分，见 `docs/commands.md`；
      打包范围由 `scripts/plugin-package-list.json` 控制，增删插件改该文件即可）
    - `dist/sdk-packages/{desktop,mobile}/*`（两端 SDK 发布包：npm `.tgz` + crates.io `.crate`
      + 聚合 zip + `SHA256SUMS-<target>`（文件名带端后缀，避免同一 release 内附件重名），

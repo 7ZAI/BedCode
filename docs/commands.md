@@ -291,7 +291,7 @@ pnpm run package         # 产出 dist/<plugin-id>.zip
 bedcode-desktop/src-tauri/resources/plugins/desktop/<plugin-id>/{index.js,plugin.json,<lib>.wasm}
 bedcode-mobile/src-tauri/resources/plugins/mobile/<plugin-id>/      # 进 APK 资源（首启解压）
 bedcode-mobile/wasm-apps/<name>/dist/<plugin-id>.zip                   # 可分发的插件包
-dist/plugin-packages/<target>/<plugin-id>.zip                       # §5.5 的 zip 分发包
+dist/plugin-packages/<target>/<plugin-id>-<target>.zip              # §5.5 的 zip 分发包（带端后缀，避免 release 附件同名）
 dist/sdk-packages/<target>/                                         # §5.5 的 SDK 产物
 ```
 

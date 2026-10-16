@@ -219,7 +219,7 @@ prepare-release（提取版本 + 生成双语 changelog）
    ├─ build-windows   (windows-latest)  -> 签名 NSIS + latest.json 记录
    ├─ build-linux     (ubuntu-latest)   -> 签名 deb
    ├─ build-android   (ubuntu-latest)   -> 签名 APK
-   ├─ package-plugins (ubuntu-latest)   -> dist/plugin-packages/{desktop,mobile}/<id>.zip
+   ├─ package-plugins (ubuntu-latest)   -> dist/plugin-packages/{desktop,mobile}/<id>-<target>.zip
    └─ package-sdks    (ubuntu-latest)   -> dist/sdk-packages/{desktop,mobile}/*
             ▼
    finalize-release（同步 release body + 校验 latest.json 已上传）
