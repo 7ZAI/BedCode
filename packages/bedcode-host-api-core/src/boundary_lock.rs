@@ -10,10 +10,24 @@
 //!    各端 adapter 的职责，实现层保持机制级最小依赖；
 //! 4. **域文件在场**：实现层模块不得以「重构」为名被清空（缺失 = 共享核名存实亡）。
 //!
-//! 只扫非注释行：本锁自身的说明与源文件里的记账注释不算回接
+//! ## 位置与自排除（2026-10-16）
+//!
+//! 本锁原先住在 crate 根 `tests/boundary_lock.rs`——那是**独立测试二进制**，只经 `pub`
+//! API 访问对外行为，被宿主侧 `capability_crates_unit_tests_only.rs` 判为治理 crate
+//! 不得有的 crate 根测试面（它一直在把桌面 `cargo test` 判红）。迁入 `src/` 后由
+//! `lib.rs` 以 `#[cfg(test)] mod boundary_lock;` 引入（与同族 `file-transfer-core` /
+//! `ws-client-engine` 的 `src/boundary_lock.rs` 同形态）。
+//!
+//! 迁入后**必须自排除本文件**（`SELF_LOCK_FILE`）：它自身含被禁 needle 的字面量常量表
+//! （`retired_needles`）与报错文案，不自排除会扫到自己而恒红。
+//!
+//! 扫描只计非注释行：本锁自身的说明与源文件里的记账注释不算回接
 //! （注释纪律见 AGENTS §6——注释解释为什么，锁不惩罚解释）。
 
 use std::path::{Path, PathBuf};
+
+/// 自排除的锁文件（含被禁 needle 的字面量，见头注「位置与自排除」）
+const SELF_LOCK_FILE: &str = "boundary_lock.rs";
 
 fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
@@ -74,6 +88,10 @@ fn visit_rs(dir: &Path, f: &mut impl FnMut(&str, &str)) {
         if path.is_dir() {
             visit_rs(&path, f);
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            // 自排除：本锁文件自己就含被禁 needle 的字面量常量表（见头注）
+            if path.file_name().and_then(|n| n.to_str()) == Some(SELF_LOCK_FILE) {
+                continue;
+            }
             let rel = path
                 .strip_prefix(&src_dir())
                 .unwrap_or(&path)

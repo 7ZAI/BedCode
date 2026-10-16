@@ -21,7 +21,7 @@
 //! - **禁止**宿主平台（tauri）与运行时（tokio）依赖——阻塞 / 驱动异步是各端 adapter
 //!   的职责（桌面 `runtime_util::block_on_async`、移动 `block_in_place` + `block_on`）。
 //!
-//! 上述判据由 `tests/boundary_lock.rs` 强制（票 18 §6）。
+//! 上述判据由 `src/boundary_lock.rs` 强制（票 18 §6）。
 //!
 //! ## 域进度（每域一步、可回退，迁移顺序见票 18 §3）
 //!
@@ -50,3 +50,9 @@ pub mod fs;
 pub mod gate;
 pub mod log;
 pub mod storage;
+
+// 边界锁（票 18 §6）以测试模块形式就地住在 `src/`——治理 crate 的 crate 根不得有
+// `tests/` 目录（宿主侧 `capability_crates_unit_tests_only.rs` 判红），且本锁只读本 crate
+// 源码，与实现层同处一目录便于同步维护。
+#[cfg(test)]
+mod boundary_lock;

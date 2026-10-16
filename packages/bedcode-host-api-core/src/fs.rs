@@ -27,7 +27,7 @@
 //! ## 依赖纪律
 //!
 //! 只依赖 std + serde_json + tracing（本 crate 头注 §边界判据，由
-//! `tests/boundary_lock.rs` 钉住）。**无 tokio**：异步驱动由各端 adapter 在本层
+//! `src/boundary_lock.rs` 钉住）。**无 tokio**：异步驱动由各端 adapter 在本层
 //! 之外完成——本层只见同步 bool。
 
 use std::path::Path;

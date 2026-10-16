@@ -55,7 +55,7 @@
 ### `bedcode-host-api-core` —— host_api 实现层（运行期机制语义）
 
 - **是什么**：每域两层中的**实现层**——`gate`（权限门入参 `PermissionGate`，权限词汇经参数传入）/ `storage` / `bus` / `database`（插件私有库：超时护栏 / 行列字节护栏 / 批次事务 / 裸事务控制拒绝）/ `log` / `events` / `fs`（`FsHostPorts::platform_delete` 等平台边经端口注入）。各端 adapter 与 WIT 绑定留宿主侧（本 crate 各域在 `bedcode-wasm-core/src/host_api/*.rs` 有薄转发）。
-- **边界锁**（`tests/boundary_lock.rs`）：实现层不得出现 `plugin_api`（双端 SDK）、`wasm_core`（回引内核）、`tauri`、`tokio`；只允许机制级依赖（实际仅 `serde_json` / `tracing` / `rusqlite`）。域文件在场亦被锁住（防「重构」清空）。
+- **边界锁**（`src/boundary_lock.rs`，`#[cfg(test)]` 模块）：实现层不得出现 `plugin_api`（双端 SDK）、`wasm_core`（回引内核）、`tauri`、`tokio`；只允许机制级依赖（实际仅 `serde_json` / `tracing` / `rusqlite`）。域文件在场亦被锁住（防「重构」清空）。
 - **不抽判据**：`config` / `http` 已判定不抽（config 引用各端 SDK 枚举；http 属能力域 crate 各自形态）。
 - **消费方**：`bedcode-wasm-core`（adapter）、`bedcode-server-base`（re-export `PLUGIN_DB_*` 四护栏常量，故**不可并入 wasm-core**——会形成 `server-base → wasm-core → server-base` 依赖环）、移动 purity 锁（判据 3 钉「共享实现核不得消失」）。
 
