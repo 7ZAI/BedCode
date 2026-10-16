@@ -15,6 +15,9 @@
  * **主色色板在本表**（2026-10-16 从宿主外观页下沉）：主色是本应用的产品外观（B5 业务
  * 默认值 / 策略），宿主外壳固定用默认象牙白，不再全局改色。选择器只改本应用运行面
  * 根节点上的 `data-palette`（见 ../app/AppRoot.vue），不外溢到壳。
+ * 选择器带色块预览（`swatchPreview: true`）：色值与 `mobile.css` 的
+ * `[data-palette=…]` 主色 token 同源，所见即所改；实时生效靠
+ * `useAppSettings` 的模块级共享状态（运行面与设置页同读一份值）。
  */
 
 export type SettingKind = 'boolean' | 'number' | 'enum'
@@ -31,6 +34,14 @@ export interface SettingDef {
   hintKey?: string
   /** enum 型的可选项 */
   options?: { value: string; labelKey: string }[]
+  /**
+   * 枚举项以「色块预览 + 文字」单选按钮渲染（当前仅主色色板用）
+   *
+   * 色块颜色取全局 `--mobile-palette-swatch-<value>` token（mobile.css 定义，
+   * 随主题深浅自动切换），选中态除色块外还有文字/勾选/aria-pressed 多重承载
+   * ——E2E 断言与无障碍都依赖「不只靠颜色传达」这条口径。
+   */
+  swatchPreview?: boolean
   /** number 型的取值范围 */
   min?: number
   max?: number
@@ -114,6 +125,7 @@ export const SETTING_GROUPS: SettingGroup[] = [
         fallback: 'default',
         labelKey: 'settings.accentPalette',
         hintKey: 'settings.accentPaletteHint',
+        swatchPreview: true,
         options: [
           { value: 'default', labelKey: 'settings.palette.default' },
           { value: 'forest', labelKey: 'settings.palette.forest' },

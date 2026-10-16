@@ -147,14 +147,16 @@ const terminalSession = ref<{ id: string; name: string } | null>(null)
  * `--mobile-accent` 系 token，壳（导航 / 卡片 / 对话框）继续用 :root 默认象牙白。
  * 取值走设置域的业务设置（宿主 KV 桥），真源与选择器在 settings/SettingsPage.vue。
  *
- * 首屏先用 fallback 渲染、load 落定后覆盖：加载是异步 KV 读，若初值留空则
- * 整轮应用界面都拿不到 accent token（主色缺失比闪一下更糟）。
+ * 实时生效：useAppSettings 是模块级共享状态（设置页与运行面同读一份值）——
+ * 设置页点了新色板，这里立即跟着变，无需重启应用。未加载时回退 'default'
+ * 保证第一帧就有色；加载落定后 computed 自动切到持久化值。
  */
-const accentPalette = ref('default')
-void appSettings.load().then(() => {
+const accentPalette = computed(() => {
   const value = appSettings.values.accentPalette
-  if (typeof value === 'string' && value) accentPalette.value = value
+  return typeof value === 'string' && value ? value : 'default'
 })
+// 首屏预取设置（幂等：模块级 loadPromise，重复调用不重复读 KV）
+void appSettings.load()
 
 const isAuthenticated = ctrl.isAuthenticated
 const reconnectBanner = ctrl.reconnectBanner

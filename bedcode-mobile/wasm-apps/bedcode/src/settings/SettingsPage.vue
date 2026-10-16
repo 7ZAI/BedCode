@@ -72,24 +72,67 @@
           </div>
 
           <!-- 枚举项：分段选择。flex-wrap 是必需的——主色色板 5 档在窄屏一行放不下，
-               不换行会把标签列挤到 0 宽。窄屏时整行换行，宽屏仍保持同行。 -->
+               不换行会把标签列挤到 0 宽。窄屏时整行换行，宽屏仍保持同行。
+               带 swatchPreview 的枚举（主色色板）改为色块 + 文字的单选按钮：
+               每个选项一个色点（颜色即选中后的实际主色），选中的色块内打勾、
+               单元格高亮——a11y 不靠颜色单通道，文字 / aria-pressed 同步承载。 -->
           <div
             v-else
             class="flex items-center gap-1 flex-shrink-0"
             :class="(item.options?.length ?? 0) > 3 ? 'flex-wrap justify-end max-w-[62%]' : ''"
           >
-            <button
-              v-for="opt in item.options ?? []"
-              :key="opt.value"
-              type="button"
-              class="min-h-[32px] px-3 rounded-lg text-xs transition-colors"
-              :aria-pressed="ctrl.values[item.key] === opt.value"
-              :style="segmentStyle(ctrl.values[item.key] === opt.value)"
-              :disabled="ctrl.saving.value"
-              @click="onSelect(item.key, opt.value)"
-            >
-              {{ t(opt.labelKey) }}
-            </button>
+            <template v-if="item.swatchPreview">
+              <button
+                v-for="opt in item.options ?? []"
+                :key="opt.value"
+                type="button"
+                class="flex flex-col items-center gap-1 min-w-[56px] px-2 pt-2 pb-1.5 rounded-lg transition-colors focus-visible:ring-2 focus-visible:ring-[var(--mobile-accent)] active:opacity-80"
+                :aria-pressed="ctrl.values[item.key] === opt.value"
+                :data-palette-option="opt.value"
+                :disabled="ctrl.saving.value"
+                :style="swatchCellStyle(ctrl.values[item.key] === opt.value)"
+                @click="onSelect(item.key, opt.value)"
+              >
+                <span
+                  class="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                  aria-hidden="true"
+                  :style="swatchDotStyle(opt.value, ctrl.values[item.key] === opt.value)"
+                >
+                  <svg
+                    v-if="ctrl.values[item.key] === opt.value"
+                    class="w-3.5 h-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                </span>
+                <span
+                  class="text-[11px] leading-none whitespace-nowrap"
+                  :style="{ color: ctrl.values[item.key] === opt.value ? 'var(--mobile-text-primary)' : 'var(--mobile-text-secondary)' }"
+                >
+                  {{ t(opt.labelKey) }}
+                </span>
+              </button>
+            </template>
+            <template v-else>
+              <button
+                v-for="opt in item.options ?? []"
+                :key="opt.value"
+                type="button"
+                class="min-h-[32px] px-3 rounded-lg text-xs transition-colors"
+                :aria-pressed="ctrl.values[item.key] === opt.value"
+                :style="segmentStyle(ctrl.values[item.key] === opt.value)"
+                :disabled="ctrl.saving.value"
+                @click="onSelect(item.key, opt.value)"
+              >
+                {{ t(opt.labelKey) }}
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -145,6 +188,33 @@ function segmentStyle(active: boolean) {
   return {
     background: active ? 'var(--mobile-accent)' : 'var(--mobile-bg-primary)',
     color: active ? 'var(--mobile-text-on-accent)' : 'var(--mobile-text-secondary)',
+  }
+}
+
+/**
+ * 色块选项单元格样式（swatchPreview 枚举项）
+ *
+ * 选中态用 accent 系 token 高亮单元格；边框两态都存在，避免选中切换造成
+ * 1px 布局抖动。选中强调色 = 当前选区的主色（选了哪个档，整页立刻换色），
+ * 与 `data-palette` 的实时生效互为印证。
+ */
+function swatchCellStyle(active: boolean) {
+  return {
+    background: active ? 'var(--mobile-accent-muted)' : 'transparent',
+    border: `1px solid ${active ? 'var(--mobile-accent)' : 'var(--mobile-border)'}`,
+  }
+}
+
+/**
+ * 色块样式：色值取全局 `--mobile-palette-swatch-<value>`（mobile.css 定义，
+ * 深/浅色主题各有变体，选择器所见即所改）。选中的色块内勾选图标用
+ * `--mobile-text-on-accent`——此时整体 accent 已是该色板，对色号约等于
+ * 白/黑字，在任何主色上都清晰。
+ */
+function swatchDotStyle(value: string, active: boolean) {
+  return {
+    background: `var(--mobile-palette-swatch-${value})`,
+    color: active ? 'var(--mobile-text-on-accent)' : 'transparent',
   }
 }
 
