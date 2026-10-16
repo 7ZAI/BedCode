@@ -339,6 +339,15 @@ html:not(.dark) .shell-ui {
 .notify-card--dragging {
   transition: none;
 }
+/* 滑动删除时露出的指示层：卡片滑开，底下是删除表达（垃圾桶图标）。
+   底色刻意不用破坏色实心大块（红色铺满整张卡背太抢眼、与「滑动」这个轻动作
+   不匹配）：把 --mobile-error 以低比例混进浮起底色，只留一层薄薄的危险信号；
+   图标本身仍着 --mobile-error，破坏语义不丢。双主题都由 token 派生，零新色值。 */
+.notify-swipe-reveal {
+  background: color-mix(in srgb, var(--mobile-error) 14%, var(--mobile-bg-elevated));
+  color: var(--mobile-error);
+}
+
 /* 列表删除后的归位（TransitionGroup 只定义 move；enter/leave 走默认即无动画） */
 .notify-list-move {
   transition: transform var(--shell-dur-base) var(--shell-ease-standard);
@@ -367,6 +376,22 @@ html:not(.dark) .shell-ui {
     transform: translateX(120vw);
     opacity: 0.25;
   }
+}
+
+/* ============================================================================
+   壁纸上的浮空文字（主屏专用）
+   ----------------------------------------------------------------------------
+   主屏内容直接压在壁纸上，而壁纸（渐变档位与用户自选图片）的亮度与色相不可控：
+   次级字色（--mobile-text-secondary）在壁纸亮处对比度不足，读起来像糊了
+   （ui-ux-pro-max `--domain ux` Color Contrast：正文需 4.5:1）。
+   这里给这类文字叠一层由页面底色派生的柔和描边：深色主题是暗晕、浅色主题是亮晕，
+   双主题都提高字形边缘与壁纸的分离度，且不引入新色值、不改布局。
+   无壁纸时晕色与页面底色同色，等于不可见；卡片内的文字不受影响（不挂在这个类下）。
+   ============================================================================ */
+.shell-text-over-wall {
+  text-shadow:
+    0 0 2px color-mix(in srgb, var(--mobile-bg-primary) 78%, transparent),
+    0 1px 4px color-mix(in srgb, var(--mobile-bg-primary) 55%, transparent);
 }
 
 /* ============================================================================

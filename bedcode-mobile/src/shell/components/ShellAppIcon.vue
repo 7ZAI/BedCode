@@ -1,6 +1,6 @@
 <template>
   <span
-    class="inline-flex items-center justify-center flex-shrink-0 overflow-hidden border"
+    class="inline-flex items-center justify-center flex-shrink-0 overflow-hidden"
     :class="toneClass"
     :style="boxStyle"
     role="img"
@@ -91,6 +91,19 @@ watch(
   },
 )
 
+/**
+ * 作品真正在场（图片图标且未回退）：此时图标盒完全退让——零描边、零底色。
+ *
+ * 移动端插件图标（plugin.json 的 icon）都是满幅圆角方作品（icon.svg：自带
+ * 底色 + rx 18~20% 圆角），盒子再画 1px 描边 + 铺一层比页面更亮的底，就只在
+ * 作品四周添一圈「白框」——作品自己的圆角（≈size 的 8px）比盒子的圆角
+ * （size 的 11px）小，两者之间的缝里漏出的正是盒底本身。用户实测反馈的
+ * 「图标有白色边框」就是这个缝 + 描边。盒子只保留圆角裁切。
+ */
+const artworkShown = computed(
+  () => kind.value === 'image' && !!props.app.iconUrl && !imageFailed.value,
+)
+
 /** 圆角随尺寸线性放大并钳制：小盒（列表行）接近方形角，大可盒（预览位）过渡到拟 Windows/Android 大圆角，避免同一图标在 12/16 两档间跳变 */
 const borderRadius = computed(() => {
   const r = Math.round(props.size * 0.25)
@@ -104,18 +117,21 @@ const boxStyle = computed(() => ({
 }))
 
 const toneClass = computed(() => {
+  // 作品在场时不做任何外框（见 artworkShown 注释）
+  if (artworkShown.value) return 'bg-transparent'
   switch (props.tone) {
     case 'plain':
-      return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)] border-[var(--mobile-border)]'
+      return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-secondary)]'
     case 'ghost':
-      return 'bg-transparent text-[var(--mobile-text-secondary)] border-dashed border-[var(--mobile-border-hover)]'
+      // ghost 的全部视觉身份就是那圈虚线框，描边只属于它一档
+      return 'bg-transparent text-[var(--mobile-text-secondary)] border border-dashed border-[var(--mobile-border-hover)]'
     default:
-      // accent 底板对四种形态取同一个表面 + 同一条描边，只有图形本身不同。
+      // accent 底板对四种形态取同一个表面（**不含描边**：移动端主线图标是满幅作品，
+      // 描边只会成为作品外的一圈白框；桌面壳同位的 .glyph-box 也没有描边）。
       // 早前 emoji / 图片走中性底、首字母回退走 accent 淡底，同一宫格里出现
       // 深色块与浅灰块两种质感，读起来像两种控件；这里收成一套，格子只由
-      // 里面的图形区分，不靠底色。emoji / 图片自带颜色，不叠前景色，
-      // 否则会出现双色描边。
-      return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-primary)] border-[var(--mobile-border)]'
+      // 里面的图形区分，不靠底色。
+      return 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-primary)]'
   }
 })
 </script>

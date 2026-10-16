@@ -17,6 +17,8 @@
  * | C-H10 | 自定义壁纸 | custom 档 + 路径 → 壁纸层用 asset URL 铺底 | 图片层 style 含 URL |
  * | C-H11 | 多任务入口 | 运行带分组头带多任务入口（recents 全局可达，不只运行页胶囊） | openSwitcher 被调用 |
  * | C-H12 | 系统宫格瓦片样式 | 启动器风格：.shell-sys-tile + data-tile=entry.id，SVG 为 24 画框实心块面（fill + evenodd 挖空），不再是 stroke 线稿 | 类名 / data-tile / fill 属性按入口在场 |
+ * | C-H13 | 运行卡停止按钮形状 | 圆角矩形危险按钮（不是 capsule chip）——短标签 + 44px 触控高度下 rounded-full 会缩成圆形，读作状态徽标而非按钮 | class 含 rounded-[10px]，不含 rounded-full / 999px |
+ * | C-H14 | 壁纸上的浮空文字 | 壁纸上的标题/副标题挂 .shell-text-over-wall（底色描边护对比度）；shell.css 里该类的描边色由 token 派生 | 头部文本框与四个分组头均带类；CSS 含 text-shadow + color-mix |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -75,6 +77,7 @@ vi.mock('@/plugin/assets', () => ({
 }))
 
 import ShellHomeScreen from '@/shell/components/screens/ShellHomeScreen.vue'
+import ShellAppIcon from '@/shell/components/ShellAppIcon.vue'
 
 function app(id: string, state: ShellApp['state'], name = id): ShellApp {
   return {
@@ -149,6 +152,72 @@ describe('C-H2 运行卡片带', () => {
     await stop.trigger('click')
 
     expect(mockStop).toHaveBeenCalledWith('a')
+  })
+
+  it('should_useRectDangerButton_when_stopRendered', () => {
+    apps.value = [app('a', 'running', 'AppA')]
+    const wrapper = mount(ShellHomeScreen)
+
+    const stop = wrapper.findAll('button').find((b) => b.text().includes('shell.home.stopInstance'))!
+    const classes = stop.classes()
+
+    // 形状契约：「停止」两字 + 44px 触控下限下，胶囊（rounded-full）会缩成圆形，
+    // 与壳内其它矩形控件不同族；改用 control 圆角（10px）的描边危险按钮
+    expect(classes).toContain('rounded-[10px]')
+    expect(classes.some((c) => c.includes('rounded-full') || c.includes('999px')), '不得为胶囊/圆形').toBe(false)
+    expect(classes).toContain('border')
+    expect(stop.attributes('style'), '危险色走 token color-mix（不硬编码）').toContain('--mobile-error')
+  })
+})
+
+describe('C-H15 应用图标外框（满幅作品不得叠框）', () => {
+  /** 移动端插件图标（plugin.json.icon）都是满幅圆角方作品 */
+  const imageApp = () => ({
+    ...app('a', 'stopped', 'AppA'),
+    icon: 'icon.svg',
+    iconUrl: 'asset://localhost/icon.svg',
+  })
+
+  it('should_notFrameArtwork_when_imageIconRendered', () => {
+    const wrapper = mount(ShellAppIcon, { props: { app: imageApp() } })
+    const box = wrapper.find('span')
+
+    // 作品自带底色与圆角：盒子再描边 + 铺底就只在作品四周添一圈白框（实测反馈）
+    expect(box.classes().some((c) => c.startsWith('border')), '作品外围不得有描边').toBe(false)
+    expect(box.classes()).toContain('bg-transparent')
+  })
+
+  it('should_keepSurface_when_iconFallsBackToLetter', () => {
+    // 没有作品可依托（无图标 / 图片失败）时盒子才是承载面，仍不着描边
+    const wrapper = mount(ShellAppIcon, { props: { app: app('a', 'stopped', 'AppA') } })
+    const box = wrapper.find('span')
+
+    expect(box.classes()).toContain('bg-[var(--mobile-bg-elevated)]')
+    expect(box.classes().some((c) => c.startsWith('border')), '回退态同样不得有描边').toBe(false)
+  })
+
+  it('should_keepDashedFrame_when_toneGhost', () => {
+    // ghost 的全部视觉身份就是虚线框（「更多」占位），描边只留给它
+    const wrapper = mount(ShellAppIcon, { props: { app: app('a', 'stopped', 'AppA'), tone: 'ghost' } })
+
+    expect(wrapper.find('span').classes()).toContain('border-dashed')
+  })
+})
+
+describe('C-H14 壁纸上的浮空文字', () => {
+  it('should_markWallFloatingText_when_homeRendered', () => {
+    apps.value = [app('a', 'running', 'AppA')]
+    const wrapper = mount(ShellHomeScreen)
+
+    // 壁纸亮度/色相不可控（含用户自选图片）：直接压在壁纸上的文字必须有底色描边。
+    // 用户反馈的两条就是头部「本机 · N 个应用」与应用宫格分组头的「N 个已安装」。
+    const headerText = wrapper.find('header .shell-text-over-wall')
+    expect(headerText.exists(), '头部标题/副标题框挂描边类').toBe(true)
+    expect(headerText.text()).toContain('shell.home.appCount')
+
+    const appsNote = wrapper.findAll('span').find((s) => s.text().includes('shell.home.appsNote'))
+    expect(appsNote?.exists(), '应用宫格分组头说明在场').toBe(true)
+    expect(appsNote!.element.closest('.shell-text-over-wall'), '分组头说明文字在描边容器内').not.toBeNull()
   })
 })
 

@@ -94,12 +94,13 @@
               :class="{ 'notify-card--flee': clearingAll && !item.sticky }"
               :style="clearingAll && !item.sticky ? { animationDelay: `${index * 48}ms` } : undefined"
             >
-              <!-- 滑动删除指示层：卡片滑开时露出红底 + 垃圾桶——手势的删除表达，
-                   不给驻留项（它们不响应滑动）。跟随卡片圆角被外层裁切。 -->
+              <!-- 滑动删除指示层：卡片滑开时露出淡色底 + 红色垃圾桶——手势的删除表达，
+                   不给驻留项（它们不响应滑动）。底色与图标色落在 .notify-swipe-reveal
+                   （shell.css）：破坏色实心整块太抢眼，改用 token 派生的一层薄信号。
+                   跟随卡片圆角被外层裁切。 -->
               <div
                 v-if="!item.sticky"
-                class="absolute inset-0 flex items-center justify-end pr-5"
-                :style="{ background: 'var(--mobile-error)', color: 'var(--mobile-text-on-accent)' }"
+                class="notify-swipe-reveal absolute inset-0 flex items-center justify-end pr-5"
                 aria-hidden="true"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

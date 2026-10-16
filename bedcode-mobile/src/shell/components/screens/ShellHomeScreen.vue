@@ -17,7 +17,10 @@
     <!-- ==================== 头部 ==================== -->
     <header class="relative z-10 flex items-center gap-3 px-4 pt-3 pb-2 flex-shrink-0">
       <ShellBrandTile :size="38" />
-      <div class="flex-1 min-w-0">
+      <!-- shell-text-over-wall：标题与副标题直接压在壁纸上（无卡面），壁纸亮度不可控，
+           靠一层底色描边保证对比度（text-shadow 可继承，包住两条文字即可，
+           不挂到整个 header 上——铃铛角标有自己的实色底，不需要描边） -->
+      <div class="shell-text-over-wall flex-1 min-w-0">
         <div class="shell-type-title">
           BedCode
         </div>
@@ -52,7 +55,7 @@
     <div class="relative z-10 flex-1 min-h-0 overflow-y-auto pb-6 shell-content-cap">
       <!-- ======== 正在运行（MRU 卡片带，桌面同构） ======== -->
       <template v-if="runningOrdered.length > 0">
-        <ShellSection :title="t('shell.home.runningTitle')" class="shell-reveal">
+        <ShellSection :title="t('shell.home.runningTitle')" class="shell-reveal shell-text-over-wall">
           <!-- 多任务入口：recents 在业界是全局可达的（Android / iOS 都能从任意屏进入），
                底部系统条退役后这里补上，不至于只能从运行页胶囊绕进去 -->
           <template #action>
@@ -94,14 +97,25 @@
                 </span>
               </span>
             </button>
-            <!-- 关闭 = 停用实例（Android 卡片关闭的同一语义：回收内存，数据保留） -->
+            <!-- 关闭 = 停用实例（Android 卡片关闭的同一语义：回收内存，数据保留）。
+                 用圆角矩形危险按钮（与桌面壳 .shell-mini.danger 同构）：胶囊 chip 的
+                 rounded-full 在「停止」两字 + 44px 触控高度下会缩成圆形状，既与壳内其它
+                 矩形控件（--shell-radius-control）不同族，也容易被读成状态徽标而不是按钮。 -->
             <div class="mt-1.5 flex justify-end">
-              <ShellChip
-                :label="t('shell.home.stopInstance')"
-                tone="danger"
-                clickable
+              <button
+                type="button"
+                class="inline-flex items-center justify-center gap-1.5 rounded-[10px] border px-3 shell-type-micro transition-colors duration-200 active:bg-[var(--mobile-error-muted)] min-h-[var(--mobile-touch-target-min)]"
+                :style="{
+                  borderColor: 'color-mix(in srgb, var(--mobile-error) 35%, transparent)',
+                  color: 'var(--mobile-error)',
+                }"
                 @click="stopApp(app.id)"
-              />
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+                <span>{{ t('shell.home.stopInstance') }}</span>
+              </button>
             </div>
           </article>
         </div>
@@ -112,7 +126,7 @@
            滑动切下一张。定宽而非 flex-1 是刻意的——卡片内容由应用自持，等宽拉伸会让
            单行信息量不同的卡片看起来参差。 -->
       <template v-if="slotCards.length > 0">
-        <ShellSection :title="t('shell.home.slotsTitle')" class="shell-reveal" :style="{ animationDelay: '80ms' }" />
+        <ShellSection :title="t('shell.home.slotsTitle')" class="shell-reveal shell-text-over-wall" :style="{ animationDelay: '80ms' }" />
         <div class="shell-slot-track shell-reveal" role="list" :style="{ animationDelay: '120ms' }">
           <div v-for="card in slotCards" :key="card.key" class="shell-slot-item" role="listitem">
             <component :is="card.component" :app="card.app" />
@@ -121,7 +135,7 @@
       </template>
 
       <!-- ======== 应用宫格 ======== -->
-      <ShellSection :title="t('shell.home.appsTitle')" :note="t('shell.home.appsNote', { count: apps.length })" class="shell-reveal" :style="{ animationDelay: '160ms' }">
+      <ShellSection :title="t('shell.home.appsTitle')" :note="t('shell.home.appsNote', { count: apps.length })" class="shell-reveal shell-text-over-wall" :style="{ animationDelay: '160ms' }">
         <template #action>
           <!-- 图标按钮（44px 触控目标）：入口语义是「应用管理」，文字 chip 在宫格标题行里
                抢视觉重心且显得扁平，改用单图标 + 可访问名（ui-ux-pro-max --domain icons：
@@ -157,7 +171,7 @@
       </div>
 
       <!-- ======== 系统宫格（平台自有面，与应用同层） ======== -->
-      <ShellSection :title="t('shell.home.sysTitle')" class="shell-reveal" :style="{ animationDelay: '240ms' }" />
+      <ShellSection :title="t('shell.home.sysTitle')" class="shell-reveal shell-text-over-wall" :style="{ animationDelay: '240ms' }" />
       <div class="px-4">
         <div class="grid grid-cols-4 gap-3 shell-reveal" role="list" :style="{ animationDelay: '280ms' }">
           <button
@@ -218,7 +232,6 @@ import type { ShellApp } from '../../types'
 import ShellAppCell from '../ShellAppCell.vue'
 import ShellAppIcon from '../ShellAppIcon.vue'
 import ShellBrandTile from '../ShellBrandTile.vue'
-import ShellChip from '../ShellChip.vue'
 import ShellSection from '../ShellSection.vue'
 
 const { t } = useI18n()

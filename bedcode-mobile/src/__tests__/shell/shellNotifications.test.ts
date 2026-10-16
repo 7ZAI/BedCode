@@ -17,8 +17,11 @@
  * | C-N8 | 通知栏计数 | 计数 = 通知条数 + 待审批数 | 头部/角标口径一致 |
  * | C-N9 | 通知栏动作 | 单条关闭 / 清除全部 / 去审批 / 打开应用 | 分别落到 dismiss / clear / openDetail / openShellApp |
  * | C-N10 | 滑动删除 | 水平滑超阈值删除（带滑出动画）；短滑回弹；垂直滚动让位；驻留项豁免 | 超阈值→移除；短/垂直/sticky→保留 |
+ * | C-N11 | 滑动指示层 | 卡片滑开露出的删除层不用破坏色实心大块（太抢眼），底色由 token 混色派生 | 层挂 .notify-swipe-reveal；shell.css 里该类用 color-mix + --mobile-error |
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { mount } from '@vue/test-utils'
 import { computed, nextTick, ref } from 'vue'
 import {
@@ -412,6 +415,26 @@ describe('C-N10 左右滑动删除', () => {
 
     expect(cardOf(wrapper, 'v-swip').exists(), '垂直滚动应让位列表滚动，不删除').toBe(true)
     expect(notifications.notifications.value.length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('should_useTokenDerivedReveal_when_swipeLayerRendered', () => {
+    notifications.pushNotification({ kind: 'info', icon: 'i', source: 's', title: 'layer' })
+    shadeOpen.value = true
+    const wrapper = mountShade()
+
+    // ① 结构：滑动露出的是专用的指示层类（颜色不在组件里写死）
+    const layer = wrapper.find('.notify-swipe-reveal')
+    expect(layer.exists(), '滑开时露出的删除指示层在场').toBe(true)
+
+    // ② 颜色：该类在 shell.css 里由 --mobile-error 低比例混进浮起底色得出，
+    //    不是破坏色实心铺底——实心大红色是用户实测反馈的「太突兀」
+    const css = readFileSync(join(process.cwd(), 'src/shell/styles/shell.css'), 'utf-8')
+    const block = css.slice(css.indexOf('.notify-swipe-reveal'))
+    const rule = block.slice(0, block.indexOf('}'))
+    expect(rule, '指示层底色由 color-mix 派生').toContain('color-mix(in srgb, var(--mobile-error)')
+    expect(rule, '不得退回破坏色实心底').not.toMatch(/background:\s*var\(--mobile-error\)/)
+
     wrapper.unmount()
   })
 
