@@ -64,6 +64,12 @@ pub use type_hub::{
     TypeHubSet,
 };
 
+/// mDNS 浏览单例源码锁（票 05）：全进程对同一服务类型只允许类型中枢调
+/// `daemon.browse` / `stop_browse`，守护实例只允许 `engine` 创建一次——扫描
+/// `packages/**/src` + 双端 `src-tauri/src` 钉死这两条不变量（ADR 0054）
+#[cfg(test)]
+mod mdns_browse_singleton_lock;
+
 // ==================== 模块描述符词汇（常编译 pub：宿主 adapter 引用） ====================
 //
 // wasm-core 纯净性收口票 02 批次 03：宿主侧 adapter（`src-tauri/src/plugin/mdns.rs`）

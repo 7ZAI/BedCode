@@ -253,6 +253,7 @@ wasm-apps/<app-id>/rust/**    业务真源（会话 / 传输 / 配对 / 对话�
 | 可路由能力表 ↔ 转发方法同步 | `packages/bedcode-wasm-core/src/manager/capability.rs` |
 | 能力模块白名单双向一致 | `packages/bedcode-wasm-core/src/manager/runtime/component.rs`（同处 `stale_artifact_rebuild_hint`） |
 | 拆分 crate 边界 / 双面认识点唯一 / 端口装配点唯一 | `src-tauri/src/server/crate_boundary_lock.rs` + 各面 `dependency_direction_lock.rs` |
+| **mDNS 浏览单例（每服务类型唯一 `daemon.browse` / 唯一 `ServiceDaemon::new`；server-peer-net 不引 discovery-engine）** | `packages/bedcode-discovery-engine/src/mdns_browse_singleton_lock.rs`（源码锁）+ `packages/bedcode-server-peer-net/src/dependency_direction_lock.rs`（依赖方向） |
 | 契约分片组合面（cap 真源 / 双向覆盖 / 包版本单点化） | `src/plugin/bindings.rs` cfg(test) + `src-tauri/tests/wit_package_version_lock.rs` + 根 `pnpm run check:wit` |
 | 能力域迁宿主后的接线（白名单/装配器/权限同步） | `src-tauri/tests/pty_wiring.rs` + 各域 adapter 单测 + wasm-core `lib.rs::pty_module_must_not_return_to_wasm_core` |
 | 整核抽出垫片（宿主无 wasm_core 实现） | `src-tauri/tests/wasm_core_whole_crate_lock.rs` |
