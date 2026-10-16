@@ -57,7 +57,8 @@ aes-gcm = "0.10"
 # async feature：事件循环全异步（recv_async_timeout 可被 select! 组合），
 # 取代旧「tokio worker 内阻塞 recv_timeout(5s)」形态。
 mdns-sd = { version = "0.20", features = ["async"] }
-# 仅引用 flume::RecvTimeoutError 判别事件循环退出原因；版本随 mdns-sd 的传递依赖
+# 浏览订阅通道类型（PeerMdnsBrowse::receiver，宿主类型中枢 fan-out 出口；mdns-sd
+# 自身 Receiver 无法在库外构造）+ 事件循环退出原因判别。版本随 mdns-sd 的传递依赖
 # （两端宿主 lock 均为 0.12）
 flume = "0.12"
 

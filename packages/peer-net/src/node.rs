@@ -104,8 +104,8 @@ impl PeerNetNode {
 
     /// 注入发现结果在线缓存（builder 风格，镜像 [`Self::with_trust_store`] 先例）
     ///
-    /// 挂载后 [`crate::discovery::spawn_peer_mdns_daemon`] 的守护回调与测试的
-    /// 手工喂入共用该缓存实例（「同一通路」，D1）。
+    /// 挂载后 [`crate::discovery::spawn_peer_mdns_daemon`] 的事件循环（消费宿主编
+    /// 造的中枢浏览订阅）与测试的手工喂入共用该缓存实例（「同一通路」，D1）。
     pub fn with_discovery(mut self, cache: Arc<DiscoveryCache>) -> Self {
         self.discovery = Some(cache);
         self
