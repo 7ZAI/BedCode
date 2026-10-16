@@ -59,7 +59,6 @@ use std::time::Duration;
 use crate::http_routes::{HttpRouteDecl, ROUTES};
 use bedcode_plugin_api::host::bus::TOPIC_NS_SEP;
 use bedcode_plugin_api::host::ws::WS_CLIENT_CONNECT;
-use bedcode_plugin_api::EndpointAuth;
 use bedcode_server_base::config::NetworkConfig;
 use bedcode_server_base::identity::AuthenticatedIdentity;
 use bedcode_server_base::ports::{
@@ -67,6 +66,14 @@ use bedcode_server_base::ports::{
     MdnsTypeSubscription, PathsPort, PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent,
     ServerLifecyclePort, ServerPorts, SystemInfoPort,
 };
+// 注册面只接受**宿主侧**的 EndpointAuth：`bedcode-server-http` / `bedcode-server-websocket`
+// 各自在 `wire.rs` 持有一份与 SDK `bedcode_plugin_api::EndpointAuth` **逐字孪生**的副本
+// （能力域 crate 不依赖端 SDK，故不共享类型；三份由边界漂移锁钉住文本一致）。本测试验的是
+// 「宿主照插件声明登记出正确档位」，解析必须用注册面自己的类型——2026-10-17 CI 实测：此处
+// 传 SDK 类型即 E0308（expected `bedcode_server_http::wire::EndpointAuth`,
+// found `bedcode_plugin_api::EndpointAuth`）。
+use bedcode_server_http::wire::EndpointAuth as HttpEndpointAuth;
+use bedcode_server_websocket::wire::EndpointAuth as WsEndpointAuth;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 
@@ -365,7 +372,8 @@ fn manifest_ws_endpoints() -> Vec<(String, String)> {
 /// 注册进真实 HTTP 注册表
 ///
 /// 逐字对齐两处（错开一处就是「测试通过了但生产注册的不是这个」）：
-/// ① 档位解析 `EndpointAuth::parse_with(decl.auth, EndpointAuth::Jwt)`——缺省最严档；
+/// ① 档位解析 `EndpointAuth::parse_with(decl.auth, EndpointAuth::Jwt)`——缺省最严档
+/// （用宿主注册面自己的 `HttpEndpointAuth`，不是 SDK 那份孪生类型，见上方 import 注释）；
 /// ② 内部端点段 = `decl.path`（宿主再拼 `/api/plugin/<owner>/`）。
 ///
 /// **与生产的一处刻意差异**：生产 `register_one` 把注册失败降级成 `log_warn`（D7 故障
@@ -374,7 +382,7 @@ fn manifest_ws_endpoints() -> Vec<(String, String)> {
 fn register_all_http_routes() -> usize {
     let mut registered = 0usize;
     for decl in ROUTES {
-        let auth = EndpointAuth::parse_with(Some(decl.auth), EndpointAuth::Jwt)
+        let auth = HttpEndpointAuth::parse_with(Some(decl.auth), HttpEndpointAuth::Jwt)
             .unwrap_or_else(|e| panic!("{} 的 auth 档位非法：{e}", decl.path));
         let methods: Vec<String> = decl.methods.iter().map(|m| m.to_string()).collect();
         let entry = bedcode_server_http::registry::register(
@@ -1123,7 +1131,7 @@ async fn manifest_ws_endpoints_mount_and_gate_on_real_websocket_face() {
     assert!(!declared.is_empty(), "manifest 必须声明至少一条 wsEndpoint");
     let mut mounted = Vec::new();
     for (path, auth) in &declared {
-        let parsed = EndpointAuth::parse_with(Some(auth.as_str()), EndpointAuth::Jwt)
+        let parsed = WsEndpointAuth::parse_with(Some(auth.as_str()), WsEndpointAuth::Jwt)
             .unwrap_or_else(|e| panic!("manifest wsEndpoint {path} 的 auth 非法：{e}"));
         let entry = bedcode_server_websocket::endpoint::register(
             PLUGIN_ID,
