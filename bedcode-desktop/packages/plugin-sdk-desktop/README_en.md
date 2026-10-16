@@ -1,15 +1,17 @@
 # @binblink/bedcode-plugin-sdk-desktop
 
-The BedCode Desktop plugin development kit — provides everything a plugin needs: **type definitions**, **runtime proxies**, a **Vite build plugin**, and **shared UI components**. Plugins only need this package; no host source code required.
+The BedCode Desktop WASM app development kit — provides everything an app needs: **type definitions**, **runtime proxies**, a **Vite build plugin**, and **shared UI components**. Apps only need this package; no host source code required.
 
-> Full development guide: [`plugin-dev-desktop.md`](../../plugin-dev-desktop.md) (Chinese).
+> Terminology: this repository calls "plugins" WASM apps; the package name, CLI name and identifiers keep the original `plugin` words (`plugin.json`, `bedcode-plugin-api`).
+>
+> Full development guide: [`wasm-app-dev-desktop.md`](../../wasm-app-dev-desktop.md) (Chinese); API & extension-point reference [`wasm-app-dev-guide.md`](../../../bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md).
 
 English | [简体中文](README.md)
 
 ## Install
 
 ```bash
-npm install --save-dev @binblink/bedcode-plugin-sdk-desktop
+pnpm add -D @binblink/bedcode-plugin-sdk-desktop
 ```
 
 Peer dependencies (provided by the host at runtime; installed in the plugin for building & type-checking):
@@ -22,19 +24,31 @@ Peer dependencies (provided by the host at runtime; installed in the plugin for 
 ## Quick Start (recommended: scaffold)
 
 ```bash
-# Create a plugin project (interactive name / type selection; --rust adds a WASM backend)
-npx bedcode-plugin-desktop create my-plugin --rust
+# Create a WASM app project (id and name are positional args, not interactive; --rust adds a WASM backend)
+bedcode-plugin-desktop create com.example.my-app "My App" --author "you" --rust
 
-cd my-plugin
-npm install
-npm run dev        # Browser dev environment (Dev Shell: mock host + HMR)
-npm run build      # Build output dist/index.js (optional: -- --resources-dir <dir> copies into the host)
-npm run manifest   # Auto-fill plugin.json contributes / permissions from source
-npm run validate   # Validate plugin.json
-npm run doctor     # Environment self-check
+cd my-app
+pnpm install
+ppnpm run dev        # Browser dev environment (Dev Shell: empty host shell + HMR)
+ppnpm run build      # Build dist/ (vite frontend + cargo wasm32 for rust-ts)
+ppnpm run manifest   # Auto-fill plugin.json contributes / permissions from source
 ```
 
-Copy the build output into the host's `plugins/desktop/{plugin-id}/` directory, then enable it on the host's plugin management page.
+More commands (run the CLI directly inside the app project, not as npm scripts):
+
+```bash
+bedcode-plugin-desktop build --resources-dir ../bedcode-desktop/src-tauri/resources/plugins/desktop
+# copies the build output into src-tauri/resources/plugins/desktop/{id}/ (how built-in WASM apps ship)
+
+bedcode-plugin-desktop build --frontend-only / --rust-only   # build only half (rust-ts)
+bedcode-plugin-desktop dev [pluginDir] [--port <port>] [--host] [--open]
+bedcode-plugin-desktop manifest --check   # check only, don't write (CI)
+bedcode-plugin-desktop validate [--dir]   # validate plugin.json (id format / required fields / pluginType / permission allowlist / artifact presence)
+bedcode-plugin-desktop doctor             # environment self-check (Node / Rust / wasm32 target / dev-shell / SDK)
+```
+
+Copy the build output into the host's `src-tauri/resources/plugins/desktop/{id}/` directory, then enable it on the host's app management page.
+User-side install goes through a zip package (desktop "Plugins" page → pick zip, unpacked into `app_data_dir/plugins/{id}/`).
 
 ## Creating a Plugin Manually
 
@@ -51,7 +65,6 @@ A minimal plugin needs just two files:
   "description": "Example plugin",
   "author": "you",
   "main": "index.js",
-  "sandbox": "inline",
   "pluginType": "ts-only",
   "permissions": ["storage", "ui:sidebar"],
   "contributes": {
@@ -60,6 +73,12 @@ A minimal plugin needs just two files:
   }
 }
 ```
+
+Required fields: `name` / `version` / `platform` / `main` / `pluginType` / `permissions` / `contributes`
+(validation source of truth `bin/manifest-validate.js`; the host deserializes with no defaults, so a missing field rejects the install).
+`pluginType` accepts `rust` / `rust-ts` / `ts-only`; `rust-ts` requires `rustLibrary` (must match the Cargo.toml package name).
+
+> `sandbox` has been retired from the manifest (audit ticket 06 ruling 2: the frontend is not sandboxed) — the Rust types ignore and drop the field, so declaring it has no effect. Do not declare it.
 
 **`src/index.ts`** — plugin entry (must export `activate`):
 
@@ -93,12 +112,13 @@ The `PluginContext` received by `activate(context)` is the **single channel** th
 | `context.commands` | Register / execute commands | granted by default |
 | `context.terminal` | Send input to sessions, subscribe to output | `terminal:input` / `terminal:output` / `terminal:observe` |
 | `context.session` | Session list, status change subscription | `session:read` / `session:write` |
-| `context.ui` | Sidebar / toolbox / statusbar / settings section / input extensions / terminal toolbar / titlebar / file viewer | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
+| `context.ui` | Sidebar / toolbox / statusbar / settings section / input extensions / terminal toolbar / titlebar / file handlers (`registerFileHandler`) | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
 | `context.events` | Host event subscription & publishing (`on` / `emit`) | subscribe: default; publish: `broadcast` |
-| `context.storage` | Key-value storage (`get` / `set` / `delete` / `flush`) | `storage` (default) |
-| `context.http` | Register HTTP endpoints (e.g. for Agent CLI hooks) | `network:http` |
-| `context.fileService` | File service mount, peer info, system dir / file pickers | `fileservice` |
-| `context.i18n` | Host i18n: register plugin translations, `t()` helper | granted by default |
+| `context.storage` | Key-value storage (`get` / `set` / `delete` / `flush`) | `storage` (**no default grant on desktop — must be declared explicitly**) |
+| `context.http` | Register HTTP endpoints (`registerEndpoint`, e.g. for Agent CLI hooks) | `network:http` |
+| `context.i18n` | Host i18n: register app translations, `t()` helper, `getI18n()` for the instance | granted by default |
+| `context._disposables` | List of Disposables collected by the host on deactivation (internal) | — |
+| `context.id` / `context.extensionPath` | App id / install directory path (read-only) | — |
 
 Permission example: `"permissions": ["storage", "ui:sidebar", "terminal:output", "network:http"]`.
 
@@ -203,13 +223,11 @@ const saved = await context.storage.get<typeof config.properties>(PLUGIN_CONFIG_
 
 ## Event Constants
 
-Event topics follow the `{domain}:{action}` convention; each domain owns its event constants in its own plugin package (single source of truth). The SDK ships no business-specific event names. For example, the Auto Task plugin's event constants live in `plugins/auto-task/src/events.ts` and are used inside that plugin:
+Event topics follow the `{domain}:{action}` convention; each domain owns its event names in its own WASM app package (single source of truth). The SDK ships no business-specific event names. For example, the terminal-session app (`wasm-apps/terminal-session`) subscribes to its task status event:
 
 ```ts
-// Inside a plugin, import its domain event constants
-import { EVENT_TASK_STATUS_CHANGED } from './events'
-
-context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
+// Inside an app, subscribe to its domain event (string literal or a local constant)
+context.events.on('task:status-changed', (payload) => {
   // Task status change (e.g. Agent CLI idle → in_progress)
 })
 ```
@@ -235,7 +253,15 @@ const options = [
 </template>
 ```
 
-Currently provided: `Select` (dropdown, supports `update:modelValue` / `open` events, `md` / `sm` sizes).
+Currently provided (each subpath is an independent export that default-exports the component):
+
+| Subpath | Component | Purpose |
+|---------|-----------|---------|
+| `./ui` | `Select` | Dropdown (`update:modelValue` / `open` events, `md` / `sm` sizes) |
+| `./ui/markdown-editor` | `MarkdownEditor` | Markdown editing area (syntax toolbar + preview toggle, `v-model`) |
+| `./ui/terminal-input-rail` | `TerminalInputRail` | Terminal input navigation rail (floating on the right of the terminal; one line = one user input, position mapped to the buffer) |
+| `./ui/plugin-global-dialog` | `PluginGlobalDialog` | Host global dialog (mounted once at the app root; rendering driven by the global dialog controller, apps drive it via `context.ui.showDialog`, no props on mount) |
+| `./ui/zoom-compensation` | (no component) | Coordinate conversion for fixed-position overlays under root CSS zoom (self-calibrating; currently F=1, kept as a defensive no-op) |
 
 ## Subpath Exports
 
@@ -244,11 +270,15 @@ Currently provided: `Select` (dropdown, supports `update:modelValue` / `open` ev
 | `@binblink/bedcode-plugin-sdk-desktop` | Main API: types + runtime proxies + config helper + event constants |
 | `@binblink/bedcode-plugin-sdk-desktop/vite` | `bedcodePlugin()` Vite build plugin |
 | `@binblink/bedcode-plugin-sdk-desktop/types` | Pure types (types only, no runtime) |
-| `@binblink/bedcode-plugin-sdk-desktop/ui` | Shared Vue components |
+| `@binblink/bedcode-plugin-sdk-desktop/ui` | Shared Vue component: `Select` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/markdown-editor` | `MarkdownEditor` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/terminal-input-rail` | `TerminalInputRail` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/plugin-global-dialog` | `PluginGlobalDialog` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/zoom-compensation` | zoom coordinate conversion helper |
 
 ## Developing this SDK
 
 ```bash
-npm run build      # tsup build → dist (ESM + d.ts)
-npm run test:run   # vitest run
+pnpm run build      # tsup build → dist (ESM + d.ts)
+pnpm run test:run   # vitest run
 ```

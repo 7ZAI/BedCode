@@ -71,13 +71,13 @@ bedcode-mobile/
 │   │   ├── router/         # Message routing (route context, events, registry)
 │   │   ├── auth/           # Auth state & pairing flow
 │   │   ├── file_service/   # File service: SAF directory tree reading
-│   │   ├── plugin/         # Plugin host: wasmtime runtime (host_impl split by capability domain),
-│   │   │                   #   APK assets extraction, downloader, saf_io, android_plugins native bridge
+│   │   ├── plugin/         # Plugin host: end-specific WIT bindings + Host impls, APK assets
+│   │   │                   #   extraction, downloader, saf_io, android_plugins native bridge
 │   │   ├── mdns/           # mDNS service discovery & advertisement
 │   │   ├── model/  enums/  # Data models (API DTOs, WS messages) / enum types
+│   │   ├── egress.rs       # Egress authorization gate (runtime enforcement of the no-direct-fetch rule)
 │   │   ├── system/         # Shared commands, config management, grouped constants, unified error types, JSON settings persistence
-│   │   ├── session.rs      # Remote session management
-│   │   ├── state.rs        # Global state management (singleton managers + token storage)
+│   │   └── state.rs        # Global state management (singleton managers + token storage)
 │   │   ├── peer/           # Peer network adapter module (net assembly & delegation / ports /
 │   │   │                   #   seam platform hooks / transfer·receive·remote delegation / migration)
 │   └── gen/android/        # Android project (custom Kotlin plugins: foreground service, SAF, biometrics,
@@ -85,7 +85,7 @@ bedcode-mobile/
 ├── packages/
 │   ├── plugin-sdk-mobile/  # Plugin SDK (TS + Rust, incl. dev-shell and templates)
 │   └── plugin-component-test/ # Test WASM plugin crate
-├── wasm-apps/              # Official apps (ai-chatbox / bedcode / file-transfer)
+├── wasm-apps/              # Built-in WASM apps (ai-chatbox / bedcode / file-transfer)
 ├── scripts/                # Dev & build scripts (Android dev log capture, plugin build, etc.)
 └── docs/                   # Project docs (code-map.md, etc.)
 ```
@@ -138,28 +138,31 @@ cd src-tauri && cargo test         # Rust tests
 | `pnpm run build` / `build:fast`        | Frontend type-check + build / build only                        |
 | `pnpm run tauri:android:build:fast`    | Quick debug build without type-check                            |
 | `pnpm run tauri:android:build:emulator` | Emulator (x86_64) debug build                                |
-| `pnpm run plugins:build`               | Build official plugins (WASM artifacts)                         |
+| `pnpm run plugins:build`               | Build built-in WASM apps (WASM artifacts)                          |
 | `pnpm run build:all`                   | Build plugins first, then the frontend                          |
 | `pnpm run target:size`                 | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
 
 ## Plugin System
 
-Mobile plugins share the same architecture as the desktop (wasmtime 48, WASM Component Model + permission control), with mobile-only capabilities added: **SAF storage access**, dialogs / system notifications, **dynamic routing**, lifecycle hooks, Android system back-key interception, and a dev-shell mock protocol (browser HMR dev environment). Host capability implementations are split by capability domain under `host_impl/` (storage/db/fs/http/terminal/event/bus/config/notify/peer/support). Built-in plugins are extracted from APK assets into the app data directory and scanned there; remote download with SHA256 verification is also supported.
+Mobile plugins share the same architecture as the desktop (wasmtime 48, WASM Component Model + permission control), with mobile-only capabilities added: **SAF storage access**, dialogs / system notifications, **dynamic routing**, lifecycle hooks, Android system back-key interception, and a dev-shell mock protocol (browser HMR dev environment). Host capability implementations are split in two layers: the mechanism shared with the desktop lives in root `packages/bedcode-*` (the wasm-core whole core + capability-domain crates), and end-specific domains live in `src-tauri/src/plugin/` (host-fs-mobile / host-notify-mobile / host-terminal-stream / host-auth-client / host-connection-target). Built-in apps are extracted from APK assets into the app data directory and scanned there; remote download with SHA256 verification is also supported.
 
-To build your own plugin, use [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README_en.md) (TS SDK + Rust `bedcode-plugin-api-mobile` crate); full guide in [plugin-dev-mobile.md](plugin-dev-mobile.md).
+To build your own WASM app, use [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README_en.md) (TS SDK + Rust `bedcode-plugin-api-mobile` crate); full guide in [wasm-app-dev-mobile.md](wasm-app-dev-mobile.md).
 
-### Official Plugins
+### Built-in WASM Apps
 
 | Plugin            | Version    | Description                                                                                                |
 | ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
 | **AI Chatbox**    | 1.0.0-beta | AI chat: any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming conversations, multi-session management, JSONL conversation logs |
-| **Auto Task**     | 1.0.0-beta | Auto task queue: queue & auto-execution, auto-response to agent questions, preset tasks, scheduled jobs, task history with retry (backend logic lives in the desktop plugin of the same name) |
+| **BedCode**<br>(id `com.bedcode.terminal-session`) | 1.0.0-beta | Remote terminal controller ("watch on phone, manage on desktop"): terminal subscription replay + live output, special keys straight into the desktop PTY, automatic reconnect on drop with ring re-anchoring, auto task queue & auto-response, preset tasks / scheduled jobs / task history (read-only projection of the desktop task domain) |
 | **File Transfer** | 1.0.0-beta | LAN file transfer (over peer-network direct links): browse peer shared directories, multi-select batch transfer, queue pause/resume/cancel/retry with explicit failure reasons, receive policy (batch-approve / auto-accept / auto-decline), SAF save-location picker, history |
+
+> Both ends use **`wasm-apps/` for WASM app sources**; an app on each end carries an independent contract (ADR 0018). File transfer has been converged to a **single artifact for both ends** — the mobile side has no `rust/` of its own and points at the shared desktop crate via `bedcode.sharedRustManifest`.
 
 ## Related Docs
 
 - Root [README](../README.md) — project overview & security model
-- [plugin-dev-mobile.md](plugin-dev-mobile.md) — mobile plugin development guide
+- [wasm-app-dev-mobile.md](wasm-app-dev-mobile.md) — mobile WASM app development guide (from scratch to on-device verification)
+- [`../docs/knowledge/wasm-app-development-checklist.md`](../docs/knowledge/wasm-app-development-checklist.md) — development red lines (permissions / storage / events / auth center / HTTP surface)
 - [docs/code-map.md](docs/code-map.md) — code structure index
 - [docs/terminal-output-pipeline-optimization.md](docs/terminal-output-pipeline-optimization.md) — terminal output pipeline optimization notes
 

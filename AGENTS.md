@@ -61,7 +61,7 @@
 | 改 Rust 后端 | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR |
 | 改 wasm-core 机制 / 核心 WIT / 契约分片 | **ADR 0049（单形态 + 绑定归位，accepted）+ ADR 0045（单一 crate + WIT 分片组合）+ `.scratch/2026-10-11-wasm-core-single-form/spec.md`**——机制一份、绑定在宿主（§5.4）；WIT 改动只改真源（`packages/bedcode-wasm-core/wit/core.wit` 或能力域 `wit/<domain>.wit`），**禁止手改**端生成物 `rust/wit/`，改完重拼并跑 `pnpm run check:wit`（**仓库根**执行；CI + husky 同判据）。**要往 wasm-core 加 `bindgen!` / `impl … Host` 先停下**——内核唯一合法绑定是 `manager/runtime/core_binding.rs`（core 交集），其余全在各端宿主；反接锁 `packages/bedcode-wasm-core/src/lib.rs::binding_surface_must_not_return_to_wasm_core` |
 | 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
-| 改插件 | `docs/knowledge/plugin-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
+| 改插件 | `docs/knowledge/wasm-app-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
 | 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
 | 改数据库 / schema | §9 + `packages/bedcode-wasm-core/src/db/`（schema / 迁移真源，ADR 0037 随整核迁入 crate）与同 crate `host_api/{database,storage}.rs`（插件面机制） |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估；改完跑 `cross-end-tests` |
@@ -238,7 +238,7 @@ SDK（plugin-sdk-{desktop,mobile}）
 
 ## 7. 插件开发检查清单
 
-全文外移：[`docs/knowledge/plugin-development-checklist.md`](docs/knowledge/plugin-development-checklist.md)。开发 / 修改插件前**必须**通读并逐项核对（permissions / WIT·ABI / 能力与权限词汇 / 同实例串行 / 会话真源 / HTTP 面 / 存储隔离 / `wasmHash` / 日志等）。硬约束与本文件同级，冲突按 §0 裁决。
+全文外移：[`docs/knowledge/wasm-app-development-checklist.md`](docs/knowledge/wasm-app-development-checklist.md)。开发 / 修改插件前**必须**通读并逐项核对（permissions / WIT·ABI / 能力与权限词汇 / 同实例串行 / 会话真源 / HTTP 面 / 存储隔离 / `wasmHash` / 日志等）。硬约束与本文件同级，冲突按 §0 裁决。
 
 ---
 
@@ -323,7 +323,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 发布 | `docs/knowledge/release-workflow.md`、`sdk-publish.md` |
 | 跨端协议 | `docs/knowledge/mobile-desktop-auth.md` + `cross-end-tests/` |
 | 日志 / 排障 | `docs/knowledge/logging.md`、`adb-fd0-bug.md`、`plugin-wasm-logging.md` |
-| 插件开发检查清单 | `docs/knowledge/plugin-development-checklist.md`、`plugin-http-endpoint-trust.md` |
+| 插件开发检查清单 | `docs/knowledge/wasm-app-development-checklist.md`、`plugin-http-endpoint-trust.md` |
 | 会话 / 终端下沉 | `docs/knowledge/session-engine-downsink.md` |
 | 分支隔离 / CI | `docs/knowledge/feature-branch-isolation.md`、`github-actions-setup.md` |
 | 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |

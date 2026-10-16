@@ -1,6 +1,16 @@
-# BedCode 插件开发指南
+# BedCode WASM 应用开发指南（桌面端 API 参考）
 
-本文档面向第三方开发者，介绍如何为 BedCode 桌面端开发插件。
+本文档面向第三方开发者，介绍如何为 BedCode 桌面端开发 wasm 应用（工程目录
+`wasm-apps/<id>/`）——侧重 **plugin.json 字段、PluginContext API 与扩展点的完整参考**。
+
+> **先读这两个**：
+> - [`../../wasm-app-dev-desktop.md`](../../wasm-app-dev-desktop.md) —— 从零创建、构建、验证的
+>   主流程与 Dev Shell 用法（**首选入口**）
+> - [`../../../docs/knowledge/wasm-app-development-checklist.md`](../../../docs/knowledge/wasm-app-development-checklist.md)
+>   —— 权限 / 存储 / 事件 / 认证中心 / HTTP 面等红线（与 AGENTS.md 同级）
+>
+> 术语：机制内核与运行时仍把加载单元称为「插件」（`plugin.json`、`PluginManager`、
+> `host-*` 原语等标识符不变）；本仓对**业务型 wasm 应用**统一用 wasm-app 一词。
 
 ---
 
@@ -129,12 +139,12 @@ plugins/desktop/com.example.my-plugin/
   "id": "com.example.my-plugin",       // 反向域名格式，全局唯一
   "name": "My Plugin",                 // 显示名称
   "version": "1.0.0",                  // 语义化版本号
+  "platform": "desktop",               // 适配平台：desktop | mobile | both（按工程所在端；见下）
 
   // ==================== 可选字段 ====================
   "description": "插件描述文本",         // 插件功能说明
   "author": "Author Name",             // 作者
   "main": "index.js",                  // TS 入口文件（编译后），TS-only 必填
-  "sandbox": "inline",                 // 沙箱模式，目前仅支持 "inline"
   "pluginType": "ts-only",            // 插件类型：ts-only | rust-ts | rust
   "rustLibrary": "",                   // WASM 库文件名（仅 rust-ts 需要）
   "permissions": ["storage", "ui:sidebar"],  // 请求的权限列表
@@ -153,9 +163,23 @@ plugins/desktop/com.example.my-plugin/
 }
 ```
 
-### sandbox 字段
+### sandbox 字段（已退役，勿声明）
 
-目前仅支持 `"inline"` 模式 — 插件代码在宿主进程内运行，共享主线程。
+`sandbox` 已从 manifest 退役（审计票 06 裁决 2：前端不做隔离，插件代码始终在宿主进程内运行）。
+Rust 端 `PluginManifest` 不声明该字段，反序列化会直接丢弃——写进清单无任何效果，请从工程里删掉。
+校验器 `manifest-validate.js` 仅为兼容旧产物仍接受 `inline` / `isolated` 两个取值。
+
+### platform 字段（必填）
+
+插件适配平台，三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+按工程所在端取对应值（桌面工程写 `desktop`、移动工程写 `mobile`），只有真正的
+双端适配工程写 `both`。
+
+宿主在**加载（目录扫描）与 zip 安装**两条入口做端匹配校验：桌面拒 `mobile`、
+移动拒 `desktop`，不匹配即显性拒绝装载（错误点名声明值与出路 `both`）——把一端的
+分发包装到另一端「装了却不工作」比一次显性拒绝难排查得多。字段缺失或取值不在
+词汇内时反序列化即失败（wire 无缺省）；构建链 `manifest-validate.js` 在打包前
+先拦拼写错误。
 
 ### rustLibrary 字段（仅 rust-ts）
 
@@ -298,25 +322,50 @@ TS-only 插件通过监听 `lifecycle:startup` / `lifecycle:shutdown` Tauri 事�
 
 ### 权限列表
 
-| 权限 | 允许的 API 方法 | 说明 |
-|------|----------------|------|
-| `terminal:input` | `terminal.sendInput`, `terminal.onInput` | 向终端发送输入、监听输入事件 |
-| `terminal:output` | `terminal.onOutput` | 监听终端输出 |
-| `session:read` | `session.list`, `session.get`, `session.onStatusChange` | 读取会话信息 |
-| `session:write` | `session.create`, `session.stop` | 创建/停止会话 |
-| `ui:sidebar` | `ui.registerSidebarPanel` | 注册侧边栏面板 |
-| `ui:toolbox` | `ui.registerToolboxPage` | 注册工具箱页面 |
-| `ui:statusbar` | `ui.registerStatusBarItem`, `ui.registerTitleBarItem` | 注册状态栏/标题栏项 |
-| `ui:settings` | `ui.registerSettingsSection` | 往宿主设置页贡献配置分组（组件只渲染卡片正文，标题与外层容器由宿主渲染） |
-| `ui:input` | `ui.registerInputExtension`, `ui.registerTerminalToolbarItem` | 注册输入扩展/终端工具栏 |
-| `network:http` | `http.registerEndpoint` | 注册 HTTP 端点 |
-| `storage` | `storage.get`, `storage.set`, `storage.delete` | 插件持久化存储 |
+合法权限与 API 映射的唯一真源是 SDK `packages/plugin-sdk-desktop/rust/src/permission.rs`
+的 `VALID_PERMISSIONS` / `PERMISSION_API_MAP`（空数组 = WASM-only 权限，无前端 context 方法可门）；
+前端消费方读它的生成物 `src/plugin/permission-vocabulary.ts`，**禁止手拄**（
+`pnpm run gen:permissions` 重生）。
+
+| 权限 | 前端 context API 方法 |
+|------|----------------------|
+| `terminal:input` | `terminal.onInput` |
+| `terminal:output` | `terminal.onOutput` |
+| `session:read` | `session.predictTerminalSize` / `openTerminal` / `closeTerminal` / `isTerminalOpen` |
+| `connection:read` | （WASM-only，读在册连接清单） |
+| `ui:sidebar` | `ui.registerSidebarPanel` / `registerPage` |
+| `ui:toolbox` | `ui.registerToolboxPage` |
+| `ui:statusbar` | `ui.registerStatusBarItem` / `registerTitleBarItem` |
+| `ui:dialog` | `ui.showDialog` |
+| `ui:pageToolbar` | `ui.registerPageToolbarItem` |
+| `ui:settings` | `ui.registerSettingsSection`（组件只渲染卡片正文，标题与外层容器由宿主渲染） |
+| `ui:input` | `ui.registerInputExtension` / `registerTerminalToolbarItem` |
+| `ui:fileHandler` | `ui.registerFileHandler` |
+| `network:http` | `http.registerEndpoint` |
+| `storage` | `storage.get` / `set` / `delete` / `flush` |
+| `fs:read` / `fs:write` | `fs.read` / `fs.write` / `fs.copy` |
+| `fs:pick` | `platform.pickFiles` / `pickFolder` / `pickFolders` |
+| `broadcast` | （WASM-only，消息总线） |
+| `timer:schedule` | `timer.register` |
+| `process:run` | `process.run` / `process.kill` |
+| `app:cli` | `app.cliInstall` / `cliUninstall` |
+| `peer` | `peer.*`（对等网络发现 / 拨号 / 传输 / 共享目录 / 接收策略全套） |
+| `mdns` | `mdns.browse` / `advertise` 及对应 stop |
+| `ws:client` | `ws.connect` / `sendText` / `sendBinary` / `close` / `isConnected` |
+| `ws:server` | `ws.registerEndpoint` / `broadcast*` / `listClients` 等全套 |
+| `auth` | （WASM-only，认证中心） |
+| `pty:spawn` / `pty:io` | `pty.spawn` / `kill`、`pty.write` / `resize` / `ringFetch` / `isRunning` |
+| `task:run` | （WASM-only，并发任务域） |
+| `crypto:aead` / `crypto:asym` / `crypto:kdf` | `crypto.*` 对应子集 |
 
 ### 权限规则
 
-1. **`storage` 权限默认授予**，所有插件都有存储能力
+1. **桌面端没有默认授予**（wasm-core `permission.rs::grant_permissions` 只授予
+   manifest 声明且在本表内的权限；被过滤项由激活路径 `warn` 留痕）。`storage` 也需
+   **显式声明**（四个内置 wasm 应用均声明了它）——只有**移动端**把 `storage` 设为
+   恒授予且不可关闭（`src/shell/permissions.ts::SHELL_LOCKED_PERMISSIONS`）
 2. 未在 `permissions` 中声明的权限无法使用对应 API
-3. 非法权限字符串会被自动过滤（不会报错，只是忽略）
+3. 非法权限字符串会被过滤并 `warn` 留痕（不报错也不静默忽略）
 4. 权限在插件停用时全部收回，再次激活时重新授予
 
 ---
@@ -713,14 +762,18 @@ await context.storage.set('config', { apiKey: '...', maxResults: 10 })
 
 ## 12. 构建与打包
 
-### TS-only 插件构建
+> 首选走 SDK CLI（`bedcode-plugin-desktop build`），它已封装 vite + cargo wasm32 +
+> componentize + wasmHash 注入 + `--resources-dir` 复制。下方手写流程仅作参考。
+
+### ts-only 应用构建
 
 ```bash
-# 在插件目录下构建
-cd plugins/desktop/com.example.my-plugin
-pnpm exec vite build
+# 在 wasm 应用目录下构建
+cd wasm-apps/com.example.my-app
+pnpm run build                 # = bedcode-plugin-desktop build
+pnpm run build -- --frontend-only
 
-# 产物输出到 src-tauri/resources/plugins/desktop/com.example.my-plugin/index.js
+# 产物输出到 src-tauri/resources/plugins/desktop/com.example.my-app/index.js
 ```
 
 **vite.config.ts 示例**：
@@ -729,15 +782,15 @@ pnpm exec vite build
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
-import { bedcodePlugin } from '@bedcode/plugin-sdk/vite'
+import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
 
-const pluginId = 'com.example.my-plugin'
+const pluginId = 'com.example.my-app'
 
 export default defineConfig({
   plugins: [vue(), bedcodePlugin()],
   build: {
     lib: {
-      entry: resolve(__dirname, 'index.ts'),
+      entry: resolve(__dirname, 'src/index.ts'),
       formats: ['es'],
       fileName: () => 'index.js',
     },
@@ -747,26 +800,40 @@ export default defineConfig({
 })
 ```
 
-> **重要**：`bedcodePlugin()` 会自动将 `vue`、`vue-i18n`、`pinia`、`vue-sonner` 标记为外部依赖，并在构建后将 `import` 语句替换为从宿主全局变量读取。**不要**在插件 vite 配置中手动内联这些模块，否则 `provide`/`inject` 会跨 Vue 实例失效（`vue-sonner` 自带第二份则 toast 入自家队列、宿主 `<Toaster>` 收不到）。
+> **重要**：`bedcodePlugin()` 会把 `vue`、`vue-i18n`、`pinia`、`vue-sonner` 标记为 rollup
+> external，并在构建后把 import 语句替换为从 `window.__BEDCODE_SHARED__` 读取
+> （真源 `packages/plugin-sdk-desktop/src/vite-plugin.ts::SHARED_MODULES`）。
+> **不要**在应用 vite 配置中手动内联这些模块，否则 `provide`/`inject` 会跨 Vue 实例失效
+> （`vue-sonner` 自带第二份则 toast 入自家队列、宿主 `<Toaster>` 收不到）。
 
-### Rust+TS 插件构建
+### rust-ts 应用构建
 
 ```bash
 # 1. 编译 Rust WASM 组件
 cd rust/
 cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --release
 
-# 2. 复制 wasm 到插件目录（或使用统一构建脚本 scripts/build.js）
-# target/wasm32-unknown-unknown/release/bedcode_plugin_my_plugin.wasm
+# 2. 组件化编码（core module → Component Model 组件）
+# 统一用仓库根 packages/bedcode-componentize，或交给 SDK CLI 代劳
 
 # 3. 编译 TS 前端
 cd ..
 pnpm exec vite build
 ```
 
-### 插件分发
+> 宿主只接受 **Component Model 组件**（字节头 `00 61 73 6d 0d 00 01 00`）。
+> 裸 `cargo build --target wasm32` 产物是 core module，加载会被拒——
+> 重编后必须重跑 `bedcode-plugin-desktop build`。
 
-插件以目录形式分发，将整个 `com.example.my-plugin/` 目录放入 `plugins/desktop/` 即可。
+### 应用分发
+
+两个通道：
+
+1. **内置应用**（随安装包分发）：源码住 `wasm-apps/<id>/`，产物复制到
+   `src-tauri/resources/plugins/desktop/<id>/`（`bedcode-plugin-desktop build --resources-dir <父目录>`，
+   或宿主内 `scripts/plugin-watch.js` 的开发期同步）
+2. **用户安装**：`scripts/package-plugins.mjs` 打包为 zip，桌面端「插件」页选文件安装，
+   落盘 `app_data_dir/plugins/<id>/`
 
 ---
 

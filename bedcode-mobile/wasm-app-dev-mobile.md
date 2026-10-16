@@ -1,6 +1,12 @@
-# BedCode Mobile 插件开发指南
+# BedCode Mobile WASM 应用开发指南
 
-本文档说明如何为 BedCode Mobile 开发、构建、打包插件，以及插件在移动端的加载与生命周期。开发工具包为 `@binblink/bedcode-plugin-sdk-mobile`（SDK），通过 `bedcode-plugin` 命令行提供脚手架与构建能力。
+本文档说明如何为 BedCode Mobile 开发、构建、打包 wasm 应用（工程目录
+`wasm-apps/<id>/`），以及应用在移动端的加载与生命周期。开发工具包为
+`@binblink/bedcode-plugin-sdk-mobile`（SDK），通过 `bedcode-plugin` 命令行提供脚手架与构建能力。
+
+> **术语**：机制内核与运行时仍把加载单元称为「插件」（`plugin.json`、
+> `PluginManager`、`host-*` 原语等标识符不变）；本仓对**业务型 wasm 应用**统一用
+> wasm-app 一词。代码标识符、清单字段、WIT 契约保持原样，只有文档与工程目录命名改口。
 
 ---
 
@@ -128,6 +134,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
   "id": "com.example.my-plugin",
   "name": "My Plugin",
   "version": "0.1.0",
+  "platform": "mobile",
   "description": "",
   "author": "you",
   "main": "index.js",
@@ -142,11 +149,12 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 |---|---|---|
 | `id` | ✅ | 反域名风格，全局唯一 |
 | `name` / `version` | ✅ | 展示名 / 版本 |
+| `platform` | ✅ | 适配平台，三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。按工程所在端取值（移动工程写 `mobile`）；宿主加载 / zip 安装时按本端校验，移动拒 `desktop`，不匹配即显性拒绝 |
 | `main` | ✅ | 前端入口（产物文件名，通常 `index.js`） |
-| `pluginType` | ✅ | `wasm`（前端 + WASM 后端）或 `ts-only` |
+| `pluginType` | ✅ | 产物形态，四值（真源 `packages/plugin-sdk-mobile/rust/src/types.rs::PluginType`）：`wasm`（前端 + WASM 后端，内置应用一律用它）/ `rust-ts` / `rust` / `ts-only`（纯前端） |
 | `rustLibrary` | wasm 必填 | Rust crate 名（与 `Cargo.toml` 一致） |
 | `icon` | | 列表图标（SVG path 字符串或图标文件路径） |
-| `permissions` | | 权限声明，`storage` 默认授予 |
+| `permissions` | | 权限声明，`storage` 默认授予且不可关闭（`src/shell/permissions.ts::SHELL_LOCKED_PERMISSIONS`） |
 | `contributes` | | 扩展点声明（命令/视图/navTab/终端/设置区/配置） |
 | `wasmHash` | 可选 | WASM 文件 SHA256（`sha256-` 前缀），安装时校验 |
 
@@ -156,7 +164,7 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 
 | 权限 | 说明 |
 |---|---|
-| `storage` | 插件键值存储（**默认授予**，无需声明） |
+| `storage` | 插件键值存储（**默认授予且不可关闭**，无需声明） |
 | `ui:toolbox` | 工具箱页注册 |
 | `ui:navtab` | 底部导航 Tab 注册 |
 | `ui:input` | 终端工具栏注册 |
@@ -166,8 +174,18 @@ bedcode-plugin create com.example.ui-only "UI Only" --ts-only
 | `terminal:input` / `terminal:output` | 终端输入/输出事件 |
 | `session:read` / `session:write` | 会话信息读取 / 会话创建与停止 |
 | `network:http` | HTTP 请求（经宿主代理） |
-| `fs:read` / `fs:write` | 文件系统访问（经授权弹窗） |
+| `fs:read` / `fs:write` / `fs:pick` | 文件系统访问（经授权弹窗）/ 系统选择器 |
 | `bus` | 插件间消息总线 |
+| `peer` / `mdns` / `ws:client` | 对等网络 / mDNS / WS 客户端 |
+
+权限词汇有两份真源，口径不同：
+
+- **内核侧**（`packages/bedcode-wasm-core/src/permission.rs`）——`host-*` 原语的
+  最终仲裁表；未在本表内的位即使 manifest 声明也会被激活路径过滤并 `warn` 留痕。
+- **移动端 SDK 侧**（`packages/plugin-sdk-mobile/rust/src/permission.rs`）——内核表的
+  超集，额外包含只在移动端前端生效的面（`ui:navtab` / `ui:route` / `ui:back` /
+  `bus` / `session:write` 等）。前端注册类 API 的闸门在
+  `src/plugin/permission.ts` + `src/shell/permissions.ts`。
 
 未授予的权限在敏感 host 函数调用前会被拒绝。
 
@@ -227,32 +245,48 @@ app.mount(container)
 
 ## 8. WASM 后端（rust）
 
-插件后端编译为 **WASM 组件（Component Model）**，契约定义在 SDK 的
-`packages/plugin-sdk-mobile/rust/wit/bedcode.wit`（宿主导入 16 接口 / 插件导出 5 接口，
-另有可选导出 events-binary；单一事实来源，wit-bindgen 编译期校验）。`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以
-`wasm_entry!` 宏生成组件导出（manifest / activate / deactivate / invoke_command / 生命周期
-钩子 / 事件 / 上传与传输钩子）；宿主按 `rustLibrary` 查找 `{crate}.wasm`
-（组件产物）编译实例化。自研 ABI（`__bedcode_*` 导出、`(ptr,len)` 内存搬运、签名表）
-已在 2025-08 迁移清理删除。
+插件后端编译为 **WASM 组件（Component Model）**，契约真源在
+`packages/bedcode-wasm-core/wit/core.wit`（机制必需面，8 import + 4 export）+ 能力域
+`packages/bedcode-*/wit/<domain>.wit` + 端 `rust/wit-src/cap-mobile.wit`；端生成物
+`packages/plugin-sdk-mobile/rust/wit/bedcode.wit` 由 `compose.json` 驱动
+`scripts/compose-wit.mjs` 拼装（`world plugin` = `include` core + 6 个 cap），
+**禁止手改生成物**（漂移锁：仓库根 `pnpm run check:wit`，CI + husky 同判据）。
+`rust/src/lib.rs` 实现 `WasmPlugin` trait 后以 `wasm_entry!` 宏生成组件导出
+（manifest / activate / deactivate / invoke_command / 生命周期钩子 / 事件 / 上传与传输钩子）；
+宿主按 `rustLibrary` 查找 `{crate}.wasm`（组件产物）编译实例化。
+自研 ABI（`__bedcode_*` 导出、`(ptr,len)` 内存搬运、签名表）已在 2025-08 迁移清理删除。
+
+**版本与形态模型**（整数 ABI 已退役，ADR 0051 D2）：
+
+- **包版本** = WIT package semver `bedcode:plugin@0.2.0`，真源仓库根
+  `contracts/bedcode-plugin-package.rs::PACKAGE_VERSION`；compose.json 只声明包名，
+  源文件 package 行由 `compose-wit.mjs` 注入，`wit_package_version_lock.rs` 钉一致。
+- **组件形态**经 `AbiPolicy` 只管 `abi-form`：桌面要求 `form = 1`，移动端 `None`
+  （移动 WIT 无 `abi-form` 导出，不要求）——`compose.json` 里的 `abi.version`
+  （桌面 38 / 移动 21）仅作重建提示的参考号，不再由 wasm-core 强制校验。
+- **组件形态闸门**：宿主只接受 Component Model 组件，裸 `cargo build --target wasm32`
+  产物会被拒（加载期点名缺失 interface 与重建版本）。
 
 **SDK 依赖**：插件 rust crate 依赖 `bedcode-plugin-api-mobile`（即 plugin-sdk-mobile/rust），
 wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 在此 feature 下）；
 构建命令见 §4（内置 componentize）。
 
-**契约差异表（移动端 vs 桌面端 WIT）**：
+**契约差异表（移动端 vs 桌面端宿主接口）**：
 
 | 项 | 桌面端 | 移动端 | 说明 |
 |----|--------|--------|------|
-| import 接口 | 21 组 | 16 组 | 移动无 session/api-call/timer/process/app/file-service/transfer/host-pty/host-task/host-crypto；移动特有 host-notify / host-terminal-stream。`host-database` 双端已退役（ABI 桌面 35 / 移动 19，主库收归 wasm-core） |
-| host-database | 已退役 | 已退役 | 主库收归 wasm-core、不给插件直接调用（2026-10-09 双端机制决策）；插件数据库能力 = host-plugin-database（私有库，`storage` 位） |
-| host-fs | 9 函数 | 8 函数 | 移动新增 MediaStore 入库 / SaveAs（SAF）；无 read-dir/canonicalize/stat |
-| host-events | emit/notify | emit | v18 起移动端 notify 独立成 host-notify 域（纯事件语义） |
-| host-notify | — | 5 函数 | 移动特有（ABI v18）：通知（震动/声音分控）+ 权限查询/请求 + 震动 + 提示音 |
-| host-log | 5 函数 | 5 函数 | mark-plugin-error 语义对齐 |
-| events 导出 | 4 个 | 5 个 | 移动端 WS 认证生命周期事件 |
-| abi | version + form | 仅 version | 无 core 共存形态 |
+| 宿主导入接口 | 26 组 | 18 组 | 真源 = 两端 `rust/wit/` 生成物（`grep 'interface host-'` 即得） |
+| 插件导出接口 | 4 组 | 4 组 | `command` / `lifecycle` / `events-binary` / `manifest`，均住 `core.wit` |
+| 核心机制面 | 8 import | 8 import | `host-storage` / `host-plugin-database` / `host-log` / `host-config` / `host-events` / `host-bus` / `host-fs` / `host-platform`（ADR 0052 D1） |
+| 桌面独有 | `host-pty` / `host-process` / `host-task` / `host-api-call` / `host-app` / `host-crypto` / `host-auth-center` / `host-connection-registry` / `host-timer` / `host-websocket`（客户端域） / `host-websocket-server` / `host-http-endpoint` / `host-fs-desktop` / `host-platform-desktop` | — | 端扩展的声明与实现均住桌面宿主（ADR 0052 D4） |
+| 移动独有 | — | `host-terminal-stream` / `host-fs-mobile` / `host-notify-mobile` / `host-auth-client` / `host-connection-target` | 端独有域整面落移动宿主 |
+| 通知 | `host-notify`（共享契约房） | `host-notify` + `host-notify-mobile`（4 函数） | 2026-10-13 通知功能级统一；移动端附加震动 / 声音 / 权限查询面 |
+| 认证 | `host-auth-center`（v32 四函数 + 组合式原语） | `host-auth-client` | 入场签发密钥与生物公钥托管均归认证中心自持（ADR 0031 / 0033） |
+| 主库直调 | 已退役 | 已退役 | `host-database` 整面退役，主库收归 wasm-core；插件数据库能力 = `host-plugin-database`（私有库，声明 `storage` 位） |
 
-完整 WIT 与迁移背景见 `../docs/implementation-plans/mobile-wasmtime-component-migration.md`。
+完整契约演进（含每版删改明细）见 ADR 0022 修订记录、
+`../docs/knowledge/wasmtime-component-migration.md` 与
+[`../docs/knowledge/wasm-app-development-checklist.md`](../docs/knowledge/wasm-app-development-checklist.md)。
 
 **重要**：`plugin.json` 与 `rust/src/lib.rs` 中的 `manifest()` 都声明清单——**以 `plugin.json` 为准**（宿主扫描读取），`manifest()` 用于 SDK 内部校验。
 
@@ -302,7 +336,7 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 
 详见 `packages/plugin-sdk-mobile/dev-shell/README.md`。
 
-> 桌面端插件开发与 Dev Shell 见 `../bedcode-desktop/plugin-dev-desktop.md`。
+> 桌面端插件开发与 Dev Shell 见 `../bedcode-desktop/wasm-app-dev-desktop.md`。
 
 ## 11. 验证清单（真机 / 模拟器）
 
@@ -326,7 +360,12 @@ SAF 选择器、系统通知）仍需真机验证。首次运行自动安装 dev
 | SDK 模板 | `bedcode-mobile/packages/plugin-sdk-mobile/template/` |
 | SDK 浏览器开发环境 | `bedcode-mobile/packages/plugin-sdk-mobile/dev-shell/` |
 | 插件宿主 | `bedcode-mobile/src-tauri/src/plugin/`（manager / loader / downloader / wasm_runtime / wasm_host / registry / commands / storage / transfer / saf_io / saf_path / fs_auth / approval / message_bus / validation / android_plugins） |
-| 内置插件 | `bedcode-mobile/wasm-apps/ai-chatbox`、`wasm-apps/file-transfer`、`wasm-apps/bedcode` |
+| 内置 wasm 应用 | `bedcode-mobile/wasm-apps/{ai-chatbox,bedcode,file-transfer}`（`bedcode` 目录 = 显示名 BedCode，插件 id 仍是 `com.bedcode.terminal-session`） |
 | 插件管理页 | `bedcode-mobile/src/views/PluginView.vue` |
 | 前端插件运行时 | `bedcode-mobile/src/plugin/`（loader / registry / context / commands / events / permission / shared-runtime / routes / dialog-host / components） |
+| 宿主壳（平台机制） | `bedcode-mobile/src/shell/`（运行面挂载 / 权限总览与审批 / 通知栏 / 设置）——壳内不落业务页面（ADR 0046） |
 | Kotlin 解压桥 | `bedcode-mobile/src-tauri/gen/android/.../PluginAssetExtractor.kt` |
+| 机制整核与能力域 crate | 仓库根 `packages/bedcode-wasm-core` 与 `packages/bedcode-*`，索引见 [`../packages/README.md`](../packages/README.md) |
+| WIT 契约真源 | `packages/bedcode-wasm-core/wit/core.wit` + 能力域 `packages/bedcode-*/wit/<domain>.wit` + 端 `rust/wit-src/cap-mobile.wit`；改契约后跑 `pnpm run check:wit`（仓库根） |
+| 开发约束清单 | [`../docs/knowledge/wasm-app-development-checklist.md`](../docs/knowledge/wasm-app-development-checklist.md)（权限 / 存储 / 事件 / 认证中心 / HTTP 面等红线） |
+| 桌面端指南 | [`../bedcode-desktop/wasm-app-dev-desktop.md`](../bedcode-desktop/wasm-app-dev-desktop.md) |

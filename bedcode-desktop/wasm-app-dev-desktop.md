@@ -1,8 +1,12 @@
-# BedCode Desktop 插件开发指南
+# BedCode Desktop WASM 应用开发指南
 
-本文档说明如何为 BedCode Desktop 开发插件，以及如何使用浏览器开发环境（Dev Shell）
-快速迭代插件前端。开发工具包为 `@binblink/bedcode-plugin-sdk-desktop`（SDK），
-命令行为 `bedcode-plugin-desktop`。
+本文档说明如何为 BedCode Desktop 开发 **wasm 应用**（工程目录 `wasm-apps/<id>/`），
+以及如何使用浏览器开发环境（Dev Shell）快速迭代应用前端。
+开发工具包为 `@binblink/bedcode-plugin-sdk-desktop`（SDK），命令行为 `bedcode-plugin-desktop`。
+
+> **术语**：机制内核与运行时仍把加载单元称为「插件」（`plugin.json`、`PluginManager`、
+> `host-*` 原语等标识符不变）；本仓对**业务型 wasm 应用**统一用 wasm-app 一词。
+> 代码标识符、清单字段、WIT 契约保持原样，只有文档与工程目录命名改口。
 
 ---
 
@@ -20,8 +24,10 @@
                    插件目录（resources/plugins/{id}/ 或安装目录）
 ```
 
-桌面端插件类型：`ts-only`（纯前端）、`rust-ts`（前端 + Rust WASM 后端）、
-`rust`（纯后端）。`plugin.json` 声明权限与扩展点（sandbox / contributes）。
+桌面端产物形态（`plugin.json` 的 `pluginType`，词汇真源
+`packages/plugin-sdk-desktop/rust/src/types.rs::PluginType`）：
+`ts-only`（纯前端）、`rust-ts`（前端 + Rust WASM 后端，内置 wasm 应用一律用它）、
+`rust`（纯后端）。`plugin.json` 声明权限与扩展点（permissions / contributes）。
 
 **关键概念**：
 
@@ -70,7 +76,9 @@ pnpm run build -- --frontend-only / --rust-only   # 只构建一半（rust-ts �
 | `context.system` | `revealInDir(path)` 在系统文件管理器中打开目录并选中文件（Shell COM 直调，中文路径原生支持） |
 | `context.i18n` | `getI18n()` 取宿主 i18n 实例；`registerMessages` / `t` 自动加插件 ID 前缀 |
 
-内置插件示例：`wasm-apps/ai-chatbox`（侧边栏 AI 面板 + 终端工具栏项）、`wasm-apps/auto-task`（Claude Code 任务队列 + 定时任务）、`wasm-apps/file-transfer`（局域网文件传输）、`wasm-apps/scheduler`（计划任务）。
+内置 wasm 应用：`wasm-apps/ai-chatbox`（侧边栏 AI 面板 + 终端工具栏项）、
+`wasm-apps/terminal-session`（会话中心：配对信任 / 会话编排 / 任务队列，会话事实真源）、
+`wasm-apps/file-transfer`（局域网文件传输）、`wasm-apps/agent-hub`（Agent CLI 管理台）。
 
 ## 4. 浏览器开发环境（Dev Shell）
 
@@ -104,7 +112,7 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 | 命令 | 说明 |
 |---|---|
 | `bedcode-plugin-desktop manifest [--check]` | 按源码自动填充 plugin.json 的 contributes/permissions；`--check` 只检查（CI） |
-| `bedcode-plugin-desktop validate [--dir]` | 校验 plugin.json（id 格式、必填字段、sandbox/pluginType、权限白名单、产物存在性） |
+| `bedcode-plugin-desktop validate [--dir]` | 校验 plugin.json（id 格式、必填字段、platform/pluginType、权限白名单、产物存在性） |
 | `bedcode-plugin-desktop doctor` | 环境自检：Node ≥ 20 / Rust / wasm32 target / dev-shell 依赖 / SDK 构建产物 |
 | `bedcode-plugin-desktop --version` | 打印 SDK 版本 |
 
@@ -124,6 +132,10 @@ Rust 后端逻辑、真实 HTTP 端点、系统文件选择需在真实宿主验
 | SDK 命令行 | `bedcode-desktop/packages/plugin-sdk-desktop/bin/cli.js` |
 | SDK 模板 | `bedcode-desktop/packages/plugin-sdk-desktop/template/` |
 | SDK 浏览器开发环境 | `bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/` |
-| 插件宿主（Rust） | `bedcode-desktop/src-tauri/src/plugin/`（host / loader / registry / api_bridge / wasm_runtime / file_service / storage / permission / validation / message_bus / fs_auth / approval / watcher） |
-| 前端插件运行时 | `bedcode-desktop/src/plugin/`（context / registry / loader / commands / events / permission / shared-runtime / contributionKinds） |
-| 内置插件 | `bedcode-desktop/wasm-apps/ai-chatbox`、`auto-task`、`file-transfer`、`scheduler` |
+| 插件宿主（Rust） | `bedcode-desktop/src-tauri/src/plugin/`（端差异域的 WIT 绑定 + Host impl：api_call / app / auth / bindings / connection / crypto / fs / guest_events / host_facts / http / mdns / notify / peer / platform / platform_picker / process / pty / task / timer / ws；机制整核在 `packages/bedcode-wasm-core`） |
+| 前端插件运行时 | `bedcode-desktop/src/plugin/`（context / registry / loader / commands / events / permission + permission-vocabulary / shared-runtime / contributionKinds / runtime-listeners / 终端宿主能力） |
+| 内置 wasm 应用 | `bedcode-desktop/wasm-apps/{ai-chatbox,terminal-session,file-transfer,agent-hub}` |
+| 机制整核与能力域 crate | 仓库根 `packages/bedcode-wasm-core`（机制内核）与 `packages/bedcode-*`（能力域 / 传输面 / 引擎），索引见 [`../packages/README.md`](../packages/README.md) |
+| WIT 契约真源 | `packages/bedcode-wasm-core/wit/core.wit` + 能力域 `packages/bedcode-*/wit/<domain>.wit` + 端 `rust/wit-src/cap-*.wit`；端 `rust/wit/` 是生成物，改契约跑 `pnpm run check:wit`（仓库根） |
+| 开发约束清单 | [`../docs/knowledge/wasm-app-development-checklist.md`](../docs/knowledge/wasm-app-development-checklist.md)（API / 权限 / 存储 / 事件 / 认证中心等红线） |
+| API 参考（长篇） | [`docs/knowledge/wasm-app-dev-guide.md`](docs/knowledge/wasm-app-dev-guide.md) |

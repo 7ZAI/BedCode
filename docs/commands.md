@@ -272,7 +272,7 @@ pnpm run dev             # 浏览器 Dev Shell（HMR，无需真机）
 pnpm run package         # 产出 dist/<plugin-id>.zip
 ```
 
-浏览器 Dev Shell 需要先构建 SDK（`cd packages/plugin-sdk-<end> && pnpm run build`），用法见 `bedcode-desktop/plugin-dev-desktop.md` 与 `bedcode-mobile/plugin-dev-mobile.md`。Dev Shell 只验前端，WASM 后端命令仍需真机。
+浏览器 Dev Shell 需要先构建 SDK（`cd packages/plugin-sdk-<end> && pnpm run build`），用法见 `bedcode-desktop/wasm-app-dev-desktop.md` 与 `bedcode-mobile/wasm-app-dev-mobile.md`。Dev Shell 只验前端，WASM 后端命令仍需真机。
 
 ### 5.4 产物落点
 
@@ -295,7 +295,7 @@ node scripts/package-sdks.mjs        # 两端 SDK：npm tarball + crates.io crat
 
 CI 由 `.github/workflows/release.yml` 的 `package-plugins` / `package-sdks` job 执行并上传到 release，流程见 `docs/knowledge/release-workflow.md`。
 
-插件 zip 可直接在桌面端「插件」页安装（加载插件 → 选 zip），落盘 `app_data_dir/plugins/<id>/`；加载校验 manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性，拒绝覆盖同 id（升级需先卸载），卸载会删除该插件全部数据。插件开发约束见 `docs/knowledge/plugin-development-checklist.md`。
+插件 zip 可直接在桌面端「插件」页安装（加载插件 → 选 zip），落盘 `app_data_dir/plugins/<id>/`；加载校验 manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性，拒绝覆盖同 id（升级需先卸载），卸载会删除该插件全部数据。插件开发约束见 `docs/knowledge/wasm-app-development-checklist.md`。
 
 ### 5.6 WIT 分片拼装（契约生成物，ADR 0045）
 

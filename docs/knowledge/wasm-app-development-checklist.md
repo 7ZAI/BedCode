@@ -1,10 +1,15 @@
-# 插件开发检查清单
+# wasm 应用开发检查清单
 
-> 自 AGENTS.md §7 外移（2026-09-24）。**开发 / 修改插件前通读并逐项核对**；
+> 自 AGENTS.md §7 外移（2026-09-24）；2026-10-16 随工程目录命名同步改名为 wasm 应用
+> （机制内核与运行时仍以「插件」称呼加载单元，`plugin.json` / `PluginManager` /
+> `host-*` 等标识符不变）。**开发 / 修改 wasm 应用前通读并逐项核对**；
 > 硬约束与 AGENTS.md 同级——冲突时按 AGENTS.md §0 优先级裁决。
 > 相关：ADR 0017（互调）/ 0019（wasmtime 双端）/ 0022（裁剪线与双端偏离）、`docs/knowledge/logging.md`。
 
-插件位于 `wasm-apps/<plugin-id>/`（桌面端；移动端仍为 `plugins/`）（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。
+应用位于 `wasm-apps/<id>/`（双端同名目录；旧文档里写「移动端仍为 `plugins/`」已不适用）——
+独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`
+（移动端 `file-transfer` 为双端单产物形态：无自有 `rust/`，经 `package.json` 的
+`bedcode.sharedRustManifest` 指向桌面端共享 crate）。
 
 ## 检查清单
 
@@ -54,6 +59,14 @@
     存在理由是**内存生命周期**（wasm 线性内存只增不减，长驻实例撞单实例限额且不自愈），不是业务分层
   - 宿主侧**只按谓词**判角色（`is_role_driven` / `provides_host_capabilities` / `is_business_app`），
     加载顺序取自 SDK 常量 `PluginKind::ROLE_DRIVEN_LOAD_ORDER`——新增角色不必改宿主
+- [ ] **适配平台（manifest `platform`，必填）**：`desktop`（仅桌面）/ `mobile`（仅移动）/
+  `both`（双端适配）。取值按**工程所在端目录**取对应值（桌面 `wasm-apps/` 工程写 `desktop`、
+  移动 `wasm-apps/` 工程写 `mobile`），只有真正的双端适配工程写 `both`。两端宿主在
+  **加载（目录扫描）与 zip 安装**两条入口都做端匹配校验：桌面拒 `mobile`、移动拒 `desktop`，
+  不匹配即 fail-visible 拒绝并点名声明值与出路 `both`——把一端的分发包装到另一端
+  「装了却不工作」比一次显性拒绝难排查得多。取值域真源是 SDK `rust/src/types.rs::PluginPlatform`，
+  构建链 `manifest-validate.js` / `cli.js validate` 只抄拼写（改枚举必须同改它），
+  非法取值**构建期 + 宿主反序列化期双侧拒**（wire 无缺省，缺失同拒）
 - [ ] **认证中心面（`host-auth` v32 四函数，ADR 0031）**：**只有中心插件需要**，其余插件用组合式
   原语即可，不要自己注册。① 中心在 `activate()` 内调 `auth_center_register(methods)` 自注册
   （注册表**单中心**：第二个注册者被拒并点名在册属主），`deactivate()` 调

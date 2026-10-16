@@ -23,8 +23,8 @@
 在插件工程目录运行：
 
 ```bash
-npm run dev                   # 推荐：npm 脚本自动解析 node_modules/.bin（Windows 必需）
-pnpm exec bedcode-plugin dev        # 或 pnpm exec 方式（等效）
+pnpm run dev                  # 推荐：脚本自动解析 node_modules/.bin（Windows 必需）
+pnpm exec bedcode-plugin dev  # 或 pnpm exec 方式（等效）
 bedcode-plugin dev            # 仅 macOS/Linux（PATH 含 .bin 时）
 ```
 
@@ -144,7 +144,7 @@ dev-shell/src/
 - **SDK 报找不到模块**：插件工程的 `@binblink/bedcode-plugin-sdk-mobile` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（`pnpm run build` 一次）。
 - **真机专属能力**（WASM 命令、真实 WS、SAF 文件选择、系统通知）无法在
-  浏览器模拟，发布前仍按 `../../../plugin-dev-mobile.md` 验证清单过真机。
+  浏览器模拟，发布前仍按 `../../../wasm-app-dev-mobile.md` 验证清单过真机。
 - **应用在「应用」页点启动没反应**：dev-shell 的启动即重新跑一次插件 `activate()`；
   若插件在 activate 期抛错，详情页会显示错误原因，日志面板同步记 error。
 - **权限开关是灰的**：预览环境没有可写的权限真源（`setPermissionGrant` 恒返回 false），

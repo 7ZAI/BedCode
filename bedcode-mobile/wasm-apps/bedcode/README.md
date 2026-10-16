@@ -1,4 +1,4 @@
-# BedCode Plugin (Mobile)
+# BedCode wasm 应用（移动端，远程终端控制端）
 
 移动端内置「远程终端控制端」wasm app（应用显示名 **BedCode**，目录 / 包名 `bedcode`）：与桌面端 `com.bedcode.terminal-session` **同名但职责不同**（spec D6 选项 A）——桌面端是会话/任务/终端的**权威**（持有 PTY、WS 服务端、认证中心桥接），本端只做订阅消费、会话控制调用与任务面板的只读投影（ADR 0012「手机看、桌面管」）。两端契约独立（ADR 0018），不因同名互相约束。
 

@@ -192,7 +192,7 @@ wasm-apps/<app-id>/rust/**    业务真源（会话 / 传输 / 配对 / 对话�
 | Agent CLI / Skills / 供应商 / 用量 | `agent-hub/rust/src/` |
 | 多供应商对话 | `ai-chatbox/rust/src/` |
 
-**改前注意**：验证在各自 crate 根跑 `cargo test`；改插件前通读 `docs/knowledge/plugin-development-checklist.md`。
+**改前注意**：验证在各自 crate 根跑 `cargo test`；改插件前通读 `docs/knowledge/wasm-app-development-checklist.md`。
 
 ### 11 · 插件 SDK 与守门夹具
 

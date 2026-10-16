@@ -106,5 +106,5 @@ Date: 2026-09-23
 - `docs/adr/0022-plugin-host-interface-primitive-boundary.md` —— 会话语义下沉批次（v8）、
   host-pty（v6）、终端（v9）、性能红线 v23 的边界裁决
 - `docs/knowledge/plugin-kernel-roadmap.md` —— 阶段 3 归属、移动端受损清单 M1–M9
-- `docs/knowledge/plugin-development-checklist.md` —— 插件开发检查清单（同实例串行红线等）
+- `docs/knowledge/wasm-app-development-checklist.md` —— 插件开发检查清单（同实例串行红线等）
 - 原实施 spec 的票级记录保留在专项目录（issues/01…12），不随本文件迁移

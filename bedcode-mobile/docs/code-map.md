@@ -97,7 +97,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 - **端口与测试基建**：`plugin/host_ports.rs`（`HostEnginePorts` 宿主引擎端口）+ `plugin/peer_ports.rs` + 内核 `test_support`（无头夹具）
 - **Kotlin 桥**：`plugin/android_plugins/`（前台服务 / SAF / 生物识别 / 全部文件访问 / 组播锁 / 通知 / 设备信息 → 对应 Kotlin Plugin）
 - **前端插件系统**：`src/plugin/`（加载器 / 运行期 store 作用域 / 注册表 / 权限 / 上下文 / 事件 / UI 宿主）；扩展点 `registerNavTab` / `registerTerminalView` / `registerSettingsSection` 等
-- **插件 SDK**：`packages/plugin-sdk-mobile/`（Rust + TS 双侧；SAF / 通知 / 路由等移动专属能力 + 模板 + dev-shell；开发指南 `plugin-dev-mobile.md`）
+- **插件 SDK**：`packages/plugin-sdk-mobile/`（Rust + TS 双侧；SAF / 通知 / 路由等移动专属能力 + 模板 + dev-shell；开发指南 `wasm-app-dev-mobile.md`）
 - **WIT 生成物**：`packages/plugin-sdk-mobile/rust/wit/`（由 `compose.json` 驱动 `scripts/compose-wit.mjs` 拼装；真源 = 内核 `core.wit` + 能力域 `wit/<domain>.wit` + 本端 `rust/wit-src/cap-mobile.wit`；包版本真源 = 仓根 `contracts/bedcode-plugin-package.rs`）
 
 **改前注意**：wasm-core 内零端名 / 零机制名（AGENTS §5.4）；新增宿主能力 → `plugin/host_domains/`（core 域）或 `plugin/<domain>.rs`（独有域）+ SDK `rust/src/host/` trait；新增 Android 能力 → Kotlin Plugin + `android_plugins/` 注册桥。

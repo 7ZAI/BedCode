@@ -1,15 +1,17 @@
 # @binblink/bedcode-plugin-sdk-desktop
 
-BedCode Desktop 插件开发工具包 — 提供插件所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**，插件只需依赖本包即可开发，无需引用宿主源码。
+BedCode Desktop wasm 应用开发工具包 — 提供应用所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**，应用只需依赖本包即可开发，无需引用宿主源码。
 
-> 完整开发指南见仓库文档 [`plugin-dev-desktop.md`](../../plugin-dev-desktop.md)。
+> 术语：本仓把「插件」称为 wasm 应用；包名 / CLI 名 / 标识符保留 `plugin` 原词（`plugin.json`、`bedcode-plugin-api`）。
+>
+> 完整开发指南见仓库文档 [`wasm-app-dev-desktop.md`](../../wasm-app-dev-desktop.md)；API 与扩展点参考 [`wasm-app-dev-guide.md`](../../../bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md)。
 
 [English](README_en.md) | 简体中文
 
 ## 安装
 
 ```bash
-npm install --save-dev @binblink/bedcode-plugin-sdk-desktop
+pnpm add -D @binblink/bedcode-plugin-sdk-desktop
 ```
 
 Peer 依赖（宿主已在运行时提供，插件侧安装用于构建与类型检查）：
@@ -22,19 +24,31 @@ Peer 依赖（宿主已在运行时提供，插件侧安装用于构建与类型
 ## 快速开始（推荐：脚手架）
 
 ```bash
-# 创建插件工程（交互式选择插件名 / 类型；--rust 附带 WASM 后端）
-npx bedcode-plugin-desktop create my-plugin --rust
+# 创建 wasm 应用工程（id 与 name 为位置参数，非交互；--rust 附带 WASM 后端脚手架）
+bedcode-plugin-desktop create com.example.my-app "My App" --author "you" --rust
 
-cd my-plugin
-npm install
-npm run dev        # 浏览器开发环境（Dev Shell：mock 宿主 + HMR）
-npm run build      # 构建产物 dist/index.js（可选 -- --resources-dir <目录> 直接复制进宿主）
-npm run manifest   # 按源码自动填充 plugin.json 的 contributes / permissions
-npm run validate   # 校验 plugin.json 合法性
-npm run doctor     # 环境自检
+cd my-app
+pnpm install
+ppnpm run dev        # 浏览器开发环境（Dev Shell：空壳宿主 + HMR）
+ppnpm run build      # 构建产物 dist/（vite 前端 + rust-ts 时 cargo wasm32）
+ppnpm run manifest   # 按源码自动填充 plugin.json 的 contributes / permissions
 ```
 
-构建产物复制到宿主 `plugins/desktop/{plugin-id}/` 目录后，在宿主插件管理页启用。
+更多命令（直接在应用工程里跑 CLI，非 npm script）：
+
+```bash
+bedcode-plugin-desktop build --resources-dir ../bedcode-desktop/src-tauri/resources/plugins/desktop
+# 把产物复制到 src-tauri/resources/plugins/desktop/{id}/（内置 wasm 应用随安装包分发的方式）
+
+bedcode-plugin-desktop build --frontend-only / --rust-only   # 只构建一半（rust-ts）
+bedcode-plugin-desktop dev [pluginDir] [--port <port>] [--host] [--open]
+bedcode-plugin-desktop manifest --check   # 只检查不写入（CI）
+bedcode-plugin-desktop validate [--dir]   # 校验 plugin.json（id 格式 / 必填 / pluginType / 权限白名单 / 产物存在性）
+bedcode-plugin-desktop doctor             # 环境自检（Node / Rust / wasm32 target / dev-shell / SDK）
+```
+
+构建产物复制到宿主 `src-tauri/resources/plugins/desktop/{id}/` 后，在宿主应用管理页启用。
+用户侧安装走 zip 包（桌面端「插件」页 → 选 zip，落盘 `app_data_dir/plugins/{id}/`）。
 
 ## 手动创建插件
 
@@ -51,7 +65,6 @@ npm run doctor     # 环境自检
   "description": "示例插件",
   "author": "you",
   "main": "index.js",
-  "sandbox": "inline",
   "pluginType": "ts-only",
   "permissions": ["storage", "ui:sidebar"],
   "contributes": {
@@ -60,6 +73,14 @@ npm run doctor     # 环境自检
   }
 }
 ```
+
+必填字段：`name` / `version` / `platform` / `main` / `pluginType` / `permissions` / `contributes`
+（校验真源 `bin/manifest-validate.js`；宿主反序列化无缺省，缺失即拒装）。
+`pluginType` 取值 `rust` / `rust-ts` / `ts-only`；`rust-ts` 时必须给 `rustLibrary`
+（与 Cargo.toml 包名一致）。
+
+> `sandbox` 已从 manifest 退役（审计票 06 裁决 2：前端不做隔离）——Rust 端类型会
+> 直接忽略并丢弃该字段，写进清单无效，请勿再声明。
 
 **`src/index.ts`** — 插件入口（必须导出 `activate`）：
 
@@ -93,12 +114,13 @@ export async function deactivate(): Promise<void> {
 | `context.commands` | 注册 / 执行命令 | 默认授予 |
 | `context.terminal` | 向会话发送输入、订阅输出 / 输入 | `terminal:input` / `terminal:output` / `terminal:observe` |
 | `context.session` | 会话列表、状态变更订阅 | `session:read` / `session:write` |
-| `context.ui` | 注册侧边栏 / 工具箱 / 状态栏 / 设置分组 / 输入扩展 / 终端工具栏 / 标题栏 / 文件查看器 | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
+| `context.ui` | 注册侧边栏 / 工具箱 / 状态栏 / 设置分组 / 输入扩展 / 终端工具栏 / 标题栏 / 文件处理器（`registerFileHandler`） | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
 | `context.events` | 宿主事件订阅与发布（`on` / `emit`） | 订阅默认授予；发布需 `broadcast` |
-| `context.storage` | 键值存储（`get` / `set` / `delete` / `flush`） | `storage`（默认附带） |
-| `context.http` | 注册 HTTP 端点（供 Agent CLI hooks 等调用） | `network:http` |
-| `context.fileService` | 文件服务挂载（`mount`）、对端信息、系统目录 / 文件选择 | `fileservice` |
-| `context.i18n` | 宿主 i18n：注册插件翻译、`t()` 快捷翻译 | 默认授予 |
+| `context.storage` | 键值存储（`get` / `set` / `delete` / `flush`） | `storage`（**桌面端无默认授予，必须显式声明**） |
+| `context.http` | 注册 HTTP 端点（`registerEndpoint`，供 Agent CLI hooks 等调用） | `network:http` |
+| `context.i18n` | 宿主 i18n：注册应用翻译、`t()` 快捷翻译、`getI18n()` 取实例 | 默认授予 |
+| `context._disposables` | 宿主在注销时统一回收的 Disposable 列表（内部使用） | — |
+| `context.id` / `context.extensionPath` | 应用 id / 安装目录路径（只读） | — |
 
 
 权限声明示例：`"permissions": ["storage", "ui:sidebar", "terminal:output", "network:http"]`。
@@ -204,15 +226,12 @@ const saved = await context.storage.get<typeof config.properties>(PLUGIN_CONFIG_
 
 ## 事件常量
 
-事件主题遵循 `{domain}:{action}` 命名规范；各领域事件常量由对应插件工程持有（单一事实来源），
-SDK 不内置具体业务事件名。例如 Auto Task 插件的事件常量位于
-`plugins/auto-task/src/events.ts`，插件内部自用：
+事件主题遵循 `{domain}:{action}` 命名规范；各领域事件名由对应 wasm 应用工程自持（单一事实来源），
+SDK 不内置具体业务事件名。例如终端会话应用（`wasm-apps/terminal-session`）订阅的任务状态事件：
 
 ```ts
-// 插件内 import 本领域事件常量
-import { EVENT_TASK_STATUS_CHANGED } from './events'
-
-context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
+// 应用内订阅本领域事件（字符串字面量或抽为本地常量）
+context.events.on('task:status-changed', (payload) => {
   // 任务状态变更（如 Agent CLI idle → in_progress）
 })
 ```
@@ -238,7 +257,15 @@ const options = [
 </template>
 ```
 
-当前提供：`Select`（下拉选择，支持 `update:modelValue` / `open` 事件、`md` / `sm` 尺寸）。
+当前提供（每个子路径 = 一个独立导出，默认导出组件本身）：
+
+| 子路径 | 组件 | 用途 |
+|--------|------|------|
+| `./ui` | `Select` | 下拉选择（`update:modelValue` / `open` 事件，`md` / `sm` 尺寸） |
+| `./ui/markdown-editor` | `MarkdownEditor` | Markdown 编辑区（语法工具栏 + 预览切换，`v-model`） |
+| `./ui/terminal-input-rail` | `TerminalInputRail` | 终端输入导航条（终端右侧悬浮，一根横线 = 一次用户输入，位置映射 buffer 相对位置） |
+| `./ui/plugin-global-dialog` | `PluginGlobalDialog` | 宿主全局弹窗（应用根挂载一次；渲染由全局弹窗控制器驱动，插件经 `context.ui.showDialog` 操控，挂载方无 props） |
+| `./ui/zoom-compensation` | （无组件） | fixed 定位覆盖层在根元素 CSS zoom 下的坐标换算（自校准；当前 F=1，作防御性 no-op 保留） |
 
 ## 子路径导出总览
 
@@ -247,11 +274,15 @@ const options = [
 | `@binblink/bedcode-plugin-sdk-desktop` | 主 API：类型 + 运行时代理 + 配置助手 + 事件常量 |
 | `@binblink/bedcode-plugin-sdk-desktop/vite` | `bedcodePlugin()` Vite 构建插件 |
 | `@binblink/bedcode-plugin-sdk-desktop/types` | 纯类型导出（仅类型，无运行时） |
-| `@binblink/bedcode-plugin-sdk-desktop/ui` | 共享 Vue 组件 |
+| `@binblink/bedcode-plugin-sdk-desktop/ui` | 共享 Vue 组件：`Select` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/markdown-editor` | `MarkdownEditor` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/terminal-input-rail` | `TerminalInputRail` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/plugin-global-dialog` | `PluginGlobalDialog` |
+| `@binblink/bedcode-plugin-sdk-desktop/ui/zoom-compensation` | zoom 坐标换算工具 |
 
 ## 本地开发本 SDK
 
 ```bash
-npm run build      # tsup 构建 dist（ESM + d.ts）
-npm run test:run   # vitest run
+pnpm run build      # tsup 构建 dist（ESM + d.ts）
+pnpm run test:run   # vitest run
 ```

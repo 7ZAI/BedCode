@@ -1,6 +1,6 @@
-# File Transfer Plugin (Desktop)
+# File Transfer wasm 应用（桌面端）
 
-桌面端内网文件传输插件：在线对端发现与切换、远程目录浏览、多任务并发传输（失败重试 / 取消），支持本地目录挂载供对端访问，并内置首连确认（consent）与信任对端（trusted peers）两层安全闸门。核心业务状态由 Rust WASM 层自持（issue 13 Phase 3，ADR 0022 v2/v3），TS 前端负责 UI 渲染。
+桌面端内网文件传输应用：在线对端发现与切换、远程目录浏览、多任务并发传输（失败重试 / 取消），支持本地目录挂载供对端访问，并内置首连确认（consent）与信任对端（trusted peers）两层安全闸门。核心业务状态由 Rust WASM 层自持（issue 13 Phase 3，ADR 0022 v2/v3），TS 前端负责 UI 渲染。
 
 ## 功能
 

@@ -1,6 +1,6 @@
-# AI Chatbox Plugin (Desktop)
+# AI Chatbox wasm 应用（桌面端）
 
-桌面端 AI 大模型对话插件：接入任意 OpenAI 兼容供应商，支持流式对话、多会话管理与代码高亮渲染。核心业务逻辑在 Rust WASM 层实现，TS 前端负责协议适配与 UI 渲染。
+桌面端 AI 大模型对话应用：接入任意 OpenAI 兼容供应商，支持流式对话、多会话管理与代码高亮渲染。核心业务逻辑在 Rust WASM 层实现，TS 前端负责协议适配与 UI 渲染。
 
 ## 功能
 

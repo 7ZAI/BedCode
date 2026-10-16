@@ -1,6 +1,6 @@
-# AI Chatbox Plugin (Mobile)
+# AI Chatbox wasm 应用（移动端）
 
-移动端 AI 大模型对话插件：与桌面端同 ID（`com.bedcode.ai-chatbox`）的对应实现，独立运行于手机端，支持多供应商流式对话与会话管理。协议适配在 TS 前端，Rust WASM 层负责日志落盘与目录授权。
+移动端 AI 大模型对话应用：与桌面端同 ID（`com.bedcode.ai-chatbox`）的对应实现，独立运行于手机端，支持多供应商流式对话与会话管理。协议适配在 TS 前端，Rust WASM 层负责日志落盘与目录授权。
 
 ## 功能
 

@@ -196,20 +196,26 @@ cd bedcode-desktop && pnpm run test:run          # Frontend (vitest run)
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
-## Plugin System
+## WASM App Development
 
-Plugins are built on the **wasmtime runtime (WASM Component Model)**: the Rust backend compiles to a WASM component, the TypeScript frontend builds separately, and both ship alongside a `plugin.json` manifest into the host's resources directory to be loaded sandboxed. Plugins can observe and extend host session and system capabilities:
+> Terminology: this repository calls "plugins" **WASM apps** (sources live in `wasm-apps/`); the
+> mechanism kernel and runtime keep the `plugin` identifiers (`plugin.json` / `PluginManager` /
+> `host-*` primitives / WIT package `bedcode:plugin`) to stay aligned with wasmtime and
+> industry terminology.
 
-- **WASM Sandbox Runtime** — resource-constrained, memory-isolated; a plugin crash never affects the host
-- **Dynamic Loading** — scanned from `{plugin-id}/plugin.json` at runtime; install and use without recompiling the host
-- **Host API Bridge** — wit defines the contract and wit-bindgen generates the glue ABI from the trait; the frontend and the WASM backend call host capabilities (terminal, session, storage, event bus, filesystem, etc.) through the same interface
+WASM apps are built on the **wasmtime runtime (WASM Component Model)**: the Rust backend compiles to a WASM component, the TypeScript frontend builds separately, and both ship alongside a `plugin.json` manifest into the host's resources directory to be loaded sandboxed. Apps can observe and extend host session and system capabilities:
+
+- **WASM Sandbox Runtime** — resource-constrained, memory-isolated; an app crash never affects the host
+- **Dynamic Loading** — scanned from `{id}/plugin.json` at runtime; install and use without recompiling the host
+- **Host API Bridge** — WIT defines the contract (package semver `bedcode:plugin@0.2.0`) and wit-bindgen generates the glue ABI from the trait; the frontend and the WASM backend call host capabilities (terminal, session, storage, event bus, filesystem, etc.) through the same interface
 - **Permission Model** — the manifest declares the permissions required; the host validates and grants them one by one at load time, and out-of-scope calls are rejected outright
 
-The mobile end shares the same architecture as desktop (both are a WASM component + a frontend bundle), with only the host capability surface tailored per platform (e.g. mobile SAF file access, desktop PTY).
+The mobile end shares the same architecture as desktop (both are a WASM component + a frontend bundle), with only the host capability surface tailored per platform (e.g. mobile SAF file access, desktop PTY). **Both ends use `wasm-apps/` for WASM app sources.**
 
-> 📖 Development guides: [desktop plugin development](bedcode-desktop/plugin-dev-desktop.md) ｜ [mobile plugin development](bedcode-mobile/plugin-dev-mobile.md) — the full walkthrough for creating a plugin from scratch (project layout, manifest declarations, frontend/backend development, build & packaging, on-device verification)
+> 📖 Development guides: [desktop WASM app development](bedcode-desktop/wasm-app-dev-desktop.md) ｜ [mobile WASM app development](bedcode-mobile/wasm-app-dev-mobile.md) — the full walkthrough for creating an app from scratch (project layout, manifest declarations, frontend/backend development, build & packaging, on-device verification);
+> API & extension-point reference [docs/knowledge/wasm-app-dev-guide.md](bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md), development red-line checklist [docs/knowledge/wasm-app-development-checklist.md](docs/knowledge/wasm-app-development-checklist.md)
 
-### Plugin Development SDK
+### WASM App Development SDK
 
 - **`@binblink/bedcode-plugin-sdk-desktop`** / **`@binblink/bedcode-plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
 - **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check

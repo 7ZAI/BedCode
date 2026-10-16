@@ -194,20 +194,25 @@ cd bedcode-desktop && pnpm run test:run          # 前端（vitest run）
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
-## 插件开发
+## wasm 应用开发
 
-插件基于 **wasmtime 运行时（WASM Component Model）**：Rust 后端编译为 WASM 组件，TypeScript 前端独立构建，二者随 `plugin.json` 清单一起放入宿主 resources 目录，在沙箱内加载运行。插件可观察并扩展宿主的会话与系统能力：
+> 术语：本仓把「插件」一律称为 **wasm 应用**（源码住 `wasm-apps/`）；但机制内核与运行时的
+> 标识符保留 `plugin` 原词（`plugin.json` / `PluginManager` / `host-*` 原语 / WIT 包 `bedcode:plugin`），
+> 以与 wasmtime / 行业术语一致。
 
-- **WASM 沙箱运行时** — 资源受限、内存隔离，插件崩溃不影响宿主
-- **动态加载** — 扫描 `{plugin-id}/plugin.json` 运行时加载，即装即用、无需重编译宿主
-- **宿主 API 桥接** — wit 接口定义契约，wit-bindgen 按 trait 自动生成胶水层 ABI；前端与 WASM 后端以同一套接口调用宿主能力（终端、会话、存储、事件总线、文件系统等）
+wasm 应用基于 **wasmtime 运行时（WASM Component Model）**：Rust 后端编译为 WASM 组件，TypeScript 前端独立构建，二者随 `plugin.json` 清单一起放入宿主 resources 目录，在沙箱内加载运行。应用可观察并扩展宿主的会话与系统能力：
+
+- **WASM 沙箱运行时** — 资源受限、内存隔离，应用崩溃不影响宿主
+- **动态加载** — 扫描 `{id}/plugin.json` 运行时加载，即装即用、无需重编译宿主
+- **宿主 API 桥接** — WIT 接口定义契约（包 semver `bedcode:plugin@0.2.0`），wit-bindgen 按 trait 自动生成胶水层 ABI；前端与 WASM 后端以同一套接口调用宿主能力（终端、会话、存储、事件总线、文件系统等）
 - **权限模型** — manifest 声明所需权限，宿主加载时校验并逐项授权，越权调用直接拒绝
 
-移动端与桌面端架构一致（同为 WASM 组件 + 前端产物双形态），仅宿主能力面按平台裁剪（如移动端 SAF 文件访问、桌面端 PTY）。
+移动端与桌面端架构一致（同为 WASM 组件 + 前端产物双形态），仅宿主能力面按平台裁剪（如移动端 SAF 文件访问、桌面端 PTY）。两端 wasm 应用源码目录**均名 `wasm-apps/`**。
 
-> 📖 开发指南：[桌面端插件开发](bedcode-desktop/plugin-dev-desktop.md) ｜ [移动端插件开发](bedcode-mobile/plugin-dev-mobile.md) —— 从零创建插件的完整流程（工程结构、manifest 声明、前后端开发、构建打包、真机验证）
+> 📖 开发指南：[桌面端 wasm 应用开发](bedcode-desktop/wasm-app-dev-desktop.md) ｜ [移动端 wasm 应用开发](bedcode-mobile/wasm-app-dev-mobile.md) —— 从零创建应用的完整流程（工程结构、manifest 声明、前后端开发、构建打包、真机验证）；
+> API 与扩展点参考 [docs/knowledge/wasm-app-dev-guide.md](bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md)，开发红线清单 [docs/knowledge/wasm-app-development-checklist.md](docs/knowledge/wasm-app-development-checklist.md)
 
-### 插件开发 SDK
+### wasm 应用开发 SDK
 
 - **[`@binblink/bedcode-plugin-sdk-desktop`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-desktop)** / **[`@binblink/bedcode-plugin-sdk-mobile`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-mobile)**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
