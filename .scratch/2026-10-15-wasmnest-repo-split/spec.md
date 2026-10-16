@@ -1,5 +1,11 @@
 # WasmNest 平台改名 + 多仓拆分（lib / 两端 / app / 跨端 / 元仓）
 
+> ⚠️ **本文的「拆分仓数」结论已作废（2026-10-16）**：用户改判为**三仓**
+> （平台仓 / 能力仓 / 应用仓），见 `.scratch/2026-10-16-three-repo-split/spec.md`。
+> 本文仍有效的部分：§Problem Statement 的动机、§Testing Decisions 的缝模型、
+> §5 D5/D7/D8 的接线与门禁机制、§D9 的「先改名、后拆分」顺序与 P0 闸门清单。
+> 作废的部分：§5 D1（仓清单）、D2/D6（crate 与 app 仓归属切法）、§1 各仓内容清单。
+
 > 用户指令（2026-10-15）：
 > 1. 新建 `WasmNest` 目录与多个 git 仓库，把 BedCode 下的内容拆分进入新目录与新仓库；
 > 2. 整体仓库 BedCode 全部改名为 WasmNest；

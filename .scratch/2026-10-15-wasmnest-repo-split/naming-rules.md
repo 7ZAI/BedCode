@@ -122,7 +122,7 @@ plugin id、rust lib 名、显示名**一律保留 `bedcode` / `BedCode`（§4�
 | --- | --- |
 | plugin id `com.bedcode.terminal-session` | 该应用的**身份**；显示名就叫 BedCode，vendor 段 `bedcode` 与之一致 |
 | rust lib 名 `bedcode_plugin_terminal_session` | 与 plugin id 同源，`plugin.json` 的 `rustLibrary` 字段 |
-| app slug `bedcode`（仓名 `wasmnest-app-bedcode`、目录名 `apps/bedcode/`） | 应用名，非平台名 |
+| app slug `bedcode`（仓名 `wasmnest-app-bedcode`、目录名 `apps/bedcode/`） | 应用名，非平台名——⚠️ **三仓方案下已修正**：slug/目录名改为 `terminal-session`，仅显示名保留（见 §8 N8b） |
 | 显示名 `BedCode`（`plugin.json` 的 `name`、i18n 文案、README 标题） | 用户可见的产品名 |
 
 **仍须改名**（该应用里的平台引用）：
@@ -142,7 +142,7 @@ SDK 依赖名（`bedcode-plugin-api` / `@binblink/bedcode-plugin-sdk-*`）、WIT
 | plugin id | 插件存储命名空间 + 权限授权记录键 ⇒ 旧记录成孤儿 | 同上；同时须清理旧 plugin id 的授权记录残留 |
 | **WIT 包名 `bedcode:plugin` → `wasmnest:plugin`** | **版本进入 import 名，宿主与 guest 不等即实例化失败** | 走 AGENTS §5.1.4 顺序：ABI bump + 双端 WIT 副本同步 + 重建**全部** app 产物 |
 | `bedcode.keystore` → `wasmnest.keystore` | 打包配置与 CI secret 的文件名引用 | 同步改 Android 签名配置 + CI 步骤；改错会签不出包 |
-| crate 名（含已发布 SDK） | crates.io / npm 名字不可回收 | 新开 `wasmnest-*` 名 + 旧包 yank / 弃用（spec §8-1 待裁决） |
+| crate 名（含已发布 SDK） | crates.io / npm 名字不可回收 | 新开 `wasmnest-*` 名 + 旧包 yank / 弃用（**已裁决**：三仓 spec §10-9） |
 | 仓库 URL | 文档与 package.json 里的仓库链接 | 指向新仓；旧仓冻结后保留只读 |
 
 ---
@@ -169,3 +169,21 @@ SDK 依赖名（`bedcode-plugin-api` / `@binblink/bedcode-plugin-sdk-*`）、WIT
 - **回退**：**回退点 = P1 完成后的 `dev` commit**（即 BedCode 3.0.0 的代码状态）。改名在
   `feature/wasmnest-rename` 分支上进行，未合入前不影响 `dev`；合入后若发现问题，回退该 commit 即可。
   拆分阶段另起新仓（无历史），旧仓停写不动，任一步出问题可直接丢弃重建。
+
+---
+
+## 8. 三仓方案的追加改名项（2026-10-16 裁决，supersedes 本文 §4 的目录名部分）
+
+三仓切法（`.scratch/2026-10-16-three-repo-split/spec.md`）在三层模型与替换规则集**不变**的前提下，
+追加/修正以下三条，**全部并入同一次「步骤 1 单仓改名」**执行（拆分阶段仍然只搬不改名）：
+
+| # | 追加项 | 说明 |
+| --- | --- | --- |
+| N8a | `bedcode-desktop/` → `desktop/`、`bedcode-mobile/` → `mobile/` | 平台仓内不再需要仓名前缀（`wasmnest/desktop` 已表明归属）；两端目录同属一仓后前缀反而冗余。该项**优先于**机械规则（先按机械规则得 `wasmnest-desktop/`，再显式回改为 `desktop/`） |
+| N8b | 应用目录统一为 `apps/<slug>/{desktop,mobile}`，其中 **`<slug>` = `terminal-session`** | 取代本文 §4「app slug `bedcode`、目录名 `apps/bedcode/`」——三仓下应用不再各占一仓，目录名取与 plugin id、桌面源目录一致的 `terminal-session`；**保留的 `BedCode` 降为纯「显示名」**（`plugin.json` 的 `name` / i18n / README 标题） |
+| N8c | 能力仓/应用仓**仓名**不再逐个列出 | 旧案 §4 里的 `wasmnest-app-*`、`wasmnest-lib` 等仓名作废；三仓分别为平台仓 / 能力仓 / 应用仓（仓名字面以实际建仓时定，本文不锁定） |
+
+**§4 豁免清单的净效果**：plugin id `com.bedcode.terminal-session`、rust lib 名
+`bedcode_plugin_terminal_session`、显示名 `BedCode` 三项**照旧保留**；仅「app slug / 目录名」
+一项由 `bedcode` 改为 `terminal-session`（N8b）。验证判据 V1–V6 不变（V1/V2 的命中位置白名单
+改为：plugin id / rustLibrary / 显示名 三类）。
