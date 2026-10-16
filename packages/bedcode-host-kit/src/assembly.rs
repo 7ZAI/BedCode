@@ -163,6 +163,12 @@ mod tests {
     /// 探针装配器：记录被调用一次
     static PROBE_INSTALL_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+    /// 本二进制内串行锁：`PROBE_INSTALL_CALLS` 是**进程级全局状态**，而 `cargo test`
+    /// 默认多线程并行跑同二进制内的用例——下面两例都经 `install_domain_ports` 触发探针，
+    /// 并行时计数会互相干扰（2026-10-16 实测偶发 `left: 2, right: 1`，CI 上就是一条
+    /// 随机红）。锁只覆盖这两例的临界区，不影响其它用例并行。
+    static PROBE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn probe_install(_host: Arc<dyn HostPorts>) {
         PROBE_INSTALL_CALLS.fetch_add(1, Ordering::SeqCst);
     }
@@ -219,6 +225,8 @@ mod tests {
     /// 自报的端口装配器必须被遍历到，且被调用
     #[test]
     fn submitted_installer_is_invoked() {
+        // 与 `installed_names_are_sorted` 互斥：两例都会把探针计数 +1（见锁的说明）
+        let _serial = PROBE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = PROBE_INSTALL_CALLS.load(Ordering::SeqCst);
         let installed = install_domain_ports(Arc::new(StubHost));
         assert!(
@@ -235,6 +243,8 @@ mod tests {
     /// 已装配域名按字典序（与收集顺序无关）
     #[test]
     fn installed_names_are_sorted() {
+        // 与 `submitted_installer_is_invoked` 互斥：本例同样会把探针计数 +1（见锁的说明）
+        let _serial = PROBE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let installed = install_domain_ports(Arc::new(StubHost));
         let mut sorted = installed.clone();
         sorted.sort_unstable();
