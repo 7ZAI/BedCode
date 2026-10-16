@@ -44,7 +44,7 @@ fn main() {
         }
     }));
 
-    bedcode_lib::run()
+    bedcode_mobile_lib::run()
 }
 
 /// 获取 panic 日志文件路径

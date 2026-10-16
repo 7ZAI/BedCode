@@ -65,13 +65,19 @@ function invokeCalls(cmd: string): unknown[][] {
   return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
 }
 
-/** 默认 invoke 分发（ws_verify_pairing_code 默认成功返回凭据） */
+/** 默认 invoke 分发（票 14 阶段 B：验证配对码走插件命令面 + 宿主窄读凭据） */
 function installInvokeMock() {
-  mockInvoke.mockImplementation((cmd: string) => {
+  mockInvoke.mockImplementation((cmd: string, payload?: { command?: string }) => {
     switch (cmd) {
       case 'ws_connect':
         return Promise.resolve({ address: DEVICE.address, port: DEVICE.port, status: 'connected' })
-      case 'ws_verify_pairing_code':
+      case 'plugin_invoke':
+        // 配对编排域命令：verify-pairing-code 默认受理（凭据零过境，插件只拿 accepted）
+        if (payload?.command === 'terminal-session.verify-pairing-code') {
+          return Promise.resolve({ accepted: true })
+        }
+        return Promise.resolve(undefined)
+      case 'ws_get_auth_credentials':
         return Promise.resolve(makeAuthCredentials({ fingerprint: 'fp-desktop-1', pairingId: 'pairing-1' }))
       case 'egress_declare_desktop_target':
         return Promise.resolve(null)
@@ -121,10 +127,15 @@ describe('配对流：useMobileConnection 配对状态机 × 凭据持久化', (
     await flushAsync()
     expect(conn.connectionStatus.value).toBe('pairing')
 
-    // 用户输入配对码 → invoke 返回凭据（含 JWT）
+    // 用户输入配对码 → 插件命令受理 → 宿主窄读凭据（含 JWT）
     const ok = await conn.verifyPairingCode('123456')
     expect(ok).toBe(true)
-    expect(invokeCalls('ws_verify_pairing_code')).toEqual([[{ code: '123456' }]])
+    const verifyCall = mockInvoke.mock.calls.find(
+      ([cmd, payload]) => cmd === 'plugin_invoke' && (payload as { command?: string })?.command === 'terminal-session.verify-pairing-code',
+    )
+    expect(verifyCall).toBeDefined()
+    expect((verifyCall?.[1] as { args: { code: string } }).args).toEqual({ code: '123456' })
+    expect(invokeCalls('ws_get_auth_credentials')).toHaveLength(1)
 
     // 凭据保存：authCredentials + localStorage 三项
     expect(conn.authCredentials.value).toMatchObject({
@@ -177,19 +188,64 @@ describe('配对流：useMobileConnection 配对状态机 × 凭据持久化', (
     expect(stored[0].connectCount).toBe(2)
   })
 
-  it('配对码错误：invoke 返回 null → 不保存凭据、返回 false、状态不进入 paired', async () => {
-    // 配对码验证失败（Rust 端拒绝）
-    mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === 'ws_verify_pairing_code') return Promise.resolve(null)
+  it('配对码错误：插件返回 accepted=false → 不取凭据、不保存、返回 false、状态不进入 paired', async () => {
+    // 配对码验证失败（桌面端业务拒绝，插件只拿到 accepted=false）
+    mockInvoke.mockImplementation((cmd: string, payload?: { command?: string }) => {
+      if (cmd === 'plugin_invoke' && payload?.command === 'terminal-session.verify-pairing-code') {
+        return Promise.resolve({ accepted: false })
+      }
       return Promise.resolve(undefined)
     })
 
     const ok = await conn.verifyPairingCode('000000')
     expect(ok).toBe(false)
+    expect(invokeCalls('ws_get_auth_credentials')).toHaveLength(0)
     expect(conn.authCredentials.value).toBeNull()
     expect(localStorage.getItem('auth_session_token')).toBeNull()
     expect(conn.connectionStatus.value).toBe('disconnected')
     expect(conn.isPaired.value).toBe(false)
+  })
+
+  // 回归锁（2026-10-15 真机：配对成功后断开，再从连接历史连每次都要求重新输入配置码）：
+  // 认证编排已迁插件命令面，宿主不再经过本 composable 的 verifyPairingCode /
+  // authenticateWithBiometric，凭据只能在本回调里经宿主窄读口（ws_get_auth_credentials）
+  // 回读——否则 localStorage 镜像永空，下次「存量凭据静默换新」必失败。
+  it('插件命令面配对成功（只收 ws_paired）：回读宿主凭据写镜像 + 记已配对设备', async () => {
+    await conn.connect(DEVICE)
+    await flushAsync()
+    expect(localStorage.getItem('auth_session_token')).toBeNull()
+
+    // 只发生 ws_paired：没有宿主侧 saveCredentials 参与
+    await emit('ws_paired')
+    await flushAsync()
+
+    expect(invokeCalls('ws_get_auth_credentials')).toHaveLength(1)
+    expect(conn.authCredentials.value).toMatchObject({
+      pairingId: 'pairing-1',
+      fingerprint: 'fp-desktop-1',
+      sessionToken: 'test-jwt-token',
+    })
+    expect(localStorage.getItem('auth_pairing_id')).toBe('pairing-1')
+    expect(localStorage.getItem('auth_fingerprint')).toBe('fp-desktop-1')
+    expect(localStorage.getItem('auth_session_token')).toBe('test-jwt-token')
+
+    // 已配对设备记录依赖回读后的指纹（镜像为空时此前被跳过）
+    expect(conn.pairedDevices.value).toHaveLength(1)
+    expect(conn.pairedDevices.value[0].fingerprint).toBe('fp-desktop-1')
+  })
+
+  it('宿主未持有凭据时 ws_paired：不伪造镜像也不记已配对设备', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'ws_get_auth_credentials') return Promise.resolve(null)
+      return Promise.resolve(undefined)
+    })
+
+    await emit('ws_paired')
+    await flushAsync()
+
+    expect(localStorage.getItem('auth_session_token')).toBeNull()
+    expect(conn.authCredentials.value).toBeNull()
+    expect(conn.pairedDevices.value).toHaveLength(0)
   })
 
   it('认证失败事件：ws_auth_failed → 状态 error + 原因透传', async () => {

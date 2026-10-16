@@ -2,7 +2,9 @@
 
 ## 工作流概述
 
-`.github/workflows/release.yml` 支持 Windows NSIS 安装包 + Android APK 的自动构建发布。
+`.github/workflows/release.yml` 负责一次发布的全部产物：Windows NSIS 安装包、Linux deb
+（均带签名升级包与 `latest.json`）、Android APK、两端插件 zip 分发包与两端 SDK 发布包；
+平台构建与产物打包 job 全部并行，收尾由 `finalize-release` 统一完成。
 
 **触发方式：**
 - 推送 `v*` 格式 tag 自动触发
@@ -48,30 +50,51 @@
 
 ## 发布流程
 
+### 0. 发布前总结 CHANGELOG（一次性写入）
+
+日常修改代码**不**向 `CHANGELOG.md` / `CHANGELOG_zh.md` 逐次记录；只在每次发布前，按上次发布
+以来的提交记录（`git log <last-tag>..HEAD`）归纳出**当前版本**章节（如 `## [x.x.x] - date`），
+替换 Unreleased 占位内容。Release body 由流水线从 CHANGELOG 提取当前版本章节自动生成（见下方
+「Release Body 格式」），因此发布前必须完成本节总结。
+
 ### 1. 更新版本号
 
-同时更新以下两处版本号：
+用脚本一次改齐两端（AGENTS §2：桌面 / 移动版本号同步维护；真源 = 桌面
+`bedcode-desktop/src-tauri/tauri.conf.json`，脚本同步写两端各 3 处：`package.json` /
+`src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）：
 
-- `src-tauri/tauri.conf.json` → `"version": "x.x.x"`
-- `src-tauri/Cargo.toml` → `version = "x.x.x"`
+```bash
+node scripts/bump-version.mjs -v x.x.x        # 或 --patch / --minor / --major（默认 patch）
+# 只改一端：--desktop / --mobile（一般不用，两端要同步）
+```
+
+> release.yml 的 version 取自**桌面** `tauri.conf.json`（或 tag），移动端 APK 内的版本来自移动端
+> `tauri.conf.json`——两端不同步会让 APK 版本与 release 标签对不上。
 
 ### 2. 提交并打 Tag
 
 ```bash
-git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git add bedcode-desktop bedcode-mobile
 git commit -m "chore: bump version to x.x.x"
 git tag vx.x.x
-git push origin dev --tags
+git push origin master --tags
 ```
+
+> 或直接 `node scripts/bump-version.mjs -v x.x.x --tag`（提交 + 打 tag）。正式发布只允许 tag 在
+> master 祖先上（release.yml 的 `publish-release` 会拒绝 dev / feature 上的 tag）。
 
 ### 3. 等待构建完成
 
 推送 tag 后 GitHub Actions 自动触发。在 **Actions → Release** 页面查看进度。
 
-- **build-windows**: ~10-15 分钟
-- **build-android**: ~15-25 分钟（依赖 Windows Job 完成）
+平台构建与产物打包**全部并行**（各自 `needs: prepare-release`）：
+
+- **build-windows**: ~10-15 分钟（NSIS + latest.json）
+- **build-linux**: deb + 签名升级包
+- **build-android**: ~15-25 分钟（APK）
 - **package-plugins**: 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（独立 job，与平台构建并行）
 - **package-sdks**: 构建两端插件 SDK（TS 前端 + Rust crate）并打包 npm tarball / crates.io 产物（独立 job，与平台构建并行）
+- **finalize-release**: 收尾（同步双语 release body + 校验 `latest.json` 已上传）
 
 ### 4. 审核并发布 Release
 
@@ -79,13 +102,38 @@ git push origin dev --tags
 
 1. 检查产物是否完整：
    - `BedCode_x.x.x_x64-setup.exe`（Windows NSIS）
+   - `*.deb`（Linux）
    - `*.apk`（Android）
-   - `dist/plugin-packages/{desktop,mobile}/*.zip`（插件 zip 分发包，见 `docs/commands.md`；
+   - `dist/plugin-packages/{desktop,mobile}/<plugin-id>-<target>.zip`（插件 zip 分发包：两端同名插件靠端后缀区分，见 `docs/commands.md`；
      打包范围由 `scripts/plugin-package-list.json` 控制，增删插件改该文件即可）
    - `dist/sdk-packages/{desktop,mobile}/*`（两端 SDK 发布包：npm `.tgz` + crates.io `.crate`
-     + 聚合 zip + SHA256SUMS，见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
-2. 编辑 Release Body（可选）
+     + 聚合 zip + `SHA256SUMS-<target>`（文件名带端后缀，避免同一 release 内附件重名），
+     见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
+2. 编辑 Release Body（可选）：默认 body 由流水线自动生成（见下方「Release Body 格式」），如手改请保持其结构
 3. 点击 **Publish release** 发布
+
+### Release Body 格式（中英文切换）
+
+Release body 由 `prepare-release` 作业从 `CHANGELOG_zh.md`（中文版）与 `CHANGELOG.md`（英文版）自动提取当前版本内容合并生成，写法参照 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness/releases) 的双语 release：
+
+```markdown
+[中文](#cn-<version>) | [English](#en-<version>)
+
+（中文版内容：以首个章节标题挂锚点）
+<h3 id="cn-<version>">功能</h3>
+...
+
+---
+
+（英文版内容：以首个章节标题挂锚点）
+<h3 id="en-<version>">Features</h3>
+...
+```
+
+- 顶部一行是**中英文切换链接**（`[中文](#cn-V) | [English](#en-V)`）
+- 中文版在前、英文版在后，中间以 `---` 分隔
+- 切换锚点挂在各自语言块的**首个章节标题**上（`<h3 id="cn-V">` / `<h3 id="en-V">`，仅首个章节带锚点，其余保持普通 `###`）
+- 版本号来源：tag（`vX.Y.Z`）或 `tauri.conf.json`；切换链接与锚点中的版本号必须一致，手改 body 时不要破坏该对应关系
 
 ---
 

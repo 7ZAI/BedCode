@@ -61,18 +61,8 @@ const CONTRIBUTION_KINDS: Record<string, ContributionKind> = {
     labelKey: 'desktop.plugin.chip.terminal',
     count: (p) => (p.contributes.terminal ? 1 : 0),
   },
-  toolProviders: {
-    emoji: '🛠️',
-    labelKey: 'desktop.plugin.chip.toolProviders',
-    count: (p) => p.contributes.toolProviders?.length ?? 0,
-    params: (p) => ({ count: p.contributes.toolProviders?.length ?? 0 }),
-  },
-  fileHandlers: {
-    emoji: '📁',
-    labelKey: 'desktop.plugin.chip.fileHandlers',
-    count: (p) => p.contributes.fileHandlers?.length ?? 0,
-    params: (p) => ({ count: p.contributes.fileHandlers?.length ?? 0 }),
-  },
+  // `toolProviders` / `fileHandlers` 不再列为 chip：宿主侧从未落地消费实现
+  // （声明了也不会生效），展示为「扩展点」是误导——摘除展示，类型字段暂留兼容。
   configuration: {
     emoji: '🎛️',
     labelKey: 'desktop.plugin.chip.configuration',
@@ -92,9 +82,24 @@ export interface PermissionMeta {
   emoji: string
   titleKey: string
   descKey: string
+  /** 高危位的后果文案（仅高危位有；审批弹层据此红色强调，见 HIGH_RISK_PERMISSIONS） */
+  riskKey?: string
 }
 
-/** 14 项桌面端权限元数据注册表 */
+/**
+ * 高危权限位（ADR 0020 审批裁决 3：整单批准 + 高位视觉强调）
+ *
+ * 判据是「一旦授予即可在用户机器上执行任意代码 / 读写他人数据」：
+ * 进程执行、伪终端创建（等价于任意命令）、终端输入（注入执行）、主库面（内含
+ * 设备/信任/设置等他方数据）。清单固定，变更需同步 risk 文案与弹层行为。
+ */
+export const HIGH_RISK_PERMISSIONS: readonly string[] = [
+  'process:run',
+  'pty:spawn',
+  'terminal:input',
+]
+
+/** 权限元数据注册表（覆盖 SDK 词汇表全部条目；未知权限回退原始串，见 getPermissionMeta） */
 const PERMISSION_META: Record<string, PermissionMeta> = {
   storage: {
     emoji: '💾',
@@ -105,26 +110,28 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '⌨️',
     titleKey: 'desktop.plugin.perm.terminal:input.title',
     descKey: 'desktop.plugin.perm.terminal:input.desc',
+    riskKey: 'desktop.plugin.perm.terminal:input.risk',
   },
   'terminal:output': {
     emoji: '📺',
     titleKey: 'desktop.plugin.perm.terminal:output.title',
     descKey: 'desktop.plugin.perm.terminal:output.desc',
   },
-  'terminal:observe': {
-    emoji: '👁️',
-    titleKey: 'desktop.plugin.perm.terminal:observe.title',
-    descKey: 'desktop.plugin.perm.terminal:observe.desc',
-  },
   'session:read': {
     emoji: '📄',
     titleKey: 'desktop.plugin.perm.session:read.title',
     descKey: 'desktop.plugin.perm.session:read.desc',
   },
-  'session:write': {
-    emoji: '✏️',
-    titleKey: 'desktop.plugin.perm.session:write.title',
-    descKey: 'desktop.plugin.perm.session:write.desc',
+  // 票 04：`host-connection` 独立原语的判据位（读宿主 server 在册连接）
+  'connection:read': {
+    emoji: '🔌',
+    titleKey: 'desktop.plugin.perm.connection:read.title',
+    descKey: 'desktop.plugin.perm.connection:read.desc',
+  },
+  'session:config': {
+    emoji: '🛠️',
+    titleKey: 'desktop.plugin.perm.session:config.title',
+    descKey: 'desktop.plugin.perm.session:config.desc',
   },
   'ui:sidebar': {
     emoji: '📋',
@@ -141,6 +148,31 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.ui:toolbox.title',
     descKey: 'desktop.plugin.perm.ui:toolbox.desc',
   },
+  'ui:settings': {
+    emoji: '⚙️',
+    titleKey: 'desktop.plugin.perm.ui:settings.title',
+    descKey: 'desktop.plugin.perm.ui:settings.desc',
+  },
+  'ui:statusbar': {
+    emoji: '📊',
+    titleKey: 'desktop.plugin.perm.ui:statusbar.title',
+    descKey: 'desktop.plugin.perm.ui:statusbar.desc',
+  },
+  'ui:dialog': {
+    emoji: '🪟',
+    titleKey: 'desktop.plugin.perm.ui:dialog.title',
+    descKey: 'desktop.plugin.perm.ui:dialog.desc',
+  },
+  'ui:pageToolbar': {
+    emoji: '🧷',
+    titleKey: 'desktop.plugin.perm.ui:pageToolbar.title',
+    descKey: 'desktop.plugin.perm.ui:pageToolbar.desc',
+  },
+  'ui:fileHandler': {
+    emoji: '🗂️',
+    titleKey: 'desktop.plugin.perm.ui:fileHandler.title',
+    descKey: 'desktop.plugin.perm.ui:fileHandler.desc',
+  },
   'network:http': {
     emoji: '🌐',
     titleKey: 'desktop.plugin.perm.network:http.title',
@@ -156,15 +188,90 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.fs:write.title',
     descKey: 'desktop.plugin.perm.fs:write.desc',
   },
-  fileservice: {
+  'fs:pick': {
     emoji: '🗂️',
-    titleKey: 'desktop.plugin.perm.fileservice.title',
-    descKey: 'desktop.plugin.perm.fileservice.desc',
+    titleKey: 'desktop.plugin.perm.fs:pick.title',
+    descKey: 'desktop.plugin.perm.fs:pick.desc',
   },
   broadcast: {
     emoji: '📩',
     titleKey: 'desktop.plugin.perm.broadcast.title',
     descKey: 'desktop.plugin.perm.broadcast.desc',
+  },
+  'timer:schedule': {
+    emoji: '⏱️',
+    titleKey: 'desktop.plugin.perm.timer:schedule.title',
+    descKey: 'desktop.plugin.perm.timer:schedule.desc',
+  },
+  'process:run': {
+    emoji: '⚡',
+    titleKey: 'desktop.plugin.perm.process:run.title',
+    descKey: 'desktop.plugin.perm.process:run.desc',
+    riskKey: 'desktop.plugin.perm.process:run.risk',
+  },
+  'app:cli': {
+    emoji: '🔗',
+    titleKey: 'desktop.plugin.perm.app:cli.title',
+    descKey: 'desktop.plugin.perm.app:cli.desc',
+  },
+  peer: {
+    emoji: '📡',
+    titleKey: 'desktop.plugin.perm.peer.title',
+    descKey: 'desktop.plugin.perm.peer.desc',
+  },
+  mdns: {
+    emoji: '🔍',
+    titleKey: 'desktop.plugin.perm.mdns.title',
+    descKey: 'desktop.plugin.perm.mdns.desc',
+  },
+  'ws:client': {
+    emoji: '🔌',
+    titleKey: 'desktop.plugin.perm.ws:client.title',
+    descKey: 'desktop.plugin.perm.ws:client.desc',
+  },
+  'ws:server': {
+    emoji: '🛰️',
+    titleKey: 'desktop.plugin.perm.ws:server.title',
+    descKey: 'desktop.plugin.perm.ws:server.desc',
+  },
+  auth: {
+    emoji: '🔑',
+    titleKey: 'desktop.plugin.perm.auth.title',
+    descKey: 'desktop.plugin.perm.auth.desc',
+  },
+  'pty:spawn': {
+    emoji: '🖥️',
+    titleKey: 'desktop.plugin.perm.pty:spawn.title',
+    descKey: 'desktop.plugin.perm.pty:spawn.desc',
+    riskKey: 'desktop.plugin.perm.pty:spawn.risk',
+  },
+  'pty:io': {
+    emoji: '⌨️',
+    titleKey: 'desktop.plugin.perm.pty:io.title',
+    descKey: 'desktop.plugin.perm.pty:io.desc',
+  },
+  'task:run': {
+    emoji: '🧵',
+    titleKey: 'desktop.plugin.perm.task:run.title',
+    descKey: 'desktop.plugin.perm.task:run.desc',
+  },
+  // 票 03（host-crypto）：crypto 三权限位（crypto:aead / asym / kdf）。
+  // 密钥由宿主托管，算法运算是中危能力——不进 HIGH_RISK_PERMISSIONS，
+  // 按「高危位才带 risk 文案」不变量，不设 riskKey。
+  'crypto:aead': {
+    emoji: '🔐',
+    titleKey: 'desktop.plugin.perm.crypto:aead.title',
+    descKey: 'desktop.plugin.perm.crypto:aead.desc',
+  },
+  'crypto:asym': {
+    emoji: '🔑',
+    titleKey: 'desktop.plugin.perm.crypto:asym.title',
+    descKey: 'desktop.plugin.perm.crypto:asym.desc',
+  },
+  'crypto:kdf': {
+    emoji: '🔁',
+    titleKey: 'desktop.plugin.perm.crypto:kdf.title',
+    descKey: 'desktop.plugin.perm.crypto:kdf.desc',
   },
 }
 
@@ -188,13 +295,41 @@ export function getContributionChips(plugin: PluginInfo): ContributionChip[] {
 }
 
 /** 获取权限元数据（未知权限回退原始字符串） */
-export function getPermissionMeta(perm: string): { emoji: string; title: string; desc: string } {
+export function getPermissionMeta(perm: string): {
+  emoji: string
+  title: string
+  desc: string
+  risk?: string
+} {
   const t = i18n.global.t
   const meta = PERMISSION_META[perm]
   if (!meta) {
     return { emoji: '🔐', title: perm, desc: t('desktop.plugin.perm.unknown') }
   }
-  return { emoji: meta.emoji, title: t(meta.titleKey), desc: t(meta.descKey) }
+  return {
+    emoji: meta.emoji,
+    title: t(meta.titleKey),
+    desc: t(meta.descKey),
+    risk: meta.riskKey ? t(meta.riskKey) : undefined,
+  }
+}
+
+/**
+ * 是否为高危权限位（审批弹层红色强调 + 后果文案）
+ *
+ * 真源是 [`HIGH_RISK_PERMISSIONS`]；弹层只对命中的位追加风险行，其余位不出现红色元素。
+ */
+export function isHighRiskPermission(perm: string): boolean {
+  return HIGH_RISK_PERMISSIONS.includes(perm)
+}
+
+/** 是否为「待人工批准」状态（未确认权限清单，启用前需审批）
+ *
+ * 比较线上值：宿主 `PluginState` 序列化为 camelCase（见 `./types.ts` 头注），
+ * PascalCase 分支永远命中不了，审批前置门禁会退化成死代码。
+ */
+export function isNeedsApproval(state: PluginState): boolean {
+  return state.state === 'needsApproval'
 }
 
 /** 详细信息行（详情页"详细信息"折叠区使用） */
@@ -225,54 +360,50 @@ export function getDetailRows(
   ]
 }
 
-/** 获取插件状态 i18n key */
+/** 获取插件状态 i18n key（按线上 camelCase 值分支，词表见 `./types.ts`） */
 export function getStateKey(state: PluginState): string {
-  if (state.state === 'Error') return 'desktop.plugin.error'
-  if (state.state === 'Activated') return 'desktop.plugin.activated'
-  if (state.state === 'Degraded') return 'desktop.plugin.degraded'
-  if (state.state === 'Activating') return 'desktop.plugin.activating'
-  if (state.state === 'NeedsApproval') return 'desktop.plugin.needsApproval'
-  if (state.state === 'Loaded') return 'desktop.plugin.loaded'
-  if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
+  if (state.state === 'error') return 'desktop.plugin.error'
+  if (state.state === 'activated') return 'desktop.plugin.activated'
+  if (state.state === 'degraded') return 'desktop.plugin.degraded'
+  if (state.state === 'activating') return 'desktop.plugin.activating'
+  if (state.state === 'needsApproval') return 'desktop.plugin.needsApproval'
+  if (state.state === 'loaded') return 'desktop.plugin.loaded'
+  if (state.state === 'deactivated') return 'desktop.plugin.deactivated'
   return 'desktop.plugin.loaded'
 }
 
 /** 判断插件是否为激活状态 */
 export function isActivated(state: PluginState): boolean {
-  return state.state === 'Activated'
+  return state.state === 'activated'
 }
 
 /** 判断插件是否为降级态（activate 成功但 on_startup 失败：实例在运行，启动初始化未完成） */
 export function isDegraded(state: PluginState): boolean {
-  return state.state === 'Degraded'
-}
-
-/** 获取降级原因（on_startup 失败信息） */
-export function getDegradedMessage(state: PluginState): string {
-  return state.state === 'Degraded' ? state.error || '' : ''
+  return state.state === 'degraded'
 }
 
 /**
- * 判断实例是否在运行（Activated 或 Degraded）。
+ * 判断实例是否在运行（activated 或 degraded）。
  *
  * Degraded 实例 activate 成功且 phase 3 扩展点注册已完成，仅 on_startup 失败 ——
  * 对「运行中」语义（列表已启用分区归属、启停开关 ON 态、配置入口放行）应视为运行；
  * 依据 spec §5.1 开放问题裁决：功能门禁先放行 + UI 降级标识。
- * 注意 `is_activated()` 后端 API 门禁仍严格 Activated，本函数只用于前端展示/入口归类。
+ * 注意后端 `is_activated()` API 门禁仍严格要求 activated（Rust 侧 `PluginState::Activated`），
+ * 本函数只用于前端展示/入口归类。
  */
 export function isRunning(state: PluginState): boolean {
-  return state.state === 'Activated' || state.state === 'Degraded'
+  return state.state === 'activated' || state.state === 'degraded'
 }
 
 /** 判断插件是否为错误状态 */
 export function isErrorState(state: PluginState): boolean {
-  return state.state === 'Error'
+  return state.state === 'error'
 }
 
-/** 错误信息 */
-export function getErrorMessage(state: PluginState): string {
-  return state.state === 'Error' ? state.error || '' : ''
-}
+// 票 03 / ADR 0030 决定 11：`getErrorMessage` / `getDegradedMessage` 已删除。
+// `PluginState.error` 是宿主侧的**诊断事实**（完整错误串），曾被列表项、tooltip、
+// 详情页直接渲染——技术详情因此出现在用户界面。现在用户面只出徽标 + 通用文案
+// （降级带应用名参数，文案 `errors.host.plugin.degraded`），详情只留在宿主日志。
 
 // 字节数 / 时间戳格式化已收敛到 @/utils/format，此处 import + re-export
 // 保持既有调用（模块内与 PluginDetailView 等）不断链

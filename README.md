@@ -4,10 +4,10 @@
 
 # BedCode
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
@@ -16,9 +16,11 @@
 
 BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端会话（Pi、Opencode 等 Agent CLI），手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管你的终端。任意命令行程序（含 TUI 应用）都可以在桌面端启动、从手机远程操作。
 
-插件系统是另一核心能力：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Auto Task（Agent 任务队列）、File Transfer（局域网文件互传）三个开箱即用的插件。
+插件系统是另一核心能力：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Terminal Session（桌面端会话中心 / 移动端远程终端 BedCode）、File Transfer（局域网文件互传）、Agent Hub（桌面端 Agent CLI 管理台）等开箱即用的插件。
 
 > 使用场景：如应用名所述，躺床上编程；或在家务、带孩子、睡觉的同时处理或监控开发编程任务。
+
+> **⚠️ 重要变更**：经过底层重构后，项目转向了更大的目标 —— 构建 **WasmNest** 平台，BedCode 仅仅作为其中运行的一个应用。因此 **3.0.0 将是最后一个更新的版本**，之后项目将会迁移，并拆分成 WasmNest 系列项目。
 
 ## 功能特性
 
@@ -38,32 +40,47 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 - **终端输出** — 双端均采用 xterm.js 模拟终端，以获取原生终端的输出显示体验；提供字体、显示主题配置
 - **终端输入** — 桌面端与系统原生终端输入体验一致；移动端提供快捷键配置（Tab、Ctrl+C、Esc、方向键）、常用命令配置、Agent CLI 快捷命令、快捷键预配置等一系列优化移动端终端输入体验的功能
 - **代码浏览器** — 移动端终端内提供项目文件浏览侧边栏、源码语法高亮、Git diff 渲染、分支切换等配合代码开发的功能
-- **任务自动化（插件）** — 双端开启 Auto Task 插件后，可在终端添加多个任务自动执行，任务状态持久化；目前适配 pi / Claude Code / Codex / opencode
+- **任务自动化（插件）** — 会话中心插件内置 Agent 任务队列：可为终端添加多个任务自动执行，任务状态持久化，提供预设任务、定时任务与历史统计，agent 请求授权时自动放行；目前适配 pi / Claude Code / Codex / opencode
+
+### 移动端宿主壳（Android 式平台）
+
+移动端从「单页终端 + 设置」演进为 **Android 式宿主壳**（路由 `/mobile/shell`）：主屏图标网格与壁纸、最近任务、下拉通知栏、权限管理总览与审批入口、应用详情页、底部胶囊与屏幕栈。
+
+宿主壳自身只提供三类能力：**运行面挂载与生命周期**（渲染位 / 胶囊 / 屏幕栈）、**平台机制与安全闸门**（外观 / 语言 / 字号缩放 / 主屏壁纸 / 通知栏 / 权限总览与审批 / 出站授权 / 链路加密 / 生物凭证）、**跨应用公共组件**（文件浏览器等）。终端、文件、会话、设备、AI 等**业务页面全部由 WASM 应用**经 `registerSurface` / `registerSlot` 注册运行面挂载，宿主壳不实现业务。旧四页宿主 UI 已退役，新功能默认落在壳内。
 
 ### 插件系统
 
 - **插件管理** — 双端插件均可热插拔，即启即用、即停即止；支持设置插件自定义配置项
-- **现有插件** — 双端内置相同插件集：AI Chatbox 两端互相独立，其余两个为关联插件
+- **现有插件** — 双端共享同一插件契约与运行机制，按平台裁剪内置插件集
 
 <table>
 <thead>
-<tr><th align="left">插件</th><th align="left">版本</th><th align="left">说明</th></tr>
+<tr><th align="left">插件</th><th align="left">版本</th><th align="left">端</th><th align="left">说明</th></tr>
 </thead>
 <tbody>
 <tr>
 <td><strong>AI&nbsp;Chatbox</strong></td>
 <td>1.0.0-beta</td>
-<td>AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘</td>
+<td>双端</td>
+<td>AI 大模型对话：接入任意 OpenAI 兼容 / Anthropic / Gemini 供应商，流式对话、思考模式与推理强度可调、多会话管理、JSONL 对话日志落盘</td>
 </tr>
 <tr>
-<td><strong>Auto&nbsp;Task</strong></td>
+<td><strong>Terminal&nbsp;Session<br>/&nbsp;BedCode</strong></td>
 <td>1.0.0-beta</td>
-<td>Agent 任务队列与自动化执行：适配 Claude Code / pi / opencode / Codex；提供任务状态、任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行等功能</td>
+<td>双端</td>
+<td>桌面端为会话中心：配对与信任、会话配置与生命周期编排、Agent 任务队列与 hooks 集成的单一权威（会话事实真源）；移动端为远程终端控制端 BedCode：订阅桌面会话输出、移动输入、任务面板</td>
 </tr>
 <tr>
 <td><strong>File&nbsp;Transfer</strong></td>
 <td>1.0.0-beta</td>
-<td>内网文件传输：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问</td>
+<td>双端</td>
+<td>内网文件传输（对等网络直连）：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问</td>
+</tr>
+<tr>
+<td><strong>Agent&nbsp;Hub</strong></td>
+<td>0.1.0</td>
+<td>桌面</td>
+<td>Agent CLI 统一管理台：环境检测与一键安装 / 卸载、Skills 管理、供应商统一配置、使用统计与会话日志解析（开发中）</td>
 </tr>
 </tbody>
 </table>
@@ -77,7 +94,7 @@ vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错�
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
 <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">
-  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode 架构图 — 桌面主机 · 移动端远程 · WASM 插件沙箱">
+  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode 架构图 — 桌面主机 · 移动端远程 · wasm-core 微内核与 WASM 插件沙箱">
 </a>
 
 <sub>📈 交互式版本：支持深色 / 浅色主题、节点聚焦、路由追踪、导出分享卡 —— <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">打开</a> · 源文件：<a href="docs/diagrams/bedcode-overall-architecture.json">archify JSON IR</a>（<a href="https://github.com/tt-a1i/archify">Archify</a> 渲染）</sub>
@@ -90,17 +107,19 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 <tr>
 <td><strong>桌面端</strong></td>
 <td>会话管理器、终端预览、服务器视图、插件配置</td>
-<td>PTY、Actix Web（HTTP + WS）、会话管理、WASM 插件系统、mDNS 广播</td>
+<td>PTY 引擎、Actix Web（HTTP + WS）、wasm-core 微内核与 WASM 插件系统、mDNS 广播（会话事实真源在 terminal-session 插件）</td>
 </tr>
 <tr>
 <td><strong>移动端</strong></td>
-<td>终端视图、代码浏览器、预设任务、工具箱、设备发现</td>
-<td>WS/HTTP 客户端、远程连接与路由、文件服务、mDNS 发现</td>
+<td>宿主壳（主屏 / 最近任务 / 通知栏 / 权限 / 应用详情）、WASM 应用运行面</td>
+<td>WS 客户端、远程连接与路由、对等网络（P2P）、SAF 文件服务、mDNS 发现</td>
 </tr>
 </tbody>
 </table>
 
 通信：**WebSocket**（终端双向流）+ **HTTP REST API**（插件 hooks、文件服务）。图中 `<───>` 即两端对应模块间的跨设备链路。
+
+底座按「无业务微内核」收敛：内核只含应用无关的通用引擎原语（进程 / 网络 / 存储 / 安全 / 通信）+ wasmtime 运行时，一切产品概念（会话、终端、设备连接、文件传输、AI）都是 WASM 插件，经 `host-*` 原语、消息总线、事件与插件互调与内核交互（边界裁决见 ADR 0022）。双端共用**一套插件机制内核**（`packages/bedcode-wasm-core`，单 crate 单形态，WIT 绑定归各端宿主），能力域与传输面拆为仓库根 `packages/bedcode-*` 共享引擎 crate，宿主只做薄壳接线。
 
 ## 技术栈
 
@@ -118,8 +137,8 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 <tr><td>认证</td><td>JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹</td></tr>
 <tr><td>加密</td><td>X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS</td></tr>
 <tr><td>设备发现</td><td>mDNS（mdns-sd）</td></tr>
-<tr><td>插件系统</td><td>wasmtime（WASM 组件运行时）</td></tr>
-<tr><td>其他</td><td>shiki（代码高亮）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志</td></tr>
+<tr><td>插件系统</td><td>wasmtime 48（WASM 组件运行时）</td></tr>
+<tr><td>其他</td><td>shiki（代码高亮）、ECharts（服务器指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志</td></tr>
 </tbody>
 </table>
 
@@ -151,7 +170,7 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.95（wasmtime 48 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)）
 
@@ -175,20 +194,25 @@ cd bedcode-desktop && pnpm run test:run          # 前端（vitest run）
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
-## 插件开发
+## wasm 应用开发
 
-插件基于 **wasmtime 运行时（WASM Component Model）**：Rust 后端编译为 WASM 组件，TypeScript 前端独立构建，二者随 `plugin.json` 清单一起放入宿主 resources 目录，在沙箱内加载运行。插件可观察并扩展宿主的会话与系统能力：
+> 术语：本仓把「插件」一律称为 **wasm 应用**（源码住 `wasm-apps/`）；但机制内核与运行时的
+> 标识符保留 `plugin` 原词（`plugin.json` / `PluginManager` / `host-*` 原语 / WIT 包 `bedcode:plugin`），
+> 以与 wasmtime / 行业术语一致。
 
-- **WASM 沙箱运行时** — 资源受限、内存隔离，插件崩溃不影响宿主
-- **动态加载** — 扫描 `{plugin-id}/plugin.json` 运行时加载，即装即用、无需重编译宿主
-- **宿主 API 桥接** — wit 接口定义契约，wit-bindgen 按 trait 自动生成胶水层 ABI；前端与 WASM 后端以同一套接口调用宿主能力（终端、会话、存储、事件总线、文件系统等）
+wasm 应用基于 **wasmtime 运行时（WASM Component Model）**：Rust 后端编译为 WASM 组件，TypeScript 前端独立构建，二者随 `plugin.json` 清单一起放入宿主 resources 目录，在沙箱内加载运行。应用可观察并扩展宿主的会话与系统能力：
+
+- **WASM 沙箱运行时** — 资源受限、内存隔离，应用崩溃不影响宿主
+- **动态加载** — 扫描 `{id}/plugin.json` 运行时加载，即装即用、无需重编译宿主
+- **宿主 API 桥接** — WIT 接口定义契约（包 semver `bedcode:plugin@0.2.0`），wit-bindgen 按 trait 自动生成胶水层 ABI；前端与 WASM 后端以同一套接口调用宿主能力（终端、会话、存储、事件总线、文件系统等）
 - **权限模型** — manifest 声明所需权限，宿主加载时校验并逐项授权，越权调用直接拒绝
 
-移动端与桌面端架构一致（同为 WASM 组件 + 前端产物双形态），仅宿主能力面按平台裁剪（如移动端 SAF 文件访问、桌面端 PTY）。
+移动端与桌面端架构一致（同为 WASM 组件 + 前端产物双形态），仅宿主能力面按平台裁剪（如移动端 SAF 文件访问、桌面端 PTY）。两端 wasm 应用源码目录**均名 `wasm-apps/`**。
 
-> 📖 开发指南：[桌面端插件开发](bedcode-desktop/plugin-dev-desktop.md) ｜ [移动端插件开发](bedcode-mobile/plugin-dev-mobile.md) —— 从零创建插件的完整流程（工程结构、manifest 声明、前后端开发、构建打包、真机验证）
+> 📖 开发指南：[桌面端 wasm 应用开发](bedcode-desktop/wasm-app-dev-desktop.md) ｜ [移动端 wasm 应用开发](bedcode-mobile/wasm-app-dev-mobile.md) —— 从零创建应用的完整流程（工程结构、manifest 声明、前后端开发、构建打包、真机验证）；
+> API 与扩展点参考 [docs/knowledge/wasm-app-dev-guide.md](bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md)，开发红线清单 [docs/knowledge/wasm-app-development-checklist.md](docs/knowledge/wasm-app-development-checklist.md)
 
-### 插件开发 SDK
+### wasm 应用开发 SDK
 
 - **[`@binblink/bedcode-plugin-sdk-desktop`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-desktop)** / **[`@binblink/bedcode-plugin-sdk-mobile`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-mobile)**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
@@ -201,8 +225,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 **正在开发（未发布）**
 
-- **wasm核心改造** — 插件子系统重构为 WASM 内核五模块骨架（`core-config` / `core-monitor` / `core-security` / `core-bus` / `core-plugin-manager`），mDNS 等基础能力下沉为 `host-*` 原语；WIT 契约双端同步演进（ABI 桌面 10→11 / 移动 8→9），旧插件保持兼容。当前 `wasm核心改造` 分支推进中
-- **Agent Hub 插件** — 多个 Agent CLI（claude / codex / opencode / pi）的统一可视化管理：环境检测与一键安装、Skills 管理、供应商统一配置、使用统计；auto-task 能力将来并入。磁盘清理插件暂停开发，位置由 Agent Hub 顶替
+- **Agent Hub 插件** — 多个 Agent CLI（claude / codex / opencode / pi）的统一可视化管理：环境检测与一键安装 / 卸载、Skills 管理、供应商统一配置、使用统计与会话日志解析。桌面端已随包内置 0.1.0，持续开发中
 
 **规划中**
 
@@ -210,8 +233,8 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 **架构演进**
 
-- **wasm核心改造后的架构调整** — 底座向无业务内核收敛：内核收束为进程 / 网络 / 存储 / 安全 / 通信五类引擎原语 + wasmtime 运行时，能力经 `host-*` 原语下沉到插件层，业务编排一律在插件（ADR 0022 裁剪线）。路线见 `.scratch/plugin-kernel-roadmap`，终态见 `.scratch/platform-kernel`
-- **Wasmtime 微内核 · 插件化演进** — 宿主持续向微内核收敛：wasmtime 沙箱 + 组件加载器 + 认证通信是不可切割的核心，其余能力（终端、文件服务、AI Chatbox、Auto Task、File Transfer、磁盘清理）均以 WASM 插件形态热插拔。插件运行于 WASM Component Model + wasmtime 沙箱之上，已接入 WASI preview2（文件系统 / 预打开目录）。随 WASI 标准完善（网络、时钟、进程等系统接口标准化），插件将在安全沙箱内获得近原生系统能力，且保持跨宿主可移植、跨语言、跨平台开发——宿主无需重编译即可引入新能力
+- **无业务底座内核** — 底座向无业务内核收敛：内核收束为进程 / 网络 / 存储 / 安全 / 通信五类引擎原语 + wasmtime 运行时，能力经 `host-*` 原语下沉到插件层，业务编排一律在插件（ADR 0022 裁剪线）。机制内核已收为**单 crate 单形态**（`packages/bedcode-wasm-core`，ADR 0045 / 0049），能力域与传输面拆为仓库根 `packages/bedcode-*` 共享引擎 crate（ADR 0035 / 0040–0052）；契约改用 WIT 包 semver（`bedcode:plugin@0.2.0`），整数 ABI 已退役（ADR 0051）。路线见 [`docs/knowledge/plugin-kernel-roadmap.md`](docs/knowledge/plugin-kernel-roadmap.md)，终态见 [`docs/knowledge/businessless-kernel-vision.md`](docs/knowledge/businessless-kernel-vision.md)
+- **WasmNest 平台化** — 底座持续向「通用 WASM 应用宿主」收敛：wasmtime 沙箱 + 组件加载器 + 认证通信是不可切割的核心，其余能力（终端、文件服务、AI Chatbox、Agent Hub、File Transfer）均以 WASM 插件形态热插拔。插件运行于 WASM Component Model + wasmtime 沙箱之上，已接入 WASI preview2（文件系统 / 预打开目录）。随 WASI 标准完善（网络、时钟、进程等系统接口标准化），插件将在安全沙箱内获得近原生系统能力，且保持跨宿主可移植、跨语言、跨平台开发——宿主无需重编译即可引入新能力
 
 ## 插件化+AI 有没有搞头？
 

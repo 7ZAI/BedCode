@@ -7,7 +7,6 @@ pub use bedcode_plugin_api_mobile::types::PluginManifest;
 pub use bedcode_plugin_api_mobile::types::*;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// 插件来源
 #[derive(Debug, Clone, PartialEq)]
@@ -26,76 +25,16 @@ pub enum PluginSource {
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     pub state: bedcode_plugin_api_mobile::types::PluginState,
-    pub granted_permissions: HashSet<String>,
     /// 插件来源
     pub source: PluginSource,
     /// 插件目录路径（包含 plugin.json 的目录）
     pub extension_path: String,
 }
 
-/// 插件生命周期事件
-///
-/// 统一的事件枚举，供 PluginManager::dispatch_lifecycle_event() 使用。
-/// 每个变体携带触发点传入的上下文数据。
-#[derive(Debug, Clone)]
-pub enum PluginLifecycleEvent {
-    AppStartup,
-    AppShutdown,
-    AuthSuccess,
-    Disconnect { reason: String },
-    SessionCreated { session_id: String },
-    SessionStopped { session_id: String },
-    TerminalInput { session_id: String, data: String },
-    TerminalOutput { session_id: String, data: String },
-}
-
-impl PluginLifecycleEvent {
-    /// 返回声明字段名（用于 is_declared 检查）
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::AppStartup => "onStartup",
-            Self::AppShutdown => "onShutdown",
-            Self::AuthSuccess => "onAuthSuccess",
-            Self::Disconnect { .. } => "onDisconnect",
-            Self::SessionCreated { .. } => "onSessionCreated",
-            Self::SessionStopped { .. } => "onSessionStopped",
-            Self::TerminalInput { .. } => "onTerminalInput",
-            Self::TerminalOutput { .. } => "onTerminalOutput",
-        }
-    }
-
-    /// 返回前端 Tauri 事件名（不含 plugin:lifecycle: 前缀）
-    pub fn tauri_event_name(&self) -> &'static str {
-        match self {
-            Self::AppStartup => "appStartup",
-            Self::AppShutdown => "appShutdown",
-            Self::AuthSuccess => "authSuccess",
-            Self::Disconnect { .. } => "disconnect",
-            Self::SessionCreated { .. } => "sessionCreated",
-            Self::SessionStopped { .. } => "sessionStopped",
-            Self::TerminalInput { .. } => "terminalInput",
-            Self::TerminalOutput { .. } => "terminalOutput",
-        }
-    }
-
-    /// 转为前端 Tauri 事件 payload
-    pub fn to_payload(&self) -> serde_json::Value {
-        match self {
-            Self::AppStartup | Self::AppShutdown | Self::AuthSuccess => {
-                serde_json::json!({})
-            }
-            Self::Disconnect { reason } => {
-                serde_json::json!({ "reason": reason })
-            }
-            Self::SessionCreated { session_id } | Self::SessionStopped { session_id } => {
-                serde_json::json!({ "sessionId": session_id })
-            }
-            Self::TerminalInput { session_id, data } | Self::TerminalOutput { session_id, data } => {
-                serde_json::json!({ "sessionId": session_id, "data": data })
-            }
-        }
-    }
-}
+/// 插件生命周期事件（真源 = fork crate `manager::types`，批次 2b 迁入；
+/// 此处 re-export 保 `crate::plugin::types::PluginLifecycleEvent` 路径——
+/// handler/auth.rs 与 connection/manager.rs 的分发面零改动）
+pub use bedcode_wasm_core::manager::types::PluginLifecycleEvent;
 
 /// 返回给前端的插件信息
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,231 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createWebHistory } from 'vue-router'
+import i18n from '@/locales'
+import SettingsView from '@/views/SettingsView.vue'
+import { getPluginRegistry } from '@/plugin/registry'
+import type { PluginContext } from '@/plugin/types'
+import { invoke } from '@tauri-apps/api/core'
+import { toast } from 'vue-sonner'
+import { useUpdateChecker } from '@/composables/useUpdateChecker'
+
+// Mock Tauri APIs（设置 store / 更新检查均经 invoke）
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === 'get_app_settings') {
+      return {
+        network: { port: 8765 },
+        ui: { theme: 'system', language: 'zh-CN', animations_enabled: true },
+        log: { level: 'info' },
+      }
+    }
+    return undefined
+  }),
+  convertFileSrc: vi.fn((p: string) => p),
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async () => () => {}),
+}))
+
+vi.mock('@tauri-apps/plugin-os', () => ({
+  platform: vi.fn(async () => 'windows'),
+}))
+
+// toast 只需「被调用 + 参数」，渲染交给 vue-sonner 自身（本组不测 toast 外观）
+vi.mock('vue-sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() },
+}))
+
+/**
+ * 设置页渲染测试 — 分组合并渲染的外部可见行为
+ *
+ * 断言渲染出的分组标题序列（外部可见输出），而非内部函数：
+ * 未注册贡献时与改造前逐分组等价；贡献分组按 order 落到正确位置；
+ * 插件 error 态后设置页回落到纯内置形态（兜底壳，不残留空分组）。
+ */
+describe('SettingsView 分组渲染', () => {
+  const registry = getPluginRegistry()
+
+  /** 内置分组标题 key（顺序与写死的分组组件一一对应）；
+   * 已退役内置分组：`settings.pairing.title`（票 14，配对分组改由 com.bedcode.terminal-session
+   * 贡献）与 `settings.session.title`（会话默认值分组随域下沉同一插件）；
+   * 2026-09-27 新增 `settings.authorization.title`（应用授权二级入口，order 700） */
+  const BUILTIN_TITLE_KEYS = [
+    'settings.ui.title',
+    'settings.linkCrypto.title',
+    'settings.system.title',
+    'settings.log.title',
+    'settings.authorization.title',
+    'settings.about.title',
+  ]
+  const BUILTIN_TITLES = BUILTIN_TITLE_KEYS.map((k) => i18n.global.t(k))
+
+  let router: ReturnType<typeof createRouter>
+
+  async function mountView(): Promise<VueWrapper> {
+    const wrapper = mount(SettingsView, {
+      global: {
+        plugins: [createPinia(), i18n, router],
+      },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  /** 渲染出的分组标题文本（按 DOM 顺序） */
+  function titles(wrapper: VueWrapper): string[] {
+    return wrapper.findAll('h3.wb-section-title').map((h) => h.text().trim())
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    router = createRouter({
+      history: createWebHistory(),
+      routes: [
+        // 应用授权分组的 router-link 目标（缺它会在挂载时告警「无名路由」）
+        {
+          path: '/settings/authorization',
+          name: 'settings-authorization',
+          component: { template: '<div />' },
+        },
+        { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+      ],
+    })
+  })
+
+  afterEach(() => {
+    registry.clearPlugin('com.bedcode.terminal-session')
+  })
+
+  /** 最小 context 桩（新契约：贡献分组只在插件有前端 context 时渲染卡片正文） */
+  function makeContext(): PluginContext {
+    return { id: 'com.bedcode.terminal-session', _disposables: [] } as unknown as PluginContext
+  }
+
+  it('未注册贡献时渲染 6 个内置分组，标题序列与内置分组定义一致', async () => {
+    const wrapper = await mountView()
+    expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
+  })
+
+  it('贡献分组按 order 落到内置分组之间，标题取插件命名空间文案', async () => {
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
+    /* 真实时序：loader 在 activate 前把 context 预登记进注册表（两次都在贡献面渲染前），
+       测试需同步补齐，否则 keyed Provider 判「无 context」不渲染卡片正文 */
+    registry.setContext('com.bedcode.terminal-session', makeContext())
+    // 插件文案按「插件 id + 扁平点号 key」合并（与 context.i18n.registerMessages 同一形态）；
+    // 覆盖 zh-CN / zh / en 三种 locale 取值，避免受设置 store 的语言默认值影响
+    for (const locale of ['zh-CN', 'zh', 'en']) {
+      i18n.global.mergeLocaleMessage(locale, {
+        'com.bedcode.terminal-session.pairing.settings.title': '终端会话与设备',
+      })
+    }
+    registry.registerSettingsSection('com.bedcode.terminal-session', {
+      id: 'session-settings',
+      titleKey: 'pairing.settings.title',
+      order: 150,
+      component: { template: '<div data-testid="plugin-body">plugin body</div>' },
+    })
+
+    const wrapper = await mountView()
+    const rendered = titles(wrapper)
+    // order 150：插到「界面」与「链路加密」之间，标题取插件自身命名空间文案
+    expect(rendered[0]).toBe(BUILTIN_TITLES[0])
+    expect(rendered[1]).toBe('终端会话与设备')
+    expect(rendered[2]).toBe(BUILTIN_TITLES[1])
+    expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(true)
+  })
+
+  it('插件进入 error 态后贡献分组被摘除，设置页回落到纯内置形态', async () => {
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'activated' })
+    registry.setContext('com.bedcode.terminal-session', makeContext())
+    registry.registerSettingsSection('com.bedcode.terminal-session', {
+      id: 'session-settings',
+      titleKey: 'pairing.settings.title',
+      order: 150,
+      component: { template: '<div data-testid="plugin-body">plugin body</div>' },
+    })
+    const wrapper = await mountView()
+    expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(true)
+
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'error', error: 'wasm trap' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(false)
+    expect(titles(wrapper)).toEqual(BUILTIN_TITLES)
+  })
+})
+
+/**
+ * 「检查更新」按钮的反馈契约
+ *
+ * 调用方（SettingsView.handleCheckUpdate）按 `!r && status==='latest'` 弹
+ * 「已是最新版本」——若 checkForUpdate 在无更新时返回**真值对象**（而非 null），
+ * 该分支永不成立，点击「检查更新」就静默无反应（本用例锁的就是这条）。
+ */
+describe('设置页「检查更新」按钮', () => {
+  let router: ReturnType<typeof createRouter>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.mocked(toast.info).mockClear()
+    vi.mocked(toast.error).mockClear()
+    // useUpdateChecker 的 status 是模块级单例 ref：上一条用例留下的终态会改掉
+    // 按钮文案（「检查更新」→「已是最新版本」），跨用例必须复位
+    useUpdateChecker().status.value = 'idle'
+    router = createRouter({
+      history: createWebHistory(),
+      routes: [
+        { path: '/settings/authorization', name: 'settings-authorization', component: { template: '<div />' } },
+        { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+      ],
+    })
+  })
+
+  async function mountAndClickCheck(): Promise<void> {
+    const wrapper = mount(SettingsView, { global: { plugins: [createPinia(), i18n, router] } })
+    await flushPromises()
+    const btn = wrapper.findAll('button').find((b) => b.text().includes(i18n.global.t('settings.about.checkUpdate')))
+    expect(btn, '工具栏必须有「检查更新」按钮').toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+  }
+
+  it('已是最新版本 → 弹 info 提示（不静默无反应）', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_app_settings') {
+        return { network: { port: 8765 }, ui: { theme: 'system', language: 'zh-CN', animations_enabled: true }, log: { level: 'info' } }
+      }
+      if (cmd === 'check_for_update') return { available: false, version: null, date: null }
+      return undefined
+    })
+
+    await mountAndClickCheck()
+
+    expect(vi.mocked(toast.info)).toHaveBeenCalledWith(
+      i18n.global.t('settings.about.alreadyLatest'),
+      expect.anything(),
+    )
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  it('检查失败 → 弹 error 提示（且不弹「已是最新」）', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_app_settings') {
+        return { network: { port: 8765 }, ui: { theme: 'system', language: 'zh-CN', animations_enabled: true }, log: { level: 'info' } }
+      }
+      if (cmd === 'check_for_update') throw new Error('network is unreachable')
+      return undefined
+    })
+
+    await mountAndClickCheck()
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      i18n.global.t('settings.about.checkFailed'),
+      expect.anything(),
+    )
+    expect(vi.mocked(toast.info)).not.toHaveBeenCalled()
+  })
+})

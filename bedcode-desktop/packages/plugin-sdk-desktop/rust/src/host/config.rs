@@ -24,6 +24,13 @@ pub enum ConfigKey {
     /// wasm32-unknown-unknown 无法感知宿主 OS，需要按平台选择命令包装
     /// （如 inline 命令 sh -c vs cmd /C）的插件经此获取。
     OsPlatform,
+    /// 配对码有效期（秒，十进制字符串；v19 追加，票 14）
+    ///
+    /// 真源是宿主 `settings` 表的 `pairing_code_ttl` 键；写入走 `host-auth`
+    /// `auth-setting-set`（键白名单同两键），本枚举只提供读取通道。
+    PairingCodeTtl,
+    /// 二维码（QR token）有效期（秒，十进制字符串；v19 追加，票 14）
+    QrTokenTtl,
 }
 
 impl ConfigKey {
@@ -33,6 +40,8 @@ impl ConfigKey {
         ConfigKey::HomeDir,
         ConfigKey::CurrentTimeMs,
         ConfigKey::OsPlatform,
+        ConfigKey::PairingCodeTtl,
+        ConfigKey::QrTokenTtl,
     ];
 
     /// 线上协议字符串（host function 传参格式）
@@ -42,6 +51,8 @@ impl ConfigKey {
             ConfigKey::HomeDir => "home_dir",
             ConfigKey::CurrentTimeMs => "system.time_ms",
             ConfigKey::OsPlatform => "os.platform",
+            ConfigKey::PairingCodeTtl => "pairing_code_ttl",
+            ConfigKey::QrTokenTtl => "qr_token_ttl",
         }
     }
 
@@ -52,6 +63,8 @@ impl ConfigKey {
             "home_dir" => Some(ConfigKey::HomeDir),
             "system.time_ms" => Some(ConfigKey::CurrentTimeMs),
             "os.platform" => Some(ConfigKey::OsPlatform),
+            "pairing_code_ttl" => Some(ConfigKey::PairingCodeTtl),
+            "qr_token_ttl" => Some(ConfigKey::QrTokenTtl),
             _ => None,
         }
     }
@@ -75,6 +88,9 @@ mod tests {
         assert_eq!(ConfigKey::HomeDir.as_str(), "home_dir");
         assert_eq!(ConfigKey::CurrentTimeMs.as_str(), "system.time_ms");
         assert_eq!(ConfigKey::OsPlatform.as_str(), "os.platform");
+        // 票 14：与 `host-auth` `auth-setting-set` 的键白名单同字面量（读写同键）
+        assert_eq!(ConfigKey::PairingCodeTtl.as_str(), "pairing_code_ttl");
+        assert_eq!(ConfigKey::QrTokenTtl.as_str(), "qr_token_ttl");
     }
 
     #[test]
@@ -85,13 +101,16 @@ mod tests {
     }
 
     #[test]
-    fn test_all_contains_exactly_four_keys() {
+    fn test_all_contains_exactly_six_keys() {
         // 白名单即枚举本身：ALL 必须穷尽全部变体，新增配置项时此处同步断言
-        assert_eq!(ConfigKey::ALL.len(), 4);
+        assert_eq!(ConfigKey::ALL.len(), 6);
         assert!(ConfigKey::ALL.contains(&ConfigKey::NetworkPort));
         assert!(ConfigKey::ALL.contains(&ConfigKey::HomeDir));
         assert!(ConfigKey::ALL.contains(&ConfigKey::CurrentTimeMs));
         assert!(ConfigKey::ALL.contains(&ConfigKey::OsPlatform));
+        // 票 14：认证域两键（配对码 / QR 有效期），写侧走 host-auth auth-setting-set
+        assert!(ConfigKey::ALL.contains(&ConfigKey::PairingCodeTtl));
+        assert!(ConfigKey::ALL.contains(&ConfigKey::QrTokenTtl));
     }
 
     #[test]

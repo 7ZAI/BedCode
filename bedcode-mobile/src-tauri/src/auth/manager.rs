@@ -177,19 +177,9 @@ impl AuthManager {
         }
     }
 
-    /// 获取设备 ID
-    pub async fn get_device_id(&self) -> String {
-        self.device_id.read().await.clone()
-    }
-
     /// 获取设备唯一 ID 哈希（跨卸载重装稳定，供桌面端合并配对记录）
     pub async fn get_uid_hash(&self) -> Option<String> {
         self.uid_hash.read().await.clone()
-    }
-
-    /// 获取设备名称
-    pub async fn get_device_name(&self) -> Option<String> {
-        self.device_name.read().await.clone()
     }
 
     /// 设置设备名称
@@ -259,10 +249,10 @@ impl AuthManager {
             );
             crate::state::update_link_crypto_pin(Some(kd.clone()));
         }
-        let _ = self
-            .connection
-            .event_tx()
-            .send(MobileEvent::LinkCryptoPin { kd_public_b64, kd_fingerprint });
+        let _ = self.connection.event_tx().send(MobileEvent::LinkCryptoPin {
+            kd_public_b64,
+            kd_fingerprint,
+        });
 
         let _ = self
             .connection
@@ -289,13 +279,8 @@ impl AuthManager {
         {
             Ok(data) => {
                 // reauth 返回刷新后的新 token：refresh 语义，写回凭据与全局
-                self.apply_auth_success(
-                    data.token,
-                    fingerprint,
-                    data.kd_public_b64,
-                    data.kd_fingerprint,
-                )
-                .await;
+                self.apply_auth_success(data.token, fingerprint, data.kd_public_b64, data.kd_fingerprint)
+                    .await;
                 tracing::info!("[authenticate] HTTP re-authentication successful");
                 Ok(true)
             }
@@ -365,19 +350,10 @@ impl AuthManager {
             fingerprint: &fingerprint,
             uid_hash: uid_hash.as_deref(),
         };
-        match self
-            .http
-            .verify_pairing_code(&base_url, ctx, code, &address)
-            .await
-        {
+        match self.http.verify_pairing_code(&base_url, ctx, code, &address).await {
             Ok(data) => {
-                self.apply_auth_success(
-                    data.token,
-                    fingerprint,
-                    data.kd_public_b64,
-                    data.kd_fingerprint,
-                )
-                .await;
+                self.apply_auth_success(data.token, fingerprint, data.kd_public_b64, data.kd_fingerprint)
+                    .await;
                 Ok(true)
             }
             Err(AppError::Auth(msg)) => {
@@ -411,19 +387,10 @@ impl AuthManager {
             fingerprint: &fingerprint,
             uid_hash: uid_hash.as_deref(),
         };
-        match self
-            .http
-            .qr_connect(&base_url, ctx, token, &address)
-            .await
-        {
+        match self.http.qr_connect(&base_url, ctx, token, &address).await {
             Ok(data) => {
-                self.apply_auth_success(
-                    data.token,
-                    fingerprint,
-                    data.kd_public_b64,
-                    data.kd_fingerprint,
-                )
-                .await;
+                self.apply_auth_success(data.token, fingerprint, data.kd_public_b64, data.kd_fingerprint)
+                    .await;
                 Ok(true)
             }
             Err(AppError::Auth(msg)) => {
@@ -486,13 +453,8 @@ impl AuthManager {
             .await
         {
             Ok(data) => {
-                self.apply_auth_success(
-                    data.token,
-                    fingerprint,
-                    data.kd_public_b64,
-                    data.kd_fingerprint,
-                )
-                .await;
+                self.apply_auth_success(data.token, fingerprint, data.kd_public_b64, data.kd_fingerprint)
+                    .await;
                 tracing::info!("[authenticate_with_biometric] Biometric authentication successful");
                 Ok(true)
             }
@@ -657,7 +619,11 @@ fn derive_identity_from_uid(uid: &str) -> (String, String, String) {
     let fingerprint_hash = hex::encode(Sha256::digest(format!("bedcode-fingerprint:{}", uid).as_bytes()));
     let uid_hash = hex::encode(Sha256::digest(format!("bedcode-uid:{}", uid).as_bytes()));
     // 取前 32 字符保证与旧 UUID 长度风格一致（36 字符左右），便于日志阅读
-    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string(), uid_hash[..32].to_string())
+    (
+        device_hash[..32].to_string(),
+        fingerprint_hash[..32].to_string(),
+        uid_hash[..32].to_string(),
+    )
 }
 
 /// 验证生物认证签名（绑定自检用，与桌面端 verify_biometric_signature 算法一致）

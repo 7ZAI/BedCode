@@ -17,15 +17,52 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
 
+/**
+ * 组件装配角色（manifest `type` 字段，core-plugin-manager · ADR 0032）
+ *
+ * 三层加载顺序固定 `L1 → L2 → L3`：
+ * - `basic-service`（L1）：引擎域组件，提供 host-* 同形能力，最先激活；
+ * - `internal-business`（L2）：宿主网关的裁决依赖方（宿主**主动调它**）；
+ * - `business-app`（L3）：业务应用面，缺省。
+ *
+ * 历史拼写 `system` / `application` 仍被宿主按别名解析（只影响反序列化），
+ * 新声明一律用上面的三个值。
+ */
+export type PluginKind = 'basic-service' | 'internal-business' | 'business-app'
+
+/**
+ * 实例生命周期策略（manifest `lifecycle` 字段，ADR 0032）
+ *
+ * 正交于装配角色：角色管「装配在哪一层」，本字段管「实例活多久」。
+ * `ephemeral` = 业务 worker（无页面、即用即弃；存在理由是避开 wasm 线性内存
+ * 单调增长撞单实例限额）。**本期只预留类型**，宿主加载期与构建链均显式拒绝声明。
+ */
+export type InstanceLifecycle = 'persistent' | 'ephemeral'
+
+/**
+ * 适配平台（manifest `platform` 字段，必填）
+ *
+ * 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+ * 宿主在加载 / zip 安装期按本端校验：桌面拒 `mobile`、移动拒 `desktop`，
+ * `both` 两端均可装载（真源 SDK `rust/src/types.rs::PluginPlatform`）。
+ */
+export type PluginPlatform = 'desktop' | 'mobile' | 'both'
+
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
   id: string
   name: string
   version: string
+  /**
+   * 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+   *
+   * **必填**（与 id/name/version 同档）：宿主加载 / 安装时校验声明必须覆盖
+   * 当前端，不匹配即 fail-visible 拒绝装载。
+   */
+  platform: PluginPlatform
   description: string
   author: string
   main: string
-  sandbox: 'inline' | 'isolated'
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
@@ -33,6 +70,95 @@ export interface PluginManifest {
   icon?: string
   permissions: string[]
   contributes: PluginContributes
+  /**
+   * 组件装配角色：`basic-service`（L1）/ `internal-business`（L2）/
+   * `business-app`（L3，缺省）。缺省 L3，旧插件零迁移。
+   */
+  type?: PluginKind
+  /**
+   * 实例生命周期策略：`persistent`（缺省）/ `ephemeral`（即用即弃 worker）
+   *
+   * `ephemeral` 目前**只预留类型**（ADR 0032 §6）：宿主的一次性实例机制与
+   * 调度框架未落地，声明即在加载期与构建链被显式拒绝（不静默当常驻处理）。
+   */
+  lifecycle?: InstanceLifecycle
+  /**
+   * 能力依赖声明（应用插件消费的能力名，WIT host-* 接口名）
+   *
+   * 宿主激活时校验：每个依赖必须已有提供者（宿主原语或已激活的 L1 基础服务），
+   * 缺失即激活失败并指明能力名。缺省空数组 = 无依赖。
+   */
+  dependencies?: string[]
+  /**
+   * 单插件 Store 资源上限覆盖请求（core-config × core-security）
+   *
+   * 重型插件可请求更大的燃料预算/线性内存；未设置的字段继承内核配置。
+   * 最终值由宿主安全模块仲裁：逐字段取 min（请求值、内核配置值、编译期
+   * 硬上限）——插件只能自我收紧，放宽请求被钳回上限。缺省 = 全部继承。
+   */
+  resourceOverrides?: ResourceOverrides
+  /**
+   * 单插件在册 `host-pty` 句柄数上限声明（会话引擎下沉 P1 / H1）
+   *
+   * 缺省 = 内核默认档（8 条）。业务会话由插件经 `host-pty.spawn` 自持 PTY 后，
+   * 「用户可开多少终端」是属主插件的产品档位，不再是单一内核常量。
+   * 区间上限由宿主内核常量仲裁（越界在**加载期**拒绝、不夹取）；构建期只校形态。
+   */
+  ptyQuota?: number
+  /**
+   * WASI 预打开目录声明（manifest `wasiPreopenDirs`，**仅 worker 类别可用**，ADR 0034）
+   *
+   * 主 wasm-app 文件访问一律走宿主 `host-fs` 授权机制（manifest permissions 声明
+   * `fs:read` / `fs:write`，目录经 `fs_request_auth` / preauth 授权并持久化），不再
+   * 使用 WASI preopen。本字段为 worker 类别（`lifecycle: ephemeral`，ADR 0032 L3.b
+   * 预留）保留：worker 未实现期间（ephemeral 本身被拒）它对一切 manifest 不可达——
+   * 非 worker 声明在构建期与宿主加载期双侧显性拒绝。
+   *
+   * 条目两形态：裸路径字符串 = 可写挂载（既有形态，零迁移）；
+   * `{ path, readonly: true }` = 只读挂载。宿主实例化时逐项过授权
+   * （无弹窗的 is_granted）后才挂载，未授权目录无论哪一档都挂不上——
+   * 只读档收紧的是 guest 的写能力，不是免授权通道。
+   *
+   * 缺省空 = 无预打开。支持 `${home}` 展开为主目录。
+   */
+  wasiPreopenDirs?: WasiPreopenDir[]
+}
+
+/**
+ * 一条 WASI 预打开目录声明（manifest `wasiPreopenDirs` 的对象形态）
+ *
+ * `readonly` 缺省 = 可写，与改造前行为一致；只有显式 `true` 才挂只读档。
+ * 未知字段会被宿主判为非法条目（整份 manifest 解析失败），不要往里加键。
+ */
+export interface WasiPreopenDirDecl {
+  /** 主机路径，支持 `${home}` 前缀 */
+  path: string
+  /** `true` = 只读挂载；缺省 / `false` = 可写 */
+  readonly?: boolean
+}
+
+/** WASI 预打开目录声明条目：裸路径（可写）或 `{ path, readonly }` 对象 */
+export type WasiPreopenDir = string | WasiPreopenDirDecl
+
+/**
+ * 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）
+ *
+ * 字段可选：未设置即继承内核配置；设置即请求值，宿主仲裁后生效
+ * （见 `PluginManifest.resourceOverrides`）。
+ */
+export interface ResourceOverrides {
+  /** 单次导出调用燃料预算（指令数） */
+  fuelPerCall?: number
+  /** 线性内存上限（字节） */
+  maxMemoryBytes?: number
+  /** 表元素上限 */
+  maxTableEntries?: number
+  /** 单 Store 核心实例数上限 */
+  maxInstances?: number
+  /** 单 Store 线性内存数量上限 */
+  maxMemories?: number
+  /** 单 Store 表数量上限 */
+  maxTables?: number
 }
 
 /** 插件配置声明 */
@@ -57,9 +183,27 @@ export interface PluginContributes {
   terminal?: TerminalContribution
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  /**
+   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单 + 认证档位，票 08）。
+   * 条目为相对路径段（不含 `/api/plugin/<插件 id>/` 前缀）。宿主**只认声明**：未声明
+   * 的路径 404，未声明清单等于没有 HTTP 面（票据 03 的「前缀内 ANY 放行」过渡策略已退役）。
+   * 条目可写成对象以声明档位；缺 `auth` 即最严档 `jwt`，免凭证必须逐条显式写 `none`。
+   */
+  httpEndpoints?: HttpEndpointContribution[]
+  wsEndpoints?: WsEndpointContribution[]
   configuration?: PluginConfiguration
   lifecycle?: LifecycleContribution
 }
+
+/** HTTP 端点认证档位（与 WS 端点注册面同一张词汇表，票 08） */
+export type EndpointAuthTier = 'none' | 'jwt'
+
+/**
+ * 一条 HTTP 端点声明：纯路径段（档位取宿主最严缺省）或带 `auth` 的对象形态。
+ * 与 Rust 侧 `HttpEndpointContribution`（serde untagged）逐形对应。
+ */
+export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
+export type WsEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {
@@ -114,9 +258,9 @@ export interface SidebarPanelDescriptor {
    * 与宿主内置菜单共用同一图标体系，可包含多个 M 子路径组合成完整图标 */
   icon?: string
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
-   * 与宿主内置菜单（终端会话 100 / 服务器 200 / 设备 300 / 插件 400 / 设置 700）共用同一排序空间，
-   * 可指定任意值插入到内置菜单项之间（如 150 位于"终端会话"与"服务器"之间）；
-   * 同值按注册先后排列 */
+   * 宿主内置菜单只剩恒最末的插件管理(9998) / 设置(9999)（业务槽位已随票 13/14
+   * 下沉插件，宿主无内置业务入口）；插件目录按自身 order 排布，同域其余项取 +1/+10。
+   * 同值按注册先后排列。 */
   order?: number
   component: any
 }
@@ -130,6 +274,22 @@ export interface ToolboxPageDescriptor {
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
    * 与宿主内置菜单共用同一排序空间，可插入任意内置项之间 */
   order?: number
+  component: any
+}
+
+/** 设置分组描述符（插件往宿主设置页贡献一个分组，需 `ui:settings` 权限） */
+export interface SettingsSectionDescriptor {
+  id: string
+  /** 分组标题的 i18n key，相对插件自身命名空间
+   * （宿主按 `${pluginId}.${titleKey}` 解析，与 `context.i18n.t` 同一前缀规则；
+   * 未注册该 key 时 vue-i18n 回退显示 key 本身） */
+  titleKey: string
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
+  icon?: string
+  /** 排序值，升序排列（越小越靠前），缺省与其余贡献面一致（600）。
+   * 与宿主内置分组共用同一排序空间，可指定任意值插入内置分组之间；同值按注册先后排列 */
+  order?: number
+  /** 分组内容组件：只渲染卡片正文，外层 `<section>` 与标题由宿主统一渲染（保证与内置分组像素一致） */
   component: any
 }
 
@@ -283,18 +443,58 @@ export interface SessionAPI {
   list(): Promise<any[]>
   get(sessionId: string): Promise<any>
   onStatusChange(handler: (event: any) => void): Disposable
+  /**
+   * 预测宿主终端窗口的初始网格（宿主窗口几何 + 字体测量 + 整体缩放）。
+   *
+   * 供插件在启动会话前把 `cols` / `rows` 交给 `create-with-spec`——终端窗口本体、
+   * 创建尺寸与渲染管线留宿主（spec D3），预测规则必须与窗口创建规则同源，故留在
+   * 宿主一处实现而不在插件复刻。任一环节不可用（非 Tauri 环境 / 字体未就绪）返回
+   * `null`，调用方不传尺寸、由宿主兜底默认网格。
+   */
+  predictTerminalSize(): Promise<{ cols: number; rows: number } | null>
+  /**
+   * 打开（或聚焦）宿主终端窗口——宿主既有路由深链 `/terminal-window/:sessionId`。
+   *
+   * 窗口几何、贴靠、就绪事件与关闭一律留宿主；插件只触发，不自建窗口、不自带渲染管线。
+   *
+   * @returns `true` = 新建窗口（尚在就绪中，调用方宜显示 loading）；`false` = 既有窗口已聚焦
+   */
+  openTerminal(session: { id: string; name: string }): Promise<boolean>
+  /**
+   * 关闭宿主终端窗口（幂等：窗口不存在时静默返回）。
+   *
+   * 会话停止 / 删除时由调用方触发——「何时该关窗」是插件侧的编排决策。
+   */
+  closeTerminal(sessionId: string): Promise<void>
+  /**
+   * 该会话是否已有打开的终端窗口（宿主窗口登记事实，同步）。
+   *
+   * 调用方据此决定「先聚焦（无需 loading）还是新建（显示就绪 loading）」——
+   * 与宿主会话页原行为同口径。
+   */
+  isTerminalOpen(sessionId: string): boolean
 }
 
 /** UI 注册表（需 ui:* 权限） */
 export interface UIRegistry {
   registerSidebarPanel(panel: SidebarPanelDescriptor): Disposable
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
+  /**
+   * 注册一个可由插件页路由直达、但**不进入侧边栏菜单**的页面
+   * （viewType 'page'，宿主全量注册表可见、sidebar/toolbox 菜单投影不含）。
+   * 仍经 `/plugin/sidebar/:pluginId/:viewId` 路由渲染——适合「从某页内进入的
+   * 二级页面 / 深链直达」场景（票 14 收尾：连接历史不再占侧边栏，改经设备列表入口）。
+   * order 字段在非菜单页面无排序意义，可省略。
+   */
+  registerPage(page: SidebarPanelDescriptor): Disposable
   registerStatusBarItem(item: StatusBarItemDescriptor): Disposable
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
+  /** 往宿主设置页贡献一个分组（见 SettingsSectionDescriptor；权限 ui:settings） */
+  registerSettingsSection(section: SettingsSectionDescriptor): Disposable
   /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
   showDialog(options: PluginDialogOptions): PluginDialogHandle
 }
@@ -316,12 +516,6 @@ export interface StorageAPI {
 /** HTTP API（需 network:http 权限） */
 export interface HttpAPI {
   registerEndpoint(path: string, handler: RequestHandler): Disposable
-}
-
-/** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
-export interface SystemAPI {
-  /** 在系统文件管理器中显示文件/目录（Windows 资源管理器选中、macOS Finder Reveal） */
-  revealInDir(path: string): Promise<void>
 }
 
 /** 国际化 API — 插件访问宿主 i18n 能力 */
@@ -347,8 +541,6 @@ export interface PluginContext {
   readonly http: HttpAPI
   /** 国际化 API */
   readonly i18n: I18nAPI
-  /** 系统 API（需 system:open 权限） */
-  readonly system: SystemAPI
   /** 内部：所有 Disposable 收集器 */
   readonly _disposables: Disposable[]
 }
@@ -377,16 +569,19 @@ export type PluginDevMock = Record<string, unknown>
 /** 插件运行时状态
  *
  * 与宿主侧 `bedcode-desktop/src/plugin/types.ts` 为双写副本，修改任一文件必须同步另一份。
- * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）。
+ * 线协议真源 = 共享内核 crate `packages/bedcode-wasm-core/src/manifest.rs` 的
+ * `PluginState`（`#[serde(tag = "state", rename_all = "camelCase")]`）——宿主命令返回
+ * 的 JSON 是 camelCase（`{state:'activated'}` / `{state:'needsApproval'}` …），
+ * 插件前端消费状态时必须按线上值分支。
  */
 export type PluginState =
-  | { state: 'Loaded' }
-  | { state: 'Activating' }
-  | { state: 'Activated' }
-  | { state: 'Degraded'; error: string }
-  | { state: 'NeedsApproval' }
-  | { state: 'Error'; error: string }
-  | { state: 'Deactivated' }
+  | { state: 'loaded' }
+  | { state: 'activating' }
+  | { state: 'activated' }
+  | { state: 'degraded'; error: string }
+  | { state: 'needsApproval' }
+  | { state: 'error'; error: string }
+  | { state: 'deactivated' }
 
 /** 插件信息（从后端获取） */
 export interface PluginInfo {
@@ -396,7 +591,6 @@ export interface PluginInfo {
   description: string
   author: string
   main: string
-  sandbox: string
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string

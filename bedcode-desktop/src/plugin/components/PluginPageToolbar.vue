@@ -4,12 +4,12 @@
     <button
       v-for="item in items"
       :key="`${item.pluginId}:${item.id}`"
-      class="wb-btn-ghost"
+      class="wb-btn-ghost shrink-0 whitespace-nowrap !text-[calc(11px*var(--ui-scale))]"
       :title="item.label"
       @click="item.onClick?.()"
     >
       <span v-if="item.icon" class="w-3.5 h-3.5 plugin-icon">{{ item.icon }}</span>
-      <span v-else class="text-xs">{{ item.label }}</span>
+      <span v-else>{{ item.label }}</span>
     </button>
   </template>
 </template>

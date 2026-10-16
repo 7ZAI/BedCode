@@ -1,0 +1,56 @@
+/**
+ * 应用页签面板停靠过渡（票 2026-10-10：全量 UI 下沉 —— app 域页签容器）
+ *
+ * 形态：页签式切页，**同屏只允许一页可见**。非当前页完全停在屏外一侧
+ * （translateX(±100%)）并 visibility: hidden，由容器 overflow 裁切。
+ *
+ * 为什么不做半屏叠放：面板自身没有背景，半屏停靠时相邻页会从当前页背后透出来，
+ * 表现为「页面重叠 / 两页同时可见」；且停靠面板还会溢出容器压到头部与导航上。
+ * 与任务页三面板的停靠同一形态（task/toolbox.css::att-tab-panel-*）：
+ * 非当前页隐藏 + 位移过渡，只保留仅 GPU 合成属性。
+ *
+ * 面板常驻挂载——切页不重挂载，滚动位置与事件订阅得以保留
+ * （与旧宿主 MobileSwipeContainer 的常驻语义一致）。
+ */
+
+.app-tab-panel {
+  position: absolute;
+  inset: 0;
+  /* 默认停在右侧屏外并隐藏；visibility 延迟到位移结束再翻，动画走完才移出命中区 */
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    visibility 0s linear 0.3s;
+}
+
+/* 当前页：立即可见，滑入与显示同步进行 */
+.app-tab-panel--active {
+  transform: translateX(0);
+  visibility: visible;
+  z-index: 1;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+/* 停靠位：已过页停左侧、未到页停右侧（切页的入 / 出场起点） */
+.app-tab-panel--left {
+  transform: translateX(-100%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.app-tab-panel--right {
+  transform: translateX(100%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 尊重系统减弱动效偏好：停靠仍在位，只去掉滑动 */
+@media (prefers-reduced-motion: reduce) {
+  .app-tab-panel,
+  .app-tab-panel--active {
+    transition-duration: 0s;
+    transition-delay: 0s;
+  }
+}

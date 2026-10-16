@@ -25,4 +25,13 @@ pub trait HostApp {
 
     /// 卸载 CLI（幂等）：删除文件 + 移除仅本插件添加的 PATH 条目
     fn cli_uninstall(&self, file_name: &str, bin_dir: &str) -> Result<(), HostError>;
+
+    /// 插件自身资源目录（v25 函数级追加，**无权限门**——只返回调用方自己的安装路径）
+    ///
+    /// 返回本插件安装目录的绝对路径（含随包资源，如 Agent 集成 hook 脚本）。
+    /// 会话创建编排整体移交插件后（session-engine-downsink P1-b）宿主不再产生
+    /// `Creating` 生命周期事件，本方法是插件获取自身资源目录的唯一途径（原由
+    /// 该事件 payload 的 `resource_dir` 字段提供）。
+    /// 宿主服务不可用 / 插件未加载 → `Err`（不静默返回空串）。
+    fn plugin_resource_dir(&self) -> Result<String, HostError>;
 }

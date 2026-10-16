@@ -1,0 +1,66 @@
+/**
+ * 静态首屏（Vue 挂载前的过渡帧）
+ *
+ * 为什么是独立静态文件、且**不能**搬回 index.html 内联 <style>：
+ *
+ *   Tauri v2 在 codegen 期给 index.html 里每个 <style> 打上 nonce 占位符
+ *   （tauri-codegen/src/context.rs → tauri-utils/src/html2.rs `inject_nonce(document,
+ *   "style", STYLE_NONCE_TOKEN)`），运行期再把它换成随机 nonce 并往 CSP 的
+ *   `style-src` 追加 `'nonce-…'`（tauri/src/manager/mod.rs `replace_csp_nonce`）。
+ *   而 CSP3 规定：directive 里一旦出现 nonce-source / hash-source，同一 directive 的
+ *   `'unsafe-inline'` **被忽略** —— 于是所有「运行时用 JS 插入的内联 <style>」全部被
+ *   `style-src-elem` 拒掉（`style.sheet === null`）。本项目四个 wasm 应用的前端样式
+ *   （ft-* / ah-* / session-task-* / md-body）都靠 `document.head.appendChild(style)`
+ *   注入，release 产物里会集体失效——dev 不炸是因为 devCsp 只配了 connect-src，
+ *   `tauri::manager::AppManager::csp()` 在 dev 分支不取 csp，无 nonce 注入。
+ *
+ *   结构锁：src-tauri/tests/capabilities_lock.rs::index_html_has_no_inline_style_or_script
+ *
+ * 放在 public/ 而非并入 src/style.css：src/style.css 由 main.ts 以 JS import 引入，
+ *   dev 期要等 JS 执行才生效；本文件要的是「HTML 一解析就有样式」的静态首屏，
+ *   走 <link> 在 dev / prod 行为一致，且不被 PostCSS/Tailwind 二次加工（字面值是
+ *   style.css token 的手工镜像，保持逐字可控）。
+ *
+ * 此刻 style.css 的 token 与应用内主题设置（SQLite AppConfig）都还没加载，
+ * 只能跟随系统深浅色（与移动端 index.html 静态首屏同源的做法）；
+ * 应用内手动选的主题从 SplashLoading.vue 起才生效。
+ * 下面的浅色字面值是 style.css 浅色 token 的手工镜像（改 token 需同步这里），
+ * 深色分支保持既有 slate 配色不动（与品牌开屏深色的差异属既有状态）。
+ */
+
+/* 系统减弱动态效果时降级为瞬时（与 src/style.css 同款约定） */
+.splash {
+  display: flex;
+  height: 100vh;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid #1e293b;
+  border-top-color: #6366f1;
+  animation: spin 0.8s linear infinite;
+}
+
+/* 浅色系统：镜像 style.css 浅色 token —— 底 #f5f4f0→#efede7（--bg-page→--bg-sidebar），
+   环身 #e4e1d8（--border），前进端 #26231b（--text-primary） */
+@media (prefers-color-scheme: light) {
+  .splash {
+    background: linear-gradient(135deg, #f5f4f0, #efede7);
+  }
+
+  .spinner {
+    border-color: #e4e1d8;
+    border-top-color: #26231b;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

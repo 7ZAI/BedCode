@@ -46,7 +46,39 @@ import { generateManifest } from './manifest-gen.js'
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATE_DIR = join(SDK_ROOT, 'template')
 
+/** 组件化工具 manifest 的仓库内相对路径（工具为仓库级 crate，非 SDK 自带） */
+const COMPONENTIZE_REL = join('packages', 'bedcode-componentize', 'Cargo.toml')
+
 // ==================== 工具函数 ====================
+
+/**
+ * 定位仓库级组件化工具 `packages/bedcode-componentize/Cargo.toml`。
+ *
+ * 不能按固定深度从 SDK 根拼绝对路径：SDK 作为依赖安装时（pnpm 把 `file:` 依赖**复制**进
+ * `node_modules/.pnpm/…`，node 解析入口脚本不会回落到源码目录），那个深度指向包仓库内部
+ * ⇒ manifest 找不到，`cargo run --manifest-path` 直接失败。故自 SDK 根与插件工作目录
+ * 各向上逐级查找 `packages/bedcode-componentize/Cargo.toml`，命中第一个即用；
+ * 两处都找不到时报错并给出获取方式（此时通常意味着插件工程不在本仓库内）。
+ *
+ * @param {string} cwd 插件工程目录（构建时的工作目录）
+ * @returns {string} 组件化工具 manifest 的绝对路径
+ */
+function resolveComponentizeManifest(cwd) {
+  for (const start of [SDK_ROOT, resolve(cwd)]) {
+    let dir = start
+    for (;;) {
+      const candidate = join(dir, COMPONENTIZE_REL)
+      if (existsSync(candidate)) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  throw new Error(
+    `找不到组件化工具 ${COMPONENTIZE_REL}（已自 SDK 目录与插件目录 ${cwd} 向上查找）。` +
+      '该工具是仓库级 crate：插件工程需位于本仓库内，或先把 packages/bedcode-componentize 放到可达路径。',
+  )
+}
 
 /** 解析命令行参数：positional 数组 + flags 映射（--flag value / --flag=value / 布尔 --flag） */
 function parseArgs(argv) {
@@ -89,6 +121,38 @@ function run(cmd, args, cwd) {
     console.error(`[bedcode-plugin] 命令失败 (${cmd} ${args.join(' ')})`)
     process.exit(1)
   }
+}
+
+/** dev-shell 的 vite 入口（存在即代表该 dev-shell 目录已装好依赖） */
+const DEV_SHELL_VITE = 'node_modules/vite/bin/vite.js'
+
+/**
+ * 定位可用的 dev-shell 目录：优先已装依赖的仓库内 SDK 检出。
+ *
+ * 内置插件用 `file:` 说明符依赖 SDK 时，pnpm 把 SDK 硬链注入插件 node_modules：
+ * 注入副本带 dev-shell 源码但不带其 node_modules，直接用它等于每次 dev 都重装一遍。
+ * 插件 package.json 的 `file:` 说明符能指回仓库内 SDK 检出，检出已装依赖时优先用它。
+ * 外部脚手架（npm 发布的 SDK）没有 file: 说明符，走 SDK 自带 dev-shell 自行安装。
+ */
+function resolveDevShellDir(pluginDir) {
+  const bundled = join(SDK_ROOT, 'dev-shell')
+  const installed = (dir) => existsSync(join(dir, DEV_SHELL_VITE))
+  if (installed(bundled)) return bundled
+  // 尽力探测：读不到就退回自带 dev-shell，缺失时由调用方报错（此处不能用 readJson，
+  // 它遇解析失败直接 process.exit，会把 doctor 这类自检命令一起带走）
+  const readPkg = (path) => JSON.parse(readFileSync(path, 'utf-8'))
+  try {
+    const sdkName = readPkg(join(SDK_ROOT, 'package.json')).name
+    const deps = readPkg(join(pluginDir, 'package.json'))
+    const spec = deps.dependencies?.[sdkName] ?? deps.devDependencies?.[sdkName]
+    if (typeof spec === 'string' && spec.startsWith('file:')) {
+      const checkout = join(resolve(pluginDir, spec.slice('file:'.length)), 'dev-shell')
+      if (installed(checkout)) return checkout
+    }
+  } catch {
+    // 忽略：非 file: 依赖（npm 发布包）或读不到说明符
+  }
+  return bundled
 }
 
 /** 递归收集目录下所有文件 */
@@ -305,17 +369,21 @@ function cmdDev(positional, flags) {
     process.exit(1)
   }
 
-  const devShellDir = join(SDK_ROOT, 'dev-shell')
+  const devShellDir = resolveDevShellDir(pluginDir)
   if (!existsSync(devShellDir)) {
     console.error(`[bedcode-plugin] dev-shell 不存在: ${devShellDir}（SDK 包不完整）`)
     process.exit(1)
   }
 
-  // dev-shell 首次运行需要安装自身依赖（vue / vite / tailwind 等）
-  const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
+  // dev-shell 首次运行需要安装自身依赖（vue / vite / tailwind 等）。
+  // 不加任何 pnpm 参数：dev-shell 自带 pnpm-workspace.yaml（packages: - .）既锚定安装
+  // 目录又是 allowBuilds 白名单的载体，而 --ignore-workspace 会连白名单一起忽略，
+  // 导致依赖构建脚本被跳过、pnpm 以 ERR_PNPM_IGNORED_BUILDS 非零退出（pnpm 12 已无
+  // --no-audit / --no-fund，传了直接报未知参数）
+  const viteBin = join(devShellDir, DEV_SHELL_VITE)
   if (!existsSync(viteBin)) {
     console.log('[bedcode-plugin] dev-shell 依赖缺失，正在安装（仅首次）…')
-    run('pnpm', ['install', '--ignore-workspace', '--no-audit', '--no-fund'], devShellDir)
+    run('pnpm', ['install'], devShellDir)
   }
 
   const args = [
@@ -324,6 +392,10 @@ function cmdDev(positional, flags) {
     join(devShellDir, 'vite.config.ts'),
     '--port',
     String(flags.port || 5173),
+    // --force：依赖预构建缓存（dev-shell/node_modules/.vite）会残留插件改名 / 搬目录前的
+    // 绝对路径，vite 重跑优化器时读到即ENOENT，且只对前端返 504、页面空白且不自愈；
+    // 强制忽略缓存重建是唯一自愈手段（dev-shell 启动成本可接受）
+    '--force',
   ]
   // --host：监听局域网（vite 默认仅 localhost），手机浏览器可访问查看页面
   if (flags.host) args.push('--host', typeof flags.host === 'string' ? flags.host : '0.0.0.0')
@@ -551,8 +623,10 @@ function cmdBuild(flags) {
     // 编码为 Component Model 组件（等价 wasm-tools component new）。
     // 工具幂等——产物已是组件（0d 00 01 00）时直接复制，支持增量构建。
     // 迁移 spec §4 S2：产物字节形态 `00 61 73 6d 0d 00 01 00`（模块段在组件头前）
+    // 工具住仓库级 `packages/bedcode-componentize`（file-transfer 单产物后双端
+    // 共用同一编码路径，2026-10-13 自 SDK rust/tools/ 提升）
     console.log('\n[bedcode-plugin] ====== 组件化 WASM (Component Model) ======')
-    const componentizeManifest = join(SDK_ROOT, 'rust/tools/componentize/Cargo.toml')
+    const componentizeManifest = resolveComponentizeManifest(cwd)
     run(
       'cargo',
       ['run', '--release', '--manifest-path', componentizeManifest, '--', wasmPath, '-o', wasmPath],
@@ -667,6 +741,11 @@ const VALID_PERMISSIONS = new Set([
 const VALID_PLUGIN_TYPES = new Set(['wasm', 'ts-only', 'rust', 'rust-ts'])
 const WASM_HASH_RE = /^sha256-[0-9a-f]{64}$/i
 
+// 适配平台取值域（manifest `platform`，必填，与 id/name/version 同档）。
+// 真源是 SDK rust/src/types.rs::PluginPlatform（serde rename_all = "lowercase"）；
+// 宿主加载 / 安装期按本端校验：移动拒 desktop、桌面拒 mobile，both 两端均可。
+const VALID_PLATFORMS = new Set(['desktop', 'mobile', 'both'])
+
 function cmdValidate(flags) {
   const dir = resolve(process.cwd(), flags.dir || '.')
   const manifestPath = join(dir, 'plugin.json')
@@ -695,11 +774,18 @@ function cmdValidate(flags) {
     errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
   }
 
-  // 必填字段
-  for (const field of ['name', 'version', 'main', 'pluginType', 'permissions', 'contributes']) {
+  // 必填字段（platform 与 id/name/version 同档：宿主反序列化无缺省，缺失即拒装）
+  for (const field of ['name', 'version', 'platform', 'main', 'pluginType', 'permissions', 'contributes']) {
     if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
       errors.push(`缺少必填字段: ${field}`)
     }
+  }
+
+  // platform 取值域（拼写与宿主端门禁词汇同源；未知取值在宿主反序列化即拒）
+  if (manifest.platform && !VALID_PLATFORMS.has(manifest.platform)) {
+    errors.push(
+      `platform 非法: "${manifest.platform}"（允许: ${[...VALID_PLATFORMS].join(' / ')}）`,
+    )
   }
 
   // pluginType / rustLibrary / wasmHash
@@ -795,11 +881,11 @@ function cmdDoctor() {
   }
 
   // dev-shell 依赖（dev 命令就绪性）
-  const devVite = join(SDK_ROOT, 'dev-shell/node_modules/vite/bin/vite.js')
+  const devShellVite = join(resolveDevShellDir(process.cwd()), DEV_SHELL_VITE)
   add(
     'dev-shell 依赖（dev 命令）',
-    existsSync(devVite),
-    existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装',
+    existsSync(devShellVite),
+    existsSync(devShellVite) ? '已安装' : '首次运行 dev 命令时自动安装',
   )
 
   // SDK dist（file: 依赖的插件需要）

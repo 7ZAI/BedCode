@@ -6,7 +6,7 @@
  * 开发模式统一构建脚本，委托给各插件的构建系统
  *
  * 用法：node scripts/plugin-dev.js [--plugin <plugin-id>]
- * 默认构建 auto-task 插件
+ * 默认构建 com.bedcode.terminal-session（终端会话中心）插件
  */
 
 import { spawn } from 'child_process'
@@ -19,22 +19,26 @@ const __dirname = dirname(__filename)
 const ROOT = resolve(__dirname, '..')
 const IS_WIN = platform() === 'win32'
 
-// 插件配置 — 指向合并后的插件工程目录
+// 插件配置 — 指向合并后的插件工程目录（wasm 应用源码目录 wasm-apps/）
 const PLUGINS = {
-  'com.bedcode.ai-chatbox': {
-    pluginDir: 'plugins/ai-chatbox',
+  // 与 plugin-build.js 同表同序（docs/commands.md §5.2 记的 agent-hub 独立命令）
+  'com.bedcode.agent-hub': {
+    pluginDir: 'wasm-apps/agent-hub',
   },
-  'com.bedcode.auto-task': {
-    pluginDir: 'plugins/auto-task',
+  'com.bedcode.ai-chatbox': {
+    pluginDir: 'wasm-apps/ai-chatbox',
   },
   'com.bedcode.file-transfer': {
-    pluginDir: 'plugins/file-transfer',
+    pluginDir: 'wasm-apps/file-transfer',
+  },
+  'com.bedcode.terminal-session': {
+    pluginDir: 'wasm-apps/terminal-session',
   },
 }
 
 // 解析参数
 const args = process.argv.slice(2)
-let targetPlugin = 'com.bedcode.auto-task'
+let targetPlugin = 'com.bedcode.terminal-session'
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--plugin' && args[i + 1]) {
     targetPlugin = args[i + 1]

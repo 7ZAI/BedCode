@@ -17,10 +17,12 @@ export async function initSharedRuntime(options: SharedRuntimeOptions): Promise<
   const vue = await import('vue')
   const vueI18n = await import('vue-i18n')
   const piniaMod = await import('pinia')
+  const sonner = await import('vue-sonner')
   ;(window as any)[SHARED_KEY] = {
     vue,
     'vue-i18n': vueI18n,
     pinia: options.pinia,
+    'vue-sonner': sonner,
     i18n: options.i18n,
     router: options.router,
   }

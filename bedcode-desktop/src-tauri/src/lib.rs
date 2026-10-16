@@ -1,29 +1,48 @@
 //! BedCode Desktop - Library Entry Point
 
+// 私有项单测必须留在 crate 内（集成测试只见 pub API）：
+// `mark_first_context_menu_connect` / `forget_context_menu_label` 是本文件的私有 fn。
+// 另两个源码扫描锁（能力层 / CSP 锁、热路径日志锁）不触碰任何 crate 内部符号，
+// 已下沉到 `tests/capabilities_lock.rs` / `tests/hot_path_logging_lock.rs` —— 搬得动
+// 的搬走，这里只留搬不动的。
+#[cfg(all(test, target_os = "linux"))]
+mod native_context_menu_test;
+
 // ==================== Domain Modules ====================
 
 pub mod commands;
-pub mod db;
-pub mod enums;
-pub mod events;
-pub mod mdns;
-pub mod peer_migration;
-pub mod peer_net;
-pub mod peer_receive;
-pub mod peer_remote;
-pub mod peer_transfer;
+pub mod crypto;
+// 第一方免弹窗归属清单（产品数据真源，票 08/P0-2；判定逻辑在 wasm-core）
+pub mod first_party_dirs;
+// 宿主侧插件能力面（能力域端口 adapter / 强制引用行 / 白名单条目同处）——
+// 票 02 批次 02 起：域实现搬进 `packages/` 能力 crate 后，宿主侧的接线落这里
 pub mod plugin;
-pub mod process;
-pub mod pty;
 pub mod server;
-pub mod session;
 pub mod system;
 pub mod utils;
 
+// ==================== 整核抽出垫片（wasm-core-whole-crate） ====================
+// wasm_core / db / pty 已迁入 `bedcode-wasm-core` crate（.scratch/
+// 2026-10-06-wasm-core-whole-crate/spec.md）；以下 `pub use` 垫片保持既有
+// `crate::wasm_core::*` / `crate::db::*` 路径零改动编译通过（spec §4.3 D3）。
+// 反双份锁见 tests/（整核抽出结构锁）。`enums` 垫片已随无消费者整体退役
+// （2026-10-10：真源在 SDK `bedcode-plugin-api::wire`）。
+//
+// **`pty` 不在再导出名单里**：host-pty 能力域（引擎 + WIT 接线 + 域机制）已整面迁到
+// `bedcode-pty-engine`（pty-capability-domain 票 D1/D3），内核不再有 PTY 面可垫；
+// 调用点一律写显式路径 `bedcode_pty_engine::plugin_binding::*`。宿主侧端口 adapter
+// 自票 02 批次 02 起落 `crate::plugin::pty`（原 wasm-core `host_api/pty.rs`）。
+pub use bedcode_wasm_core as wasm_core;
+pub use bedcode_wasm_core::db;
+
+// 桥接基准工程的 Channel 传输面（**仅 debug 构建**：release 产物不含本命令面，
+// 闸门锁见本模块 tests::bench_channel_surface_stays_debug_only）
+#[cfg(debug_assertions)]
+mod bench_channel;
+
 // ==================== Re-exports ====================
 
-use commands::system::RunningSessionInfo;
-use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+use crate::server::peer_net_cmds;
 pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
@@ -31,7 +50,6 @@ pub use system::{AppConfig, AppContext, AppError, Result};
 use db::Database;
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::Mutex;
 
 /// 删除当天已存在的日志文件（仅 dev 构建调用）
 ///
@@ -141,6 +159,128 @@ where
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
 
+/// 前端插件通道会话的生命周期钩子（审计票 06）
+///
+/// 页面加载重置**该 webview** 的 loader 会话密钥与全部插件令牌：宿主前端 bootstrap 会在导入
+/// 任何插件模块之前重新取得密钥，而插件代码只在模块被导入后才开始运行——「首个调用者生效」
+/// 因此恒由宿主前端赢得；dev 下页面刷新也能重新取得（否则刷新后插件前端全部拿不到凭证）。
+///
+/// **按 webview 分区**（2026-09-26）：本钩子对每个 webview（主窗口 / 终端窗口 / 未来任何
+/// 独立窗口）都触发，凭证表按 label 分域——否则终端窗口加载会回收主窗口凭证，使主窗口插件面
+/// 命令全数被拒（`缺少有效通道凭证`）。详见 `security::frontend_channel` 模块注释。
+fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::<tauri::Wry>::new("bedcode-frontend-channel")
+        .on_page_load(|webview, payload| {
+            let Some(plugin_host) = webview
+                .app_handle()
+                .try_state::<std::sync::Arc<crate::wasm_core::manager::host::PluginHost>>()
+            else {
+                // 页面加载早于 setup 装配 PluginHost（不应发生）：留痕不 panic
+                tracing::warn!("[PluginChannel] page load before PluginHost managed, session not reset");
+                return;
+            };
+            tracing::debug!(
+                webview = %webview.label(),
+                url = %payload.url(),
+                "[PluginChannel] 页面加载，重置该窗口的前端通道会话"
+            );
+            plugin_host.reset_frontend_loader_session(webview.label(), "page-load");
+        })
+        .build()
+}
+
+/// 页面加载钩子每 webview 只应连接一次右键抑制信号
+///
+/// WebView 一旦创建，后续每次导航（刷新、路由跳转）都会再次触发页面加载钩子，而
+/// `connect_context_menu` 是**追加**信号处理器，重复连接会在同一 WebView 上叠加。
+/// 返回 `true` 表示首次见到该 label（应由本次调用去连接信号），`false` 表示已连过。
+///
+/// **去重键只能是 label，且必须随窗口销毁清理**：会话终端窗口的 label 是
+/// `terminal-${session.id}`（`src/composables/useSessionWindows.ts`）——同一会话关窗后
+/// 重开得到的是**全新 WebView 实例**，但 label 一模一样。若不随销毁清理，重开的窗口会被
+/// 判成「已连过」而永不连接信号，Linux 正式版的原生右键菜单就在该窗口上复活。
+/// 清理入口是 [`forget_context_menu_label`]（挂 `WindowEvent::Destroyed`）。
+///
+/// 锁中毒（其它线程 panic 时持有）按「未见过」处理并取回内部值：页面加载钩子跑在主线程，
+/// 此处 panic 会连带拖垮窗口加载，而「抑制失败」只是退回默认右键行为，不该成为崩溃源。
+#[cfg(target_os = "linux")]
+fn mark_first_context_menu_connect(
+    connected: &std::sync::Mutex<std::collections::HashSet<String>>,
+    label: &str,
+) -> bool {
+    match connected.lock() {
+        Ok(mut seen) => seen.insert(label.to_string()),
+        Err(poisoned) => poisoned.into_inner().insert(label.to_string()),
+    }
+}
+
+/// 窗口销毁 → 丢弃该 label 的去重记录（见 [`mark_first_context_menu_connect`]）
+///
+/// 只丢弃该 label 的条目，其他窗口（主窗口 / 其余终端窗口）不受影响。
+/// 锁中毒时同样取回内部值继续清理，不 panic。
+#[cfg(target_os = "linux")]
+fn forget_context_menu_label(connected: &std::sync::Mutex<std::collections::HashSet<String>>, label: &str) {
+    match connected.lock() {
+        Ok(mut seen) => {
+            seen.remove(label);
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().remove(label);
+        }
+    }
+}
+
+/// 右键抑制去重表：进程内单例（页面加载钩子与窗口销毁钩子共用一份）
+#[cfg(target_os = "linux")]
+static CONTEXT_MENU_CONNECTED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+/// 取去重表（首次调用时初始化）
+#[cfg(target_os = "linux")]
+fn context_menu_ledger() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    CONTEXT_MENU_CONNECTED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 正式版（release）抑制 WebView 原生右键菜单 —— **Linux 专用**
+///
+/// Windows（WebView2）/ macOS（WKWebView）由前端 `src/main.ts` 在 capture 阶段
+/// `preventDefault` 即可覆盖所有窗口；Linux 的 WebKitGTK 在 DOM `contextmenu` 的默认动作里
+/// 弹原生菜单，JS `preventDefault` 拦不住（wry#30），只能连接 `context-menu` 信号并返回
+/// `true` 阻止默认弹出。
+///
+/// **覆盖每个 webview**：钩子挂在页面加载上，主窗口与会话终端窗口（前端运行时创建的独立
+/// `WebviewWindow`，见 `src/composables/useSessionWindows.ts`）等每次页面加载都会触发；
+/// 早期实现只在 setup 里给 `main` 连一次信号，运行期新建的窗口仍会弹原生菜单。
+///
+/// dev 构建保留右键菜单（调试需要「检查元素」），故闭包内按 `debug_assertions` 提前返回；
+/// 插件在 Linux 上照常注册，好让 debug 构建也做类型检查（release-only 代码路径不该是
+/// 「只有发版才编译过」的黑盒）。
+#[cfg(target_os = "linux")]
+fn native_context_menu_guard() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    use webkit2gtk::WebViewExt;
+
+    let connected = context_menu_ledger();
+
+    tauri::plugin::Builder::<tauri::Wry>::new("bedcode-native-context-menu-guard")
+        .on_page_load(move |webview, _payload| {
+            // dev 构建保留原生右键菜单，便于开发调试（检查元素等）
+            if cfg!(debug_assertions) {
+                return;
+            }
+            let label = webview.label().to_string();
+            if !mark_first_context_menu_connect(&connected, &label) {
+                return;
+            }
+            if let Err(e) = webview.with_webview(|platform_webview| {
+                platform_webview.inner().connect_context_menu(|_, _, _, _| true);
+            }) {
+                // 仅释放开关功能失败，不影响启动；失败时该窗口保持默认右键行为
+                tracing::warn!(error = %e, window = %label, "禁用右键菜单失败（WebKitGTK context-menu 信号连接失败）");
+            }
+        })
+        .build()
+}
+
 pub fn run() {
     use tauri::Emitter;
 
@@ -148,12 +288,26 @@ pub fn run() {
     let start = app_start.0;
 
     let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(frontend_channel_session_hook());
+
+    // Linux：正式版抑制 WebView 原生右键菜单的页面加载钩子（dev 注册但空转）
+    #[cfg(target_os = "linux")]
+    {
+        builder = builder.plugin(native_context_menu_guard());
+        // 窗口销毁即丢弃其去重记录：同一会话关窗后重开得到的是全新 webview 实例，
+        // 但 label 复用（`terminal-${session.id}`），不清理则新窗口永不被连接信号。
+        builder = builder.on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                forget_context_menu_label(context_menu_ledger(), window.label());
+            }
+        });
+    }
 
     // WDIO 测试插件仅 debug 构建注册（release 不编译该依赖、不注册该插件）
     #[cfg(debug_assertions)]
@@ -209,21 +363,8 @@ pub fn run() {
                 }
             }
 
-            // 正式版（release）禁用右键原生菜单：WebKitGTK 的 context-menu 信号
-            // 处理器返回 true 阻止默认菜单弹出（JS preventDefault 在 Linux 上无效，
-            // 见 wry#30）；dev 构建保留右键菜单，便于开发调试（检查元素等）。
-            #[cfg(all(target_os = "linux", not(debug_assertions)))]
-            {
-                use webkit2gtk::WebViewExt;
-                if let Some(win) = app.get_webview_window("main") {
-                    if let Err(e) = win.with_webview(|platform_webview| {
-                        platform_webview.inner().connect_context_menu(|_, _, _, _| true);
-                    }) {
-                        // 仅释放开关功能失败，不影响启动；失败时右键菜单保持默认行为
-                        tracing::warn!(error = %e, "禁用右键菜单失败（WebKitGTK context-menu 信号连接失败）");
-                    }
-                }
-            }
+            // 注：正式版禁用右键原生菜单（Linux WebKitGTK context-menu 信号）由
+            // native_context_menu_guard 插件的页面加载钩子统一处理，覆盖每个 webview。
 
             let app_handle = app.handle();
 
@@ -288,7 +429,7 @@ pub fn run() {
             // 系统唤醒时强制窗口重绘（详见 system::power_wake 模块文档）
             crate::system::power_wake::spawn_wake_monitor(app_handle.clone());
 
-            // 保存 resource_dir 供后续会话创建时使用
+            // 保存 resource_dir 供 AppContext 与插件资源加载使用
             let resource_dir = app_handle.path().resource_dir().expect("Failed to get resource dir");
 
             // 解析桌面端插件目录
@@ -320,7 +461,7 @@ pub fn run() {
             let ws_port = app_config.network.port;
 
             // 检查端口可用性
-            let ws_port = match server::port_checker::check_and_resolve_port(&app_handle, ws_port) {
+            let ws_port = match server::host_port::check_and_resolve_port(&app_handle, ws_port) {
                 Ok(port) => port,
                 Err(e) => {
                     tracing::error!("Port check failed: {}", e);
@@ -342,33 +483,41 @@ pub fn run() {
             // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
             // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
             let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
-            crate::peer_net::init_node_identity(&peer_net_data_dir)?;
+            bedcode_server_peer_net::init_node_identity(&peer_net_data_dir)?;
 
-            // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
-            // 启停（插件管理器 activate/deactivate 外壳接线，
-            // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
-            app.manage(crate::peer_net::PeerNetState::default());
-            app.manage(crate::peer_transfer::PeerTransferState::default());
-            app.manage(crate::peer_receive::PeerReceiveState::default());
-            app.manage(crate::peer_remote::PeerRemoteState::default());
+            // 对等网络节点状态容器（ticket 03）：节点生命周期按**属主**随插件启停
+            // （审计票 12——插件经 host-peer.start-node / stop-node 自行请求，
+            // 内核只记账；见 peer_net::start_node_owned / release_node_for。
+            // 旧 setup 无条件自启与旧的按产品 id 开关外壳都已退役）
+            // 状态以 Arc 托管（server-lib-split）：peer-net 引擎派生任务需要
+            // 克隆句柄跨 await 存活（drive_gate / session_watch / 入站桥 /
+            // 发现刷新订阅）；命令壳与 host_api 经 peer_ctx 一次装配
+            app.manage(Arc::new(bedcode_server_peer_net::PeerNetState::default()));
+            // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
+            // 任务、历史、设置均由 file-transfer 插件私有库持有。
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_transfer::PeerTransferState::default()));
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_receive::PeerReceiveState::default()));
+            app.manage(Arc::new(bedcode_server_peer_net::peer_engine_remote::PeerRemoteState::default()));
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
 
-            let db = Arc::new(Mutex::new(db));
+            let db = Arc::new(std::sync::Mutex::new(db));
 
-            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
-            crate::peer_migration::migrate_legacy_peer_data(&app_handle, &db);
+            // v33（ADR 0033）：宿主**不再持有**入场签发密钥（签发/验签均在认证
+            // 中心），故此处无密钥预生成。旧的 `plugin_secrets` 属主 `host` 行
+            // （`('host','jwt.key')`）由 `db::run_migrations` 幂等清理（见
+            // migrations 的 v33 条目）——那是不可达的旧密钥材料，留着只是白给的面。
 
             // ==================== 创建所有全局单实例 ====================
 
             // 采集系统基本信息（OS / 设备名称 / IP），挂载到 AppContext 供全局引用
             let system_info = Arc::new(system::info::SystemInfo::collect());
 
-            let storage = Arc::new(session::SessionStorage::new(db.clone()));
             let resource_dir_arc = Arc::new(resource_dir);
-            let session_manager = Arc::new(session::SessionManager::new(storage, resource_dir_arc.clone()));
-            let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
+            // 票 11：内核会话管理器 / 配置管理器不再装配——会话真源在
+            // `com.bedcode.terminal-session` 登记域，宿主只保留 `session_gateway`
+            // 窄转发层（互调 api + `host-pty` 引擎）。
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
             // 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地（可卸载），
@@ -378,67 +527,91 @@ pub fn run() {
                 .app_data_dir()
                 .expect("Failed to get app data dir")
                 .join("plugins");
-            let plugin_host = Arc::new(tauri::async_runtime::block_on(plugin::PluginHost::new(
+            // PluginHost::new 返回 Arc<Self>（属主失败回报端口需要宿主弱引用）
+            // 整核抽出 §3.3：对等网络上下文装配端口由 lib 注入（peer_net_cmds::peer_ctx
+            // 读 tauri managed state + server 端口装配；无头 harness 不传 → HEADLESS_UNAVAILABLE）
+            let peer_ctx_provider: Option<Arc<crate::wasm_core::host_api::context::PeerCtxProvider>> =
+                Some(Arc::new(crate::server::peer_net_cmds::peer_ctx));
+            // 票 08/P0-2：第一方免弹窗归属清单（产品数据）由 lib 装配时注入——
+            // 判定逻辑在 wasm-core（机制），清单真源在本文件即可（first_party_dirs.rs）
+            let first_party_dirs = crate::first_party_dirs::first_party_dirs();
+            let plugin_host = tauri::async_runtime::block_on(wasm_core::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
                 &user_plugins_dir,
-                session_manager.clone(),
-                config_manager.clone(),
                 Some(app_handle_arc.clone()),
-            )));
+                peer_ctx_provider,
+                first_party_dirs,
+                // 桌面 ABI 规格（端事实由宿主注入：wasm-core 零端 ABI 知识，
+                // 版本上限 + abi-form 要求来自桌面 SDK 组装后的契约）
+                wasm_core::manager::runtime::AbiPolicy {
+                    form: Some(bedcode_plugin_api::form::FORM_COMPONENT),
+                },
+                // 桌面端事实（平台标识 / 入站服务器端口；单形态收口后从 wasm-core
+                // 迁出的端差异实现——file-transfer 在激活期经 platform() 探测端值）
+                std::sync::Arc::new(crate::plugin::host_facts::DesktopHostFacts),
+                // 桌面平台选择器（host-platform.pick-* 的桌面对话框实现；同样从
+                // 内核迁出的端差异——移动侧是 SAF 端口，经 EnginePortsPlatformPicker
+                // 在 `new_with_ports` 装配）
+                Some(std::sync::Arc::new(crate::plugin::platform_picker::DesktopPlatformPicker::new(
+                    (*app_handle_arc).clone(),
+                ))),
+            ));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
-            let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
-            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
+            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(
+                bedcode_discovery_engine::advertiser::MdnsAdvertiser::new(),
+            ));
 
-            // 创建同步事件通道
-            let (sync_tx, _) =
-                tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+            // 终端同步事件通道已随 websocket 业务下沉票 08 删除（插件事件改 bus+emit，
+            // 宿主不再持有 HostSyncEvent / broadcast-sync 广播面）
 
-            // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
-            tauri::async_runtime::block_on(async {
-                session_manager.set_sync_tx(sync_tx.clone()).await;
-                config_manager.set_sync_tx(sync_tx.clone()).await;
-            });
+            // ==================== guest 事件派发器注入（票 03 / ADR 0022） ====================
+            // `events` 导出的调用契约是端专属事实（桌面 on-message / on-process-done），
+            // 机制留 wasm-core、契约面由本宿主用自有绑定实现——与 peer_ctx_provider /
+            // domain_ports 同范式（`&self` + RwLock，宿主只拿到不可变 Arc）。
+            // 装配期注入即可（晚绑定共享槽）：`PluginHost::new` 扫描期已实例化的插件
+            // 在派发时实时读取本槽位，注入对它同样生效；漏注入则事件派发
+            // fail-visible 报错（不是静默丢消息）。
+            plugin_host.wasm_runtime().set_guest_events(std::sync::Arc::new(
+                crate::plugin::guest_events::DesktopGuestEvents,
+            ));
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
-            let ctx = system::app_context::AppContextBuilder::new()
+            let _ctx = system::app_context::AppContextBuilder::new()
                 .db(db.clone())
-                .session_manager(session_manager.clone())
-                .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
-                .pairing_service(pairing_service.clone())
-                .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
                 .app_handle(Some(app_handle_arc.clone()))
-                .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
                 .system_info(system_info.clone())
                 .build_and_init();
 
+            // server-lib-split：装配服务器端口（宿主壳实现注入；supervisor /
+            // ws / http / peer-net 的「无 AppContext」保守分支依赖本注册表）。
+            // 走组合根的单一装配点：无头 harness（cross-end-tests）调同一函数。
+            // 句柄直传：插件激活发生在上面的 `PluginHost::new` 内部，早于 AppContext
+            // 注册，提前装配的端口面靠它解析路径（2026-10-07 修：此前窗口内的
+            // `host-peer.start-node` 恒定报 `resolve app data dir failed: no runtime
+            // context`，peer 节点起不来 → 桌面端不广播 → 移动端发现不到）
+            crate::server::composition::install_server_ports_with(Some(app_handle_arc.clone()));
+
             // 同时注册到 Tauri State（前端 invoke 可用）
             app.manage(db.clone());
-            app.manage(config_manager.clone());
-            app.manage(session_manager.clone());
-            app.manage(pairing_service.clone());
-            app.manage(qr_manager.clone());
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
-            app.manage(system_info.clone());
-
-            // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
-            // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
-            // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
-            // 装配完成后按最终插件状态补对账
-            if let Err(e) =
-                tauri::async_runtime::block_on(crate::peer_net::sync_node_with_plugin_state(&app_handle_arc))
-            {
-                tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
-            }
-
+            // 网络出站授权应答通道（票 05）：与 fs 应答同一形态——前端弹窗经
+            // 宿主面凭证代答，故应答器必须是进程级单例（与事件广播的询问一一对应）
+            app.manage(plugin_host.wasm_host_ctx().net_auth().clone());
+            // peer-net 节点的启动不再需要 boot 对账（审计票 12）：旧实现要在装配末尾
+            // 按硬编码插件 id 补一次状态对账，因为 activate 外壳经
+            // `AppContext::try_global()` 取句柄，而 boot 装配期全局尚未注册
+            // （2026-09-06 实机实证：已激活插件的节点不随 boot 启动）。现在改由插件
+            // 在自己的 activate 里调 `host-peer.start-node`，宿主从 WasmHostContext
+            // 的 app_handle 字段取句柄（PluginHost::new 之前就早已就位，不依赖全局），
+            // 所以 boot 期直接起得来，那条对账连同它的产品耦合一起退役
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
             // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
@@ -446,7 +619,13 @@ pub fn run() {
             #[cfg(debug_assertions)]
             {
                 let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
-                let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
+                let _dev_watcher = wasm_core::watcher::PluginDevWatcher::start(
+                    plugins_dir.to_path_buf(),
+                    runtime_handle,
+                    // 整核抽出：watcher 不再经 AppContext::global() 取宿主，改由
+                    // bootstrap 注入弱引用（plugin_host 在此处已创建，见上）
+                    Arc::downgrade(&plugin_host),
+                );
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
                 Box::leak(Box::new(_dev_watcher));
@@ -457,38 +636,21 @@ pub fn run() {
 
             // 链路加密装配句柄（issue 01）：init_at_startup 需访问数据目录与 DB 状态
             let link_crypto_app_handle = app_handle.clone();
-            let supervisor = server::supervisor::ServerSupervisor::global();
+            let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
             // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
             let auto_start = true;
             tauri::async_runtime::spawn(async move {
                 // 链路加密先于服务器启动装配：第一条流量就要被开关裁决（spec §6）；
-                // 身份损坏时强制回退全关，不阻断启动
-                server::link_crypto::init_at_startup(&link_crypto_app_handle).await;
+                // 身份损坏时强制回退全关，不阻断启动。core 不认 AppHandle/Database，
+                // 数据目录与主库连接由宿主组合根薄壳解析后传入
+                server::composition::init_link_crypto_at_startup(&link_crypto_app_handle).await;
 
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
-                // 注册同步事件处理器
-                use crate::events::global_matcher;
-                use crate::events::{DesktopSyncEvent, SyncEventHandler};
-
-                let ws_manager = crate::server::ws::WebSocketManager::global();
+                let ws_manager = bedcode_server_websocket::WebSocketManager::global();
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
-
-                // 注册事件源
-                global_matcher()
-                    .register_source::<DesktopSyncEvent>(ctx.sync_tx().clone())
-                    .await;
-
-                // 注册处理器
-                let sync_handler = Arc::new(SyncEventHandler::new(
-                    ctx.session_manager().clone(),
-                    ctx.config_manager().clone(),
-                    ws_manager,
-                ));
-                global_matcher().register::<DesktopSyncEvent>(sync_handler).await;
-                tracing::info!("[BedCode] SyncEventHandler registered");
 
                 if auto_start {
                     tracing::info!("[BedCode] Auto-starting server on port {}", ws_port_for_spawn);
@@ -523,9 +685,9 @@ pub fn run() {
                 }
             });
 
-            // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = events::EventForwarder::new(app_handle.clone(), session_manager.clone());
-            event_forwarder.start();
+            // 票 09：原先在这里启动的「SessionManager 状态事件 → 前端
+            // `session-status-changed`」转发器已退役（订阅源对插件会话无流量、
+            // 前端零消费方），见 `events.rs` 模块头。
 
             setup_tray(app_handle)?;
 
@@ -552,34 +714,36 @@ pub fn run() {
                                 tracing::error!("Failed to destroy window: {}", e);
                             }
                         } else {
-                            // 有运行中会话，通知前端弹窗确认
+                            // 有运行中会话，通知前端弹窗确认。payload = 插件登记域视图
+                            // 数组原样透传（`session-list {filter:"running"}`）——「哪些状态
+                            // 算运行中需要确认」的判据在插件会话域（`ops::needs_close_confirmation`，
+                            // 2026-09-25 下沉），宿主零字段读取只取 `sessions` 数组做 emit；
+                            // **失败回退空列表**——关闭路径不能被插件异步调用阻塞
+                            // （2026-09-23 用户定案）
                             let ctx = system::app_context::AppContext::global();
-                            let sm = ctx.session_manager();
-                            let sessions = sm.list_sessions().await;
-                            let running: Vec<_> = sessions
-                                .iter()
-                                .filter(|s| {
-                                    matches!(
-                                        s.status,
-                                        enums::SessionStatus::Running
-                                            | enums::SessionStatus::Starting
-                                            | enums::SessionStatus::WaitingInput
-                                    )
-                                })
-                                .map(|s| RunningSessionInfo {
-                                    id: s.id.clone(),
-                                    name: s.name.clone(),
-                                    status: format!("{:?}", s.status),
-                                })
-                                .collect();
+                            let host_ctx = ctx.plugin_host().wasm_host_ctx();
+                            let running = match crate::utils::session_gateway::running_views(host_ctx).await {
+                                Ok(reply) => reply.get("sessions").and_then(|s| s.as_array()).cloned().unwrap_or_else(|| {
+                                    tracing::warn!(error = %reply, "window close payload: reply missing sessions array, fallback to empty list");
+                                    Vec::new()
+                                }),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "window close payload: plugin running list unavailable, fallback to empty list"
+                                    );
+                                    Vec::new()
+                                }
+                            };
 
                             tracing::info!(
+                                count = running.len(),
                                 "Window close requested with {} running session(s), emitting to frontend",
                                 running.len()
                             );
 
-                            if let Err(e) = ah.emit(system::constants::event::WINDOW_CLOSE_REQUESTED, &running) {
-                                tracing::error!("Failed to emit window-close-requested: {}", e);
+                            if let Err(e) = ah.emit(system::constants::WINDOW_CLOSE_REQUESTED, &running) {
+                                tracing::error!(error = %e, "Failed to emit window-close-requested");
                             }
                         }
                     });
@@ -605,123 +769,102 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // WSL
-            commands::wsl::list_wsl_distributions,
-            commands::wsl::is_wsl_available,
-            // Session Config
-            commands::session_config::create_session_config,
-            commands::session_config::list_session_configs,
-            commands::session_config::get_session_config,
-            commands::session_config::delete_session_config,
-            commands::session_config::update_session_config,
-            // Session
-            commands::session::start_session,
-            commands::session::create_session_no_start,
-            commands::session::start_existing_session,
-            commands::session::list_sessions,
-            commands::session::get_session,
-            commands::session::kill_session,
-            commands::session::delete_session,
-            commands::session::restart_session,
-            commands::session::resize_session,
-            // PTY Input
-            commands::pty_input::write_to_session,
-            commands::pty_input::send_special_key,
-            // 终端输出流 Channel 传输（与 WS 环回并行的替代方案，见 commands/terminal_stream.rs）
-            commands::terminal_stream::subscribe_terminal_channel,
-            commands::terminal_stream::unsubscribe_terminal_channel,
-            commands::terminal_stream::terminal_channel_ack,
-            // Pairing
-            commands::system::generate_pairing_code,
-            commands::system::get_current_pairing_code,
-            commands::system::verify_pairing_code,
-            commands::system::clear_pairing_code,
-            commands::system::get_pairing_code_ttl,
-            commands::system::set_pairing_code_ttl,
-            commands::system::list_paired_devices,
-            commands::system::remove_paired_device,
-            commands::system::list_connection_history,
-            commands::system::delete_connection_history,
-            commands::system::set_log_level,
-            commands::system::save_log_settings,
-            commands::opener::open_log_dir,
-            // QR Code
-            commands::qr::generate_qr_code,
-            commands::qr::clear_qr_code,
-            commands::qr::get_qr_connection_info,
-            commands::qr::get_qr_token_ttl,
-            commands::qr::set_qr_token_ttl,
-            commands::settings::get_all_db_settings,
-            commands::settings::set_db_setting,
+            // Session / PTY Input：**会话命令面已整体注销**（票 08）——
+            // 列表 / 单查 / 尺寸 / 写入 / 特殊键五条连壳删除，消费方改指插件
+            // 命令面（`session.list` / `session.get` / `session.action.resize` /
+            // `session.input`），见 commands.rs 会话命令节头部注释
+            // 终端输出面（票 05 摘除）：旧 Channel 传输命令
+            // （subscribe_terminal_channel / unsubscribe_terminal_channel /
+            // terminal_channel_ack，commands/terminal_stream.rs）已随宿主前端
+            // 消费方摘除——插件输出改经 host-session.output-ring-fetch 原语
+            // （插件命令面 session.output.pull）拉取，宿主不留降级输出传输
+            // 配对 / QR / 连接历史命令面已注销：产品面归 com.bedcode.terminal-session 插件的
+            // session.pairing.* / session.qr.* / session.devices.* / session.history.*
+            // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；
+            // 见 .scratch/2026-09-21-host-rust-residue/issues/05）
+            commands::set_log_level,
+            commands::save_log_settings,
+            commands::open_log_dir,
+            commands::open_external_url,
+            // Updater（外壳命令：updater:default 权限已撤除，发起权收归 Rust）
+            commands::check_for_update,
+            commands::install_update,
             // Settings
-            commands::system::get_app_settings,
-            commands::system::save_app_settings,
-            commands::system::set_terminal_bg_image,
+            commands::get_app_settings,
+            commands::save_app_settings,
+            commands::set_terminal_bg_image,
             // Utility
-            commands::system::ping,
-            commands::system::get_app_version,
-            commands::system::get_startup_time,
-            commands::system::get_local_ip_addresses,
-            commands::system::get_system_info,
-            commands::system::confirm_window_close,
-            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
+            commands::ping,
+            commands::get_app_version,
+            commands::get_startup_time,
+            commands::confirm_window_close,
+            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands.rs Dev Console Log Relay 节）
             #[cfg(debug_assertions)]
-            commands::dev_logs::report_frontend_log,
-            commands::devices::get_connected_devices,
+            commands::report_frontend_log,
+            // 桥接基准 · Channel 传输面（仅 debug：AGENTS §5.1 的 debug-only 测试面，
+            // 零业务语义、不碰既有能力；见 src/bench_channel.rs 头注释与 bench/README.md）
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_bytes,
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_text,
+            #[cfg(debug_assertions)]
+            bench_channel::bench_channel_stream_raw,
             // Plugin
-            commands::plugin::plugin_list_loaded,
-            commands::plugin::plugin_get_info,
-            commands::plugin::plugin_preauthorize,
-            commands::plugin::plugin_activate,
-            commands::plugin::plugin_deactivate,
-            commands::plugin::plugin_install_from_file,
-            commands::plugin::plugin_uninstall,
-            commands::plugin::plugin_mark_error,
-            commands::plugin::plugin_frontend_load_report,
-            commands::plugin::plugin_get_activated_state,
-            commands::plugin::plugin_storage_get,
-            commands::plugin::plugin_storage_set,
-            commands::plugin::plugin_storage_delete,
-            commands::plugin::plugin_terminal_send_input,
-            commands::plugin::plugin_list_commands,
-            commands::plugin::plugin_list_views,
-            commands::plugin::plugin_find_file_handler,
-            commands::plugin::plugin_invoke,
-            commands::plugin::plugin_list_rust_commands,
-            commands::plugin::plugin_dev_reload,
-            commands::plugin::plugin_fs_auth_respond,
-            commands::opener::plugin_reveal_in_dir,
+            commands::plugin_list_loaded,
+            commands::plugin_get_info,
+            commands::plugin_preauthorize,
+            commands::plugin_activate,
+            commands::plugin_deactivate,
+            commands::plugin_approve,
+            commands::plugin_frontend_loader_session,
+            commands::plugin_channel_token,
+            commands::plugin_install_from_file,
+            commands::plugin_uninstall,
+            commands::plugin_mark_error,
+            commands::plugin_frontend_load_report,
+            commands::plugin_get_activated_state,
+            commands::plugin_storage_get,
+            commands::plugin_storage_set,
+            commands::plugin_storage_delete,
+            // `plugin_terminal_send_input` 随票 08 注销：终端输入改走插件
+            // 命令通道 `session.input`（宿主不再替插件导流输入）
+            commands::plugin_list_commands,
+            commands::plugin_list_views,
+            commands::plugin_find_file_handler,
+            commands::plugin_invoke,
+            commands::plugin_list_rust_commands,
+            commands::plugin_dev_reload,
+            commands::plugin_fs_auth_respond,
+            commands::plugin_network_auth_respond,
+            commands::plugin_auth_overview,
+            commands::plugin_auth_set_strategy,
+            commands::plugin_auth_revoke,
+            commands::plugin_auth_remove_record,
             // Server
-            commands::server::server_start,
-            commands::server::server_stop,
-            commands::server::server_restart,
-            commands::server::get_server_status,
-            commands::server::get_server_metrics,
-            commands::server::get_server_network_config,
-            commands::server::update_server_port,
-            commands::server::update_server_auto_start,
-            commands::server::update_server_network_config,
-            commands::server::get_traffic_encryption_config,
-            commands::server::set_traffic_encryption_config,
-            commands::server::get_link_crypto_fingerprint,
-            commands::server::reset_server_network_config,
-            // mDNS
-            commands::mdns::mdns_start_advertise,
-            commands::mdns::mdns_stop_advertise,
-            commands::mdns::mdns_is_advertising,
-            // Peer Net
-            peer_net::start_peer_node,
-            peer_net::stop_peer_node,
+            commands::server_start,
+            commands::server_stop,
+            commands::server_restart,
+            commands::get_server_status,
+            commands::get_server_metrics,
+            commands::get_server_network_config,
+            commands::update_server_port,
+            commands::update_server_auto_start,
+            commands::update_server_network_config,
+            commands::get_traffic_encryption_config,
+            commands::set_traffic_encryption_config,
+            commands::get_link_crypto_fingerprint,
+            commands::reset_server_network_config,
+            // Peer Net（命令壳在 peer_net_cmds——引擎实现不持有 AppHandle，
+            // server-lib-split）
+            peer_net_cmds::start_peer_node,
+            peer_net_cmds::stop_peer_node,
             // Phase 4（issue 13）：对等网络产品面已整体迁入 file-transfer 插件
             // （WIT host-peer 13 原语），主前端命令面退役——仅保留生命周期、
             // 首连确认与信任管理（宿主级兜底路径）。其余查询/管理命令的函数体
             // 暂留一版（部分仍为 host_impl 内部簿记调用），下版本删除。
-            peer_net::respond_peer_consent,
-            peer_net::list_trusted_peers,
-            peer_net::revoke_trusted_peer,
-            peer_receive::set_peer_receive_policy,
-            peer_receive::set_peer_download_dir,
-            peer_receive::set_peer_transfer_encryption,
+            peer_net_cmds::respond_peer_consent,
+            peer_net_cmds::list_trusted_peers,
+            peer_net_cmds::revoke_trusted_peer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

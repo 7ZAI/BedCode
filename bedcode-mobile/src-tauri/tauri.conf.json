@@ -1,7 +1,7 @@
 {
   "productName": "BedCode",
   "identifier": "com.bedcode.mobile",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1423",
@@ -24,7 +24,17 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self' asset: http://asset.localhost",
+        "connect-src": "'none'",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "style-src": "'unsafe-inline' 'self' asset: http://asset.localhost",
+        "font-src": "'self' asset: http://asset.localhost",
+        "script-src": "'self' 'unsafe-eval' 'wasm-unsafe-eval' asset: http://asset.localhost"
+      },
+      "devCsp": {
+        "connect-src": "'self' ipc: http://ipc.localhost ws: wss: http: https:"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": {

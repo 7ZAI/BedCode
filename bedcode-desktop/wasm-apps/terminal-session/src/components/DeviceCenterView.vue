@@ -1,0 +1,833 @@
+<template>
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
+    <!-- ==================== 工具栏页头：左标题+IP:端口，右刷新/生成 ==================== -->
+    <div class="wb-toolbar">
+      <div class="flex items-center gap-3">
+        <h2 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
+          {{ t('pairing.sidebar.title') }}
+        </h2>
+        <span class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]"
+          >{{ displayIp }}:{{ port }}</span
+        >
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="wb-btn-ghost" @click="refreshAll">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+            />
+          </svg>
+          {{ t('pairing.button.refresh') }}
+        </button>
+        <button class="wb-btn-primary" :disabled="isGenerating" @click="generateCode">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+            />
+          </svg>
+          {{ t('pairing.code.generate') }}
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== Tab 切换：设备配对 / 设备列表 ==================== -->
+    <!-- Tab 区规格与 Agent任务（TaskHistoryView）同款，三点对齐：
+         ① 满宽分段控件（容器 flex + 单项 flex-1 等分），不是收缩条；
+         ② tab 带自身带底边线 + 卡片底色，与下方内容区物理分开；
+         ③ 水平内边距 px-6 与内容列同宽，tab 条左右缘与卡片对齐。
+         早前是 inline-flex 收缩条浮在页面底色上（整条 172px、两项各 80px），
+         读起来像一对工具按钮而不是页签导航。 -->
+    <div
+      class="px-6 pt-3 pb-3 flex-shrink-0 bg-[var(--bg-card)] border-b border-[var(--border)]"
+    >
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--bg-hover)]" role="tablist">
+        <button
+          v-for="tab in deviceTabs"
+          :key="tab.key"
+          class="flex-1 h-8 rounded-md text-[calc(12px*var(--ui-scale))] font-medium transition-colors duration-200"
+          :class="
+            activeTab === tab.key
+              ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm'
+              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+          "
+          role="tab"
+          :aria-selected="activeTab === tab.key"
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== 认证中心未就绪横幅（ADR 0031 欠账 / 票 08 §8.1） ==================== -->
+    <!-- 置顶且**不随 Tab 切换隐藏**：fail-closed 的失败发生在入站方向，与用户当前
+         看哪个 Tab 无关；且此时本页其余功能（配对码生成等）**照常可用**，
+         没有横幅就会出现「配对成功但手机连不上」且界面无任何解释的静默失败。 -->
+    <div
+      v-if="centerStatusError"
+      class="mx-6 mt-4 mb-0 rounded-[10px] border px-4 py-3 flex items-start gap-3"
+      :class="
+        centerStatusError === 'not_ready'
+          ? 'border-[var(--color-danger)] bg-[var(--color-danger-light)]'
+          : 'border-[var(--border-strong)] bg-[var(--bg-card)]'
+      "
+    >
+      <span
+        class="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+        :class="
+          centerStatusError === 'not_ready'
+            ? 'bg-[var(--color-danger)]'
+            : 'bg-[var(--text-tertiary)]'
+        "
+      ></span>
+      <div class="min-w-0 flex-1">
+        <template v-if="centerStatusError === 'not_ready'">
+          <p
+            class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--color-danger)]"
+          >
+            {{ t('pairing.center.notReadyTitle') }}
+          </p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-0.5">
+            {{ t('pairing.center.notReadyDesc') }}
+          </p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1">
+            {{ t('pairing.center.rebuildHint') }}
+          </p>
+        </template>
+        <!-- 状态未知：**不**给「重建产物」指引——那是未就位的修法，
+             状态读不到是另一类问题，给错指引会把排障方向带偏 -->
+        <template v-else>
+          <p
+            class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-secondary)]"
+          >
+            {{ t('pairing.center.statusUnknown') }}
+          </p>
+        </template>
+      </div>
+    </div>
+
+    <div class="page-swap page-swap-pad-lg flex-1 overflow-auto">
+      <Transition name="page">
+        <!-- ==================== Tab1 设备配对 · 网络信息 + 配对码 + QR（各占一行） ==================== -->
+        <div v-if="activeTab === 'pairing'" class="space-y-5">
+          <!-- ==================== 网络信息条（置顶） ==================== -->
+          <div
+            class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] px-4 py-2.5 flex items-center gap-3 flex-wrap"
+          >
+            <span
+              class="text-[calc(11px*var(--ui-scale))] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]"
+            >
+              {{ t('pairing.network.title') }}
+            </span>
+            <span class="text-[var(--border)]">|</span>
+            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{
+              t('pairing.network.ipv4Address')
+            }}</span>
+            <!-- 固定宽度：行内条带布局，避免 Select 块级根元素撑满整行 -->
+            <Select
+              :model-value="selectedHost || ''"
+              :options="ipOptions"
+              :placeholder="t('pairing.network.notSelected')"
+              size="sm"
+              class="wb-mono w-[200px]"
+              @update:model-value="handleIpSelect"
+            />
+            <span class="text-[var(--border)]">·</span>
+            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{
+              t('pairing.network.websocketPort')
+            }}</span>
+            <span class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)]">{{
+              port
+            }}</span>
+            <span
+              v-if="addresses.length === 0"
+              class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] ml-auto"
+            >
+              {{ t('pairing.network.noIpv4') }}
+            </span>
+          </div>
+
+          <!-- ==================== 配对码卡片（内容居中，旧版样式） ==================== -->
+          <div
+            class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col"
+          >
+            <div class="flex items-center justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4
+                  class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+                >
+                  {{ t('pairing.code.title') }}
+                </h4>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button
+                  v-if="pairingCode"
+                  class="wb-btn-ghost !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  @click="cancelPairing"
+                >
+                  {{ t('pairing.button.cancel') }}
+                </button>
+                <button
+                  v-else
+                  class="wb-btn-primary !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  :disabled="isGenerating"
+                  @click="generateCode"
+                >
+                  {{ t('pairing.code.generate') }}
+                </button>
+                <span
+                  v-if="pairingCode"
+                  class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]"
+                >
+                  <span
+                    class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"
+                  ></span>
+                  {{ remainingSeconds }}{{ t('pairing.time.seconds') }}
+                </span>
+              </div>
+            </div>
+
+            <div class="flex flex-col items-center text-center">
+              <template v-if="pairingCode">
+                <p
+                  class="font-mono text-[calc(36px*var(--ui-scale))] font-bold tracking-[0.15em] text-[var(--text-primary)] select-all break-all text-center px-2 mb-4"
+                >
+                  {{ pairingCode.code }}
+                </p>
+                <p
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed"
+                >
+                  {{ t('pairing.code.hint') }}
+                </p>
+              </template>
+              <template v-else>
+                <div
+                  class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4"
+                >
+                  <svg
+                    class="w-7 h-7 text-[var(--text-tertiary)]"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="1.5"
+                      d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                    />
+                  </svg>
+                  <p
+                    class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight"
+                  >
+                    {{ t('pairing.code.placeholder') }}
+                  </p>
+                </div>
+                <p
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed"
+                >
+                  {{ t('pairing.code.hint') }}
+                </p>
+              </template>
+            </div>
+          </div>
+
+          <!-- ==================== QR 码卡片（内容居中，旧版样式） ==================== -->
+          <div
+            class="rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] p-5 flex flex-col"
+          >
+            <div class="flex items-center justify-between gap-3 mb-4">
+              <div class="min-w-0">
+                <h4
+                  class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+                >
+                  {{ t('pairing.qr.title') }}
+                </h4>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button
+                  v-if="hasQr"
+                  class="wb-btn-ghost !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  @click="clearQr"
+                >
+                  {{ t('pairing.button.cancel') }}
+                </button>
+                <button
+                  class="wb-btn-primary !h-7 !px-2.5 text-[calc(11px*var(--ui-scale))]"
+                  :disabled="isQrLoading"
+                  @click="generateQr(selectedHost || undefined)"
+                >
+                  {{ hasQr ? t('pairing.button.refresh') : t('pairing.qr.generate') }}
+                </button>
+                <span
+                  v-if="hasQr"
+                  class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]"
+                >
+                  <span
+                    class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse"
+                  ></span>
+                  {{ qrRemainingSeconds }}{{ t('pairing.time.seconds') }}
+                </span>
+              </div>
+            </div>
+
+            <div class="flex flex-col items-center text-center">
+              <template v-if="hasQr">
+                <!-- 白底衬底保证二维码在暗色模式下可读 -->
+                <div class="inline-block bg-white p-3 rounded-lg border border-[var(--border)] mb-4">
+                  <canvas ref="qrCanvasRef" class="block"></canvas>
+                </div>
+                <p
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed"
+                >
+                  {{ t('pairing.qr.hint') }}
+                </p>
+                <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-1.5">
+                  {{ t('pairing.qr.singleUse') }}
+                </p>
+              </template>
+              <template v-else>
+                <div
+                  class="w-[168px] h-[168px] rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg-page)] flex flex-col items-center justify-center text-center px-3 gap-1.5 mb-4"
+                >
+                  <svg
+                    class="w-7 h-7 text-[var(--text-tertiary)]"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="1.5"
+                      d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z"
+                    />
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="1.5"
+                      d="M6.75 6.75h.008v.008H6.75V6.75zM6.75 16.5h.008v.008H6.75V16.5zM16.5 6.75h.008v.008H16.5V6.75zM13.5 13.5h.008v.008H13.5V13.5zM13.5 19.5h.008v.008H13.5V19.5zM19.5 13.5h.008v.008H19.5V13.5zM19.5 19.5h.008v.008H19.5V19.5zM16.5 16.5h.008v.008H16.5V16.5z"
+                    />
+                  </svg>
+                  <p
+                    class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] leading-tight"
+                  >
+                    {{ t('pairing.qr.placeholder') }}
+                  </p>
+                </div>
+                <p
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] leading-relaxed"
+                >
+                  {{ t('pairing.qr.hint') }}
+                </p>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- ==================== Tab2 设备列表 · 在线 / 离线 ==================== -->
+        <div v-else class="space-y-6">
+          <!-- ==================== ONLINE 分区 ==================== -->
+          <section>
+            <h3 class="wb-section-title">
+              {{ t('pairing.device.sectionOnline') }}
+              <span class="text-[var(--text-tertiary)]">·</span> {{ onlineDevices.length }}
+            </h3>
+            <p
+              v-if="onlineDevices.length === 0"
+              class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] px-1 py-2"
+            >
+              {{ t('pairing.empty.noData') }}
+            </p>
+            <div v-else class="space-y-2">
+              <article
+                v-for="device in onlineDevices"
+                :key="device.id"
+                class="px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+              >
+                <div class="flex items-center gap-3 min-w-0">
+                  <span
+                    class="w-2 h-2 rounded-full shrink-0 bg-[var(--color-success)] animate-pulse"
+                  ></span>
+                  <p
+                    class="flex-1 min-w-0 text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate"
+                  >
+                    {{ device.deviceName }}
+                  </p>
+                  <span
+                    class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--color-success-light)] text-[var(--color-success)]"
+                  >
+                    <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]"></span>
+                    {{ t('pairing.device.connected') }}
+                  </span>
+                  <span
+                    class="wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]"
+                    >{{ device.address }}</span
+                  >
+                  <button
+                    class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                    @click="viewHistory(device.id)"
+                  >
+                    {{ t('pairing.device.historyView') }}
+                  </button>
+                  <button
+                    class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                    @click="removeDevice(device.id)"
+                  >
+                    {{ t('pairing.button.remove') }}
+                  </button>
+                </div>
+                <div
+                  class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                >
+                  <span>{{
+                    t('pairing.device.pairedAt', { date: formatDate(device.pairedAt) })
+                  }}</span>
+                  <template v-if="device.lastSeen">
+                    <span class="text-[var(--border)]">·</span>
+                    <span>{{
+                      t('pairing.device.lastSeen', { date: formatDate(device.lastSeen) })
+                    }}</span>
+                  </template>
+                  <span class="text-[var(--border)]">·</span>
+                  <span>{{
+                    t('pairing.device.connectCount', { count: device.connectCount })
+                  }}</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <!-- ==================== OFFLINE 分区 ==================== -->
+          <section>
+            <h3 class="wb-section-title">
+              {{ t('pairing.device.sectionOffline') }}
+              <span class="text-[var(--text-tertiary)]">·</span> {{ offlineDevices.length }}
+            </h3>
+            <p
+              v-if="offlineDevices.length === 0"
+              class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] px-1 py-2"
+            >
+              {{ t('pairing.empty.noData') }}
+            </p>
+            <div v-else class="space-y-2">
+              <article
+                v-for="device in offlineDevices"
+                :key="device.id"
+                class="px-4 py-3 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] hover:shadow-sm transition-shadow"
+              >
+                <div class="flex items-center gap-3 min-w-0">
+                  <span class="w-2 h-2 rounded-full shrink-0 bg-[var(--text-tertiary)]"></span>
+                  <p
+                    class="flex-1 min-w-0 text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-secondary)] truncate"
+                  >
+                    {{ device.deviceName }}
+                  </p>
+                  <span
+                    class="wb-mono text-[calc(11px*var(--ui-scale))] inline-flex items-center gap-1.5 px-2 h-5 rounded-[6px] bg-[var(--bg-hover)] text-[var(--text-tertiary)]"
+                  >
+                    <span class="w-1.5 h-1.5 rounded-full bg-[var(--text-tertiary)]"></span>
+                    {{ t('pairing.device.offline') }}
+                  </span>
+                  <span
+                    class="wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]"
+                    >{{ device.address }}</span
+                  >
+                  <button
+                    class="h-7 px-2.5 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+                    @click="viewHistory(device.id)"
+                  >
+                    {{ t('pairing.device.historyView') }}
+                  </button>
+                  <button
+                    class="h-7 px-2.5 rounded-[6px] border border-transparent wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-tertiary)] hover:border-[var(--border)] hover:text-red-500 transition-colors"
+                    @click="removeDevice(device.id)"
+                  >
+                    {{ t('pairing.button.remove') }}
+                  </button>
+                </div>
+                <div
+                  class="mt-2 pl-5 flex items-center gap-2 flex-wrap text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                >
+                  <span>{{
+                    t('pairing.device.pairedAt', { date: formatDate(device.pairedAt) })
+                  }}</span>
+                  <template v-if="device.lastSeen">
+                    <span class="text-[var(--border)]">·</span>
+                    <span>{{
+                      t('pairing.device.lastSeen', { date: formatDate(device.lastSeen) })
+                    }}</span>
+                  </template>
+                  <span class="text-[var(--border)]">·</span>
+                  <span>{{
+                    t('pairing.device.connectCount', { count: device.connectCount })
+                  }}</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <!-- ==================== 入场密钥轮换（ADR 0033 D4） ==================== -->
+          <section>
+            <h3 class="wb-section-title">{{ t('pairing.key.sectionTitle') }}</h3>
+            <div
+              class="px-4 py-3.5 rounded-[10px] border border-[var(--border)] bg-[var(--bg-card)] flex items-center justify-between gap-4"
+            >
+              <p
+                class="flex-1 min-w-0 text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]"
+              >
+                {{ t('pairing.key.description') }}
+              </p>
+              <button
+                class="h-8 px-3 rounded-[6px] border border-[var(--border)] wb-mono text-[calc(11px*var(--ui-scale))] uppercase tracking-wide text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="isRotatingKey"
+                @click="showRotateKeyDialog = true"
+              >
+                {{ t('pairing.key.rotate') }}
+              </button>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </div>
+
+    <!-- 移除设备确认 -->
+    <PluginModal
+      v-model="showRemoveDeviceDialog"
+      :title="t('pairing.device.confirmRemove')"
+      size="sm"
+    >
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">
+        {{ t('pairing.device.confirmRemoveMsg') }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button class="wb-btn-ghost" @click="showRemoveDeviceDialog = false">
+            {{ t('pairing.button.cancel') }}
+          </button>
+          <button class="wb-btn-primary bg-[var(--color-danger)]" @click="confirmRemoveDevice">
+            {{ t('pairing.button.remove') }}
+          </button>
+        </div>
+      </template>
+    </PluginModal>
+    <!-- 轮换入场密钥确认 -->
+    <PluginModal
+      v-model="showRotateKeyDialog"
+      :title="t('pairing.key.confirmTitle')"
+      size="sm"
+    >
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">
+        {{ t('pairing.key.confirmMsg') }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button class="wb-btn-ghost" @click="showRotateKeyDialog = false">
+            {{ t('pairing.button.cancel') }}
+          </button>
+          <button
+            class="wb-btn-primary"
+            :disabled="isRotatingKey"
+            @click="confirmRotateKey"
+          >
+            {{ t('pairing.key.rotate') }}
+          </button>
+        </div>
+      </template>
+    </PluginModal>
+  </div>
+</template>
+
+<script setup lang="ts">
+/**
+ * DeviceCenterView — 设备与配对页面（宿主 `DevicesView.vue` 的插件版，票 14）
+ *
+ * What to build（票面）：设备配对 / 已配对设备两块视图搬入插件并经侧边栏目录承载，
+ * 位置与外观不变；配对码展示与倒计时、QR 生成、设备撤销确认全在插件内完成。
+ *
+ * 与宿主原页的刻意差异（票内记录）：
+ * - 取数只走插件命令通道与 PluginContext（spec D2）：宿主 `generate_pairing_code` /
+ *   `list_paired_devices` 等命令面是宿主 UI 的兼容接缝，插件不得直调（C4 强校验）；
+ * - 用户选择的对外 IP 落插件存储（宿主原为 `AppConfig.network.qr_host`）——QR 载荷
+ *   的 host 由插件传入，线协议形状不变；
+ * - 宿主 `PluginPageToolbar target="devices"` 不再渲染（宿主原页让位后挂载点消失），
+ *   与票 13 会话页同一处置。
+ */
+import { computed, inject, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { toast } from 'vue-sonner'
+import QRCode from 'qrcode'
+import Select from '@binblink/bedcode-plugin-sdk-desktop/ui'
+import { getRouter, type PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import PluginModal from './PluginModal.vue'
+import { useDeviceCenter } from '../composables/useDeviceCenter'
+
+const context = inject<PluginContext>('pluginContext')!
+const { t } = context.i18n
+
+const {
+  pairingCode,
+  remainingSeconds,
+  isGenerating,
+  loadNetwork,
+  selectHost,
+  generateCode: generatePairingCode,
+  restoreCode,
+  clearCode,
+  qrRemainingSeconds,
+  isQrLoading,
+  hasQr,
+  generateQr,
+  restoreQr,
+  clearQr,
+  qrPayload,
+  onlineDevices,
+  offlineDevices,
+  loadDevices,
+  removeDevice: revokeDevice,
+  rotateSigningKey,
+  loadAuthCenterStatus,
+  port,
+  addresses,
+  selectedHost,
+  ipOptions,
+  subscribeHostEvents,
+  dispose,
+} = useDeviceCenter(context)
+
+// ==================== Tab 切换 ====================
+type TabKey = 'pairing' | 'devices'
+const activeTab = ref<TabKey>('pairing')
+const deviceTabs: { key: TabKey; label: string }[] = [
+  { key: 'pairing', label: t('pairing.tab.pairing') },
+  { key: 'devices', label: t('pairing.tab.devices') },
+]
+
+/** 工具栏展示的当前对外 IP（未选择时显示占位文案） */
+const displayIp = computed(() => selectedHost.value || t('pairing.network.notSelected'))
+
+// ==================== 撤销确认 ====================
+const showRemoveDeviceDialog = ref(false)
+const pendingDeviceId = ref<string | null>(null)
+
+// ==================== 入场密钥轮换确认（ADR 0033 D4） ====================
+const showRotateKeyDialog = ref(false)
+const isRotatingKey = ref(false)
+
+// ==================== 认证中心就位横幅（ADR 0031 欠账 / 票 08 §8.1） ====================
+/** 非 null 即「中心未就位」；`unknown` 区分「读不到状态」与「确知未注册」 */
+const centerStatusError = ref<null | 'not_ready' | 'unknown'>(null)
+
+/**
+ * 读认证中心就位状态并更新横幅
+ *
+ * **三态**（不得压成两态）：
+ * - `registered: true` → 无横幅（正常态）
+ * - `registered: false` → 「未就位」横幅：入站必被拒，给出修复指引
+ * - **读失败** → 「状态未知」横幅：**不**当作未就位。两者正确动作不同
+ *   （前者是重建产物，后者是通信/宿主问题），混同会把排障方向带偏。
+ */
+async function refreshCenterStatus(): Promise<void> {
+  try {
+    const status = await loadAuthCenterStatus()
+    centerStatusError.value = status.registered ? null : 'not_ready'
+  } catch (e) {
+    console.error('[Device Center] auth center status unavailable:', e)
+    centerStatusError.value = 'unknown'
+  }
+}
+
+// ==================== QR 渲染 ====================
+
+const qrCanvasRef = ref<HTMLCanvasElement | null>(null)
+
+/**
+ * 把当前 QR 载荷绘制到 canvas（幂等；载荷缺失 / canvas 未挂载时跳过）
+ *
+ * 三个触发点缺一不可（2026-09-26 修复「切走再切回来二维码空白」）：
+ * 1. 载荷变化——生成 / 恢复 / 扫码后自动重生成；
+ * 2. canvas 元素重建——切到「设备列表」Tab 再切回时 `v-if` 会重建 canvas，
+ *    此时载荷未变、仅靠 1 不会重画，画布保持空白（2026-09-26 单测复现）；
+ * 3. KeepAlive 重新激活（路由切回）—— 路由页被保活时不重建组件，canvas 与
+ *    载荷都可能未变，但重新进入页面必须保证图案可见，不依赖 WebView 对
+ *    「移出文档再移回」的 canvas 内容保留行为。
+ */
+async function renderQrCanvas() {
+  const payload = qrPayload()
+  const canvas = qrCanvasRef.value
+  if (!payload || !canvas) return
+  try {
+    await QRCode.toCanvas(canvas, payload, {
+      width: 192,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+    })
+  } catch (e) {
+    console.error('[Device Center] render qr canvas failed:', e)
+  }
+}
+
+watch(() => qrPayload(), () => void renderQrCanvas(), { flush: 'post' })
+// canvas 元素重建（Tab 切换 / 分支重渲染）后补画：载荷不变时上面的 watch 不会触发
+watch(qrCanvasRef, () => void renderQrCanvas(), { flush: 'post' })
+// 路由切回（KeepAlive 激活）时确保图案可见
+onActivated(() => {
+  void renderQrCanvas()
+  // KeepAlive 切回页面时刷新网络信息（端口）：服务器可能已在期间重启换端口，
+  // 不刷新会继续显示旧端口（与 ServerView 的「保存端口 → 立即重启」配套）
+  void loadNetwork()
+})
+
+// ==================== 交互编排 ====================
+
+/** 选择对外 IP（插件存储持久化；同时刷新 QR 载荷） */
+function handleIpSelect(value: string | number) {
+  if (value === '') return
+  void selectHost(String(value)).then(() => {
+    if (hasQr.value) void generateQr(String(value))
+  })
+}
+
+/** 生成配对码（含失败提示；无码视为生成失败，不静默） */
+async function generateCode() {
+  try {
+    const info = await generatePairingCode()
+    if (!info?.code) {
+      toast.error(t('pairing.code.generateFailedNoCode'))
+    }
+  } catch (e) {
+    console.error('[Device Center] generate pairing code failed:', e)
+    toast.error(t('pairing.code.generateFailed'))
+  }
+}
+
+/** 取消配对码（清除后端状态 + 停表） */
+function cancelPairing() {
+  void clearCode()
+}
+
+/** 刷新：网络信息 + 设备列表 + 就位状态一并取最新 */
+async function refreshAll() {
+  // 本机地址会随换网络 / DHCP 续租变化，服务器端口也可能已重启换过（与 ServerView 的
+  // 「保存端口 → 立即重启」配套）：刷新必须重读网络信息，否则工具栏与二维码继续挂旧地址
+  await loadNetwork()
+  // 已挂出二维码时按新地址重组载荷（token 不变、不重新签发）：地址已变却还挂着旧 IP 的码，
+  // 扫出来照样连不上
+  if (hasQr.value) {
+    await restoreQr(selectedHost.value || undefined)
+  }
+  await loadDevices()
+  // 顺带重读就位状态：用户「停用并重新启用插件」后的第一手反馈就来自这次点击，
+  // 不必等重启页面（横幅正是为「修完立刻看到好了」而存在的）
+  await refreshCenterStatus()
+  toast.success(t('pairing.toast.listRefreshed'))
+}
+
+/** 打开某设备的连接历史页（同一插件的另一个侧边栏目录，query 传设备 id） */
+function viewHistory(deviceId: string) {
+  void getRouter().push({
+    name: 'plugin-sidebar-view',
+    params: { pluginId: context.id, viewId: 'session.history' },
+    query: { deviceId },
+  })
+}
+
+function removeDevice(deviceId: string) {
+  pendingDeviceId.value = deviceId
+  showRemoveDeviceDialog.value = true
+}
+
+async function confirmRemoveDevice() {
+  if (!pendingDeviceId.value) return
+  try {
+    await revokeDevice(pendingDeviceId.value)
+    toast.success(t('pairing.device.removed'))
+  } catch (e) {
+    void e
+    toast.error(t('pairing.error.revokeFailed'))
+  } finally {
+    showRemoveDeviceDialog.value = false
+    pendingDeviceId.value = null
+  }
+}
+
+/**
+ * 确认轮换入场签发密钥（ADR 0033 D4）
+ *
+ * 轮换**不撤销既有凭证**（撤销走 `revokeDevice`），上一代密钥在宽限期内继续
+ * 验签，所以这里**不**触发设备列表刷新——列表不会因轮换而变化。
+ * `kid` 只是代次标识，回显给用户便于对照日志（不含密钥材料）。
+ */
+async function confirmRotateKey() {
+  if (isRotatingKey.value) return
+  isRotatingKey.value = true
+  try {
+    const result = await rotateSigningKey()
+    toast.success(t('pairing.key.rotatedTo', { kid: result.kid }))
+  } catch (e) {
+    console.error('[Device Center] rotate entry signing key failed:', e)
+    toast.error(t('pairing.key.error'))
+  } finally {
+    isRotatingKey.value = false
+    showRotateKeyDialog.value = false
+  }
+}
+
+// ==================== 日期格式化（跟随宿主 locale，与宿主原页同口径） ====================
+
+const dateFormatter = computed(() => {
+  const locale = context.i18n.getI18n()?.global?.locale?.value === 'en' ? 'en-US' : 'zh-CN'
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+
+function formatDate(dateStr?: string | null): string {
+  if (!dateStr) return t('pairing.status.unknown')
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return t('pairing.status.unknown')
+  return dateFormatter.value.format(date)
+}
+
+// ==================== 生命周期 ====================
+
+onMounted(async () => {
+  // 每一段独立捕获：任一路失败只降级本段（D7 故障隔离），不让页面整体不可用
+  try {
+    await Promise.all([loadNetwork(), loadDevices()])
+  } catch (e) {
+    console.error('[Device Center] load device data failed:', e)
+    toast.error(t('pairing.error.loadFailed'))
+  }
+  // 认证中心就位横幅（独立于数据加载：它自己处理失败，不弹 toast 扰动用户）
+  await refreshCenterStatus()
+  // 恢复既有 QR / 配对码（不重新生成，与宿主原页一致）
+  await restoreQr(selectedHost.value || undefined)
+  await restoreCode()
+  // 后端事件驱动状态流转（配对码自动清除 / 设备在线态 / 扫码消耗重生成）
+  subscribeHostEvents((code) => {
+    toast.info(t('pairing.code.request', { code }))
+  })
+})
+
+onUnmounted(() => {
+  // 停止倒计时并释放宿主事件订阅：页面切走即释放，切回重新订阅（与宿主原页同语义）
+  dispose()
+})
+</script>
+
+<style scoped>
+/* Tab 切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* / .page-swap）：
+   名字恒为 `page`，时长/缓动/位移走 --motion-page-* token，效果变体由
+   <html data-page-fx> 选（全端唯一切换点 = 宿主 src/utils/pageTransition.ts）。
+   本文件不再自带 .tab-fade-* —— 同一份页面过渡散落多处必然漂移。 */
+</style>

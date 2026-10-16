@@ -1,0 +1,1104 @@
+//! 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端
+//!
+//! 自 `com.bedcode.auto-task` 插件搬迁（spec D8-P4「任务域并入」），按域重组为
+//! 本模块目录，不做逐文件平移（D1）。本插件后端只经宿主 `host-*` 基础服务取能力
+//! （D2 红线）：文件读写（`host-fs`）、插件私有库（`host-plugin-database`）、事件
+//! 广播（`host-events` / `host-bus`）、配置读取（`host-config`）、定时器
+//! （`host-timer`）——不新增任何宿主命令。
+//!
+//! 模块构成（对应 auto-task 六模块，按依赖序）：
+//! - [`agent`]：Agent 能力 registry（命令过滤 / agent 识别 / 会话集成形态）
+//! - [`hooks`]：Agent 集成（多 Agent hooks 安装 / 清理 / 模板版本触发重写）
+//! - [`state`]：会话状态与会话映射 + 任务状态记录/广播 + 自动授权模式
+//! - [`queue`]：任务队列调度与广播（随 state 一起搬迁——state↔queue 循环依赖，
+//!   无法分开编译；票据 16 完成定时驱动部分与 HTTP 面）
+//! - [`preset`]：预设任务（一次性消耗，入队后删除）
+//!
+//! **编排反转（票 15 硬性验收）**：本插件是会话编排方——会话创建由本插件经
+//! `host-session.create-with-spec` 发起（launch 域），集成注入（写 hooks）由本插件
+//! 自己驱动：activate 注册生命周期监听器，`on-session-lifecycle(Creating)` 即调用
+//! [`hooks::ensure_agent_integration`]（resource_dir 经 `host-app.plugin-resource-dir`
+//! 原语自取，不再依赖事件 payload）。
+//! 反向回调兼容面（`terminal-hooks` / `on-session-lifecycle` / `on-input-submitted`）
+//! 保留在 SDK，但本插件不再依赖它驱动主流程——创建编排在插件侧，回调只是资源
+//! 目录与其它创建路径（移动端 HTTP）的传输载体。
+//!
+//! **async 化（票 15 硬性验收）**：wasip3 async store 内整批文件遍历与长循环必须
+//! 周期让出（调用宿主原语即 await 点），禁止无让出的阻塞循环拖垮同实例配对回调
+//! （D7）。长循环统一经 [`yield_guard`] 计数让出。
+//!
+//! **错误隔离（票 15 硬性验收）**：三域（配对/信任、会话/配置、任务）各自 `Result`
+//! 边界、禁止跨域持锁；定时器回调按命令名分域计数失败，失败只降级本域。
+
+pub mod agent;
+pub mod config_queue;
+pub mod hooks;
+pub mod preset;
+pub mod queue;
+pub mod scheduled;
+pub mod state;
+
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostLog, HostPluginDatabase};
+use bedcode_plugin_api::wasm_host::WasmHost;
+use serde::Serialize;
+
+/// 长循环让出护栏（WASI 0.3 async 语义）
+///
+/// wasmtime async store 中宿主 import 调用是唯一的 await 点：纯 guest 计算循环
+/// 不触发让出，长时间无宿主调用会阻塞同一 store 上的配对回调（D7 错误隔离——
+/// 配对不得阻塞任务 tick）。本护栏每 `TASK_YIELD_INTERVAL` 次调用一次廉价宿主
+/// 原语（`config_get(CurrentTimeMs)`，白名单键、无副作用）制造 await 点。
+///
+/// 用法：`let mut counter = 0u64; for ... { ...; yield_guard(host, &mut counter); }`
+pub fn yield_guard(host: &WasmHost, counter: &mut u64) {
+    *counter += 1;
+    if *counter % TASK_YIELD_INTERVAL == 0 {
+        // 仅需让出：忽略返回值（读宿主时钟无副作用，失败也不影响任务逻辑）
+        let _ = host.config_get(ConfigKey::CurrentTimeMs);
+    }
+}
+
+/// 让出频率：每 64 次迭代让出一次（host 调用本身廉价；过高频会放大宿主往返）
+pub const TASK_YIELD_INTERVAL: u64 = 64;
+
+/// 任务历史表建表 SQL（按语句拆分，宿主 plugin_db_execute 单语句执行）
+///
+/// 与 auto-task 原 schema 逐字一致（对照测试断言同一输入 → 同一写入结果，
+/// 表结构漂移会破坏等价性）。
+pub const TASK_HISTORY_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS task_history (
+    id              TEXT PRIMARY KEY,
+    description     TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    agent           TEXT,
+    source          TEXT,
+    session_id      TEXT,
+    claude_sid      TEXT,
+    working_dir     TEXT,
+    exit_reason     TEXT,
+    questions       TEXT,
+    auto_approve    INTEGER DEFAULT 0,
+    event_time      TEXT,
+    input_tokens    INTEGER,
+    output_tokens   INTEGER,
+    created_at      TEXT NOT NULL,
+    started_at      TEXT,
+    completed_at    TEXT,
+    updated_at      TEXT NOT NULL
+)"#,
+    "CREATE INDEX IF NOT EXISTS idx_task_history_status ON task_history(status)",
+    "CREATE INDEX IF NOT EXISTS idx_task_history_session_id ON task_history(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_task_history_created_at ON task_history(created_at)",
+];
+
+/// Claude Code session ↔ BedCode PTY session 映射表建表 SQL（按语句拆分）
+///
+/// 表名统一为 `task_session_mapping`（票 16 / D5）：它是**任务域**的记账（Agent 会话
+/// ↔ 床码会话），不是会话引擎的表；旧名由 `crate::schema` 的幂等重命名迁移改过来。
+pub const SESSION_MAPPING_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS task_session_mapping (
+    claude_sid  TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+)"#,
+    "CREATE INDEX IF NOT EXISTS idx_task_session_mapping_session ON task_session_mapping(session_id)",
+];
+
+/// 会话级开关表建表 SQL（按语句拆分）
+///
+/// auto_execute（自动执行）/ auto_answer（自动应答）两个独立开关。表名带 `task_`
+/// 前缀的理由同 [`SESSION_MAPPING_SCHEMA`]——HTTP 端点 `session-settings` 是**线协议**，
+/// 一个字符都不改（票 16），与私有库表名无关。
+pub const SESSION_SETTINGS_SCHEMA: &[&str] = &[r#"
+CREATE TABLE IF NOT EXISTS task_session_settings (
+    session_id   TEXT PRIMARY KEY,
+    auto_execute INTEGER NOT NULL DEFAULT 0,
+    auto_answer  INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+)"#];
+
+/// 定时自动任务表建表 SQL（按语句拆分）
+///
+/// 状态机：pending（待触发）→ creating（会话已创建，等 Created 事件入队）
+/// → executed（prompts 已入队）；failed（会话创建失败）/ missed（错过不补跑）。
+/// session_id 列关联触发时创建的会话，是 Created 事件的匹配键。
+pub const SCHEDULED_JOBS_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS task_scheduled (
+    id          TEXT PRIMARY KEY,
+    name        TEXT,
+    config_id   TEXT NOT NULL,
+    trigger_at  TEXT NOT NULL,
+    prompts     TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    session_id  TEXT,
+    created_at  TEXT NOT NULL,
+    executed_at TEXT,
+    error       TEXT
+)"#,
+    "CREATE INDEX IF NOT EXISTS idx_task_scheduled_status ON task_scheduled(status, trigger_at)",
+];
+
+/// 初始化任务域全部表（幂等：逐条 CREATE TABLE IF NOT EXISTS）
+///
+/// **必须在 `crate::schema::migrate_via_host()` 之后调用**：旧库若先被这里建出统一名
+/// 的空表，重命名迁移会因「新旧名同时存在」跳过该条，旧表里的真实数据留在无人读的
+/// 名字下（现象是升级后列表变空而非报错）。
+///
+/// 顺序由**运行时强制**而非调用点纪律：建表前先查 `sqlite_master`——若仍有迁移清单
+/// 里的旧表名存在且对应新名未建，说明迁移没跑或跑到一半，直接显性报错（fail-visible：
+/// 不静默建出空前缀表把旧数据困在旧名下）
+pub fn ensure_schema_via_host(host: &WasmHost) -> Result<(), String> {
+    // 顺序守卫：迁移清单里的旧表名若仍存在 → 迁移未完成，拒绝建表
+    let tables = host
+        .plugin_db_query("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .map_err(|e| format!("task schema order check query failed: {}", e.message))?;
+    let existing: std::collections::HashSet<String> = tables
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            row.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+    let unrenamed: Vec<&str> = crate::schema::TABLE_RENAMES
+        .iter()
+        .filter(|r| existing.contains(r.legacy) && !existing.contains(r.prefixed))
+        .map(|r| r.legacy)
+        .collect();
+    if !unrenamed.is_empty() {
+        return Err(format!(
+            "task schema init requires prefix migration first: legacy table(s) still present \
+             without prefixed counterpart: {} (run crate::schema::migrate_via_host() before \
+             ensure_schema_via_host)",
+            unrenamed.join(", ")
+        ));
+    }
+
+    for (name, schema) in [
+        ("task_history", TASK_HISTORY_SCHEMA),
+        ("task_session_mapping", SESSION_MAPPING_SCHEMA),
+        ("task_session_settings", SESSION_SETTINGS_SCHEMA),
+        ("task_queue", queue::TASK_QUEUE_SCHEMA),
+        ("task_config_queues", config_queue::CONFIG_QUEUE_SCHEMA),
+        ("task_preset", preset::PRESET_TASKS_SCHEMA),
+        ("task_scheduled", SCHEDULED_JOBS_SCHEMA),
+    ] {
+        for stmt in schema {
+            host.plugin_db_execute(stmt)
+                .map_err(|e| format!("task schema init failed on {}: {}", name, e))?;
+        }
+    }
+    Ok(())
+}
+
+// ==================== 定时器分域回调（D7 错误隔离） ====================
+
+/// 定时器回调命令名：宿主到点调用本插件该 command（ADR 0003）
+pub const SCHEDULER_TICK_COMMAND: &str = "session.task.scheduler-tick";
+
+/// 定时器间隔（秒）——与旧插件并行期保持 1s：延迟 clear 的精度是可感知行为，
+/// 放宽间隔会让「上一个任务输出被立刻清屏」
+pub const SCHEDULER_INTERVAL_SECS: u64 = 1;
+
+/// tick 分发表里的队列域步骤名（按名计数失败）
+pub const DOMAIN_QUEUE_DELAY_CLEAR: &str = "queue-delay-clear";
+
+/// tick 分发表里的静默超时域步骤名
+pub const DOMAIN_QUEUE_SILENCE: &str = "queue-silence-check";
+
+/// tick 分发表里的重试停滞收敛域步骤名
+///
+/// 与 [`DOMAIN_QUEUE_SILENCE`] 分开而非合并：两者判据不同（12h 守「合法长任务
+/// 不许误杀」/ 20min 守「过渡态必须有界」）、收敛后的动作也不同（本域收敛后要续跑
+/// 队列）。独立成域才能在 tick 报告里分开归因（某个域失败只降级该域，D7）。
+pub const DOMAIN_QUEUE_RETRYING: &str = "queue-retrying-check";
+
+/// tick 分发表里的定时任务域步骤名（票 16）
+///
+/// 旧 auto-task 把「定时任务四步」和「静默看门狗」串在同一个 `handle_scheduler_tick`
+/// 里（看门狗是它的第 4 步），合并后拆成两个独立域：定时域内某一步失败不再连带把
+/// 看门狗一起跳过，反之亦然（D7 单域降级）。一轮 tick 内各步仍恰好执行一次。
+pub const DOMAIN_SCHEDULED_TRIGGER: &str = "scheduled-trigger";
+
+/// 单域失败明细（`(域名, 原因)`）
+#[derive(Debug, Clone, Serialize)]
+pub struct TickFailure {
+    pub domain: String,
+    pub reason: String,
+}
+
+/// tick 执行报告（外部可见：宿主定时器回调的返回值）
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TickReport {
+    /// 本轮成功执行的域
+    pub executed: Vec<String>,
+    /// 本轮失败但**未中断其余域**的域（D7：失败只降级本域）
+    pub failed: Vec<TickFailure>,
+}
+
+/// 按域依次执行 tick 步骤，单域失败只登记该域而不中断其余域
+///
+/// **错误隔离契约（票 15 硬性验收第 6 项）**：三域同实例（配对 / 会话 / 任务），
+/// 任一步失败必须只降级本域；这里是该契约的 executable 形态——只要还想让后续的
+/// 定时任务域（票 16）在被前一个域拖累时仍能跑起来，就必须顺序独立执行。
+///
+/// **panic 边界（与契约的区分）**：隔离保证只对 `Result::Err` 生效；域闭包 panic
+/// 会穿出本函数（剩余域不跑）。wasm 目标以 `panic="abort"` 编译（wasmtime 侧
+/// 把 trap 视为实例失败），`catch_unwind` 在此不可用——panic 视为整个实例失败、
+/// 不在 D7 隔离保证内，由宿主按实例故障处置。native 单测下同样穿出（fail-fast，
+/// 测试立即红）——这是有意的：panic 是编程错误，不该被当成可恢复的域故障吞掉。
+pub fn run_tick_domains(
+    steps: Vec<(&'static str, Box<dyn FnOnce() -> Result<(), String>>)>,
+) -> TickReport {
+    let mut report = TickReport::default();
+    for (domain, step) in steps {
+        match step() {
+            Ok(()) => report.executed.push(domain.to_string()),
+            Err(reason) => report.failed.push(TickFailure {
+                domain: domain.to_string(),
+                reason,
+            }),
+        }
+    }
+    report
+}
+
+/// 任务域 tick：宿主定时器到点调用
+///
+/// 四个域依次独立执行（票 15 两域 + 票 16 定时任务域 + 重试停滞收敛域）：
+/// - [`DOMAIN_QUEUE_DELAY_CLEAR`]：waiting 态项登记的延迟 clear 到点下发
+/// - [`DOMAIN_QUEUE_SILENCE`]：executing 态静默超时 → 复用会话结束兜底收敛
+/// - [`DOMAIN_QUEUE_RETRYING`]：retrying 过渡态静默超时 → 收敛并续跑队列
+///   （见 [`queue::check_retrying_silence`]）
+/// - [`DOMAIN_SCHEDULED_TRIGGER`]：定时任务宽限兑底 / 错过判定 / 到期触发 /
+///   定时会话首轮下发兜底（见 [`scheduled::handle_scheduler_tick`]）
+///
+/// 单域失败只登记该域，不短路其余域（D7）。
+pub fn tick_via_host(host: &WasmHost, now_utc: &str) -> serde_json::Value {
+    // 闭包箱必须是 'static：`WasmHost` 是 Copy 的 unit struct，`now_utc` 转所有权字符串
+    let host = *host;
+    let now = now_utc.to_string();
+    let steps: Vec<(&'static str, Box<dyn FnOnce() -> Result<(), String>>)> = vec![
+        (
+            DOMAIN_QUEUE_DELAY_CLEAR,
+            Box::new({
+                let now = now.clone();
+                move || queue::send_due_clears(&host, &now)
+            }),
+        ),
+        (
+            DOMAIN_QUEUE_SILENCE,
+            Box::new({
+                let now = now.clone();
+                move || queue::check_executing_silence(&host, &now)
+            }),
+        ),
+        (
+            DOMAIN_QUEUE_RETRYING,
+            Box::new({
+                let now = now.clone();
+                move || queue::check_retrying_silence(&host, &now)
+            }),
+        ),
+        (
+            DOMAIN_SCHEDULED_TRIGGER,
+            Box::new(move || scheduled::handle_scheduler_tick(&host, &now)),
+        ),
+    ];
+    let report = run_tick_domains(steps);
+    for failure in &report.failed {
+        host.log_warn(&format!(
+            "task tick: domain '{}' failed, degraded but others unaffected: {}",
+            failure.domain, failure.reason
+        ));
+    }
+    serde_json::to_value(&report).unwrap_or_else(|e| {
+        serde_json::json!({ "executed": [], "failed": [{ "domain": "report-serialize", "reason": e.to_string() }] })
+    })
+}
+
+// ==================== Tests ====================
+
+/// 启动恢复：activate 必须同时跑两个域的恢复（任务行/队列项 + 定时任务 creating）
+///
+/// 宿主重启时会话与 agent 进程一起消失，两处遗留各需一条恢复：任务域的
+/// `in_progress` / `asking` / `retrying` 行与未终结队列项（否则队列被
+/// `has_active_task` 恒真堵死），定时域的 `creating` 任务（否则 Created 事件永不到达）。
+/// 任缺一条都不会编译报错、不会让测试变红，只在真实重启后留下悬挂项——故以结构锁
+/// 钉住 activate 的调用面（native 无法跑 activate：无宿主 import）。
+#[test]
+fn activate_runs_both_restart_recoveries() {
+    let src = include_str!("../lib.rs");
+    let body = src
+        .split("fn activate() -> anyhow::Result<()> {")
+        .nth(1)
+        .expect("activate body must exist")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    assert!(
+        body.contains("state::recover_running_tasks_on_restart("),
+        "activate 缺任务域启动恢复：上一进程遗留的运行中/重试中任务行与在途队列项会永久悬挂"
+    );
+    assert!(
+        body.contains("scheduled::recover_creating_jobs("),
+        "activate 缺定时域启动恢复：creating 态定时任务会永久等待永不到达的 Created 事件"
+    );
+    // 顺序：建表先于恢复（表不在就无从更新），会话表清空先于任务域恢复
+    //（口径是「会话不在登记域才收敛」）
+    let schema_at = body
+        .find("task::ensure_schema_via_host(")
+        .expect("task schema init must be called at activate");
+    let recovery_at = body
+        .find("state::recover_running_tasks_on_restart(")
+        .expect("task recovery must be called at activate");
+    assert!(
+        schema_at < recovery_at,
+        "任务域建表必须早于启动恢复（表不存在时恢复无从执行）"
+    );
+    let session_init_at = body
+        .find("session::ensure_schema_via_host()")
+        .expect("session schema init must be called at activate");
+    assert!(
+        session_init_at < recovery_at,
+        "会话表清空必须早于任务域启动恢复（恢复口径是「会话不在登记域才收敛」）"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// tick 分发表的错误隔离契约：单域失败**只登记该域**，不得中断其余域
+    ///
+    /// 三域同实例（D7）：若第一个域的失败会短路后续域，定时任务域（票 16 并入同一
+    /// tick）就会在队列域出问题的时间窗内彻底停摆——本用例把「只降级本域」从事后
+    /// 解释变成可执行断言。
+    #[test]
+    fn tick_domains_isolate_failures_and_keep_running_others() {
+        // 闭包箱要求 'static：用共享单元格记录执行顺序（不借用局部变量）
+        let ran = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+        let first_trace = ran.clone();
+        let second_trace = ran.clone();
+        let report = run_tick_domains(vec![
+            (
+                DOMAIN_QUEUE_DELAY_CLEAR,
+                Box::new(move || {
+                    first_trace.borrow_mut().push(DOMAIN_QUEUE_DELAY_CLEAR);
+                    Err("boom".to_string())
+                }),
+            ),
+            (
+                DOMAIN_QUEUE_SILENCE,
+                Box::new(move || {
+                    second_trace.borrow_mut().push(DOMAIN_QUEUE_SILENCE);
+                    Ok(())
+                }),
+            ),
+        ]);
+
+        assert_eq!(
+            *ran.borrow(),
+            vec![DOMAIN_QUEUE_DELAY_CLEAR, DOMAIN_QUEUE_SILENCE],
+            "失败域之后的域必须继续执行（不得短路）"
+        );
+        assert_eq!(report.executed, vec![DOMAIN_QUEUE_SILENCE.to_string()]);
+        assert_eq!(
+            report.failed.len(),
+            1,
+            "只登记真正失败的域, got: {:?}",
+            report.failed
+        );
+        assert_eq!(report.failed[0].domain, DOMAIN_QUEUE_DELAY_CLEAR);
+        assert_eq!(report.failed[0].reason, "boom");
+    }
+
+    /// 让出护栏：计数递增，且只在到达 `TASK_YIELD_INTERVAL` 时触发一次宿主调用
+    ///
+    /// 断言的是「长循环有 await 点」这一 D7 约束的形状（按频率让出，而非每次
+    /// 迭代都打宿主——那会把循环变成 O(n) 次往返）。宿主时钟读取本身无副作用，
+    /// 故此处验证计数语义而非返回值。
+    #[test]
+    fn yield_guard_counts_and_fires_on_interval() {
+        let mut counter = 0u64;
+        for _ in 0..(TASK_YIELD_INTERVAL - 1) {
+            yield_guard(&WasmHost, &mut counter);
+        }
+        assert_eq!(counter, TASK_YIELD_INTERVAL - 1, "每次迭代只累加计数");
+        assert_ne!(counter % TASK_YIELD_INTERVAL, 0, "未到阈值不得触发让出");
+    }
+
+    /// 跨域持锁禁令（D7）：任务域源码不得引用配对 / 信任 / 同意域的进程级状态
+    ///
+    /// 那三个域各自持有 `static Mutex`（配对码 / QR 管理器等），任务域一旦触碰就
+    /// 意味着任务 tick 与配对调用可能互相阻塞——这是三域合并后**唯一可能**把故障
+    /// 半径从一个域扩散到整个产品面的路径。源码扫描是这道边界可单测的形态
+    /// （不扫描本文件：护栏自身的字面量会自匹配）。
+    #[test]
+    fn task_modules_reference_no_other_domain_state() {
+        for (file, src) in task_domain_sources() {
+            for forbidden in [
+                "crate::pairing",
+                "crate::trust",
+                "crate::consent",
+                "CURRENT_CODE",
+                "QR_MANAGER",
+            ] {
+                assert!(
+                    !src.contains(forbidden),
+                    "任务域不得跨域引用 {forbidden}（{file}）：D7 禁止跨域持锁"
+                );
+            }
+        }
+    }
+
+    /// 任务域全部模块源码（`(文件名, 内容)`）——源码扫描类用例共用
+    ///
+    /// 不含本文件：护栏自身的字面量（旧表名等）会自匹配。
+    fn task_domain_sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("agent.rs", include_str!("agent.rs")),
+            ("hooks.rs", include_str!("hooks.rs")),
+            ("state.rs", include_str!("state.rs")),
+            ("queue.rs", include_str!("queue.rs")),
+            ("preset.rs", include_str!("preset.rs")),
+            ("scheduled.rs", include_str!("scheduled.rs")),
+        ]
+    }
+
+    /// P1-b：任务域不得再经「会话真源已在插件登记域」后失效的宿主原语
+    ///
+    /// `host-terminal.terminal_send` 与 `host-session.{get,close,list,annotate,…}`
+    /// 的属主判定与会话查询都查内核 `SessionManager`；P1-b 起创建走 `host-pty.spawn`，
+    /// 内核不再登记会话 → 这些调用对真实会话恒失败（`not owner of session` /
+    /// `NotFound`），且失败点静默（下发任务被标中断、终端输入丢失）。
+    /// 队列下发与读面已改走 `crate::session::{input_via_pty, view_via_host,
+    /// close_via_pty, internal_records_json}`；本锁防的是「顺手改回宿主绕一圈」。
+    #[test]
+    fn task_sources_never_route_through_dead_host_session_surface() {
+        let dead_calls = [
+            "host.terminal_send(",
+            "host.session_get(",
+            "host.session_close(",
+            "host.session_list(",
+            "host.session_annotate(",
+            "host.session_output_ring_fetch(",
+        ];
+        for (file, src) in task_domain_sources() {
+            for dead in dead_calls {
+                assert!(
+                    !src.contains(dead),
+                    "{file} 仍在调已失效的宿主会话面 {dead}：真源在本插件登记域，\
+                     经宿主绕一圈必拿 not owner of session / NotFound"
+                );
+            }
+        }
+    }
+
+    /// 票 16（D5）：私有库表名统一后，任务域源码里不得再出现旧表名的 **SQL 用法**
+    ///
+    /// 只扫 SQL 关键字紧邻的位置：`upsert_session_mapping` 之类的函数名与
+    /// `session-settings` 这类线协议路径都合法保留（后者一个字符都不能改）。
+    /// 漏改一处 SQL 的后果是运行时「no such table」，而编译与大部分单测发现不了
+    /// ——native 用例不连真库，只有这条静态护栏能挡。
+    #[test]
+    fn task_sources_only_use_prefixed_table_names() {
+        let keywords = [
+            "FROM ", "INTO ", "UPDATE ", "JOIN ", "EXISTS ", "TABLE ", "ON ",
+        ];
+        for (file, src) in task_domain_sources() {
+            for legacy in crate::schema::TABLE_RENAMES {
+                for kw in keywords {
+                    let needle = format!("{}{}", kw, legacy.legacy);
+                    assert!(
+                        !src.contains(&needle),
+                        "{file} 仍按旧名 {legacy:?} 写 SQL（找到 `{needle}`）：表名已统一到域前缀"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 统一后的新表名必须在任务域建表语句里出现（防「只改读不改写」的半迁移）
+    #[test]
+    fn task_schema_creates_prefixed_tables() {
+        let schema = format!(
+            "{:?}",
+            (
+                TASK_HISTORY_SCHEMA,
+                SESSION_MAPPING_SCHEMA,
+                SESSION_SETTINGS_SCHEMA,
+                queue::TASK_QUEUE_SCHEMA,
+                preset::PRESET_TASKS_SCHEMA,
+                SCHEDULED_JOBS_SCHEMA,
+            )
+        );
+        for name in crate::schema::TABLE_RENAMES {
+            assert!(
+                schema.contains(name.prefixed),
+                "建表语句缺统一表名 {}（新库将建不出该表）",
+                name.prefixed
+            );
+        }
+    }
+
+    /// ABI v29：HTTP 路由注册表（`http_routes::ROUTES`）与分派常量逐字一致
+    ///
+    /// 静态声明面（manifest `contributes.httpEndpoints`）已随 ABI v29 退役（用户
+    /// 裁定 ④：不通过声明配置路由，插件代码运行时注册）。新的单一事实源 =
+    /// `http_routes::ROUTES`：注册表少一项 → 该端点被宿主 404（移动端与 hook
+    /// 脚本静默失效）；多一项 → 未实现的路径被放行到插件里才 404（审计歧义）。
+    /// 两向都比对，顺序不敏感（宿主按集合匹配）。
+    #[test]
+    fn http_routes_table_matches_dispatch_list() {
+        let mut declared: Vec<&str> = crate::http_routes::ROUTES.iter().map(|r| r.path).collect();
+        declared.sort();
+
+        let mut expected = HTTP_ENDPOINTS.to_vec();
+        expected.extend(crate::BUSINESS_HTTP_ENDPOINTS.iter().copied());
+        expected.extend(crate::FILE_BROWSE_HTTP_ENDPOINTS.iter().copied());
+        expected.extend(crate::AUTH_HTTP_ENDPOINTS.iter().copied());
+        expected.extend(crate::sessions_http::SESSIONS_HTTP_PATHS.iter().copied());
+        expected.push("terminal-bg");
+        expected.sort();
+        assert_eq!(
+            declared, expected,
+            "http_routes::ROUTES 必须与 task::HTTP_ENDPOINTS + BUSINESS_HTTP_ENDPOINTS + FILE_BROWSE_HTTP_ENDPOINTS + AUTH_HTTP_ENDPOINTS + SESSIONS_HTTP_PATHS + terminal-bg 逐项一致"
+        );
+        assert_eq!(HTTP_ENDPOINTS.len(), 17);
+        assert_eq!(crate::BUSINESS_HTTP_ENDPOINTS.len(), 2);
+        assert_eq!(
+            crate::FILE_BROWSE_HTTP_ENDPOINTS.len(),
+            8,
+            "票 03 五条 + 票 04 git 三条"
+        );
+        assert_eq!(crate::AUTH_HTTP_ENDPOINTS.len(), 7, "票 07 认证链七端点");
+        assert_eq!(crate::sessions_http::SESSIONS_HTTP_PATHS.len(), 7);
+        for endpoint in crate::GIT_HTTP_ENDPOINTS {
+            assert!(
+                declared.iter().any(|d| d == endpoint),
+                "注册表缺 git 域端点 {endpoint}"
+            );
+        }
+    }
+
+    /// ABI v29：免凭证档位集合与 [`crate::NO_AUTH_HTTP_ENDPOINTS`] + terminal-bg 逐字一致
+    ///
+    /// 三个方向各自锁死：
+    /// 1. ROUTES 里标 `none` 的端点 == 常量清单（少标 → hook / 配对链路被宿主判 401；
+    ///    多标 → 写端点对局域网匿名敞开）；
+    /// 2. 认证链七条与 hook 两条**必须**全在 none 清单里（这两批是「拿不到 JWT」的调用方）；
+    /// 3. terminal-bg 恒 none（CSS background-image 无法携带认证头）。
+    #[test]
+    fn none_auth_routes_cover_public_surface_and_match_no_auth_list() {
+        let mut none_registered: Vec<&str> = crate::http_routes::ROUTES
+            .iter()
+            .filter(|r| r.auth == "none")
+            .map(|r| r.path)
+            .collect();
+        none_registered.sort();
+        let mut expected_none = crate::NO_AUTH_HTTP_ENDPOINTS.to_vec();
+        expected_none.push("terminal-bg");
+        expected_none.sort();
+        assert_eq!(
+            none_registered, expected_none,
+            "auth:none 的端点集合必须与 NO_AUTH_HTTP_ENDPOINTS + terminal-bg 一致"
+        );
+
+        // 「拿不到 JWT 的调用方」两批必须全部在免凭证清单里
+        for endpoint in crate::AUTH_HTTP_ENDPOINTS
+            .iter()
+            .chain(&["task-status", "session-mode"])
+        {
+            assert!(
+                expected_none.contains(endpoint),
+                "{endpoint} 的调用方拿不到 JWT（hook 脚本 / 配对入口），必须声明 auth:none"
+            );
+        }
+        assert!(
+            expected_none.contains(&"terminal-bg"),
+            "terminal-bg 的调用方（CSS）拿不到 JWT"
+        );
+    }
+
+    /// 票 16（对照）：path 段与旧 auto-task 的分派集合完全相同
+    ///
+    /// golden 清单逐字取自 `plugins/auto-task/rust/src/lib.rs` 的 `_http_endpoint`
+    /// 分派（`task-queue/` + `scheduled-jobs/` + state 三路）。搬迁的硬约束是
+    /// 「基址随插件 id 改、path 段一个不改」（D1），这张清单就是那条约束的断言形态。
+    #[test]
+    fn http_paths_are_the_same_set_the_old_plugin_served() {
+        const GOLDEN: &[&str] = &[
+            "task-status",
+            "session-mode",
+            "session-settings",
+            "task-history/current",
+            "task-history/list",
+            "supported-agents",
+            "task-queue/add",
+            "task-queue/remove",
+            "task-queue/list",
+            "task-queue/clear",
+            "task-queue/update",
+            "task-queue/reorder",
+            "task-queue/cancel",
+            "scheduled-jobs/create",
+            "scheduled-jobs/list",
+            "scheduled-jobs/remove",
+            "scheduled-jobs/reset",
+        ];
+        let mut ours = HTTP_ENDPOINTS.to_vec();
+        let mut golden = GOLDEN.to_vec();
+        ours.sort();
+        golden.sort();
+        assert_eq!(ours, golden, "HTTP path 段不得随搬迁变化");
+    }
+
+    /// 票 16：三域路径分派（与旧实现同序：先队列、再定时、其余归状态域）
+    #[test]
+    fn http_path_classification_matches_old_plugin_order() {
+        assert_eq!(
+            classify_http_path("task-queue/add"),
+            HttpRoute::Queue("add")
+        );
+        assert_eq!(
+            classify_http_path("scheduled-jobs/create"),
+            HttpRoute::Scheduled("create")
+        );
+        assert_eq!(
+            classify_http_path("task-history/current"),
+            HttpRoute::State("task-history/current")
+        );
+        // 未知路径落状态域并由其自答 404（宿主未声明时才走到这一步）
+        assert_eq!(classify_http_path("ghost"), HttpRoute::State("ghost"));
+        // 前缀本身（尾部斜杠）归对应域，由其 match 臂落 404——不回落状态域
+        assert_eq!(classify_http_path("task-queue/"), HttpRoute::Queue(""));
+        // 不带斜杠的同名裸路径不归队列域（旧实现即如此：strip_prefix 要求斜杠）
+        assert_eq!(
+            classify_http_path("task-queue"),
+            HttpRoute::State("task-queue")
+        );
+        // 清单里每一项都必须能分派到与之匹配的域
+        for path in HTTP_ENDPOINTS {
+            let route = classify_http_path(path);
+            if path.starts_with("task-queue/") {
+                assert!(matches!(route, HttpRoute::Queue(_)), "{path} 应归队列域");
+            } else if path.starts_with("scheduled-jobs/") {
+                assert!(
+                    matches!(route, HttpRoute::Scheduled(_)),
+                    "{path} 应归定时域"
+                );
+            } else {
+                assert!(matches!(route, HttpRoute::State(_)), "{path} 应归状态域");
+            }
+        }
+    }
+
+    /// tick 分发表覆盖四个域（票 15 两域 + 票 16 定时域 + 重试停滞收敛域），且定时域不重复注册
+    #[test]
+    fn tick_domains_cover_queue_and_scheduled_without_duplicates() {
+        let ran = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let steps: Vec<(&'static str, Box<dyn FnOnce() -> Result<(), String>>)> = [
+            DOMAIN_QUEUE_DELAY_CLEAR,
+            DOMAIN_QUEUE_SILENCE,
+            DOMAIN_QUEUE_RETRYING,
+            DOMAIN_SCHEDULED_TRIGGER,
+        ]
+        .into_iter()
+        .map(|name| {
+            let trace = ran.clone();
+            (
+                name,
+                Box::new(move || {
+                    trace.borrow_mut().push(name.to_string());
+                    Ok(())
+                }) as Box<dyn FnOnce() -> Result<(), String>>,
+            )
+        })
+        .collect();
+        let report = run_tick_domains(steps);
+
+        assert_eq!(
+            *ran.borrow(),
+            vec![
+                DOMAIN_QUEUE_DELAY_CLEAR.to_string(),
+                DOMAIN_QUEUE_SILENCE.to_string(),
+                DOMAIN_QUEUE_RETRYING.to_string(),
+                DOMAIN_SCHEDULED_TRIGGER.to_string(),
+            ],
+            "一轮 tick 四域各执行一次"
+        );
+        assert_eq!(report.executed.len(), 4);
+        assert!(report.failed.is_empty());
+    }
+
+    /// tick 实际接线：`tick_via_host` 真的注册了四个域（而非只有常量）
+    ///
+    /// 上一条锁的是分发表自身的执行语义；本条锁的是**接线**——新增的
+    /// `DOMAIN_QUEUE_RETRYING` 若忘了写进 `tick_via_host`，宿主定时器永远不会调它，
+    /// 看门狗形同不存在而测试全绿。
+    #[test]
+    fn tick_via_host_wires_every_domain_step() {
+        let tick_src = include_str!("mod.rs");
+        let body = tick_src
+            .split("pub fn tick_via_host")
+            .nth(1)
+            .expect("tick_via_host must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("tick body must precede the test module");
+        // 钉的是**标识符**（body 里注册的是常量名，不是常量值——常量值只出现在
+        // 定义处，用值去搜会恒false）
+        for identifier in [
+            "DOMAIN_QUEUE_DELAY_CLEAR",
+            "DOMAIN_QUEUE_SILENCE",
+            "DOMAIN_QUEUE_RETRYING",
+            "DOMAIN_SCHEDULED_TRIGGER",
+        ] {
+            assert!(
+                body.contains(identifier),
+                "tick_via_host 未接线域 {identifier}（常量存在但没注册 = 定时器永不调用）"
+            );
+        }
+        // 反向：分发表里不得出现未登记的域步骤（新增域时漏加常量 / 漏改分发表）
+        assert_eq!(
+            body.matches("Box::new(").count(),
+            4,
+            "tick_via_host 的步骤数与已登记域数不符（新增域时两处必须同步）"
+        );
+    }
+
+    /// 票 17（原票 16 的「双轨对照」用例退役）：四类广播的触发点数钉死
+    ///
+    /// 票 16 那条 `broadcast_payloads_match_the_pre_migration_implementation` 靠
+    /// `include_str!` 读 auto-task 四个模块源码做逐构造比对，旧插件目录一删它就没有
+    /// 对照基准。删它不丢保护，因为**载荷形状已有更强的结构性闸门**：宿主
+    /// `host_impl/events.rs::broadcast_sync` 把载荷反序列化成 SDK 的
+    /// `bedcode_plugin_api::events::SyncEvent`（与插件同一类型，serde 表示即线协议），
+    /// 再经**穷尽 `From`** 转成 `DesktopSyncEvent`——改字段名、漏字段、写成 camelCase
+    /// 要么在此撞成显性 broadcast error，要么编译期就过不去。
+    ///
+    /// 票 06（websocket 业务下沉）改写：宿主 `broadcast-sync` 已从任务域生产路径
+    /// 退役（任务事件由本插件经 bus + emit 双通道自发布，载荷自足），本锁从
+    /// 「钉四类广播点数」收敛为「钉零残留 + 双通道成对」：
+    /// - `SyncEvent::` / `broadcast_sync(` 在四个任务模块的**实现段**必须为零
+    ///   （文档注释里的历史提及不算；测试段引用类型构造也排除）；
+    /// - bus_publish / emit_event 发布点仍逐点数钉死且必须成对（漏一侧 =
+    ///   总线或前端事件单边失声）。
+    #[test]
+    fn broadcast_trigger_points_are_pinned() {
+        let sources = [
+            ("state.rs", include_str!("state.rs")),
+            ("queue.rs", include_str!("queue.rs")),
+            ("scheduled.rs", include_str!("scheduled.rs")),
+            ("preset.rs", include_str!("preset.rs")),
+        ];
+        let count_impl = |marker: &str| -> usize {
+            sources
+                .iter()
+                .map(|(file, src)| {
+                    // 只数实现段真实调用：跳过注释（含文档注释）与测试段
+                    let implementation = src.split("#[cfg(test)]").next().unwrap_or(src);
+                    implementation
+                        .lines()
+                        .filter(|l| l.contains(marker) && !l.trim_start().starts_with("//"))
+                        .count()
+                })
+                .sum()
+        };
+        // 零残留：任务域不再调用宿主同步广播产品接口（票 06）
+        for marker in ["SyncEvent::", "broadcast_sync("] {
+            assert_eq!(
+                count_impl(marker),
+                0,
+                "任务域实现段不得出现 `{marker}`（票 06：任务事件归插件 bus+emit）"
+            );
+        }
+        // 双通道发布点成对钉死：bus 9 = emit 9（状态五点 + 队列一 + 定时两 + 预设一）
+        assert_eq!(count_impl("bus_publish("), 9, "bus 发布点总数");
+        assert_eq!(count_impl("emit_event("), 9, "emit 发布点总数");
+        assert_eq!(
+            count_impl("bus_publish("),
+            count_impl("emit_event("),
+            "两通道发布点必须成对（漏一侧 = 总线或前端事件单边失声）"
+        );
+    }
+
+    /// 票 16/17：随包 hook 脚本的接线与模板版本对账
+    ///
+    /// 脚本内容里的 `PLUGIN_ID` 决定了部署到用户项目后的回调地址；这里漏改一位，
+    /// agent 的状态推送就会打到旧前缀上（旧插件退役后是静默 404，任务链整条断掉）。
+    /// 文件名与本模块从 SDK 取到的脚本名常量对账：改了常量而没改随包文件（或反之）
+    /// 都会在这里撞红。
+    ///
+    /// 票 16 刻意把模板版本 bump 压到 auto-task 后端退役之后（双轨期两侧各比对自己
+    /// 那份常量，先 bump 会来回覆盖）；票 17 退役后一次性 bump 四个，把已写入用户
+    /// 项目的集成副本改指新前缀。脚本首行 `@bedcode-template-version` 与 `hooks.rs`
+    /// 对应常量**必须同值**——只改一侧的现象是「部署副本被判定为最新而永不重写」，
+    /// 或反过来每轮都重写，都静默且难查，故在此逐脚本钉死。
+    #[test]
+    fn shipped_hook_scripts_point_at_this_plugin() {
+        use super::hooks::{
+            CLAUDE_HOOK_TEMPLATE_VERSION, CODEX_HOOK_TEMPLATE_VERSION,
+            OPENCODE_PLUGIN_TEMPLATE_VERSION, PI_EXTENSION_TEMPLATE_VERSION,
+        };
+        use bedcode_plugin_api::constants::{
+            CODEX_HOOK_SCRIPT_NAME, HOOK_SCRIPT_NAME, OPENCODE_HOOK_SCRIPT_NAME,
+            PI_HOOK_SCRIPT_NAME,
+        };
+        let shipped: [(&str, &str, &str, &str); 4] = [
+            (
+                HOOK_SCRIPT_NAME,
+                "auto_task_hook.py",
+                include_str!("../../../scripts/auto_task_hook.py"),
+                CLAUDE_HOOK_TEMPLATE_VERSION,
+            ),
+            (
+                CODEX_HOOK_SCRIPT_NAME,
+                "codex_task_hook.py",
+                include_str!("../../../scripts/codex_task_hook.py"),
+                CODEX_HOOK_TEMPLATE_VERSION,
+            ),
+            (
+                PI_HOOK_SCRIPT_NAME,
+                "pi_task_hook.ts",
+                include_str!("../../../scripts/pi_task_hook.ts"),
+                PI_EXTENSION_TEMPLATE_VERSION,
+            ),
+            (
+                OPENCODE_HOOK_SCRIPT_NAME,
+                "opencode_task_hook.ts",
+                include_str!("../../../scripts/opencode_task_hook.ts"),
+                OPENCODE_PLUGIN_TEMPLATE_VERSION,
+            ),
+        ];
+        for (constant, file, content, template_version) in shipped {
+            assert_eq!(
+                constant, file,
+                "SDK 脚本名常量与随包文件名漂移: {constant} ≠ {file}"
+            );
+            assert!(
+                content.contains("com.bedcode.terminal-session"),
+                "{file} 未指向合并插件 id"
+            );
+            assert!(
+                !content.contains("com.bedcode.auto-task"),
+                "{file} 仍含旧插件 id（部署后会打到旧前缀）"
+            );
+            // 路径段必须仍是本票声明的那批（基址改、段不改）
+            assert!(
+                content.contains("/api/plugin/") && content.contains("task-status"),
+                "{file} 的端点拼接形状漂移"
+            );
+            let marker = format!("@bedcode-template-version {template_version}");
+            assert!(
+                content.contains(&marker),
+                "{file} 的模板版本标记与 hooks.rs 常量不同值（应为 {marker}）"
+            );
+        }
+    }
+
+    /// hook 适配器的**状态语义回归锁**（随包脚本 = 部署到用户项目的产物，无运行时测试）
+    ///
+    /// 三条都是「错了不会报错、只会静默把任务状态判错」的缺陷：
+    /// 1. opencode：`session.error` 一律推 retrying → 鉴权/额度类**不可重试**错误也停在
+    ///    活动态，随后 `session.idle` 把它推成 completed（失败任务被标成功）
+    /// 2. claude：`StopFailure` 的 `error_details` 可能是对象，直接切片 TypeError →
+    ///    在 `push_task_status(interrupted)` 之前中断，retrying 任务卡死
+    /// 3. pi：状态码正则无词边界 → 「512 tokens」这类数字片段误命中可重试
+    ///
+    /// 锁的是**行为分支的存在性**（而非逐字符快照）：把任一分支改回旧形态即转红。
+    #[test]
+    fn hook_adapters_keep_error_classification_contracts() {
+        let opencode = include_str!("../../../scripts/opencode_task_hook.ts");
+        assert!(
+            opencode.contains("} else if (isRetryableError(error)) {"),
+            "opencode 的 retrying 分支必须由可重试判定守卫（不可重试错误要收敛 interrupted）"
+        );
+        assert!(
+            opencode.contains("Run failed, not retryable"),
+            "opencode 缺少不可重试错误的 interrupted 出口"
+        );
+
+        let claude = include_str!("../../../scripts/auto_task_hook.py");
+        assert!(
+            claude.contains("if not isinstance(error_details, str):"),
+            "StopFailure 的 error_details 可能是对象，切片前必须归一成字符串"
+        );
+        assert!(
+            claude.contains("Turn failed, {} background task(s) still running"),
+            "StopFailure 缺 background_tasks 守卫（与 handle_stop 不对称，后台任务会被提前判死）"
+        );
+
+        let pi = include_str!("../../../scripts/pi_task_hook.ts");
+        assert!(
+            pi.contains("\\b5\\d\\d\\b"),
+            "pi 可重试状态码需加词边界（否则 512/52000 等数字片段误命中）"
+        );
+        assert!(
+            !pi.contains("|50[234]|"),
+            "50[234] 是 5\\d\\d 的子集，不该以备选分支形式存在（避免重复分支掩盖遗漏）"
+        );
+    }
+
+    /// 限额/额度类错误的**非重试守卫**：pi 与 opencode 两侧都不得再推 retrying
+    ///
+    /// 这类载荷（`429 {"code":"insufficient_quota"}`）同时命中可重试表的 `\b429\b`
+    /// 与内核的非重试表——而 agent 内核**先查非重试表并直接放弃重试**（run 立即收敛、
+    /// 随后 agent_settled 推终态）。宿主侧只查可重试表就会把一个「没有重试在进行」
+    /// 的任务标成「重试中」，等一个永远不会到来的重试成功事件：2026-10-03 现场该行
+    /// 卡了逾 8 小时，其后队列第二项永不下发。
+    ///
+    /// 锁的是守卫的**存在与调用**（顺序语义由脚本内注释承担）：
+    /// ① 两侧都有 `NON_RETRYABLE_LIMIT_PATTERN`；② 判定入口确实先查它；
+    /// ③ 该守卫后面挂的是「不推 retrying」而不是「推 interrupted」——终态只能由
+    /// agent 自己的收敛事件给，适配器抢推终态会与之分叉。
+    #[test]
+    fn hook_adapters_reject_quota_errors_before_marking_retrying() {
+        let pi = include_str!("../../../scripts/pi_task_hook.ts");
+        let opencode = include_str!("../../../scripts/opencode_task_hook.ts");
+
+        for (file, content) in [("pi", pi), ("opencode", opencode)] {
+            assert!(
+                content.contains("NON_RETRYABLE_LIMIT_PATTERN"),
+                "{file} 缺少限额/额度类非重试守卫（insufficient_quota 之类会被误推 retrying）"
+            );
+            assert!(
+                content.contains("if (NON_RETRYABLE_LIMIT_PATTERN.test("),
+                "{file} 的守卫必须真的接在判定链上（声明了常量却没调用 = 形同虚设）"
+            );
+            assert!(
+                content.contains("insufficient_quota"),
+                "{file} 的守卫表必须含现场命中的 insufficient_quota 载荷码"
+            );
+        }
+
+        // pi：agent_end 的 retrying 分支必须经守卫后的判定函数，且守卫返回 false
+        // 时不推 retrying（保持当前状态，终态交给 agent_settled）
+        assert!(
+            pi.contains("isRetryableErrorMessage(lastRunFailure.errorMessage)"),
+            "pi 的 retrying 分支必须走带非重试守卫的判定（直接用可重试表会误标限额错误）"
+        );
+        assert!(
+            !pi.contains(
+                "isRetryableErrorMessage(lastRunFailure.errorMessage)) { void push('interrupted'"
+            ),
+            "pi 不得在 agent_end 抢推终态（终态只由 agent_settled 判定，双推会与它分叉）"
+        );
+
+        // opencode：session.error 的 retrying 分支必须经带守卫的 isRetryableError
+        assert!(
+            opencode.contains("} else if (isRetryableError(error)) {"),
+            "opencode 的 retrying 分支必须由带非重试守卫的判定函数守卫"
+        );
+    }
+}
+
+// ==================== HTTP 端点面（票 16） ====================
+
+/// 本域对外 HTTP 端点清单（**manifest `contributes.httpEndpoints` 的单一事实源**）
+///
+/// 条目是去掉 `/api/plugin/<插件 id>/` 前缀后的相对路径段，与宿主传给
+/// `_http_endpoint` 的 `path` 字段逐字一致。基址随插件 id 改（D1），**path 段一个
+/// 都不改**——移动端与已部署在项目里的 hook 脚本按原路径片段拼接请求。
+///
+/// 宿主侧对已声明插件做完整路径精确匹配（未声明路径 404，请求不到达插件），
+/// 因此本清单即「审计视图 = 实际可达面」；契约用例锁死它与 plugin.json 的一致性。
+pub const HTTP_ENDPOINTS: &[&str] = &[
+    // 状态与模式（[`state::handle_http_endpoint`]）
+    "task-status",
+    "session-mode",
+    "session-settings",
+    "task-history/current",
+    "task-history/list",
+    "supported-agents",
+    // 队列（[`queue::handle_queue_http`]，前缀 `task-queue/`）
+    "task-queue/add",
+    "task-queue/remove",
+    "task-queue/list",
+    "task-queue/clear",
+    "task-queue/update",
+    "task-queue/reorder",
+    "task-queue/cancel",
+    // 定时任务（[`scheduled::handle_scheduled_http`]，前缀 `scheduled-jobs/`）
+    "scheduled-jobs/create",
+    "scheduled-jobs/list",
+    "scheduled-jobs/remove",
+    "scheduled-jobs/reset",
+];
+
+/// HTTP 路径归属域（纯判定，不触碰宿主 → native 可测）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpRoute<'a> {
+    /// `task-queue/` 前缀，携带去掉前缀的子路径
+    Queue(&'a str),
+    /// `scheduled-jobs/` 前缀
+    Scheduled(&'a str),
+    /// 其余全部由状态域应答（含未知路径 → 该域自己返回 404）
+    State(&'a str),
+}
+
+/// 路径分派判定（与旧 auto-task 的 `strip_prefix` 顺序逐字一致）
+pub fn classify_http_path(path: &str) -> HttpRoute<'_> {
+    if let Some(sub) = path.strip_prefix("task-queue/") {
+        HttpRoute::Queue(sub)
+    } else if let Some(sub) = path.strip_prefix("scheduled-jobs/") {
+        HttpRoute::Scheduled(sub)
+    } else {
+        HttpRoute::State(path)
+    }
+}
+
+/// HTTP 端点入口（宿主 `_http_endpoint` command 调用）
+///
+/// 返回体形状固定为 `{status, body, contentType?}`——由三域各自的 handler 产出
+/// （`http_response::{ok, ok_with_data, error}`），宿主 `plugin_controller` 提取。
+pub fn handle_http_via_host(
+    host: &WasmHost,
+    method: &str,
+    path: &str,
+    body: &serde_json::Value,
+    query: &serde_json::Value,
+) -> serde_json::Value {
+    match classify_http_path(path) {
+        HttpRoute::Queue(sub) => queue::handle_queue_http(host, method, sub, body, query),
+        HttpRoute::Scheduled(sub) => {
+            scheduled::handle_scheduled_http(host, method, sub, body, query)
+        }
+        HttpRoute::State(sub) => state::handle_http_endpoint(host, method, sub, body, query),
+    }
+}
+
+/// 会话配置 + 任务域「是否支持自动化」标记（agent 能力 join）
+///
+/// 配置真源在本插件私有库（票 08），command 经 agent registry 判定是否为本域
+/// 支持的 agent——消费方据此决定能否对该配置排队列任务。
+///
+/// 读取失败**显性报错**（`Err`）：`.ok()` 静默降级为空列表会让
+/// `list-configs-with-support` 的消费方（HTTP supported-agents、queue-add
+/// 支持门控）在瞬时 `list_via_host` 失败时得出「无 agent 受支持」的错误结论。
+pub fn list_configs_with_support_via_host() -> Result<Vec<serde_json::Value>, String> {
+    let host = WasmHost;
+    let configs = crate::config::list_via_host()?;
+    let configs = configs
+        .as_array()
+        .cloned()
+        .ok_or_else(|| format!("config list did not return an array: {configs}"))?;
+    let mut counter = 0u64;
+    Ok(configs
+        .into_iter()
+        .map(|mut c| {
+            if let Some(cmd) = c.get("command").and_then(|v| v.as_str()) {
+                let agent = agent::detect_agent(cmd);
+                c["is_supported"] = serde_json::Value::Bool(agent::is_supported(agent));
+            }
+            yield_guard(&host, &mut counter);
+            c
+        })
+        .collect())
+}

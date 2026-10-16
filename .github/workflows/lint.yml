@@ -9,6 +9,7 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'scripts/**'
       - 'eslint.config.js'
       - '.prettierrc.json'
       - '.editorconfig'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'scripts/**'
       - 'eslint.config.js'
       - '.prettierrc.json'
       - '.editorconfig'
@@ -53,3 +55,11 @@ jobs:
 
       - name: ESLint (fail on errors)
         run: pnpm exec eslint .
+
+      # 根 scripts/ 的 node --test 套件（`scripts/*.test.mjs`）。其中
+      # `eslint-lock-globs.test.mjs` 是「前端锁 glob ↔ 真实目录」结构锁：2026-10-16 实测
+      # `bedcode-mobile/plugins/` 改名 `wasm-apps/` 后 glob 漂移，lint 全绿但移动端全部
+      # wasm 应用的前端零资源访问锁静默失效（AGENTS §6 前端红线）。lint 无法自证
+      # 「我的 glob 指向真目录」，只有这条锁兜得住。
+      - name: Root scripts tests (node --test)
+        run: pnpm run test:run

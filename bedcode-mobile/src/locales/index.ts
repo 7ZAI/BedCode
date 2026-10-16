@@ -8,10 +8,12 @@ import zhCNCommon from './zh-CN/common'
 import zhCNDesktop from './zh-CN/desktop'
 import zhCNMobile from './zh-CN/mobile'
 import zhCNSettings from './zh-CN/settings'
+import zhCNShell from './zh-CN/shell'
 import enCommon from './en/common'
 import enDesktop from './en/desktop'
 import enMobile from './en/mobile'
 import enSettings from './en/settings'
+import enShell from './en/shell'
 
 const i18n = createI18n({
   legacy: false,
@@ -23,12 +25,14 @@ const i18n = createI18n({
       ...zhCNDesktop,
       ...zhCNMobile,
       ...zhCNSettings,
+      ...zhCNShell,
     },
     en: {
       ...enCommon,
       ...enDesktop,
       ...enMobile,
       ...enSettings,
+      ...enShell,
     },
   },
 })

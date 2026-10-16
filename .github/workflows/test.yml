@@ -10,6 +10,14 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'cross-end-tests/**'
+      # 根 packages/** 是机制内核 / 能力域 crate（wasm-core 的 57 个带测试源文件、
+      # pty-engine、host-kit…）：只改它们的 PR 过去不触发任何 Rust 测试，而移动纯度锁、
+      # WIT 版本锁与 cross-end-tests 依赖图都落在这些 crate 上。
+      - 'packages/**'
+      # 契约版本真源（WIT 包版本单点，compose-wit.mjs 读它注入 package 行）：
+      # 改了必须重拼，落进本 workflow 才能被 wit_package_version_lock 与漂移锁看守。
+      - 'contracts/**'
       - '.github/workflows/test.yml'
   pull_request:
     branches-ignore:
@@ -17,6 +25,14 @@ on:
     paths:
       - 'bedcode-desktop/**'
       - 'bedcode-mobile/**'
+      - 'cross-end-tests/**'
+      # 根 packages/** 是机制内核 / 能力域 crate（wasm-core 的 57 个带测试源文件、
+      # pty-engine、host-kit…）：只改它们的 PR 过去不触发任何 Rust 测试，而移动纯度锁、
+      # WIT 版本锁与 cross-end-tests 依赖图都落在这些 crate 上。
+      - 'packages/**'
+      # 契约版本真源（WIT 包版本单点，compose-wit.mjs 读它注入 package 行）：
+      # 改了必须重拼，落进本 workflow 才能被 wit_package_version_lock 与漂移锁看守。
+      - 'contracts/**'
       - '.github/workflows/test.yml'
 
 permissions:
@@ -27,6 +43,12 @@ jobs:
 
   rust-desktop:
     runs-on: ubuntu-latest
+    env:
+      # sccache 缓存上限：CI 磁盘有限（ubuntu-latest ~14G），跨 run 缓存由
+      # Swatinem/rust-cache 负责，sccache 只做 job 内跨 crate 命中（server-libs /
+      # wasm-apps 循环共享依赖），2GiB 足够。根 .cargo/config.toml 的 [env] 设了
+      # force=false，外部值优先于 20GiB 默认。
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -56,10 +78,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主测试用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
-          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
+          # 本 job 要 plugins:build 全部四个桌面插件，目标分两种：agent-hub /
+          # ai-chatbox / terminal-session 是 wasm32-wasip3（pinned nightly，见下方步骤），
+          # file-transfer 是 wasm32-unknown-unknown + componentize（packages/
+          # bedcode-componentize）；宿主测试仍用 stable。wasm32-wasip2 是 wasm-core
+          # 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
           targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh（WASIP3_NIGHTLY）；
+        # stable 1.99（预计 2026-10 中）发布后移除本步骤与插件构建的 RUSTUP_TOOLCHAIN 注入
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache（2026-10-05 引入），
+      # 未安装时所有 cargo 命令直接失败，CI 必须装。不设 SCCACHE_GHA_ENABLED →
+      # 仅用 job 内磁盘缓存，不写 GHA cache 配额（跨 run 缓存由 rust-cache 负责）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -82,12 +119,174 @@ jobs:
         working-directory: bedcode-desktop
         run: pnpm run plugins:build
 
+      # 跨端 wire 形状锁（SyncPayload / SessionSummary / 控制与终端帧 / KeyCombo）的
+      # 真源在 SDK bedcode-plugin-api::wire（会话事件下沉专项票 01），其用例只在
+      # SDK crate 里跑；src-tauri 的 cargo test 通过 re-export 依赖这些类型但不会
+      # 执行 SDK 自身测试 → 不补这一步，改 wire 形状的 PR 在合并门禁上是无人看守的。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-desktop/packages/plugin-sdk-desktop/rust
+
+      - name: Cargo test (desktop plugin SDK)
+        run: cargo test --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
+
+      # 根 `packages/bedcode-*` 各 crate 的单测统一由 `rust-capability-crates` job 跑
+      # （清单由 `packages/*/` 目录推导）。此处原有一个 6-crate 手写循环（server-libs /
+      # 加密引擎 / 传输面 / 对等网络引擎域），2026-10-16 迁到该 job——手写名单是漂移源，
+      # 而且它没跟上后续拆出的机制内核与能力域 crate（覆盖面静默归零）。
+
+      - name: Verify wasm-apps target-dir (cargo metadata regression guard)
+        # B-02（2026-10-04 OCR）：`wasm-apps/.cargo/config.toml` 的 target-dir 一旦
+        # 多写一个 `..`，产物会静默落进**仓库根** `target/wasm-apps`，而 cargo test
+        # 照常全绿——唯一说真话的只有 `cargo metadata` 的 `target_directory`。
+        # 这里用 metadata 断言落点，防「多一个 ..」式回归在 CI 全绿下溜过。
+        run: |
+          EXPECTED="$GITHUB_WORKSPACE/bedcode-desktop/target/wasm-apps"
+          for app in terminal-session ai-chatbox file-transfer agent-hub; do
+            RAW=$(cd "bedcode-desktop/wasm-apps/$app/rust" && \
+              cargo metadata --no-deps --format-version 1 | python3 -c \
+              'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+            # metadata 返回的路径可能带未归一化的 `..`（实测
+            # wasm-apps/../target/wasm-apps），对比前必须 realpath
+            ACTUAL=$(python3 -c "import os,sys; print(os.path.normpath(sys.argv[1]))" "$RAW")
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "target-dir 落点错误: $app -> $ACTUAL (期望 $EXPECTED)"; exit 1
+            fi
+          done
+
+      - name: Cargo test (desktop wasm app crates)
+        # 四个 wasm 应用的**插件侧** crate（业务代码主场）。AGENTS §3 一直列着它们的
+        # 测试命令，但 test.yml 一直没跑——拆出来的层与插件 crate 在合并门禁上都没人
+        # 守。票 08 的 D10 跨端契约测试（`wasm-apps/terminal-session/rust` 里把本插件
+        # 的路由公理喂进真实 server 网关）也在这里才真正跑得到。
+        # **必须 cd 进 crate 根**（AGENTS §3 + 与 server-libs 步骤同理由）：cargo 只从 cwd
+        # 向上找 config，上层 `wasm-apps/.cargo/config.toml`（4 个应用共用这一份）把 target
+        # 指向 `bedcode-desktop/target/wasm-apps`（该 config 的相对路径以 `.cargo` 的父目录
+        # `wasm-apps/` 为基准），用 --manifest-path 从仓库根跑会漏掉重定向、把产物写进
+        # `<crate>/target`（AGENTS §3「构建产物落点」）。
+        #
+        # 这里跑的是 **native** 单测（不是 wasm32-wasip3）：crate-type 仍是纯 cdylib，
+        # 单测 harness 由 cargo 自己编；wasm 产物链由上面的 plugins:build 负责。
+        run: |
+          for app in terminal-session ai-chatbox file-transfer agent-hub; do
+            (cd "bedcode-desktop/wasm-apps/$app/rust" && cargo test)
+          done
+
+      # 宿主 wasm 闭环用例（src-tauri/tests/component_e2e.rs / sdk_e2e.rs / host_crypto_e2e.rs 等）
+      # 只读 fixture（`sdk_fixture_artifact_bytes`），产物由 **wasm-core 的 fixture_keeper 用例**
+      # 构建、落点 `bedcode-desktop/target/fixtures/wasm32-wasip3/<profile>/`（跨 job 不共享）。
+      # 不先构建就会报「sdk fixture 'sdk' 产物缺失 … 先跑 wasm-core 测试再跑本二进制」。
+      # 复用本 job 的 target 桶（src-tauri/target）：同一个 wasm-core 包 id，依赖图（wasmtime…）
+      # 直接命中，不重复编一遍。
+      - name: Build wasm fixtures (wasm-core fixture_keeper)
+        env:
+          CARGO_TARGET_DIR: bedcode-desktop/src-tauri/target
+        run: cargo test --manifest-path packages/bedcode-wasm-core/Cargo.toml fixture_keeper
+
+      # 同上：本 job 会编宿主桌面 crate（tauri-build 收集插件权限）
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        run: bash scripts/refresh-tauri-plugin-permissions.sh bedcode-desktop/src-tauri
+
       - name: Cargo test (desktop)
         working-directory: bedcode-desktop/src-tauri
         run: cargo test
 
+  # ==================== 能力域 / 机制 crate 单测 ====================
+  #
+  # 仓库根 `packages/bedcode-*` 是各自独立的 crate（无根 workspace），宿主 `cargo test`
+  # **不会**执行它们自己的 `#[cfg(test)]` 模块——只改机制内核 / 能力域 crate 的 PR，
+  # 在合并门禁上无人看守（单是 wasm-core 就有 588 例，含两个 WASI 夹具 E2E）。
+  #
+  # 为什么独立成 job：这些 crate 的 target 落点分散（3 个共享桶 + 8 个各自 `target/`），
+  # 全部塞进 rust-desktop 会与其宿主 target 一起撑爆 runner（ubuntu-latest 仅 ~14G）。
+  # 独占 runner 后磁盘隔离，且与其它 job 并行 → 总时长几乎不变。
+  #
+  # 磁盘/内存闸门（都不是随手加的，数字是 2026-10-16 本机实测——与 CI 同 OS、同
+  # profile；见下）：
+  #   1. 单一 `CARGO_TARGET_DIR`：18 个 crate 共享一份依赖图产物（tokio / rustls /
+  #      wasmtime / tauri / gtk 只编一次），并只给 rust-cache 一个目录可缓存；
+  #   2. `CARGO_INCREMENTAL=0` + `debug=0`：实测同一循环下 **17G → 8.8G**（增量目录
+  #      本身就 3.2G，DWARF 占 deps 的大头）。**代价：CI 失败栈无行号**（本地开发不受
+  #      影响，本机仍用默认 debug）——换 14G runner 跑得下，且 CI 本来就是冷目录。
+  #      注：`CARGO_INCREMENTAL=0` 还能让 sccache 缓存本地 crate（根 config 头注）。
+  #
+  # 工具链必须装齐：stable 的 `wasm32-wasip2`（wasm-core 的 WASI preopen E2E 夹具）+
+  # pinned nightly 的 `wasm32-wasip3`（p3 夹具 / host import 用例）——**缺 nightly 时
+  # 那些用例会走 `[skip]` 静默降级而不是报错**（见 wasm-core `runtime/tests/preopen_e2e.rs`），
+  # 所以不能省。
+  rust-capability-crates:
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
+      # 18 个 crate 共用一个落点（见上方注释）。夹具构建自带 CARGO_TARGET_DIR
+      # （`bedcode-desktop/target/fixtures`，真源 wasm-core `runtime/fixture_target.rs`），
+      # 不受本覆盖影响。
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci-capability-crates
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        # wasm-core 直接依赖 tauri（tray-icon / protocol-asset / test feature）与
+        # tauri-plugin-dialog → 桌面那套系统依赖在这里同样必需
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要
+          targets: wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh（WASIP3_NIGHTLY）
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 缓存单一共享 target 目录。`$workspace -> $target` 的 target 相对 workspace 目录。
+          # 注意两点（读 action 文档核过，不是猜的）：
+          #   1. action 自己会设 `CARGO_INCREMENTAL=0` 并只持久化**依赖**产物（会剔掉
+          #      增量目录与非依赖产物），所以上面的 `CARGO_INCREMENTAL=0` 是冗余的
+          #      （保留只为与本 job 的磁盘口径一致）；cache key 也不是只取 wasm-core 的锁，
+          #      而是仓库内全部 `Cargo.lock`/`Cargo.toml` + rust 环境哈希。
+          #   2. `workspaces` 需要**真实存在的 cargo 工程路径**（action 会跑 cargo metadata），
+          #      所以这里点了一个具体 crate。crate 改名（如 bedcode-* → 其它前缀）时必须
+          #      同步改这一行——改名后路径不存在会让本步显性报错（好过静默丢缓存）。
+          workspaces: packages/bedcode-wasm-core -> ../../target/ci-capability-crates
+
+      # 清单由 `packages/*/` 目录推导——与各防回接锁同一手法：手写名单是零成本后门
+      # （新增 crate 忘登记就让覆盖面静默归零，本 job 取代的那个 6-crate 循环就是这么
+      # 落后的）。**必须 cd 进 crate 根**（AGENTS §3）：各 crate 的 `.cargo/config.toml`
+      # 与相对路径依赖都以 crate 根为基准。
+      - name: Cargo test (all root capability crates)
+        run: |
+          for dir in packages/*/; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            echo "========== cargo test: $dir =========="
+            (cd "$dir" && cargo test) || exit 1
+          done
+
   rust-mobile:
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -120,6 +319,11 @@ jobs:
           # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
           targets: wasm32-unknown-unknown, wasm32-wasip2
 
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache（2026-10-05 引入），
+      # CI 必须安装；仅 job 内磁盘缓存，不写 GHA cache 配额。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bedcode-mobile/src-tauri
@@ -142,25 +346,143 @@ jobs:
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: pnpm run build
 
-      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）。
+      # 清单由目录推导：原手写名单曾漂移（退役的 `ocr` 仍在列、新增 app 会漏装依赖）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer ocr; do
-            if [ ! -d "bedcode-mobile/plugins/$p" ]; then
-              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing plugins/$p =="
-            (cd bedcode-mobile/plugins/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build plugins (WASM artifacts)
         working-directory: bedcode-mobile
         run: pnpm run plugins:build
 
+      # tauri 插件 build script 的权限产物与 rust-cache 的交互（详见脚本头部注释）：
+      # 不刷新会导致 tauri-build 收集不到插件权限，或读不到由插件 build script 生成的
+      # permissions/autogenerated/**（2026-10-17 CI 实测：移动侧报
+      # "failed to read plugin permissions ... disable.toml: No such file or directory"）。
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        run: bash scripts/refresh-tauri-plugin-permissions.sh bedcode-mobile/src-tauri
+
       - name: Cargo test (mobile)
         working-directory: bedcode-mobile/src-tauri
         run: cargo test
+
+  # ==================== 跨端真实互连 ====================
+  #
+  # 两端各自的集成测试对面都是「按文档手写的 mock 对端」——两套 mock 各自自洽时，
+  # 协议漂移能在两端 CI 全绿下长期存活（2026-10-15 实测：终端链路/会话客户端下沉
+  # wasm 插件后，本套件既不编译也无人看守，渲染重复类回归直接从门禁下溜过）。
+  #
+  # 本 job 跑的是同一进程内 **桌面真实服务器 + 真实桌面插件产物 ↔ 移动真实插件产物**
+  # （零 mock、零 adb、零 WebView）：两端都必须先构建插件产物（resources/plugins/**），
+  # 产物缺失时场景显性失败（不静默 skip）。
+  cross-end:
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 同 rust-desktop：job 内磁盘缓存，不写 GHA 配额
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 桌面插件产物需要（单一事实来源 scripts/wasip3-toolchain.sh）
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            bedcode-desktop/src-tauri
+            bedcode-mobile/src-tauri
+            cross-end-tests
+
+      # −− 桌面插件产物（随包 resources/plugins/desktop）−−
+      - name: Install dependencies (desktop)
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
+      - name: Build plugins (desktop WASM artifacts)
+        working-directory: bedcode-desktop
+        run: pnpm run plugins:build
+
+      # −− 移动插件产物（随包 resources/plugins/mobile）−−
+      - name: Install dependencies (mobile)
+        working-directory: bedcode-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Install SDK dependencies (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-mobile dist)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm run build
+
+      # 同 rust-mobile：清单由目录推导，不手写
+      - name: Install mobile plugin dependencies
+        run: |
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
+          done
+
+      - name: Build plugins (mobile WASM artifacts)
+        working-directory: bedcode-mobile
+        run: pnpm run plugins:build
+
+      # 两进程形态（2026-10-15）：桌面进程 harness（独立 workspace 成员；共享 target 桶，
+      # 依赖图只含桌面侧）。必须先于 two-proc 测试构建——测试进程经 stdio spawn 它。
+      - name: Build desktop harness (two-process rig)
+        working-directory: cross-end-tests
+        run: cargo build -p bedcode-crossend-desktop-harness
+
+      # 每个场景 = 一个独立测试二进制（AppContext 进程级单例，场景间靠进程隔离）
+      # 本 job 编 cross-end-tests workspace（内含两端宿主 crate，tauri-build 会收集插件权限）
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        run: bash scripts/refresh-tauri-plugin-permissions.sh cross-end-tests
+
+      - name: Cross-end tests (real desktop ↔ real mobile plugins)
+        working-directory: cross-end-tests
+        run: cargo test -- --nocapture
+
+      # 两进程场景 = 本包 `two-proc` 构建模式：desktop-lib 是 optional 依赖、被 feature
+      # 整体出图 ⇒ server-crate 的 common-host 无人开启 ⇒ 移动 whitelist 干净（spec §5.1）。
+      # 只跑 cross-end-tests（-p）：不能连桌面侧成员一起构建（feature 统一会复现污染）。
+      - name: Two-process cross-end tests (terminal flow + selfcheck)
+        working-directory: cross-end-tests
+        run: cargo test -p cross-end-tests --no-default-features --features two-proc --test two_proc_selfcheck --test two_proc_terminal_ws -- --nocapture
 
   # ==================== 前端 vitest ====================
 
@@ -185,9 +507,20 @@ jobs:
         working-directory: bedcode-desktop
         run: pnpm install --frozen-lockfile
 
+      # wasm 应用测试 import `@binblink/bedcode-plugin-sdk-desktop`（package main → dist/index.js），
+      # dist 不入库：不先构建 SDK，这些用例会报 "Failed to resolve entry for package"。
+      # 本地因 dist 已在场而绿，CI 必红（2026-10-17 dev 内容验证暴露）。
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
       - name: Vitest (desktop)
         working-directory: bedcode-desktop
         run: pnpm run test:run
+        env:
+          # 桌面套件（含 wasm 应用）峰值堆已贴默认 4GB 上限：同一提交前一轮通过、
+          # 下一轮就报 "JavaScript heap out of memory"（2026-10-17 CI 实测）→ 显式抬高。
+          NODE_OPTIONS: --max-old-space-size=6144
 
   frontend-mobile:
     runs-on: ubuntu-latest
@@ -206,10 +539,38 @@ jobs:
           cache: pnpm
           cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
 
+      # mobile SDK 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：根安装
+      # 不会装它的 devDeps（tsup 等），必须先独立安装并构建出 dist/。
+      #
+      # **顺序关键**：bedcode-mobile 的 `file:packages/plugin-sdk-mobile` 依赖在安装时
+      # 把 SDK 目录按文件硬链接**快照**进 node_modules——装完再构建 dist 不会刷新快照。
+      # 2026-10-17 CI 实测：先装后构时 dist 构建明明成功，vitest 仍报
+      # "Failed to resolve entry for package @binblink/bedcode-plugin-sdk-mobile"。
+      - name: Install SDK deps and build dist (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
       - name: Install dependencies
         working-directory: bedcode-mobile
         run: pnpm install --frozen-lockfile
 
+      # 移动 wasm 应用自带 package.json（vue-router / @vuepic/vue-datepicker / echarts 等，
+      # 不进根 workspace）：根安装不装它们，缺失时 task / settings 用例报
+      # "Failed to resolve import ..."（2026-10-17 CI 实测）。须在 SDK dist 构建后装，
+      # 否则 file: 依赖会把不含 dist 的 SDK 快照硬链进应用 node_modules。
+      - name: Install wasm app dependencies (mobile)
+        run: |
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
+          done
+
       - name: Vitest (mobile)
         working-directory: bedcode-mobile
         run: pnpm run test:run
+        env:
+          # 同 desktop：套件含全部 wasm 应用用例，抬高堆上限防同因 OOM
+          NODE_OPTIONS: --max-old-space-size=6144

@@ -17,7 +17,8 @@
 | --- | --- |
 | 桌面端 | 始终写文件 `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）/ `error.*.log` 仅 ERROR / `frontend.*.log` 仅 dev，按天轮转 |
 | 移动端 | `pnpm run tauri:android:dev:log` 落盘 `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（可 grep）；release 走 logcat |
-| 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_lib::*`、`reqwest::connect` 等）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤 |
+| 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、dev 服务代理连接（dev 构建下 Tauri 用 reqwest 把每个 WebView 请求转发到 `devUrl`；只过滤指向 `devUrl` host:port 的 `reqwest`/`hyper_util` 连接行，连对端的链路日志保留）、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_mobile_lib::*`、`reqwest::connect` 连对端）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤。判定规则真源 = `bedcode-mobile/scripts/lib/dev-log-filter.js`（单测 `src/__tests__/scripts/dev-log-filter.test.ts`）；**源头层**（写 logcat 前，保护设备环形缓冲）= `bedcode-mobile/src-tauri/src/system/logging.rs`（dev 服务代理回环连接 + wasmtime/cranelift 内部 debug，连 LAN 对端保留） |
+| 移动端控制台颜色 | `:dev:log` 下控制台保留子进程原始 ANSI（颜色与 `\r` 覆盖），**只有落盘文件是纯文本**；但子进程 stdout 是管道非 TTY，上游默认不产色，需 `FORCE_COLOR=1` / `CLICOLOR_FORCE=1` / `CARGO_TERM_COLOR=always` 才看得到色。行级双写通路（raw 控制台 / clean 判定与落盘）在 `scripts/lib/dev-log-router.js`，单测 `src/__tests__/scripts/dev-log-router.test.ts` |
 
 **前端 console 日志（仅 debug）**：`logger.*` → `report_frontend_log` → tracing（target=`frontend`），release 自动剥离。
 
@@ -25,18 +26,18 @@
 
 ## 3. 插件 WASM 日志
 
-- target 固定 `bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀
+- target 固定（两端各自，2026-09-30 lib 改名后）：桌面 `bedcode_desktop_lib::wasm_core::plugin_log`（`host_api/log.rs` 内**硬编码常量**，非 `module_path!`）；移动 `bedcode_mobile_lib::plugin::commands::plugin_log`（`tracing!` 宏自动取模块路径）。两端均为 `[plugin:xxx]` 前缀
 - per-plugin 级别：`BEDCODE_PLUGIN_LOG=id=level`（filter 不能按字段过滤，per-plugin 级别需在 emit_plugin_log 入口做宿主侧阈值映射）
-- WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 47.0.3 `default` features 已含 backtrace，零编译成本）
+- WASM trap 必须带 backtrace：`Config::wasm_backtrace_max_frames(Some(32))` **不得关闭**（wasmtime 48.0.3 `default` features 已含 backtrace，零编译成本）
 - 插件 wasm 恒 `--release` 构建（保留 names section 函数名、无 DWARF 行号）
-- 调试模式（dev）：`BEDCODE_PLUGIN_DEBUG=1` → debug profile wasm + `wasm_backtrace_details Environment` + 燃料联动放大，见 `.scratch/plugin-wasm-logging/spec.md`
+- 调试模式（dev）：`BEDCODE_PLUGIN_DEBUG=1` → debug profile wasm + `wasm_backtrace_details Environment` + 燃料联动放大，完整设计见 `docs/knowledge/plugin-wasm-logging.md`
 
 ---
 
 ## 4. 移动端无 dev 日志排查
 
 - 现象：落盘停在 `Starting: Intent` 后无 logcat 行
-- 首查 tauri CLI 是否卡 `adb shell pidof` 轮询（adb client 37.0.1 fd0 bug，见 `.scratch/adb-fd0-bug/bug-report.md`；`dev-run.js` 预检自愈）
+- 首查 tauri CLI 是否卡 `adb shell pidof` 轮询（adb client 37.0.1 fd0 bug，见 `docs/knowledge/adb-fd0-bug.md`；`dev-run.js` 预检自愈）
 - 链路问题优先 grep 两端 `runtime.*.log` 关键 tag：`file_service` / `peer_changed` / `MessageBus` / `reqwest::connect`
 - 排查参考：`docs/knowledge/mobile-desktop-auth.md`（认证链路）、`docs/knowledge/sdk-publish.md`
 
@@ -47,4 +48,7 @@
 - token 只记长度不落明文（`token.length()` 模式）
 - 心跳/WS 日志克制：Pong 低频、无帧级日志
 - 前端 console relay 两端一致（16KB 截断 + 批量 + release 剥离）
+- 桌面文件层带线程 id：`with_thread_ids(true)`（`ThreadId(N)` 介于级别与 target 之间，text / json 两模式都有；并发 bug 按线程维度定位）
+- 移动端 dev 两级降噪：① 源头层 `system/logging.rs`（写 logcat 前丢弃 dev 服务代理回环连接 + wasmtime/cranelift·`mdns_sd` 内部 debug，保护设备环形缓冲）② 宿主脚本层 `scripts/lib/dev-log-filter.js`（控制台 / 落盘，按 `devUrl` host:port 匹配）；两级都保留连 LAN 对端的链路日志
+- 移动端 dev 落盘 logcat 行补年份前缀（`withYearPrefix`：`MM-DD HH:MM:SS` → `YYYY-MM-DD HH:MM:SS`，脚本本地年与文件日期线一致）；控制台保持原始形态
 - dev 落盘无 ANSI 可 grep

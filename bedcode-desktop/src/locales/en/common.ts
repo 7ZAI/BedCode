@@ -1,112 +1,51 @@
 export default {
   common: {
     button: {
-      confirm: 'Confirm',
       cancel: 'Cancel',
-      save: 'Save',
-      delete: 'Delete',
-      close: 'Close',
-      reset: 'Reset',
-      start: 'Start',
       stop: 'Stop',
-      restart: 'Restart',
-      refresh: 'Refresh',
-      browse: 'Browse',
-      create: 'Create',
-      edit: 'Edit',
-      execute: 'Execute',
-      send: 'Send',
-      open: 'Open',
-      remove: 'Remove',
-      retry: 'Retry',
-      clear: 'Clear',
     },
     status: {
-      connected: 'Connected',
-      disconnected: 'Disconnected',
-      connecting: 'Connecting',
-      online: 'Online',
-      offline: 'Offline',
       error: 'Error',
       unknown: 'Unknown',
-      loading: 'Loading...',
       running: 'Running',
       stopped: 'Stopped',
-      idle: 'Idle',
-      inProgress: 'In Progress',
-      completed: 'Completed',
-      interrupted: 'Interrupted',
       asking: 'Waiting for Input',
       starting: 'Starting',
-      waiting: 'Waiting',
-      failed: 'Failed',
-      retrying: 'Retrying',
-      pending: 'Pending',
     },
-    confirm: {
-      areYouSure: 'Are you sure you want to do this?',
-      cannotUndo: 'This action cannot be undone.',
-    },
-    time: {
-      seconds: 'seconds',
-      minutes: 'min',
-      hours: 'hours',
-      secondsAgo: '{n}s',
-      minutesSecondsAgo: '{m}m {s}s',
-      hoursMinutesAgo: '{h}h {m}m',
-    },
-    nav: {
-      connection: 'Connect',
-      sessions: 'Sessions',
-      toolbox: 'Toolbox',
-      settings: 'Settings',
-    },
-    notification: {
-      tokenUpdated: 'Auth token updated',
-      deviceConnected: '"{name}" connected',
-      deviceDisconnected: '"{name}" disconnected',
-      sessionCreated: '"{device}" created session "{name}"',
-      sessionCreatedNoName: '"{device}" created a new session',
-      sessionStoppedByDevice: '"{device}" stopped session "{name}"',
-      sessionStoppedNoName: '"{device}" stopped a session',
-      peerConsentRequested: '"{name}" requests a connection (file transfer)',
-      peerConnected: '"{name}" connected',
-      peerDisconnected: '"{name}" disconnected',
-      connectionDisconnected: 'Connection lost: {reason}',
-      reconnectFailed: 'Reconnect failed: {reason}. Please reconnect manually',
-      reconnectAbandoned: 'Auto-reconnect abandoned. Please reconnect manually',
-    },
-    errorCode: {
-      ptyError: 'Terminal process error',
-      sessionError: 'Session error',
-      databaseError: 'Database error',
-      ioError: 'File operation error',
-      serializationError: 'Data serialization error',
-      websocketError: 'WebSocket connection error',
-      authError: 'Authentication error',
-      discoveryError: 'Device discovery error',
-      configError: 'Configuration error',
-      parseError: 'Parse error',
-      notificationError: 'Notification error',
-      keyringError: 'Keyring error',
-      notFound: 'Resource not found',
-      invalidInput: 'Invalid input',
-      internalError: 'Internal error',
-      networkError: 'Network connection failed',
-      timeoutError: 'Operation timed out',
-      permissionError: 'Permission denied',
-      unknownError: 'Unknown error',
-      ipcTimeout: 'IPC call timeout ({timeout}s): {cmd}',
-    },
+    // Ticket 01 (group F): common.errorCode.ipcTimeout removed with InvokeTimeoutError
+    // ({cmd} leaked the command name + had no callers; timeouts now surface via
+    // errors.host.invoke.timeout)
     misc: {
-      noData: 'No data',
-      version: 'Version',
-      build: 'Build',
-      about: 'About',
-      lineCount: '{count} lines',
       terminalTitle: 'Terminal - {name}',
-      mobileDevice: 'Mobile Device',
-      mobileClient: 'Mobile',
+    },
+  },
+  // ==================== Error Envelope (ADR 0030) ====================
+  // Top-level namespace: errors.<code> ↔ envelope code, zero mapping layer;
+  // renaming a code is a breaking change. Registry v0 base codes (ticket 01):
+  // fallback / timeout / frontend fallback; host.plugin.* runtime domain added by ticket 03.
+  // UI rule: toasts/pages show friendly copy (template + params interpolation) only;
+  // never render the code, request_id, or technical detail.
+  errors: {
+    retry: 'Retry',
+    host: {
+      internal: 'Operation failed, please try again',
+      invoke: {
+        timeout: 'Operation timed out, please retry',
+      },
+      // Ticket 02 mechanism codes (ADR 0030 registry v0): plugin-management failures
+      // + ticket 03 runtime domain (event-channel envelopes, ADR 0030 decisions 7 / 11) —
+      // one user-facing story per failure kind; interpolation params carry display names only
+      plugin: {
+        'not-activated': 'This app is not enabled, this action is unavailable',
+        'not-found': 'App not found or removed',
+        trap: 'App "{name}" misbehaved, auto-recovery attempted',
+        'recovery-failed': 'App "{name}" failed and could not recover; check the app center',
+        'self-check-failed': 'App "{plugin}" self-check failed, check its configuration',
+        degraded: 'App "{name}" is running degraded, some features unavailable',
+      },
+    },
+    frontend: {
+      internal: 'Operation failed, please try again',
     },
   },
 }

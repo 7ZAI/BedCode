@@ -1,12 +1,12 @@
 [package]
 name = "bedcode-desktop"
-version = "2.1.1"
+version = "3.0.0"
 description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
 authors = ["binblink"]
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+name = "bedcode_desktop_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
@@ -14,7 +14,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
-tauri-plugin-shell = "2"
+# tauri-plugin-shell 已移除（前端零资源访问红线）：它给前端提供 open/spawn/execute 的
+# 直接调用面，而 shell:allow-open 正是靠一条 capability 就放开的。宿主侧打开外部链接改用
+# tauri-plugin-opener（与移动端同一口径），见 commands.rs::open_external_url。
+tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
@@ -23,14 +26,12 @@ tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
-# 字节缓冲（输出历史 chunk 共享零拷贝 + 快照半块 slice；tokio 传递依赖，显式声明）
-bytes = "1"
-
 # 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
 libc = "0.2"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+# hooks feature：SQLite progress handler（宿主侧硬中断慢查询，DB 执行护栏票据 05）
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 
 # Security
 rand = "0.8"
@@ -89,8 +90,9 @@ notify = "6"
 regex = "1"
 
 # WASM runtime for plugin system
-# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
-wasmtime = "47"
+# 48（LTS，2026-08-24）：47 非 LTS 支持期将尽（48 发布后 ~2026-10）；48 为 12 倍数 LTS（支持 24 个月）。
+# 升级范围：仅桌面端（移动端保持 47，临时分叉，ADR 0019 显式偏离，见 .scratch/2026-09-18-wasmtime-48-upgrade/spec.md）
+wasmtime = "48"
 
 # HTTP client (WASM plugin HTTP proxy)
 reqwest = { version = "0.12", features = ["stream"] }
@@ -110,6 +112,40 @@ bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
 bedcode-peer-net = { path = "../../packages/peer-net" }
 # 链路报文加密协议核心（issue 09 共享 crate，与移动端 event WS 共同消费）
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
+# server-lib-split：桌面 server 基础层（错误/常量/错误边界/系统信息/网络配置/
+# 连接身份/端口 traits）与加密引擎（算法实现 + 注册表）
+bedcode-server-base = { path = "../../packages/bedcode-server-base" }
+# 插件宿主机制内核（仓库根 packages/，双端共享锚点，wasm-core-lib-split 票 03）：
+# 插件实例状态 `WasmPluginState` + 能力模块契约 + 自动注册表 + Store 上限与指标值对象。
+# 它必须独立于宿主 bin crate —— 否则能力 crate 无法命名 `WasmPluginState`
+# （`add_to_linker::<S,D>` 是单态）⇒ 与宿主构成 Cargo 环。本期为**零行为变更的搬迁**：
+# StoreLimits / PluginMetrics / WasmPluginState 原位从 wasm_core 搬入，宿主留转发。
+bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
+# 插件机制整核（wasm-core-whole-crate，.scratch/2026-10-06）：wasm_core 整目录 +
+# 引擎面（db/pty/enums/system 部分）+ 宿主胶水迁入本 crate；lib.rs 经 `pub use
+# bedcode_wasm_core as wasm_core` 垫片保持既有 `crate::wasm_core::*` 路径零改动。
+# 2026-10-08 迁根：整核本体与能力域同落仓库根 packages/。
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core" }
+# PTY 能力域（wasm-core 纯净性收口票 02/06 → pty-capability-domain 票 D1/D3）：
+# 引擎面 + host-pty WIT 接线整面迁入能力 crate（ADR 0039）。票 02 批次 02 起宿主
+# **直接消费**：端口 adapter + 强制引用行 + 白名单条目同落 `src/plugin/pty.rs`
+# （wasm-core 已不再依赖本 crate，也不再出现它的任何路径）。
+# lib 声明同时满足 crate_boundary_lock 断言③「宿主清单声明全部拆分产物」
+# （pty-engine 已登记 SPLIT_CRATES）。
+bedcode-pty-engine = { path = "../../packages/bedcode-pty-engine", features = ["common-host"] }
+# 组播发现能力域（mDNS，wasm-core-lib-split 票 03）：引擎 + 宿主绑定层 + 自动
+# 注册。票 02 批次 03 起宿主**直接消费**：端口 adapter 在 `src/plugin/mdns.rs`
+# （wasm-core 已不再依赖本 crate，`host_context_registry` 随其退役）。
+bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine", features = ["common-host"] }
+bedcode-crypto-engine = { path = "../../packages/bedcode-crypto-engine" }
+# server-lib-split 票 03：传输无关内核（supervisor/filter/link_crypto/metrics + TransportFace 组合）
+bedcode-server-core = { path = "../../packages/bedcode-server-core" }
+# server-lib-split 票 04：HTTP 传输面（registry/gateway/controllers/middleware/dtos + HttpTransportFace）
+bedcode-server-http = { path = "../../packages/bedcode-server-http", features = ["common-host"] }
+# server-lib-split 票 05：WebSocket 传输面（conn/channel/registry/endpoint/routes/manager）
+bedcode-server-websocket = { path = "../../packages/bedcode-server-websocket", features = ["common-host"] }
+# server-lib-split 票 06：对等网络引擎域（节点身份/节点与发现守护生命周期/host-peer 引擎转发）
+bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net", features = ["common-host"] }
 inventory = "0.3"
 
 # Power management (prevent system sleep)
@@ -121,8 +157,6 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
-# 传输引擎：CancellationToken 取消语义 + ReaderStream 文件流式上传
-tokio-util = { version = "0.7", features = ["io"] }
 dirs = "6.0.0"
 
 # Actix Web (HTTP + WS server)
@@ -130,13 +164,19 @@ actix-web = "4"
 actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
-actix-cors = "0.7"
-# 插件文件服务下载端点（NamedFile 提供原生 Range/206/HEAD 支持）
-actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
-wasmtime-wasi = "47"
+wasmtime-wasi = { version = "48", features = ["p3"] }
+
+# WDIO E2E 测试插件：注册由 lib.rs 的 cfg(debug_assertions) 门控（release 只编译不注册）。
+# 不置于 [target.'cfg(debug_assertions)'.dependencies]：cargo 不支持用 debug_assertions
+# 选择依赖（会产生 manifest warning 且不按预期工作），故放普通依赖 + 代码层门控。
+# **必须留在通用 dependencies**（曾误放 Linux 段）：capabilities/default.json 声明了
+# `wdio:default`，而 tauri-build 在编译期按**当前平台**收集插件权限——依赖若只在 Linux
+# 存在，Windows/macOS 构建会报「Permission wdio:default not found, expected one of
+# core:default, ...」（2026-10-17 Windows 构建实测）。
+tauri-plugin-wdio = "1"
 
 # Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
 # + 文件定位 COM API（SHOpenFolderAndSelectItems / ShellExecuteExW，见 commands/opener.rs）
@@ -153,20 +193,23 @@ dbus = "0.9"
 # 的 =2.0.2 一致（tauri-runtime-wry → wry 传递依赖，声明为直接依赖不改变解析）
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
-# WDIO E2E 测试插件：仅 debug 构建编译/注册（release 不含测试插件，见 lib.rs 的 cfg(debug_assertions) 注册）
-[target.'cfg(debug_assertions)'.dependencies]
-tauri-plugin-wdio = "1"
-
 [dev-dependencies]
 tempfile = "3"
 # 集成测试 HTTP 配对（POST /api/auth/* 换取 JWT）：已为运行依赖，dev 复用同版本
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
-# 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
-# （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
-wit-component = "=0.256.0"
-# mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
-flume = "0.12"
+# 集成测试直连插件私有库（认证记录下沉后 pairing/历史真源在私有库，白盒断言用）
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# ==================== 桥接基准工程（bench/） ====================
+# 自带 main() 的基准驱动（非 libtest harness）：CLI 参数 / 表格报告 / JSON 导出
+# 全部由工程自己控制，故关闭默认 harness。无参数运行 = 冒烟模式（3 个数量级门禁探针），
+# 全量场景需显式 `-- --full`。详见 bench/README.md 与
+# .scratch/2026-09-26-wasm-bridge-bench/spec.md
+[[test]]
+name = "wasm_bridge_bench"
+path = "tests/wasm_bridge_bench/main.rs"
+harness = false
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
@@ -190,3 +233,6 @@ split-debuginfo = "packed"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.test.package.wasmtime]
+debug-assertions = false

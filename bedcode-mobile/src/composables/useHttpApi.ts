@@ -213,28 +213,10 @@ export async function httpReauth(data: {
 }
 
 // ==================== Session API ====================
-
-export async function httpListSessions() {
-  return request<{ sessions: any[] }>('/api/sessions')
-}
-
-export async function httpStartSession(
-  configId: string,
-  size?: { cols: number; rows: number }
-) {
-  return request<{ sessionId: string; status: string }>(
-    '/api/sessions/start',
-    {
-      method: 'POST',
-      // size：本端终端组件按设备屏幕预算的默认网格，主机 PTY 以此为初始尺寸
-      body: JSON.stringify({ configId, cols: size?.cols, rows: size?.rows })
-    }
-  )
-}
-
-export async function httpStopSession(sessionId: string) {
-  return request(`/api/sessions/${sessionId}/stop`, { method: 'POST' })
-}
+// 票 13：list / start / stop / remove / input 已迁插件 `com.bedcode.terminal-session`
+// （见 `src/plugin/sessionCommands.ts`，经 host-http + jwtAuth 直连桌面）。
+// 本文件只保留 resize——终端 UI 域（票 15）经 `mobileApi.httpRequest` 消费，
+// 届时随该票收口。
 
 export async function httpResizeSession(
   sessionId: string,
@@ -245,18 +227,6 @@ export async function httpResizeSession(
   return request(`/api/sessions/${sessionId}/resize`, {
     method: 'POST',
     body: JSON.stringify({ cols, rows, force }),
-  })
-}
-
-export async function httpRemoveSession(sessionId: string) {
-  return request(`/api/sessions/${sessionId}/remove`, { method: 'DELETE' })
-}
-
-/** 通过 HTTP API 发送终端输入（绕过 WebSocket 阻塞） */
-export async function httpSendSessionInput(sessionId: string, data: string, specialKey?: string) {
-  return request(`/api/sessions/${sessionId}/input`, {
-    method: 'POST',
-    body: JSON.stringify({ data, specialKey: specialKey || null }),
   })
 }
 
@@ -329,7 +299,7 @@ export async function httpSetSessionMode(sessionId: string, autoExecute?: boolea
   if (autoExecute !== undefined) body.auto_execute = autoExecute
   if (autoAnswer !== undefined) body.auto_answer = autoAnswer
   return request(
-    '/api/plugin/com.bedcode.auto-task/session-mode',
+    '/api/plugin/com.bedcode.terminal-session/session-mode',
     { method: 'POST', body: JSON.stringify(body) }
   )
 }
@@ -357,14 +327,14 @@ export interface QueueListResponse {
 /** 查询任务队列 */
 export async function httpTaskQueueList(sessionId: string) {
   return request<QueueListResponse>(
-    `/api/plugin/com.bedcode.auto-task/task-queue/list?session_id=${encodeURIComponent(sessionId)}`
+    `/api/plugin/com.bedcode.terminal-session/task-queue/list?session_id=${encodeURIComponent(sessionId)}`
   )
 }
 
 /** 添加任务到队列 */
 export async function httpTaskQueueAdd(sessionId: string, prompt: string) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/add',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/add',
     { method: 'POST', body: JSON.stringify({ session_id: sessionId, prompt }) }
   )
 }
@@ -372,7 +342,7 @@ export async function httpTaskQueueAdd(sessionId: string, prompt: string) {
 /** 从队列删除任务 */
 export async function httpTaskQueueRemove(sessionId: string, taskId: string) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/remove',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/remove',
     { method: 'DELETE', body: JSON.stringify({ session_id: sessionId, task_id: taskId }) }
   )
 }
@@ -380,7 +350,7 @@ export async function httpTaskQueueRemove(sessionId: string, taskId: string) {
 /** 取消活动队列项（waiting / executing） */
 export async function httpTaskQueueCancel(sessionId: string, taskId: string) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/cancel',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/cancel',
     { method: 'POST', body: JSON.stringify({ session_id: sessionId, task_id: taskId }) }
   )
 }
@@ -388,7 +358,7 @@ export async function httpTaskQueueCancel(sessionId: string, taskId: string) {
 /** 清空任务队列 */
 export async function httpTaskQueueClear(sessionId: string) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/clear',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/clear',
     { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }
   )
 }
@@ -396,7 +366,7 @@ export async function httpTaskQueueClear(sessionId: string) {
 /** 更新队列任务内容 */
 export async function httpTaskQueueUpdate(sessionId: string, taskId: string, prompt: string) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/update',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/update',
     { method: 'POST', body: JSON.stringify({ session_id: sessionId, task_id: taskId, prompt }) }
   )
 }
@@ -404,7 +374,7 @@ export async function httpTaskQueueUpdate(sessionId: string, taskId: string, pro
 /** 重排序任务队列 */
 export async function httpTaskQueueReorder(sessionId: string, taskIds: string[]) {
   return request(
-    '/api/plugin/com.bedcode.auto-task/task-queue/reorder',
+    '/api/plugin/com.bedcode.terminal-session/task-queue/reorder',
     { method: 'POST', body: JSON.stringify({ session_id: sessionId, task_ids: taskIds }) }
   )
 }
@@ -419,7 +389,7 @@ export interface SessionSettingsData {
 /** 查询会话设置（auto_execute / auto_answer） */
 export async function httpSessionSettings(sessionId: string) {
   return request<SessionSettingsData>(
-    `/api/plugin/com.bedcode.auto-task/session-settings?session_id=${encodeURIComponent(sessionId)}`
+    `/api/plugin/com.bedcode.terminal-session/session-settings?session_id=${encodeURIComponent(sessionId)}`
   )
 }
 
@@ -440,14 +410,14 @@ export interface CurrentTaskData {
 /** 查询会话当前任务 */
 export async function httpCurrentTask(sessionId: string) {
   return request<CurrentTaskData>(
-    `/api/plugin/com.bedcode.auto-task/task-history/current?session_id=${encodeURIComponent(sessionId)}`
+    `/api/plugin/com.bedcode.terminal-session/task-history/current?session_id=${encodeURIComponent(sessionId)}`
   )
 }
 
-/** 查询 auto-task 支持的 agent 列表 */
+/** 查询任务域（bedcode app）支持的 agent 列表 */
 export async function httpListSupportedAgents() {
   return request<{ agents: string[] }>(
-    '/api/plugin/com.bedcode.auto-task/supported-agents'
+    '/api/plugin/com.bedcode.terminal-session/supported-agents'
   )
 }
 
@@ -505,7 +475,7 @@ export async function httpTaskHistoryList(params?: {
   if (params?.offset !== undefined) query.set('offset', String(params.offset))
   const qs = query.toString()
   return request<TaskHistoryListResponse>(
-    `/api/plugin/com.bedcode.auto-task/task-history/list${qs ? `?${qs}` : ''}`
+    `/api/plugin/com.bedcode.terminal-session/task-history/list${qs ? `?${qs}` : ''}`
   )
 }
 
@@ -531,7 +501,7 @@ export interface ScheduledJobsListResponse {
 /** 查询定时任务列表 */
 export async function httpScheduledJobsList() {
   return request<ScheduledJobsListResponse>(
-    '/api/plugin/com.bedcode.auto-task/scheduled-jobs/list'
+    '/api/plugin/com.bedcode.terminal-session/scheduled-jobs/list'
   )
 }
 
@@ -546,7 +516,7 @@ export interface ScheduledJobCreateBody {
 /** 创建定时任务（trigger_at 为 UTC `YYYY-MM-DD HH:MM:SS`） */
 export async function httpScheduledJobCreate(body: ScheduledJobCreateBody) {
   return request<{ job_id: string }>(
-    '/api/plugin/com.bedcode.auto-task/scheduled-jobs/create',
+    '/api/plugin/com.bedcode.terminal-session/scheduled-jobs/create',
     { method: 'POST', body: JSON.stringify(body) }
   )
 }
@@ -664,13 +634,8 @@ export function useHttpApi() {
     httpVerifyPairingCode,
     httpQrConnect,
     httpReauth,
-    // Session
-    httpListSessions,
-    httpStartSession,
-    httpStopSession,
+    // Session（票 13：list/start/stop/remove/input 已迁插件，见 plugin/sessionCommands.ts）
     httpResizeSession,
-    httpRemoveSession,
-    httpSendSessionInput,
     // Config
     httpListConfigs,
     httpListQuickActions,

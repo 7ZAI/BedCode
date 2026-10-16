@@ -7,8 +7,9 @@
  *
  * 与移动端 manifest-gen 的区别（桌面端扩展点/权限体系不同）：
  * - 扩展点：sidebar/toolbox/statusbar（views）+ fileHandlers（无 navTab/settings/toolbarItems）
- * - 权限：ui:sidebar / ui:toolbox / ui:statusbar / ui:pageToolbar / ui:input / ui:fileHandler
- *   / terminal:observe / session:write / broadcast 等桌面端权限
+ * - 权限：ui:sidebar / ui:toolbox / ui:statusbar / ui:pageToolbar / ui:settings / ui:input
+ *   / ui:fileHandler / terminal:input / session:read / broadcast 等桌面端权限
+ *   （v27 起 `terminal:observe` / `session:write` 已退役，不在其列）
  *
  * 合并策略（保守，避免误删导致运行时拒绝）：
  * - permissions：派生结果与手工声明取并集
@@ -21,44 +22,96 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { permissionVocabulary } from './manifest-validate.js'
 
 // ==================== 权限映射表 ====================
 
-/** 前端 UI 注册调用 → 权限（与宿主 permission.ts PERMISSION_API_MAP 一一对应） */
-const REGISTER_PERMISSIONS = {
-  registerSidebarPanel: 'ui:sidebar',
-  registerToolboxPage: 'ui:toolbox',
-  registerStatusBarItem: 'ui:statusbar',
-  registerTitleBarItem: 'ui:statusbar',
-  registerPageToolbarItem: 'ui:pageToolbar',
-  registerInputExtension: 'ui:input',
-  registerTerminalToolbarItem: 'ui:input',
-  registerFileHandler: 'ui:fileHandler',
-}
+/**
+ * 前端 UI 注册调用 → 权限（从 SDK 权限词汇生成物的 apiMap 派生）
+ *
+ * 生成物里 `ui.registerXxx` 方法名去掉 `ui.` 前缀就是这里的扫描键（源码里以
+ * `.registerXxx(` 出现）。派生而非手抄：手抄表已经落后过一次真源（新增注册 API
+ * 忘记登记 → manifest 缺权限位 → 运行时被门），现由
+ * `bin/permission-vocabulary.json` 单点决定。
+ */
+const REGISTER_PERMISSIONS = Object.fromEntries(
+  Object.entries(permissionVocabulary().apiMap).flatMap(([perm, methods]) =>
+    (methods || [])
+      .filter((m) => m.startsWith('ui.register'))
+      .map((m) => [m.slice('ui.'.length), perm]),
+  ),
+)
 
 /** 前端 context API 使用 → 权限（正则按合并后的前端源码匹配） */
 const FRONTEND_PERMISSION_RULES = [
   { re: /\.storage\s*\.\s*(get|set|delete|flush)\b/, perm: 'storage' },
-  { re: /\.terminal\s*\.\s*sendInput\b/, perm: 'terminal:input' },
+  // v27（票 10）：`terminal.sendInput`（宿主导流输入）与
+  // `terminal.onInputSubmitted`（提交行观察）随宿主会话面退役——对应规则删除；
+  // `terminal:input` 仍由 `.terminal.onInput` 推断，`terminal:observe` 位已不存在
   { re: /\.terminal\s*\.\s*onInput\b/, perm: 'terminal:input' },
   { re: /\.terminal\s*\.\s*onOutput\b/, perm: 'terminal:output' },
-  { re: /\.terminal\s*\.\s*onInputSubmitted\b/, perm: 'terminal:observe' },
-  { re: /\.session\s*\.\s*(list|get|onStatusChange)\b/, perm: 'session:read' },
-  { re: /\.session\s*\.\s*(create|stop)\b/, perm: 'session:write' },
+  // v27（票 10）：`session:read` 现在只剩宿主终端窗口事实（数据面 `list` / `get`
+  // 与事件面 `onStatusChange` 已退役）；`session:write` 位已不存在
+  { re: /\.session\s*\.\s*(predictTerminalSize|openTerminal|closeTerminal|isTerminalOpen)\b/, perm: 'session:read' },
   { re: /\.http\s*\.\s*registerEndpoint\b/, perm: 'network:http' },
   { re: /\.events\s*\.\s*(on|emit)\b/, perm: 'broadcast' },
 ]
 
 /** Rust host API 调用 → 权限 */
 const RUST_PERMISSION_RULES = [
-  { re: /\b(storage_get|storage_set|storage_delete|db_execute|db_query)\b/, perm: 'storage' },
+  // 插件私有 KV（host-storage）
+  { re: /\b(storage_get|storage_set|storage_delete)\b/, perm: 'storage' },
+  // 主库 SQL 面已随 host-database 退役（票 18 主库收归：内核不再有插件主库
+  // 原语，`database:main` 权限位从 permission.rs 移除）——不再映射 `db_*`。
   { re: /\bterminal_send\b/, perm: 'terminal:input' },
-  { re: /\b(session_list|session_get)\b/, perm: 'session:read' },
+  // host-pty 两域（与权限词汇表 apiMap 逐字对应）：spawn/kill 属高风险面，
+  // 数据面（write/resize/ring_fetch/is_running）归 pty:io
+  { re: /\b(pty_spawn|pty_kill)\b/, perm: 'pty:spawn' },
+  { re: /\b(pty_write|pty_resize|pty_ring_fetch|pty_is_running)\b/, perm: 'pty:io' },
+  // 会话读取面：`session_list` / `session_get` + v23 起留作**一次性 legacy 迁移通道**的
+  // `session_config_list` / `session_config_get`（`config-get` 改挂 `session:read`）。
+  // **`session_config_upsert` / `session_config_delete` 已随 v23 从 ABI 删除**，`session:config`
+  // 权限位同步退役——映射表若留着旧项，就会给插件注入词汇表外的权限（见下方加载期自检）。
+  { re: /\b(session_list|session_get|session_config_list|session_config_get)\b/, perm: 'session:read' },
+  // 在册连接清单（票 04）：SDK 方法名 `connections_list`（WIT `host-connection`），
+  // 权限位与域名同源 `connection:read`——不再由 `session:read` 代答「谁能读连接清单」。
+  { re: /\bconnections_list\b/, perm: 'connection:read' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
+  // ABI v29 服务端域（动态路由注册）：register/unregister 同挂 network:http
+  // （与前端面 `http.registerEndpoint` 同权限位）
+  { re: /\bhttp_register_endpoint\b/, perm: 'network:http' },
+  { re: /\bhttp_unregister_endpoint\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },
+  // 系统文件选择器（WIT `host-platform`，SDK 方法名 `platform_pick_files` /
+  // `platform_pick_folder` / `platform_pick_folders`）：宿主要求 manifest **单独**
+  // 声明 `fs:pick` 才能调起系统原生对话框，缺声明即调用显性失败——因此扫描到调用
+  // 就必须把该位补进 manifest（与 fs:read / fs:write 分域，不合并推导）
+  { re: /\bplatform_pick_(files|folder|folders)\b/, perm: 'fs:pick' },
+  // 插件私有库（host-plugin-database）与私有 KV 同挂 storage
   { re: /\bplugin_db_\w+\b/, perm: 'storage' },
 ]
+
+/**
+ * 映射表加载期自检：任何指向「词汇表外权限」的规则立即抛错，绝不静默往下走。
+ *
+ * 真源是 `rust/src/permission.rs`（生成 `bin/permission-vocabulary.json`），而本表是手写的
+ * 宿主方法名映射——两者漏跟演一次，后果是 manifest-gen 给插件注入非法权限位，随后
+ * `plugin-build.js` 的 manifest 校验必挂（整条 `plugins:build` 链不可用，2026-09-22 实测：
+ * v23 退役 `session:config` 后本表未跟演）。
+ */
+{
+  const vocab = new Set(permissionVocabulary().permissions)
+  for (const rule of [...FRONTEND_PERMISSION_RULES, ...RUST_PERMISSION_RULES]) {
+    if (!vocab.has(rule.perm)) {
+      throw new Error(
+        `manifest-gen: 权限映射表含词汇表外权限 '${rule.perm}'（规则 ${rule.re}）——` +
+          `真源 packages/plugin-sdk-desktop/rust/src/permission.rs 变更（退役/改名）后必须跟演本表，` +
+          `并重跑 SDK 的 pnpm run gen:permissions`,
+      )
+    }
+  }
+}
 
 // ==================== 文件收集 ====================
 
@@ -185,6 +238,18 @@ function indexById(entries) {
   return map
 }
 
+/**
+ * 允许「源码标识符直接当清单值」的字段：**只有 component**。
+ *
+ * 扫描器把裸标识符（`component: ChatView`）求值成 `{__ident}`——这类字段里
+ * 「符号名本身就是清单要的值」，写回字符串正确。但其余字段出现裸标识符
+ * （`order: SOME_CONST`）意味着源码引用了一个常量，**静态求不出数值**：曾把它
+ * 当字符串写回（`"order": "AGENT_HUB_SIDEBAR_ORDER"`），宿主读成非数字 → 侧栏
+ * 排序静默失效，且清单校验无类型检查不报错，于是每次构建静默改写受版本跟踪的
+ * plugin.json。这类字段与 null 同口径：跳过（保留清单既有值）+ 日志点名。
+ */
+const IDENT_AS_STRING_KEYS = new Set(['component'])
+
 /** 合并扫描条目与旧条目：扫描值优先，null（动态表达式）回退旧值，再回退默认值 */
 function mergeEntry(scanned, old, defaults = {}) {
   const merged = { ...defaults }
@@ -192,6 +257,12 @@ function mergeEntry(scanned, old, defaults = {}) {
   for (const [key, value] of Object.entries(scanned)) {
     if (value === null || value === undefined) continue
     if (value && typeof value === 'object' && value.__ident) {
+      if (!IDENT_AS_STRING_KEYS.has(key)) {
+        console.warn(
+          `[manifest-gen] ${key} 引用标识符 ${value.__ident}（常量值静态不可求）：保留 plugin.json 既有值`,
+        )
+        continue
+      }
       merged[key] = value.__ident
       continue
     }
@@ -239,7 +310,14 @@ export function generateManifest(cwd, { check = false } = {}) {
   if (!existsSync(manifestPath)) {
     throw new Error(`plugin.json 不存在: ${manifestPath}`)
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  } catch (e) {
+    // JSON.parse 对非法 JSON 抛 SyntaxError：包一层带路径的可读错误，
+    // 便于定位是哪个插件的 manifest 损坏（坏 JSON 是配置错误，应显性失败）
+    throw new Error(`plugin.json 非法 JSON，请检查文件: ${manifestPath} (${e.message})`)
+  }
   const report = []
   const permissions = new Set(manifest.permissions || [])
   const contributes = { ...(manifest.contributes || {}) }
@@ -258,7 +336,16 @@ export function generateManifest(cwd, { check = false } = {}) {
     ...sidebarPanels.map((s) => mergeEntry(s, undefined, { type: 'sidebar' })),
     ...toolboxPages.map((s) => mergeEntry(s, undefined, { type: 'toolbox' })),
     ...statusBarItems.map((s) => mergeEntry(s, undefined, { type: 'statusbar' })),
-  ]
+  ].filter((v) => {
+    // id 解析不出来 = 注册描述符用了变量/表达式（如 `id: panel.id` 的循环注册），
+    // 扫描器无法静态求值。此时**保留 manifest 里的既有声明**：写回一条缺 id 的条目
+    // 会让宿主 `get_manifest()` 反序列化直接失败（插件加载不了），比漏一条声明严重得多
+    if (v && v.id) return true
+    console.warn(
+      `[manifest-gen] 跳过一个无法静态解析 id 的 ${v?.type ?? 'view'} 注册（保留 plugin.json 既有声明）`,
+    )
+    return false
+  })
 
   if (scannedViews.length > 0) {
     const old = indexById(contributes.views)
@@ -307,11 +394,29 @@ export function generateManifest(cwd, { check = false } = {}) {
 
     const commandIds = extractRustCommands(rustSource)
     if (commandIds.length > 0) {
-      const old = indexById(contributes.commands)
-      contributes.commands = commandIds.map((id) =>
-        mergeEntry({ id }, old.get(id), { id, title: id }),
-      )
-      report.push(`contributes.commands ← ${commandIds.length} 个`)
+      // 票 17 口径（用户裁决 ①）：manifest 已声明 commands 即视为**人工裁剪过的
+      // 用户可见命令面**，生成器不再按匹配臂覆写——`invoke_command` 的臂含宿主
+      // 桥接与闭环调试入口（com.bedcode.terminal-session 实测 28 声明 / 50 臂），全量覆写
+      // 等于把内部接缝 advertise 成产品命令。改为只报告差集：未声明的臂（提示，
+      // 由人判断是否属于用户可见面）、声明了但源码没有的（真漂移，必须修）。
+      // 未声明 commands 的插件沿用自动填充（prefactor 前形态）。
+      if (contributes.commands && contributes.commands.length > 0) {
+        const declared = new Set(contributes.commands.map((c) => c.id))
+        const missing = commandIds.filter((id) => !declared.has(id))
+        const stale = [...declared].filter((id) => !commandIds.includes(id))
+        if (missing.length > 0) {
+          report.push(
+            `contributes.commands 未声明的 invoke_command 臂 ${missing.length} 个（人工裁剪面，不自动写入）: ${missing.join(', ')}`,
+          )
+        }
+        if (stale.length > 0) {
+          report.push(`contributes.commands 声明但源码无对应臂 ${stale.join(', ')}`)
+        }
+      } else {
+        // 本分支下 manifest 未声明任何命令，无旧条目可继承
+        contributes.commands = commandIds.map((id) => ({ id, title: id }))
+        report.push(`contributes.commands ← ${commandIds.length} 个`)
+      }
     }
 
     const handlers = extractTerminalHandlers(rustSource)

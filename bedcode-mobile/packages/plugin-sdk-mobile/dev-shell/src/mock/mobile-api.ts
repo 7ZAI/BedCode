@@ -11,9 +11,15 @@ import type {
   MobileHostApi,
   MobileHttpRequestOptions,
   MobileHttpResult,
+  MobileConnectionStatus,
+  MobileDeviceTarget,
+  MobileMdnsService,
 } from '../../../src/types'
-import { activeSessionId, connected, sessions } from './session'
+import { activeSessionId, connected, onDevEvent, sessions } from './session'
 import { getAllDevMocks } from '../registry'
+
+/** 连接历史（dev-shell mock：演示种子为空列表） */
+const connectionHistory = ref<{ address: string; name: string; lastConnected?: string }[]>([])
 
 /** 活跃会话列表（响应式，MobileHostApi.activeSessions） */
 const activeSessions = computed(() => sessions.value.map((s) => ({ ...s })))
@@ -116,7 +122,7 @@ function boolField(body: JsonBody, key: string): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined
 }
 
-/** 通用 HTTP 请求路由：按对端 AutoTask 端点路径模拟（dev-shell 宿主能力 mock） */
+/** 通用 HTTP 请求路由：按对端任务域（bedcode app）端点路径模拟（dev-shell 宿主能力 mock） */
 async function routeHttpRequest(
   path: string,
   method: string,
@@ -126,7 +132,7 @@ async function routeHttpRequest(
   const query = new URLSearchParams(queryString || '')
   const sessionId = query.get('session_id') || strField(body, 'session_id') || ''
 
-  const BASE = '/api/plugin/com.bedcode.auto-task'
+  const BASE = '/api/plugin/com.bedcode.terminal-session'
 
   if (pathname === `${BASE}/task-queue/list`) {
     if (!sessionId) return fail('missing sessionId')
@@ -255,6 +261,12 @@ async function routeHttpRequest(
   return fail(`dev-shell mock: unhandled endpoint ${method} ${path}`)
 }
 
+/** dev-shell 主题（无真机主题系统；如需验证深色路径可手动置 true） */
+const isDark = ref(false)
+
+/** dev-shell 本地设置投影（vibrate 无意义置 false；档位与宿主 MobileSettings 同形） */
+const mobileSettings = ref({ vibrate: false, maxOpenTerminals: 5 })
+
 /** 暴露到 window.__BEDCODE_SHARED__.mobileApi */
 export const mobileApi: MobileHostApi = {
   activeSessionId,
@@ -263,12 +275,94 @@ export const mobileApi: MobileHostApi = {
     sessions.value.map((s) => ({ session_id: s.id, agent: s.agent, status: s.status })),
   ),
   isConnected: connected,
+  // dev-shell 无真实认证阶段：演示环境视为已认证（会话/任务端点可直接响应）
+  isPaired: connected,
 
   httpRequest<T = any>(path: string, options: MobileHttpRequestOptions = {}) {
     return routeHttpRequest(path, options.method || 'GET', parseBody(options.body)) as Promise<
       MobileHttpResult<T>
     >
   },
+
+  // dev-shell：列表已是内存真源（mock 会话），拉取即 no-op
+  async loadActiveSessions(): Promise<void> {},
+  async loadSessionConfigs(): Promise<void> {},
+  hasLoadedConfigs: ref(true),
+  isLoadingConfigs: ref(false),
+
+  // 票 15：终端 UI 域下沉所需机制面 —— dev-shell 接 mock 会话输出（字符串 → UTF-8 字节），
+  // 真机为宿主页面 Channel 裸字节投递
+  async openTerminalStream(sessionId: string, onBytes: (bytes: Uint8Array) => void) {
+    const encoder = new TextEncoder()
+    const un = onDevEvent('terminal:output', (payload: { sessionId: string; data: string }) => {
+      if (payload.sessionId === sessionId) onBytes(encoder.encode(payload.data))
+    })
+    return {
+      dispose() {
+        un.dispose()
+      },
+    }
+  },
+  isDark,
+  mobileSettings,
+  onSessionEvent(handler) {
+    // dev-shell：桥接 mock 会话生命周期（断线 / 会话停止）；像素级状态流不在浏览器模拟
+    const d1 = onDevEvent('plugin:lifecycle:disconnect', () => handler({ type: 'disconnected' }))
+    const d2 = onDevEvent('plugin:lifecycle:sessionStopped', (p: any) =>
+      handler({ type: 'session_stopped', sessionId: p?.sessionId }),
+    )
+    return {
+      dispose() {
+        d1.dispose()
+        d2.dispose()
+      },
+    }
+  },
+  // ── 连接引擎面（票 2026-10-09：宿主页下沉；dev-shell 提供静默 no-op 替身）──
+  // 演示环境已是可用的「已认证」连接（与上方 isConnected / isPaired 同口径，
+  // 否则宿主页头部显示「未连接」而认证卡片已渲染，前后矛盾）
+  connectionStatus: ref<MobileConnectionStatus>('paired'),
+  isConnecting: ref(false),
+  currentDevice: ref<MobileDeviceTarget | null>(null),
+  connectionHistory,
+  async connectDevice() {},
+  async cancelConnection() {},
+  async authenticateWithStoredToken() {
+    return true
+  },
+  async disconnect() {},
+  async loadConnectionHistory() {},
+  async clearConnectionHistory() {
+    connectionHistory.value = []
+  },
+  async removeFromConnectionHistory() {},
+  async addToConnectionHistory(address: string, name?: string) {
+    // dev-shell：内存历史去重置顶（与宿主域上限 10 条同口径）
+    const list = connectionHistory.value.filter((item) => item.address !== address)
+    list.unshift({ address, name: name || address.split(':')[0] })
+    connectionHistory.value = list.slice(0, 10)
+  },
+  onConnectionEvent() {
+    return { dispose() {} }
+  },
+  // ── mDNS 引擎事实（dev-shell 无 mDNS，静默空列表）──
+  mdnsServices: ref<MobileMdnsService[]>([]),
+  mdnsScanning: ref(false),
+  async mdnsStart() {},
+  async mdnsStop() {},
+  async mdnsRefresh() {},
+  // ── 生物凭证引擎面（dev-shell 视为不支持）──
+  async getBiometricKeyStatus() {
+    return { deviceSupported: false, deviceReason: 12, hasKey: false }
+  },
+  async bindBiometricCredential() {
+    return false
+  },
+  async unbindBiometricCredential() {
+    return false
+  },
+  // dev-shell 的会话流走真实渲染路径（非宿主 DEV mock 会话），故无 mockSessionId
+  mockSessionId: null,
 }
 
 /** 供 MockTerminalView 展示队列 */

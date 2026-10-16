@@ -15,15 +15,30 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
 
+/**
+ * 适配平台（manifest `platform` 字段，必填）
+ *
+ * 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+ * 宿主在加载 / zip 安装期按本端校验：桌面拒 `mobile`、移动拒 `desktop`，
+ * `both` 两端均可装载（真源 SDK `rust/src/types.rs::PluginPlatform`）。
+ */
+export type PluginPlatform = 'desktop' | 'mobile' | 'both'
+
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
   id: string
   name: string
   version: string
+  /**
+   * 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。
+   *
+   * **必填**（与 id/name/version 同档）：宿主加载 / 安装时校验声明必须覆盖
+   * 当前端，不匹配即 fail-visible 拒绝装载。
+   */
+  platform: PluginPlatform
   description: string
   author: string
   main: string
-  sandbox: 'inline' | 'isolated'
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
@@ -65,11 +80,34 @@ export interface PluginContributes {
   terminal?: TerminalContribution
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  /**
+   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单 + 认证档位，票 16 / 票 08）：
+   * 条目为不含 `/api/plugin/<插件 id>/` 前缀的相对路径段，可写成 `{ path, auth }`
+   * 声明档位。宿主只认声明：未声明路径 404，空/缺省清单 = 该插件没有 HTTP 面
+   * （票据 03 的「前缀内 ANY 放行」过渡策略已随票 08 退役）。
+   */
+  httpEndpoints?: HttpEndpointContribution[]
+  /**
+   * 插件 WS 端点清单（`contributes.wsEndpoints`，票 09a WS 动作词表声明式化 · expand）：
+   * 与 httpEndpoints 同形态，条目为不含 `/ws/plugin/<插件 id>/` 前缀的相对路径段，
+   * 可写成 `{ path, auth }` 声明档位。宿主按声明静态登记进 WS 注册表并精确匹配，
+   * 未声明路径不可达；缺省档 = WS 面默认档 none。
+   */
+  wsEndpoints?: WsEndpointContribution[]
   /** 配置声明 */
   configuration?: PluginConfiguration
   /** 生命周期钩子声明 */
   lifecycle?: LifecycleContribution
 }
+
+/** HTTP 端点认证档位（票 08，与 SDK `EndpointAuthTier` 同形） */
+export type EndpointAuthTier = 'none' | 'jwt'
+
+/** 一条 HTTP 端点声明：纯路径段（档位 = 宿主最严缺省 jwt）或 `{ path, auth }` 对象 */
+export type HttpEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
+
+/** 一条 WS 端点声明：纯路径段（档位 = WS 面缺省 none）或 `{ path, auth }` 对象（票 09a） */
+export type WsEndpointContribution = string | { path: string; auth?: EndpointAuthTier }
 
 /** 生命周期扩展点声明 */
 export interface LifecycleContribution {
@@ -118,20 +156,26 @@ export interface FileHandlerContribution {
 
 /** 插件运行时状态
  *
- * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）：
- * 单元变体 → `{ state: "Loaded" }`；newtype 变体 → `{ state: "Degraded", error: "..." }`。
- * Rust 源：packages/plugin-sdk-desktop/rust/src/types.rs 的 PluginState
+ * 取值口径（2026-10-14 对齐）：真源 = 共享内核 crate
+ * `packages/bedcode-wasm-core/src/manifest.rs` 的 `PluginState`，其 serde 属性为
+ * `#[serde(tag = "state", rename_all = "camelCase")]`——宿主命令
+ * `plugin_list_loaded` / `plugin_get_info`（经 wasm-core `api_bridge` 绑定）返回的
+ * JSON 是 **camelCase**：单元变体 `{ state: "activated" }`，结构体变体
+ * `{ state: "degraded", error: "..." }`。
+ * 旧声明写成 PascalCase（`'Activated'` 等），与后端序列化不一致，状态判断将永远
+ * 命中不了（表现为启停开关恒「未启用」、分区恒为未启用、贡献面永不生效）。
+ * 改动词表时先改共享 crate，再同步本类型与两端消费者。
  */
 export type PluginState =
-  | { state: 'Loaded' }
+  | { state: 'loaded' }
   /** 激活进行中（auto-activation / 手动激活期间的瞬时中间态） */
-  | { state: 'Activating' }
-  | { state: 'Activated' }
+  | { state: 'activating' }
+  | { state: 'activated' }
   /** activate 成功但 on_startup 失败：实例可用、扩展点已注册，启动初始化未完成 */
-  | { state: 'Degraded'; error: string }
-  | { state: 'NeedsApproval' }
-  | { state: 'Error'; error: string }
-  | { state: 'Deactivated' }
+  | { state: 'degraded'; error: string }
+  | { state: 'needsApproval' }
+  | { state: 'error'; error: string }
+  | { state: 'deactivated' }
 
 /** 插件信息（从后端获取） */
 export interface PluginInfo {
@@ -141,7 +185,6 @@ export interface PluginInfo {
   description: string
   author: string
   main: string
-  sandbox: string
   pluginType: PluginType
   /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
@@ -167,9 +210,11 @@ export interface SidebarPanelDescriptor {
    * 与宿主内置菜单共用同一图标体系，可包含多个 M 子路径组合成完整图标 */
   icon?: string
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
-   * 与宿主内置菜单（终端会话 100 / 服务器 200 / 设备 300 / 插件 400 / 设置 700）共用同一排序空间，
-   * 可指定任意值插入到内置菜单项之间（如 150 位于"终端会话"与"服务器"之间）；
-   * 同值按注册先后排列 */
+   * 与宿主内置菜单（设备配对 100 / 终端会话 200 / 服务器 300 保留不复用 / 插件管理 9998 / 设置 9999）
+   * 共用同一排序空间，可指定任意值插入到内置菜单项之间（如 150 位于"设备配对"与"终端会话"之间）；
+   * 同值按注册先后排列。
+   * 注意：与「设备配对 / 终端会话」内置项**同 order 值**即视为接管该域——宿主内置入口随之让位
+   * （本插件 error / 停用后自动恢复）；插在两者之间的新域目录不触发让位 */
   order?: number
   component: any
 }
@@ -183,6 +228,22 @@ export interface ToolboxPageDescriptor {
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
    * 与宿主内置菜单共用同一排序空间，可插入任意内置项之间 */
   order?: number
+  component: any
+}
+
+/** 设置分组描述符（插件往宿主设置页贡献一个分组，需 `ui:settings` 权限） */
+export interface SettingsSectionDescriptor {
+  id: string
+  /** 分组标题的 i18n key，相对插件自身命名空间
+   * （宿主按 `${pluginId}.${titleKey}` 解析，与 `context.i18n.t` 同一前缀规则；
+   * 未注册该 key 时 vue-i18n 回退显示 key 本身） */
+  titleKey: string
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
+  icon?: string
+  /** 排序值，升序排列（越小越靠前），缺省与其余贡献面一致（600）。
+   * 与宿主内置分组共用同一排序空间，可指定任意值插入内置分组之间；同值按注册先后排列 */
+  order?: number
+  /** 分组内容组件：只渲染卡片正文，外层 `<section>` 与标题由宿主统一渲染（保证与内置分组像素一致） */
   component: any
 }
 
@@ -326,28 +387,71 @@ export interface CommandRegistry {
 
 /** 终端 API（需 terminal:* 权限） */
 export interface TerminalAPI {
-  sendInput(sessionId: string, text: string): Promise<void>
+  // 票 08：`sendInput` 已退役（宿主不再替插件导流输入）；
+  // 插件写自家会话输入走命令通道 `session.input`。
   onOutput(handler: (sessionId: string, data: string) => void): Disposable
   onInput(handler: (sessionId: string, text: string) => string | null): Disposable
 }
 
-/** 会话 API（需 session:* 权限） */
+/**
+ * 会话 API（需 `session:read` 权限）
+ *
+ * 票 08 / 09 起只剩**宿主窗口事实**：数据面（`list` / `get`）与事件面
+ * （`onStatusChange`）已退役——插件读会话走自家命令通道
+ * （`session.list` / `session.get`），会话状态由插件自己发布。
+ */
 export interface SessionAPI {
-  list(): Promise<any[]>
-  get(sessionId: string): Promise<any>
-  onStatusChange(handler: (event: any) => void): Disposable
+  /**
+   * 预测宿主终端窗口的初始网格（宿主窗口几何 + 字体测量 + 整体缩放）。
+   *
+   * 供插件在启动会话前把 `cols` / `rows` 交给 `create-with-spec`——终端窗口本体、
+   * 创建尺寸与渲染管线留宿主（spec D3），预测规则必须与窗口创建规则同源，故留在
+   * 宿主一处实现而不在插件复刻。任一环节不可用（非 Tauri 环境 / 字体未就绪）返回
+   * `null`，调用方不传尺寸、由宿主兜底默认网格。
+   */
+  predictTerminalSize(): Promise<{ cols: number; rows: number } | null>
+  /**
+   * 打开（或聚焦）宿主终端窗口——宿主既有路由深链 `/terminal-window/:sessionId`。
+   *
+   * 窗口几何、贴靠、就绪事件与关闭一律留宿主；插件只触发，不自建窗口、不自带渲染管线。
+   *
+   * @returns `true` = 新建窗口（尚在就绪中，调用方宜显示 loading）；`false` = 既有窗口已聚焦
+   */
+  openTerminal(session: { id: string; name: string }): Promise<boolean>
+  /**
+   * 关闭宿主终端窗口（幂等：窗口不存在时静默返回）。
+   *
+   * 会话停止 / 删除时由调用方触发——「何时该关窗」是插件侧的编排决策。
+   */
+  closeTerminal(sessionId: string): Promise<void>
+  /**
+   * 该会话是否已有打开的终端窗口（宿主窗口登记事实，同步）。
+   *
+   * 调用方据此决定「先聚焦（无需 loading）还是新建（显示就绪 loading）」——
+   * 与宿主会话页原行为同口径。
+   */
+  isTerminalOpen(sessionId: string): boolean
 }
 
 /** UI 注册表（需 ui:* 权限） */
 export interface UIRegistry {
   registerSidebarPanel(panel: SidebarPanelDescriptor): Disposable
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
+  /**
+   * 注册一个可由插件页路由直达、但**不进入侧边栏菜单**的页面
+   * （viewType 'page'：不进 sidebarViews/toolboxViews 投影，仅存全量注册表）。
+   * 仍经 `/plugin/sidebar/:pluginId/:viewId` 路由渲染（如从设备列表进入连接历史深链），
+   * 适合「从某页内进入的二级页面」场景（票 14 收尾：连接历史不再占侧边栏）。
+   */
+  registerPage(page: SidebarPanelDescriptor): Disposable
   registerStatusBarItem(item: StatusBarItemDescriptor): Disposable
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
+  /** 往宿主设置页贡献一个分组（见 SettingsSectionDescriptor；权限 ui:settings） */
+  registerSettingsSection(section: SettingsSectionDescriptor): Disposable
   /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
   showDialog(options: PluginDialogOptions): PluginDialogHandle
 }
@@ -369,12 +473,6 @@ export interface StorageAPI {
 /** HTTP API（需 network:http 权限） */
 export interface HttpAPI {
   registerEndpoint(path: string, handler: RequestHandler): Disposable
-}
-
-/** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
-export interface SystemAPI {
-  /** 在系统文件管理器中显示文件/目录（Windows 资源管理器选中、macOS Finder Reveal） */
-  revealInDir(path: string): Promise<void>
 }
 
 /** 国际化 API — 插件访问宿主 i18n 能力 */
@@ -400,8 +498,6 @@ export interface PluginContext {
   readonly http: HttpAPI
   /** 国际化 API */
   readonly i18n: I18nAPI
-  /** 系统 API（需 system:open 权限） */
-  readonly system: SystemAPI
   /** 内部：所有 Disposable 收集器 */
   readonly _disposables: Disposable[]
 }

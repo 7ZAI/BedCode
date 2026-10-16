@@ -1,4 +1,13 @@
 {
-  "desktop": ["ai-chatbox", "auto-task", "file-transfer"],
-  "mobile": ["ai-chatbox", "auto-task", "file-transfer"]
+  "desktop": [
+    "agent-hub",
+    "ai-chatbox",
+    "file-transfer",
+    "terminal-session"
+  ],
+  "mobile": [
+    "ai-chatbox",
+    "bedcode",
+    "file-transfer"
+  ]
 }

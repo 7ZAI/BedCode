@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::system::constants::lifecycle::HOOK_TIMEOUT_SECS;
+use crate::system::constants::HOOK_TIMEOUT_SECS;
 
 /// 生命周期阶段
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -251,10 +251,21 @@ pub fn register_core_lifecycle_hooks() {
         ctx.plugin_host().notify_startup().await;
     });
 
-    // SessionManager — 优先级 10，最先清理（停止所有 PTY 进程）
-    registry.on_shutdown("session-manager", 10, || async {
-        let ctx = crate::system::app_context::AppContext::global();
-        ctx.session_manager().shutdown().await;
+    // 引擎层 PTY 回收 — 优先级 10，最先清理（停止所有 PTY 进程）
+    //
+    // 票 11 起**只剩引擎一条线**：所有会话（业务 + 插件私有）的 PTY 都住在
+    // `host-pty` 引擎注册表，内核 `SessionManager` 的 PTY 注册表随会话目录删除。
+    //
+    // 会话 PTY **不能**依赖插件自己的 `purge_for_plugin`：关机时插件可能已停用 /
+    // 超时 / trap，按属主回收依赖停用流程被调到。引擎自持的全量回收保证不留孤儿进程，
+    // 事件仍逐条按属主补发（见 `bedcode_pty_engine::plugin_binding::kill_all_registered`）。
+    registry.on_shutdown("pty-engine-reclaim", 10, || async {
+        // 域回收面自持（在册表 + 事件组装都在 `bedcode-pty-engine`），关停路径只调它：
+        // 端口走进程级装配（开机期装的那一份），故这里不再取宿主上下文
+        let reclaimed = bedcode_pty_engine::plugin_binding::kill_all_registered();
+        if reclaimed > 0 {
+            tracing::info!(reclaimed, "PTY 已在引擎层回收（系统关停）");
+        }
     });
 
     // PluginHost 通知插件关闭 — 优先级 15，在 deactivate 之前
@@ -273,7 +284,7 @@ pub fn register_core_lifecycle_hooks() {
 
     // ServerSupervisor — 优先级 30，停止 HTTP/WS 服务器
     registry.on_shutdown("server-supervisor", 30, || async {
-        let supervisor = crate::server::supervisor::ServerSupervisor::global();
+        let supervisor = bedcode_server_core::supervisor::ServerSupervisor::global();
         if supervisor.is_running().await {
             if let Err(e) = supervisor.stop().await {
                 tracing::error!("Failed to stop server during shutdown: {}", e);
@@ -303,26 +314,26 @@ pub fn register_core_lifecycle_hooks() {
 }
 
 /// 注册窗口关闭请求钩子
+/// 检查是否有存活 PTY，阻止意外关闭。
 ///
-/// 检查是否有运行中的会话，阻止意外关闭。
+/// 裁决（2026-09-23 用户定案，会话引擎下沉 P1-b）：判据从「`list_sessions()`
+/// 里有 Running 会话」改为**引擎事实「存活 PTY 计数 > 0」**——功能等价（有会话
+/// 在跑 ⇔ 有活 PTY），且不引入会话语义，避免窗口关闭路径被插件异步调用阻塞
+/// （关闭请求是同步钩子，判据必须在无 await 路径内完成）。
+///
+/// 判据 = 引擎 `host-pty` 注册表（P1-b 起业务会话也走这——插件已停用 / 超时 /
+/// trap 时仍在册句柄仍被计数，不依赖插件侧异步回调）。票 11 起内核注册表那条
+/// 计数腿随 `session/` 目录删除（它此前已被记为「生产为空，仅测试」）。
 pub fn register_window_close_hooks() {
     let registry = lifecycle_registry();
 
     registry.on_window_close_requested("session-guard", 10, || async {
-        let ctx = crate::system::app_context::AppContext::global();
-        let sm = ctx.session_manager();
-        let sessions = sm.list_sessions().await;
-        let has_running = sessions.iter().any(|s| {
-            matches!(
-                s.status,
-                crate::enums::SessionStatus::Running | crate::enums::SessionStatus::Starting
-            )
-        });
+        let engine_live = bedcode_pty_engine::plugin_binding::live_count() > 0;
 
-        if has_running {
-            tracing::warn!("Window close prevented: running sessions exist");
+        if engine_live {
+            tracing::warn!(engine_live, "Window close prevented: live PTYs exist");
         }
-        !has_running
+        !engine_live
     });
 }
 

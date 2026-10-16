@@ -1,0 +1,428 @@
+<script setup lang="ts">
+/**
+ * FileTransferView — 文件传输主页面（三段式布局）
+ *
+ * 旧版架构：浏览为主页 + 传输队列/附近设备收进 bottom sheet。
+ * 当前架构：传输 / 浏览 / 设备三段式主内容区，传输列表**直接铺出来**（默认页），
+ *         底部行动条按「多选 / 活跃传输 / 上传」三态互斥收敛唯一入口。
+ * 领域逻辑（useTasks / usePeerDevices / useRemoteFs / useSettings）完全复用，
+ * 本文件只做编排与布局。
+ */
+import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import type { PluginContext, Disposable } from '@binblink/bedcode-plugin-sdk-mobile'
+import { useSwipeTabs } from '@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs'
+import { useTasks } from '../composables/useTasks'
+import { isNeedsAllFilesAccess, promptAllFilesAccess } from '../composables/useAllFilesAccess'
+import { usePeerDevices } from '../composables/usePeerDevices'
+import { useRemoteFs } from '../composables/useRemoteFs'
+import { useSettings } from '../composables/useSettings'
+import { formatBytes, formatSpeed } from '../utils/format'
+import { isTerminalState } from '../types'
+import type { MainTab, FooterMode } from '../types'
+import PeerHeader from './PeerHeader.vue'
+import TabBar from './TabBar.vue'
+import TransfersTab from './TransfersTab.vue'
+import BrowseTab from './BrowseTab.vue'
+import DevicesTab from './DevicesTab.vue'
+import SummaryBar from './SummaryBar.vue'
+
+const context = inject<PluginContext>('pluginContext')!
+const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
+
+const tasks = useTasks(context)
+const devices = usePeerDevices(context)
+const fs = useRemoteFs(context)
+const settings = useSettings(context)
+
+/** 主分段（传输列表默认可见——传输是第一目标） */
+const tab = ref<MainTab>('transfers')
+
+/** 主分段顺序（滑动方向判定基准） */
+const TAB_ORDER: MainTab[] = ['transfers', 'browse', 'devices']
+
+/**
+ * 分段切换方向：next = 向右前进（新页自右推入、旧页向左退出），prev = 回退反向。
+ * 点击 TabBar 与左右滑都经 tab 变化统一推断，动画方向始终与手势语义一致。
+ */
+const slideDir = ref<'next' | 'prev'>('next')
+watch(tab, (next, prev) => {
+  if (prev === next) return
+  slideDir.value = TAB_ORDER.indexOf(next) >= TAB_ORDER.indexOf(prev) ? 'next' : 'prev'
+})
+
+/** 方向位移量经 CSS 变量注入过渡类（styles.css .fv2-tab-*），一套类服务两个方向 */
+const slideVars = computed(() =>
+  slideDir.value === 'next'
+    ? { '--fv2-enter-x': '16px', '--fv2-leave-x': '-16px' }
+    : { '--fv2-enter-x': '-16px', '--fv2-leave-x': '16px' },
+)
+
+/** 可发送性：自建设备缓存中存在具备传输能力的节点（与旧版同构） */
+watch(
+  () => devices.devices.value,
+  (list) => {
+    tasks.peerOnline.value = list.some((d) => d.fileTransfer !== false && !!d.nodeId)
+  },
+  { deep: false, immediate: true },
+)
+
+/** 左右滑切换主分段（内容区手势，不与浏览 tab 内列表滚动冲突） */
+function switchTab(dir: 'left' | 'right'): void {
+  const next = TAB_ORDER.indexOf(tab.value) + (dir === 'left' ? 1 : -1)
+  if (next >= 0 && next < TAB_ORDER.length) tab.value = TAB_ORDER[next]!
+}
+const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs(switchTab)
+
+// dev-shell / 桌面预览回退：鼠标指针拖动驱动同一切换逻辑（浏览器无触摸事件）。
+// 真机触摸走上方 touch 事件；此处按 pointerType 只认 mouse，避免双触发。
+let mouseStartX = 0
+let mouseStartY = 0
+let mouseDX = 0
+let mouseTracking = false
+function onMouseDown(e: PointerEvent): void {
+  if (e.pointerType !== 'mouse') return
+  mouseStartX = e.clientX
+  mouseStartY = e.clientY
+  mouseDX = 0
+  mouseTracking = true
+}
+function onMouseMove(e: PointerEvent): void {
+  if (!mouseTracking || e.pointerType !== 'mouse') return
+  const dx = e.clientX - mouseStartX
+  const dy = e.clientY - mouseStartY
+  mouseDX = Math.abs(dx) > Math.abs(dy) ? dx : 0
+}
+function onMouseUp(): void {
+  if (!mouseTracking) return
+  mouseTracking = false
+  if (mouseDX < -48) switchTab('left')
+  else if (mouseDX > 48) switchTab('right')
+  mouseDX = 0
+}
+
+// ==================== 对端 / 设备 ====================
+
+/** 对端展示名：优先活跃对端名（三态真相），回落旧任务快照/占位链 */
+const peerLabel = computed(() => devices.peer.value.name || tasks.displayPeerName.value)
+
+/** 探索发现进行中（设备 tab 头部扫描按钮 spinner 态） */
+const deviceScanning = ref(false)
+
+async function handleScanDevices(): Promise<void> {
+  if (deviceScanning.value) return
+  deviceScanning.value = true
+  try {
+    await devices.refresh()
+  } finally {
+    deviceScanning.value = false
+  }
+}
+
+function handleDeviceConnect(nodeId: string): void {
+  void devices.connect(nodeId)
+}
+function handleDeviceDisconnect(nodeId: string): void {
+  void devices.disconnect(nodeId)
+}
+function handleDeviceSetActive(nodeId: string): void {
+  void devices.switchPeer(nodeId)
+}
+
+
+
+/** 历史「打开所在文件夹」：优先本地路径（wire 有 localPath，dev-shell 演示链路），
+ * 否则真机凭文件名经宿主 MediaStore 按名解析（接收落点不在 wire 上） */
+async function handleOpenLocation(id: string): Promise<void> {
+  const entry = tasks.history.value.find((e) => e.id === id)
+  if (!entry) return
+  try {
+    if (entry.localPath) await context.system.revealInDir(entry.localPath)
+    else await context.system.revealReceivedFileLocation(entry.fileName)
+  } catch (e) {
+    console.error('[File Transfer] open location failed:', e)
+    // 打开系统公共 Download 目录需「所有文件访问」：宿主以固定前缀 reject，
+    // 弹引导对话框跳系统设置，授权后用户重试原操作即达
+    if (isNeedsAllFilesAccess(e)) {
+      void promptAllFilesAccess(context)
+      return
+    }
+    context.dialogs.showToast(t('transfer.v2.history.noLocalFile'), 'error')
+  }
+}
+
+// ==================== 浏览（选择 / 下载） ====================
+
+/** 批量拉取勾选文件（当前根内相对路径拼装，一次 pull_files 调用） */
+async function downloadSelected(): Promise<void> {
+  if (!tasks.peerOnline.value || !fs.currentRoot.value) return
+  const names = fs.selectedFiles.value
+  if (names.length === 0) return
+  try {
+    const result = await context.commands.execute('file-transfer.pull-files', {
+      dirId: fs.currentRoot.value.id,
+      path: fs.currentPath.value,
+      files: names,
+    })
+    if ((result?.count ?? 0) > 0) {
+      context.dialogs.showToast(t('transfer.saveTo.enqueued'), 'success')
+      fs.clearSelection()
+      // 下载已入队：自动切到传输页展示任务（与上传 uploadFile 一致）
+      tab.value = 'transfers'
+    }
+  } catch (e) {
+    console.error('[File Transfer] pull-files failed:', e)
+    context.dialogs.showToast(String(e), 'error')
+  }
+}
+
+/**
+ * 上传入口：系统文件选择器多选 → 直发活跃对端
+ * （宿主 SAF 选图换算真实路径；取消静默返回）
+ */
+async function uploadFile(): Promise<void> {
+  if (!tasks.peerOnline.value) {
+    context.dialogs.showToast(t('transfer.upload.offline'), 'error')
+    return
+  }
+  try {
+    const raw = await context.commands.execute('file-transfer.pick-files', {})
+    const paths: string[] = Array.isArray(raw) ? raw : []
+    if (paths.length === 0) return
+    const ok = await tasks.sendFiles(paths)
+    if (ok > 0) {
+      context.dialogs.showToast(t('transfer.upload.enqueued'), 'success')
+      tab.value = 'transfers'
+    }
+  } catch (e) {
+    const msg = String(e)
+    if (msg.includes('cancel')) return
+    console.error('[File Transfer] pick/send failed:', e)
+  }
+}
+
+/**
+ * 就绪的活跃对端 id（'' = 未就绪：没有活跃对端，或活跃对端未连接）。
+ *
+ * 浏览对端目录的准入条件 = 该值非空，与桌面端口径一致（桌面 watch peer.value.id 驱动
+ * loadRoots/reset）：`file-transfer.list-remote` 按插件侧 ACTIVE_NODE 寻址（resolve_node），
+ * 无活跃对端时调用必失败（no active peer）。不能用 `tasks.peerOnline` 作闸门——那只是
+ * 「发现到任意具备传输能力的设备」，未连接、甚至只有快照恢复条目时也为真。
+ * watch 源用 id 而非布尔：活跃对端从一个已连接节点兜底切到另一个时也要重载目录。
+ */
+const readyPeerId = computed(() => (devices.peer.value.online ? devices.peer.value.id : ''))
+
+/** 活跃对端就绪状态变化驱动目录加载（就绪加载共享根，未就绪清空浏览态）；
+ *  immediate：挂载时按当前状态对齐一次，替代此前挂载无条件 loadRoots（无活跃对端必失败） */
+watch(
+  readyPeerId,
+  (id) => {
+    if (id) void fs.loadRoots()
+    else fs.reset()
+  },
+  { immediate: true },
+)
+
+// ==================== 底部行动条 ====================
+
+/** 接收侧终态（与 TransfersTab 口径一致；ReceivingTask.state 为宿主透传字符串） */
+const RECEIVING_TERMINAL = new Set(['completed', 'failed', 'rejected', 'cancelled'])
+
+/** 活跃传输（发送队列 + 接收中；底栏「总体」与角标口径包含双向） */
+const activeTasks = computed(() => [
+  ...tasks.tasks.value.filter((tk) => !isTerminalState(tk.state)),
+  ...tasks.receivingTasks.value.filter((rt) => !RECEIVING_TERMINAL.has(rt.state)),
+])
+
+/** 总体进度：各活跃批已传字节 / 总字节 */
+const overallPercent = computed(() => {
+  const list = activeTasks.value
+  const total = list.reduce((sum, tk) => sum + (tk.size > 0 ? tk.size : 0), 0)
+  if (total <= 0) return 0
+  const done = list.reduce((sum, tk) => sum + Math.min(tk.offset, tk.size), 0)
+  return Math.min(100, Math.round((done / total) * 100))
+})
+
+/** 底栏三态：多选 > 活跃传输 > 上传 CTA */
+const footerMode = computed<FooterMode>(() => {
+  if (tab.value === 'browse' && fs.selectedCount.value > 0) return 'select'
+  if (activeTasks.value.length > 0) return 'active'
+  return 'upload'
+})
+
+/** 队列残留条数（上传态提示：终态但仍可清理/重试的任务） */
+const queuedCount = computed(() => tasks.tasks.value.length)
+
+const downloadLabel = computed(() =>
+  t('transfer.topbar.downloadSelected', {
+    count: fs.selectedCount.value,
+    size: formatBytes(fs.selectedTotalSize.value, t),
+  }),
+)
+
+const activeLabel = computed(() => {
+  const count = activeTasks.value.length
+  return count > 0 ? t('transfer.queue.active', { count }) : t('transfer.queue.title')
+})
+
+// ==================== 生命周期 ====================
+
+let disposeBackPress: Disposable | null = null
+
+onMounted(() => {
+  tasks.start()
+  devices.start()
+  void settings.load()
+  disposeBackPress = context.ui.onBackPressed(() => {
+    // 返回键接管顺序：浏览 tab 逐级退目录 → 回到传输 tab → 交还平台。
+    // 已处理的分支返回 true（消费本次返回）：不消费则宿主壳兜底会同时退一屏，
+    // 一次返回变成「退目录 + 离开应用」；走到最后（传输 tab 根）返回 false 交还平台
+    // ——壳按屏栈退回主屏，主屏则由系统退出应用（而不是留在应用里按返回无反应）。
+    if (tab.value === 'browse' && fs.crumbs.value.length > 1) {
+      void fs.up()
+      return true
+    }
+    if (tab.value === 'browse' && fs.crumbs.value.length === 1) {
+      void fs.goRoot()
+      return true
+    }
+    if (tab.value !== 'transfers') {
+      tab.value = 'transfers'
+      return true
+    }
+    return false
+  })
+  // 挂载晚于设备事件时主动探测一次
+  if (!tasks.peerOnline.value) void tasks.queryPeer()
+})
+
+onUnmounted(() => {
+  disposeBackPress?.dispose()
+  devices.stop()
+  tasks.stop()
+})
+</script>
+
+<template>
+  <div class="fv2-view mobile-ui ft-app">
+
+    <!-- 顶栏：活跃对端 + 连接状态 + 设置入口 -->
+    <PeerHeader
+      :peer-name="peerLabel"
+      :online="devices.peer.value.online"
+      :online-label="t('transfer.peer.online')"
+      :offline-label="t('transfer.peer.offline')"
+      :upload-label="t('transfer.v2.upload.cta')"
+      :upload-disabled="!tasks.peerOnline.value"
+      @peer-tap="tab = 'devices'"
+      @upload="uploadFile()"
+      @settings="context.ui.openPage('settings')"
+    />
+
+    <!-- 主分段（传输 / 浏览 / 设备） -->
+    <TabBar
+      v-model="tab"
+      :transfers="t('transfer.v2.tab.transfers')"
+      :browse="t('transfer.v2.tab.browse')"
+      :devices="t('transfer.v2.tab.devices')"
+      :active-count="activeTasks.length"
+      :device-count="devices.rows.value.length"
+    />
+
+    <!-- 主内容区（左右滑切换分段）：data-swipe-zone 声明横滑区供宿主仲裁边界，
+         区在首尾边界时交还外层翻页（MobileSwipeContainer 协议，与 auto-task 同构）。
+         :style 注入分段切换方向位移量；Transition 为方向性推入（styles.css .fv2-tab-*），
+         不用 out-in——离场分支绝对定位退出文档流，进场分支同帧接管，无空窗塌陷 -->
+    <div
+      class="flex-1 min-h-0 flex flex-col fv2-swipe-zone"
+      data-swipe-zone
+      :style="slideVars"
+      :data-zone-at-start="tab === 'transfers'"
+      :data-zone-at-end="tab === 'devices'"
+      @touchstart.passive="onTouchStart"
+      @touchmove.passive="onTouchMove"
+      @touchend="onTouchEnd"
+      @touchcancel="onTouchEnd"
+      @pointerdown="onMouseDown"
+      @pointermove="onMouseMove"
+      @pointerup="onMouseUp"
+      @pointercancel="onMouseUp"
+    >
+      <Transition name="fv2-tab">
+        <!-- 传输列表（默认，直接铺出） -->
+        <TransfersTab
+          v-if="tab === 'transfers'"
+          key="transfers"
+          :tasks="tasks.tasks.value"
+          :receiving="tasks.receivingTasks.value"
+          :history="tasks.history.value"
+          :t="t"
+          @cancel="(id) => tasks.cancel(id)"
+          @retry="(id) => tasks.retry(id)"
+          @pause="(id) => tasks.pause(id)"
+          @resume="(id) => tasks.resume(id)"
+          @resume-all="() => tasks.resumeAll()"
+          @cancel-receiving="(sessionId) => tasks.cancelReceiving(sessionId)"
+          @clear-history="() => tasks.clearHistory()"
+          @open-location="handleOpenLocation"
+        />
+
+        <!-- 浏览对端共享目录 -->
+        <BrowseTab
+          v-else-if="tab === 'browse'"
+          key="browse"
+          :entries="fs.entries.value"
+          :loading="fs.loading.value"
+          :error="fs.error.value"
+          :notice="fs.notice.value"
+          :crumbs="fs.crumbs.value"
+          :current-root="fs.currentRoot.value"
+          :selected="fs.selected.value"
+          :selected-count="fs.selectedCount.value"
+          :peer-online="readyPeerId !== ''"
+          :t="t"
+          @cd="(name) => fs.cd(name)"
+          @up="() => fs.up()"
+          @go-root="() => fs.goRoot()"
+          @go-to="(i) => fs.goTo(i)"
+          @toggle="(name) => fs.toggle(name)"
+          @toggle-all="() => fs.toggleAll()"
+          @clear-selection="() => fs.clearSelection()"
+          @refresh="() => fs.refresh()"
+          @query-peer="() => tasks.queryPeer()"
+        />
+
+        <!-- 附近设备 -->
+        <DevicesTab
+          v-else
+          key="devices"
+          :rows="devices.rows.value"
+          :scanning="deviceScanning"
+          :t="t"
+          @connect="handleDeviceConnect"
+          @disconnect="handleDeviceDisconnect"
+          @set-active="handleDeviceSetActive"
+          @scan="handleScanDevices"
+        />
+      </Transition>
+    </div>
+
+    <!-- 底部行动条（多选 / 活跃传输 / 上传 CTA 三态互斥） -->
+    <SummaryBar
+      :mode="footerMode"
+      :upload-label="t('transfer.v2.upload.cta')"
+      :queue-hint="queuedCount > 0 ? t('transfer.v2.queue.hint', { count: queuedCount }) : ''"
+      :download-label="downloadLabel"
+      :clear-label="t('transfer.table.clearSelection')"
+      :active-label="activeLabel"
+      :speed-label="formatSpeed(tasks.totalSpeed.value, t)"
+      :overall-label="t('transfer.v2.active.overall', { percent: overallPercent })"
+      :overall-percent="overallPercent"
+      :view-queue-label="t('transfer.v2.active.viewQueue')"
+      :offline="!tasks.peerOnline.value"
+      @upload="uploadFile()"
+      @download="downloadSelected()"
+      @clear-selection="() => fs.clearSelection()"
+      @open-queue="tab = 'transfers'"
+    />
+  </div>
+</template>

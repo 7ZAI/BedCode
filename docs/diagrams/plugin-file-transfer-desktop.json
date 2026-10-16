@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "File Transfer 应用架构 (Desktop)",
+    "locale": "zh-CN",
+    "subtitle": "业务真源在 Rust WASM (transfer_store / roots_registry / settings_store) · 宿主只提供无业务语义的引擎原语 · 首连 consent + 信任对端双闸门",
+    "output": "docs/diagrams/plugin-file-transfer-desktop.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/7ZAI/BedCode",
+      "provider": "github",
+      "revision": "1de69c697e4a56edca1f7a2277c368b9ef477b44"
+    }
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "侧边栏 文件传输 入口",
+      "pos": [40, 40],
+      "size": [220, 60]
+    },
+    {
+      "id": "ts_frontend",
+      "type": "frontend",
+      "label": "TS 前端",
+      "sublabel": "FileTransferView · PeerDevicesPanel · TaskPanel · RemoteFileTable · ConsentDialog · SettingsPanel",
+      "pos": [40, 160],
+      "size": [460, 90],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/src/components/FileTransferView.vue", "label": "主视图" },
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/src/components/ConsentDialog.vue", "label": "首连确认弹窗" },
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/src/components/TrustedPeersSection.vue", "label": "信任对端管理" }
+      ]
+    },
+    {
+      "id": "peer_devices",
+      "type": "external",
+      "label": "对端设备",
+      "sublabel": "局域网 mDNS 发现 · 桌面 / 移动双端互通",
+      "pos": [580, 160],
+      "size": [400, 90],
+      "sources": [
+        { "path": "packages/peer-net/src/discovery.rs", "label": "mDNS 发现" }
+      ]
+    },
+    {
+      "id": "rust_wasm",
+      "type": "cloud",
+      "label": "Rust WASM 核心",
+      "sublabel": "peer.rs 数据面编排 · device_bridge · transfer_store · roots_registry · settings_store · auth_center",
+      "tag": "wasm32-wasip3 · Component Model",
+      "pos": [40, 320],
+      "size": [460, 100],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/rust/src/lib.rs", "label": "WASM 入口 + 事件派发" },
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/rust/src/peer.rs", "label": "数据面命令编排" },
+        { "path": "bedcode-desktop/wasm-apps/file-transfer/rust/src/transfer_store.rs", "label": "任务与历史自持存储" }
+      ]
+    },
+    {
+      "id": "host_engines",
+      "type": "backend",
+      "label": "宿主引擎原语",
+      "sublabel": "host-peer · host-mdns · host-fs · host-plugin-database · host-storage · host-platform",
+      "tag": "权限 peer · mdns · fs:* · storage",
+      "pos": [40, 480],
+      "size": [400, 100],
+      "sources": [
+        { "path": "packages/peer-net/src/lib.rs", "label": "peer-net 引擎" },
+        { "path": "packages/bedcode-host-kit/src/ports.rs", "label": "Ports 下发" }
+      ]
+    },
+    {
+      "id": "plugin_db",
+      "type": "database",
+      "label": "插件私有 SQLite",
+      "sublabel": "任务 / 历史 / 共享根注册表 / 设置 · host-plugin-database 隔离",
+      "pos": [580, 480],
+      "size": [400, 90],
+      "sources": [
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api/database.rs", "label": "host-plugin-database 原语" }
+      ]
+    },
+    {
+      "id": "local_fs",
+      "type": "database",
+      "label": "本地文件系统",
+      "sublabel": "下载目录 + 挂载共享目录 (FNV-1a 稳定 id 注册表)",
+      "pos": [580, 640],
+      "size": [400, 90],
+      "sources": [
+        { "path": "bedcode-desktop/packages/bedcode-wasm-core/src/host_api/fs.rs", "label": "host-fs 原语" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "WASM sandbox (wasmtime Component Model)",
+      "wraps": ["rust_wasm"]
+    },
+    {
+      "kind": "region",
+      "label": "Desktop host (Tauri 宿主进程)",
+      "wraps": ["host_engines", "plugin_db", "local_fs"]
+    },
+    {
+      "kind": "security-group",
+      "label": "consent + 信任对端双闸门 (fail-closed)",
+      "wraps": ["host_engines"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-ui",
+      "from": "user",
+      "to": "ts_frontend",
+      "label": "对端切换 · 浏览 · 审批",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ts-invoke",
+      "from": "ts_frontend",
+      "to": "rust_wasm",
+      "label": "invoke_command",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rust-peer",
+      "from": "rust_wasm",
+      "to": "host_engines",
+      "label": "host-peer · host-mdns",
+      "variant": "emphasis"
+    },
+    {
+      "id": "engines-db",
+      "from": "host_engines",
+      "to": "plugin_db",
+      "label": "host-plugin-database",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "engines-fs",
+      "from": "host_engines",
+      "to": "local_fs",
+      "label": "host-fs (pick / read / write)",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "engines-mdns",
+      "from": "host_engines",
+      "to": "peer_devices",
+      "label": "mDNS advertise · browse",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "peer-transfer",
+      "from": "peer_devices",
+      "to": "rust_wasm",
+      "label": "TB v3 · consent / transfer / receive",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "首连 consent 与信任对端 (双闸门)",
+      "items": [
+        "未信任对端首次连接触发 consent 请求 (前端弹窗 + 30s 倒计时，激活期常驻订阅)",
+        "不在面板时经状态栏项跳转处理；已信任对端可列表 / 撤销",
+        "consent 与信任层都由宿主 fail-closed 裁决——未响应 / 拒绝一律断开"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "业务真源在 Rust WASM (ADR 0022 v2/v3)",
+      "items": [
+        "transfer_store.rs：任务 / 历史纯函数 (batchId merge · 终态归档 · 200 封顶滚动淘汰 · interrupted 标注 · retryMeta 回放)",
+        "roots_registry.rs：共享根注册表真源 (FNV-1a 稳定 id · set-shared-roots 全量推送 · 失败回滚)",
+        "settings_store.rs：接收策略 / 下载目录 / 加密开关 (插件 storage 真源 · 推送引擎闸门)"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "宿主只提供无业务语义的引擎原语",
+      "items": [
+        "host-peer (dial / disconnect / enqueue / cancel / retry / list-remote / pull-files / approve-batch / respond-consent)",
+        "host-mdns (browse / advertise + mdns:* 事件透传) · host-fs · host-storage · host-platform (pick-files / reveal-in-dir)",
+        "host-timer (schedule) · host-bus / broadcast (跨组件事件) · host-events (mdns 发现事件透传)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "多任务并发与失败恢复",
+      "items": [
+        "并发数可调；单任务失败重试 / 取消 / 移除；历史 200 封顶滚动淘汰，终态归档",
+        "插件重启时 running/pending 条目标注 interrupted；retryMeta 回放保留失败上下文",
+        "接收策略 (ask / auto-accept / auto-reject) + 超时秒数可配，ask 策略下前端弹窗审批"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "目录挂载与加密",
+      "items": [
+        "本地目录挂载共享供对端访问 (mount-local / update-roots)，local-downloads 内置只读",
+        "共享根注册表以路径 FNV-1a 为稳定 id，set-shared-roots 全量推送引擎",
+        "发送加密开关 (设置面板) 同时作为 send 批参数默认值 + 推送引擎全局闸门兜底"
+      ]
+    }
+  ]
+}

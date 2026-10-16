@@ -12,3 +12,6 @@ yarn.lock
 **/auto-imports.d.ts
 **/components.d.ts
 **/*.d.ts
+# 权限词汇生成物（真源：plugin-sdk-desktop/rust/src/permission.rs；重跑 pnpm run gen:permissions）
+**/permission.vocabulary.ts
+**/plugin-sdk-desktop/bin/permission-vocabulary.json

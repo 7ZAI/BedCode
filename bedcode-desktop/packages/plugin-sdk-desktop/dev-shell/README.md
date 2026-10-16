@@ -18,7 +18,7 @@
 在插件工程目录运行（bin 来自插件的 SDK 依赖，勿省略 `npx`）：
 
 ```bash
-cd bedcode-desktop/plugins/<your-plugin>
+cd bedcode-desktop/wasm-apps/<your-plugin>
 pnpm exec bedcode-plugin-desktop dev            # 使用当前目录作为插件
 pnpm exec bedcode-plugin-desktop dev --entry src/custom-entry.ts
 pnpm exec bedcode-plugin-desktop dev ../my-plugin --port 5180 --open
@@ -28,7 +28,7 @@ pnpm exec bedcode-plugin-desktop dev --host     # 监听局域网（平板/其�
 也可在仓库任意位置指定插件目录：
 
 ```bash
-pnpm exec bedcode-plugin-desktop dev bedcode-desktop/plugins/file-transfer
+pnpm exec bedcode-plugin-desktop dev bedcode-desktop/wasm-apps/file-transfer
 ```
 
 浏览器打开 `http://localhost:5173`（`--open` 自动打开）。首次运行会自动安装
@@ -59,8 +59,8 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
 
 | 区域 | 说明 |
 |---|---|
-| 标题栏 | 插件 `registerTitleBarItem` 渲染在右上角 |
-| 侧边栏 | 内置导航 + 插件 `registerSidebarPanel`（按 `order` 排序，与宿主一致） |
+| 标题栏 | 40px 标题栏（BedCode logo 随主题切换）+ 插件 `registerTitleBarItem` 渲染在右上角 |
+| 侧边栏 | 内置导航分组（Heroicons 图标，与宿主同体系）+ 插件 `registerSidebarPanel`（按 `order` 排序，与宿主一致）；可折叠（240px ↔ 56px） |
 | 工具箱 | 插件 `registerToolboxPage` 入口网格 |
 | 模拟终端 | 输入发送（触发 `terminal.onInput`）、模拟输出（触发 `onOutput`）、会话创建/停止、连接/断开；插件终端工具栏项 + 输入扩展渲染在顶部 |
 | 插件页 | 状态徽章、激活/停用、全部注册项一览（文件处理器 / HTTP 端点 / 挂载等） |

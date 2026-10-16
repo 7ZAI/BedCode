@@ -72,16 +72,28 @@ function cleanupListeners() {
 
 // ==================== Composable ====================
 
+/** 启动扫描选项 */
+export interface StartDiscoveryOptions {
+  /**
+   * 保留上一次已发现的列表（默认 false = 清空后重新发现）
+   *
+   * 用于「返回连接页时后台续扫」：面板切走期间已发现的设备继续可点，
+   * 不会被清空后又要求用户等一圈扫描动画。
+   */
+  keepResults?: boolean
+}
+
 /**
  * mDNS 设备发现 composable
  *
  * 全局单例模式，扫描状态跨页面共享
  */
 export function useMdnsDiscovery() {
-  async function startDiscovery() {
+  async function startDiscovery(options: StartDiscoveryOptions = {}) {
+    // 已在扫描：幂等短路，保留进行中的扫描与其已发现列表
     if (isScanning.value) return
     await initListeners()
-    discoveredServices.value = []
+    if (!options.keepResults) discoveredServices.value = []
     isScanning.value = true
     try {
       await invoke('mdns_start_discovery')

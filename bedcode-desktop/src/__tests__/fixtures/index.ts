@@ -9,7 +9,6 @@
 
 export * from './drift'
 export * from './server'
-export * from './pairing'
 export * from './session'
 export * from './plugin'
 export * from './settings'

@@ -24,10 +24,10 @@
 use crate::host::HostBus;
 use crate::wasm::bedcode::plugin::host_api_call;
 
-/// 请求 topic 前缀：`bedcode.api.<plugin-id>.<method>`（总线门禁只校验此前缀）
-pub const API_TOPIC_PREFIX: &str = "bedcode.api.";
-/// 响应 topic 前缀：`bedcode.api.reply.<caller-plugin-id>.<request-id>`
-pub const REPLY_TOPIC_PREFIX: &str = "bedcode.api.reply.";
+// 道前缀词汇与宿主共用单源（`host::bus`：本模块在 `wasm` feature 下，宿主读不到，
+// 故定义落在宿主也能链接的 `host::bus`，此处再导出保持插件侧 import 路径不变）
+pub use crate::host::bus::{API_TOPIC_PREFIX, REPLY_TOPIC_PREFIX};
+
 /// 互调调用默认超时（毫秒，spec §9.3）
 pub const DEFAULT_CALL_TIMEOUT_MS: u64 = 10_000;
 

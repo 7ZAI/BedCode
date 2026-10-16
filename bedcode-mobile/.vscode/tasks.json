@@ -1,0 +1,37 @@
+{
+    // 本文件随 BedCode.code-workspace 多根工作区使用（也可单独打开本文件夹时生效）。
+    // ${workspaceFolder} = 本文件夹（bedcode-mobile），无需再带 bedcode-mobile/ 前缀。
+    // 与仓库根 .vscode/tasks.json 的 mobile:ui:dev 同构，配合本文件夹 launch.json 的
+    // preLaunchTask 使用；调试说明见 launch.json 头部注释。
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // 移动端宿主调试用的前端 dev server（devUrl: http://localhost:1423）
+            "label": "ui:dev",
+            "type": "shell",
+            "isBackground": true,
+            "command": "pnpm",
+            "args": ["run", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                {
+                    "owner": "vite-dev-mobile",
+                    "pattern": {
+                        "regexp": "."
+                    },
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": ".",
+                        "endsPattern": "Local:"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        }
+    ]
+}

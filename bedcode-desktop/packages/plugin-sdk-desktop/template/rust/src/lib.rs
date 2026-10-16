@@ -28,6 +28,10 @@ impl WasmPlugin for {{STRUCT}} {
     }
 
     fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        // 业务失败请携带业务语义码（ADR 0030 决定 6，零 ABI）——用户看到的是友好文案，
+        // 详情只进日志；code = 插件 i18n 注册后的完整 key：
+        //   bail_with_code!("{{ID}}.errors.unknownCommand");
+        //   bail_with_code!("{{ID}}.errors.throttled", serde_json::json!({ "waitSecs": 5 }));
         Err(anyhow::anyhow!("No commands implemented"))
     }
 }

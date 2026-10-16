@@ -14,7 +14,6 @@
 mod all_files;
 mod assets;
 mod biometric;
-mod device;
 mod device_info;
 mod downloads;
 mod file_delete;
@@ -29,7 +28,6 @@ mod status_bar_style;
 pub use all_files::*;
 pub use assets::*;
 pub use biometric::*;
-pub use device::*;
 pub use device_info::*;
 pub use downloads::*;
 pub use file_delete::*;

@@ -13,14 +13,21 @@ serde_json = "1"
 
 [features]
 # 异常形态（宿主单测制造拒绝场景用）：
-#   high-abi      — abi.version() 返回 999（测宿主 abi 协商拒绝）
 #   spin-loop     — command.invoke 死循环（测燃料看门狗 trap）
 #   big-alloc     — command.invoke 显式 memory.grow 300MB（测 ResourceLimiter 拒绝）
 # 注：import-extra（unknown import 场景）已随 03 全量接线移除——所有 WIT 接口
-# 均已注册，"未知接口"由 WIT 类型系统从构造上排除
+# 均已注册，"未知接口"由 WIT 类型系统从构造上排除；high-abi（abi.version() 返回
+# 999）已随整数 ABI 退役删除（ADR 0051 D2）——版本不再由 guest 自报，产物新旧
+# 由 linker 的 import 名逐字匹配裁决，无"高版本自报"形态可造。
 default = []
-high-abi = []
 spin-loop = []
 big-alloc = []
 # on-startup-fail — on_startup 返回 Err（宿主 Degraded 状态机测试用）
 on-startup-fail = []
+# ws-client — activate 订阅 ws 属主 topic，invoke 提供 ws-connect/send-text/close/is-connected/collect 操作，
+#        并导出 events-binary（宿主动态探测命中⇒ 帧投递回流 guest）
+ws-client = []
+# terminal-session — 票 12 ABI v15 面驱动：connect 带 jwt-auth（宿主代发认证帧）、
+#        terminal-stream.forward-output（输出窄转发）、connection.primary-target 读取；
+#        导出 events-binary 复用 ws-client 的帧回流通道（下行帧 → forward-output）
+terminal-session = ["ws-client"]

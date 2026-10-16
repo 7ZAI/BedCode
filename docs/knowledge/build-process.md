@@ -269,7 +269,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+# lib 名跟随所属端（2026-09-30 改名）：两端曾同为 `bedcode_lib`，导致任何同时依赖
+# 两端的工程（跨端集成测试）crate 名冲突。同名是隐患不是风格问题。
+name = "bedcode_desktop_lib"   # 移动端为 "bedcode_mobile_lib"
 # 关键：生成多种类型的库文件
 # - staticlib: 静态库 (iOS 使用)
 # - cdylib: 动态库 (Android 使用)
@@ -316,13 +318,19 @@ mod session;
 
 ### 编译产物
 
-| 目标平台 | 编译目标 | 产物类型 | 产物名称 |
-|---------|---------|---------|---------|
-| Windows | x86_64-pc-windows-msvc | .dll | bedcode_lib.dll |
-| macOS | aarch64-apple-darwin | .dylib | libbedcode_lib.dylib |
-| Linux | x86_64-unknown-linux-gnu | .so | libbedcode_lib.so |
-| Android | aarch64-linux-android | .so | libbedcode_lib.so |
-| iOS | aarch64-apple-ios | .a | libbedcode_lib.a |
+| 端 | 目标平台 | 编译目标 | 产物类型 | 产物名称 |
+|----|---------|---------|---------|---------|
+| 桌面 | Windows | x86_64-pc-windows-msvc | .dll | bedcode_desktop_lib.dll |
+| 桌面 | macOS | aarch64-apple-darwin | .dylib | libbedcode_desktop_lib.dylib |
+| 桌面 | Linux | x86_64-unknown-linux-gnu | .so | libbedcode_desktop_lib.so |
+| 移动 | Android | aarch64-linux-android | .so | libbedcode_mobile_lib.so |
+| 移动 | iOS | aarch64-apple-ios | .a | libbedcode_mobile_lib.a |
+
+> 产物名跟随 `[lib] name`（tauri build 自动生成 `System.loadLibrary` / jniLibs
+> 文件名）。改名后 Android `gen/android/.../generated/Rust.kt` 的
+> `System.loadLibrary("bedcode_mobile_lib")` 随之变化——该目录被 gitignore，
+> `tauri android init` 重建时自动跟随；**手工备份副本
+> `android-backup/app-java/generated/Rust.kt` 需同步改**，否则恢复即失配。
 
 ---
 
@@ -390,7 +398,7 @@ pnpm run tauri:android:build
 │    - rustBuildArm64Debug → cargo build --target aarch64     │
 │    - rustBuildX86_64Debug → cargo build --target x86_64     │
 │    - rustBuildArmDebug → cargo build --target armv7         │
-│    输出: libbedcode_lib.so                                   │
+│    输出: libbedcode_mobile_lib.so                           │
 └─────────────────────────────────────────────────────────────┘
        │
        ▼
@@ -517,7 +525,7 @@ pnpm run tauri:build
 ┌─────────────────────────────────────────────────────────────┐
 │ 2. Rust 编译                                                 │
 │    cargo build --release                                     │
-│    产物: libbedcode_lib.so / .dll / .dylib                   │
+│    产物: libbedcode_desktop_lib.so / .dll / .dylib          │
 └─────────────────────────────────────────────────────────────┘
        │
        ▼
@@ -604,26 +612,208 @@ opt-level = 2        # 依赖项优化（提升 dev 下测试/插件运行速度
 
 ### Target 目录管理
 
-Rust 增量编译会导致 `target` 目录持续增长。
+Rust 增量编译会导致 `target` 目录持续增长。**本仓库无根 workspace**（两端 30+ 个独立
+`Cargo.toml`），所以「哪个 crate 的 target」会直接影响磁盘占用：per-crate target 会把
+**相同的依赖图重复编译 N 遍**。2026-09-26 治理后，产物收敛为下列落点（2026-09-30
+server-lib 拆出后新增仓库根 `target/server-libs`；2026-10-04 wasm-core-lib-split 拆出
+机制内核 + 能力域后新增仓库根 `target/host-kits`，共 8 个）：
 
-**自动清理脚本**：`scripts/check-target-size.js`
+| 落点 | 内容 | 路径真源 |
+| --- | --- | --- |
+| `bedcode-desktop/src-tauri/target/` | 桌面宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
+| `bedcode-mobile/src-tauri/target/` | 移动端宿主（含 15G 阈值治理） | Tauri / cargo 默认 |
+| `bedcode-desktop/target/fixtures/` | 桌面 9 个测试夹具共享 | `packages/bedcode-wasm-core/src/manager/runtime/fixture_target.rs`（2026-10-08 随整核本体迁根）+ `packages/.cargo/config.toml` |
+| `bedcode-desktop/target/wasm-apps/` | 桌面 4 个 wasm 应用共享 | `scripts/plugin-wasm-config.mjs`（`WASM_TARGET_DIR`）+ `wasm-apps/.cargo/config.toml` |
+| `bedcode-mobile/target/fixtures/` | 移动 2 个夹具 / 插件共享 | `bedcode-mobile/src-tauri/.../component.rs` 的 `fixture_target_dir()` |
+| `target/server-libs/`（仓库根） | 桌面 6 个 `bedcode-server-*` + `bedcode-crypto-engine` 共享（均落**仓库根** `packages/`） | 各 crate 的 `.cargo/config.toml`（`../../target/server-libs`，相对 **crate 根**；2026-10-07 能力域 lib 迁根时从 `../../../` 改为 `../../`） |
+| `target/host-kits/`（仓库根） | 「机制内核 + 能力域」同族共享：`packages/bedcode-host-kit`、`packages/bedcode-discovery-engine`（wasm-core-lib-split 票 03；sqlite 域票 07 已由 ADR 0036 撤销，不在此桶）、**整核本体 `bedcode-wasm-core`**（wasm-core-whole-crate 票 02：整核抽出后入此桶，单独 target 独立于宿主——避免把 wasmtime 栈编进宿主增量；2026-10-08 迁根至根 `packages/`） | 各 crate 的 `.cargo/config.toml`（根 `packages/` 下写 `../../target/host-kits`；2026-10-07 能力域迁根与 2026-10-08 整核迁根均从 `../../../` 改为 `../../`——同一目录） |
+| `cross-end-tests/target/` | 跨端互连测试（仓库根工程，依赖两端 lib） | cargo 默认；**刻意独立**（见下） |
+
+**`.cargo/config.toml` 里 `target-dir` 的相对路径基准 = 该 `.cargo` 目录的父目录**
+（不是 cwd、也不是 config 文件所在目录）。这条是本节最容易踩的坑：写错一层 `..`
+不会有任何报错，只是安静地把产物写到另一个目录去（2026-10-04 修：`wasm-apps/` 与
+`packages/` 两份 config 都多写了一个 `..`，实际落到**仓库根** `target/wasm-apps`
+与 `target/fixtures`，于是「`pnpm run build` 的产物」与「`cargo test` 的产物」分裂成
+两套目录，而注释与本文档都写着同一个目录——**只有 `cargo metadata` 的
+`target_directory` 字段说真话**）。改动任何一份 `target-dir` 后必须核验：
+
+```bash
+cd bedcode-desktop/wasm-apps/<app-id>/rust && cargo metadata --no-deps --format-version 1
+cd bedcode-desktop/packages/<fixture-crate> && cargo metadata --no-deps --format-version 1
+```
+
+两者的 `target_directory` 应分别是 `bedcode-desktop/target/wasm-apps` 与
+`bedcode-desktop/target/fixtures`；server-lib 六个 crate 应为仓库根 `target/server-libs`，
+机制内核 + 能力域 + 整核本体四 crate（仓库根 `packages/bedcode-host-kit` 与
+`packages/bedcode-discovery-engine`，以及 2026-10-07/10-08 迁根的
+`packages/bedcode-pty-engine` / `packages/bedcode-wasm-core`）
+应为仓库根 `target/host-kits`。
+
+**2026-10-07「能力域 lib 迁根」实测复现了这条坑**：八个 crate 从
+`bedcode-desktop/packages/` 上移到仓库根 `packages/`，深度少了一层，所有
+`target-dir` 的 `../../../` 必须同时改 `../../`——不改**不报错**，只是安静地落到仓库根的
+**上级**目录（`/home/binblink/project/tauriProject/target/…`）。改完逐个
+`cargo metadata` 核验是最快的自检。
+
+同一串 `../../target/wasm-apps` 在两处含义不同，别混：`build.js` 把它作为
+`--target-dir` 传给 cargo，命令行参数按**进程 cwd**（应用根 `wasm-apps/<app>/`）解析；
+`.cargo/config.toml` 的 `target-dir` 按**config 所在 `.cargo/` 的父目录**解析。两处
+恰好都指向 `bedcode-desktop/target/wasm-apps`，但这是「基准不同 + 层数相同」的巧合，
+改任一处都要重算层数。
+
+`cross-end-tests/target/` **不并入任何端内目录**：它的依赖图是两端 lib 的**并集**
+再加自己的 dev 依赖（tauri / actix-web 用于取类型），与任一端都不同——并入会驱逐该端
+缓存；且端内 target 有 15G 自动 `cargo clean` 阈值，混在一起会统计失真并连带清掉
+跨端缓存（与 `fixtures` / `wasm-apps` 不并入宿主同因）。代价是它的依赖图**整份重新
+编译一次**（首次构建分钟级、峰值十几 GB）——换来的是两端缓存互不干扰。
+
+`fixtures` 与 `wasm-apps` **刻意不合并**：夹具 crate 有
+`[profile.release] opt-level="s"/lto=true`，wasm 应用无 `[profile.*]`（cargo 默认）；
+profile 参与 cargo 产物指纹，同一目录会为同一份依赖图产出两份产物。
+两个目录也**不并入**各自宿主 `src-tauri/target`：那里有 15G 阈值与自动 `cargo clean`，
+混在一起会统计失真且清宿主缓存时连带清掉夹具缓存。
+
+治理前后实测（2026-09-26，本机 157G ext4）：
+
+| 状态 | 整仓 Rust 产物 | 备注 |
+| --- | --- | --- |
+| 治理前峰值 | **15.3 GiB**（11 夹具 6.0G + 4 应用 5.8G + 两端宿主 15G） | 跑一次全量测试会多出十余个 per-crate 目录 |
+| 治理后稳态 | 夹具 417M（9 个）+ 应用 150M（4 个）合入 2 个目录 | 依赖图各只编译一份 |
+
+**自动检查脚本**：`bedcode-{desktop,mobile}/scripts/check-target-size.js`
 
 ```javascript
 const CONFIG = {
-  maxSizeGB: 15,        // 最大允许 15GB
-  targetDir: 'src-tauri/target',
-  autoClean: true,      // 超过阈值自动清理
+  maxSizeGB: 15,        // 仅约束宿主 src-tauri/target，超阈值执行 cargo clean
+  sharedTargetDirs: [...],    // 共享目录：只报告，不自动删（删=丢共享编译缓存）
+  legacyTargetParents: [...], // 遗留 per-crate 目录：报告为「可安全删除」
+  // 仓库根级落点：只报告（依赖图各自独立；删=下次重编）
+  rootTargetDirs: ['target/server-libs', 'cross-end-tests/target'],
 }
 ```
 
 **pnpm scripts**：
 
 ```bash
-pnpm run target:size    # 检查 target 目录大小
-pnpm run target:clean   # 手动清理 target 目录
+pnpm run target:size    # 检查：宿主走阈值判定，其余 target 目录逐个列出大小
+pnpm run target:clean   # 手动清理宿主 target（cd src-tauri && cargo clean）
 ```
 
 **构建前自动检查**：`pnpm run build` 会自动执行检查。
+
+### Target 治理方案决策记录（2026-09-26）
+
+> 整理自 2026-09-26 target 目录治理专项 spec（2026-09-27 迁入 docs）。
+
+**为什么宿主侧不能共享**（先排除的方案）：两端 wasmtime 版本分叉（桌面 48 / 移动 48，cargo 按
+版本分产物）、目标三元组不同（移动端 `aarch64-linux-android`）、feature 集不同（tauri /
+tauri-plugin-*）——宿主侧 14G 是**活产物**（`deps/` 里几乎每个 crate 只有 1 个哈希版本，陈旧残留仅
+~10M），不是垃圾，是必要成本。真正的浪费在 12~15 个小独立 target 上。
+
+**方案评估（采纳 / 否决）**：
+
+| 方案 | 预计回收 | 决策 |
+| --- | --- | --- |
+| A 夹具共享 target | 6.0G → ~1G | **采纳** |
+| B 桌面 wasm 应用共享 target | 5.8G → ~4G | **采纳** |
+| C 移动端夹具共享 target | ~0.35G → ~0.2G | **采纳**（低成本，同构） |
+| D 两端宿主共享 target | 估 2~3G | **不做**：编译期独占锁使并发构建串行化；`cargo clean` 爆炸半径覆盖全端；且去重空间有限（见上） |
+| E 单一根 workspace | 增量有限 | **不做**：单一 `Cargo.lock` 耦合 wasmtime 分叉；stable vs nightly 工具链冲突；workspace feature 统一污染 wasm 产物；`cargo build --workspace` 会按宿主三元组编译 wasm 应用 |
+| F sccache | 不省空间 | **2026-09-26 否决 → 2026-10-05 复核后引入 → 2026-10-06「部分推翻」→ 2026-10-13 实测重定**。2026-10-06 的推翻理由（「cargo dev profile 对所有 crate 都传 `-C incremental`，sccache 静默跳过 1049 个普通 crate、覆盖率仅 21%」）**无法复现且机制不成立**：sccache 只在命令行确实带 `-C incremental` 时跳过，而 cargo 只对**工作区成员**（本地 path crate）传该参数，registry 依赖（wasmtime / tauri / actix 这些最贵的）本就全部进缓存。结论：默认配置即有效，无需 `CARGO_INCREMENTAL=0`（详见下节实测） |
+| G btrfs + compress=zstd | 14G → 5~7G | **不做**：需独立分区，loop 挂载性能损失不可接受 |
+| H 定期回收 | 立即 ~4G | **采纳**（Step 0 + 监控脚本扩展） |
+
+**实施中发现的关键事实**：clippy / rust-analyzer 之类的工具链探针会在应用 crate 目录内跑
+`cargo check`，绕过 `build.js` 显式传的 `--target-dir`，静默重建 per-crate 目录——因此
+`packages/.cargo/config.toml` 与 `wasm-apps/.cargo/config.toml` 也是真源（cargo 按 cwd 祖先链
+发现配置，与 `--manifest-path` 无关）；两份 config 均**不影响宿主构建**（`packages/` /
+`wasm-apps/` 不是 `src-tauri/` 的祖先）。
+
+**已知遗留**：移动端发布态 SDK CLI（`packages/plugin-sdk-mobile/bin/cli.js`）三处硬编码
+`rust/target/...` 产物路径未共享（约 500M 量级，改动需连带 SDK 评估）；`[profile.release.build-override]`
+（宿主导 proc-macro 降优化，理论可再省数百 M）未做——留作后续评估项。
+
+**验证结果（2026-09-26）**：夹具共享（桌面 9→1 目录 417M、移动 2→1 目录 334M）、wasm 应用共享
+（4→1 目录 150M）后过滤测试全绿；桌面 `cargo test --no-fail-fast` 890 + 集成 9 项（2 项失败均非
+本任务）；前端桌面 844 / 移动 467 passed；`pnpm exec eslint .` 0 errors；Step 0 即时回收 3.9G
+（15.3G → 11.4G）。
+
+**增量目录可随时删**（代价：本地 crate 下次全量重编，依赖产物不受影响）：
+
+```bash
+rm -rf bedcode-desktop/src-tauri/target/debug/incremental
+rm -rf bedcode-mobile/src-tauri/target/debug/incremental
+```
+
+> 提醒：`cargo test` 会把 `test` profile 的依赖产物（`debug_assertions` 开启）与 `dev`
+> profile 的并排存一份，宿主 target 因此会在「构建 + 跑测试」后明显增长（实测
+> `incremental` 单项可达 2.5G）。这是正常成本，不是泄漏。
+
+### sccache 编译缓存（2026-10-05 引入，决策记录方案 F 的复核落地）
+
+**动机**：上节治理解决「同一依赖图不重复占盘」，但两个痛点仍在——① 宿主 target 15G
+阈值自动 `cargo clean` 后依赖全量重编（分钟~小时级）；② 8 个落点 + 30+ 独立 crate 的
+依赖图互不共享（cross-end 的并集图、server-libs 与 host-kits 各编一份 wasmtime）。
+sccache 按 rustc 调用内容哈希缓存编译产物，**独立于 target 目录**，两者一并解决。
+
+**配置**（仓库根 `.cargo/config.toml`，对所有 crate 生效——cargo 按 cwd 祖先链合并
+config，子 config 无 `rustc-wrapper` 时继承根的）：
+
+```toml
+[build]
+rustc-wrapper = "sccache"   # bare 名经 PATH 解析（~/.cargo/bin 已装）
+
+[env]
+SCCACHE_CACHE_SIZE = { value = "20GiB", force = false }  # 外部变量优先（CI 设 2GiB）
+```
+
+**⚠ 与增量编译的关系（2026-10-13 实测重定；2026-10-06 的「覆盖率 21%」结论已推翻）**
+
+2026-10-05 原文写「cargo 只对本地 crate 开 incremental、依赖照常缓存」，2026-10-06 又以
+「cargo dev profile 对**所有** crate（含依赖）都传 `-C incremental`，sccache 0.18 静默跳过，
+实测 server-libs 桶 1049 个普通 crate 全跳过、仅 289 个非增量单位入缓存（覆盖率 21%）」
+把它推翻。**2026-10-13 复核：10-06 的推翻不成立。**
+
+- sccache 的判据只在**命令行确实带 `-C incremental`** 时才跳过该次编译（源码
+  `cannot_cache!("incremental")`，`src/compiler/rust.rs`）；cargo 只把该参数传给
+  **工作区成员**——即本地 path crate（`bedcode-*` / `link-crypto` / `peer-net` 等），
+  registry 依赖（wasmtime / tauri / actix / serde…）**不带**，因此默认配置下依赖图本来就全进缓存。
+- 实测（2026-10-13，桌面宿主 target 刚被 15G 阈值 `cargo clean` 后跑 `cargo check --lib`）：
+  `865 请求 / 760 executed / 758 hits（99.74%）/ 2 misses`，3m53s 完成；非缓存原因里
+  `incremental` 仅 15 次且全是本地 crate，`crate-type` 82（bin/test 链接产物，本就不可缓存）。
+  独立探针工程（单 crate + serde）同结论：serde 系列走缓存并命中，`debug/incremental/`
+  目录里只出现探针自身。
+- 10-06 记录的「1049 个普通 crate 全跳过」在当前 cargo 1.98.1 + sccache 0.18 下无法复现；
+  最接近该症状的是 **`CARGO_INCREMENTAL=1`**——但那时 sccache 会**直接拒绝执行**
+  （`sccache: incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue.`，
+  连 `rustc -vV` 探针都退出 1），一切 cargo 命令成批失败，而不是「静默跳过」。
+  **任何时候都不要设 `CARGO_INCREMENTAL=1`。**
+
+**因此不需要为 sccache 开启 `CARGO_INCREMENTAL = 0`**：它只会额外把本地 crate 纳入缓存，
+代价是失去 cargo 自身增量编译（改一个文件重编整个 crate），属全局取舍，2026-10-13 决定
+保持默认（本地 crate 走增量、依赖走缓存）。如确要全量缓存（例如频繁 clean 的场景），
+在根 config `[env]` 加 `CARGO_INCREMENTAL = { value = "0", force = false }` 即可。
+
+**排查提示**：怀疑 sccache 失效时，先看 `sccache --show-stats` 的
+`Non-cacheable reasons: incremental` 计数与本地 `target/debug/incremental/` 内容——前者
+只应命中本地 crate、后者只应出现本地 crate 目录；若 registry 依赖（wasmtime 等）也出现在
+incremental 目录里，检查是否有人设了 `CARGO_INCREMENTAL=1`。
+
+**安装（显性失败设计）**：sccache 未安装时 cargo 直接报错（找不到 wrapper），不会静默
+降级——装好即用，装法与各平台差异见根 `.cargo/config.toml` 注释。
+
+**CI 与本地差异**：CI 不启用 sccache 的 GHA cache 后端（不设 `SCCACHE_GHA_ENABLED`）——
+跨 run 缓存由 `Swatinem/rust-cache`（target）负责，sccache 只做 job 内跨 crate 命中
+（server-libs / wasm-apps 循环共享依赖）；CI job 级 `SCCACHE_CACHE_SIZE=2GiB`
+（ubuntu-latest 磁盘 ~14G）经根 config 的 `force=false` 覆盖 30GiB 默认。
+
+**缓存管理**：缓存目录 `~/.cache/sccache`（`SCCACHE_DIR` 可改），与 check-target-size.js
+**互不相关**——不在 target 内，15G 阈值 `cargo clean` 不碰它（这正是设计意图：clean 后
+由 sccache 恢复依赖）。清缓存：`sccache --stop-server && rm -rf ~/.cache/sccache`。
+磁盘占用是 target 之外的额外一份压缩产物（zstd，约 target 的 1/3），**30GiB**
+上限封顶（2026-10-13 由 20GiB 上调：单次桌面 `cargo check` 就产生 760 个编译单元，
+缓存长期停在 16~20GiB 满位附近，LRU 淘汰会挤掉稀有的 build 产物；淘汰一次 = 下次重编，
+实测平均单次编译 17.8s），紧张时降回 8~10GiB。
 
 ---
 

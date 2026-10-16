@@ -10,8 +10,13 @@ import { useI18nStore } from '@/stores/i18n'
 import { initPluginSystem } from './plugin'
 import { completeStartupTask } from '@/composables/useAppStartup'
 import { initFrontendLogger } from '@/utils/frontendLogger'
+import { presetThemeBeforeMount } from '@/composables/useTheme'
 import './style.css'
 import './styles/mobile.css'
+// 终端内置 CJK 等宽字体的 @font-face 声明（src/styles/terminal-font.css）：
+// 声明全局引入，使任意页面都能经 ensureTerminalFontLoaded 预热（会话页的网格预算、
+// 终端页的首次测量）；woff2 本体仍只在终端首次渲染时按需下载
+import './styles/terminal-font.css'
 import 'vue-sonner/style.css'
 
 const app = createApp(App)
@@ -41,6 +46,10 @@ Promise.all([
   completeStartupTask('platform')
   completeStartupTask('settings')
   logger.log('[Init] Platform and settings pre-loaded')
+
+  // 首次渲染前预应用主题（.dark 类 + isSystemDark；主色色板归各 app 自持，此处不预挂）：
+  // 消除深色用户「首帧浅色 → onMounted 后深色」的启动闪变
+  presetThemeBeforeMount()
 
   // 设置就绪后初始化插件系统
   try {

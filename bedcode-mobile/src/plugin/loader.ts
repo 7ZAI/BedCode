@@ -6,12 +6,14 @@
  */
 
 import type { PluginInfo, PluginModule, PluginContext } from './types'
+import { nextTick } from 'vue'
 import { logger } from '@/utils/frontendLogger'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import * as pluginCmds from './commands'
+import { toPluginAssetUrl } from './assets'
 import { createPluginContext } from './context'
 import { clearPluginEvents } from './events'
 import { getPluginRegistry } from './registry'
+import { disposeAppRunScope, loadPluginModuleScoped } from './app-run-scope'
 
 /** 已激活的插件实例 */
 interface ActivePlugin {
@@ -35,7 +37,13 @@ class PluginLoaderClass {
   private scanRetryTimer: ReturnType<typeof setTimeout> | null = null
   private scanRetryStartedAt = 0
 
-  /** 应用启动时加载所有已启用插件的前端模块 */
+  /**
+   * 应用启动时只预载「启动时自动激活」应用的前端模块
+   *
+   * 移动端是应用模型：启动只扫描已安装 wasm-app，不启动任何应用。只有显式
+   * 打开自启动开关（`plugin.autostart.{id}`，默认关）的应用才会在 boot 预载，
+   * 其余应用由用户在宿主壳里点击后经 `activate()` 加载（后端激活 + 前端模块）。
+   */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
     logger.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
@@ -88,26 +96,31 @@ class PluginLoaderClass {
 
       if (this.plugins.has(manifest.id)) continue
 
-      // 以持久化启用状态为准，而非当前运行时激活状态。
-      // 原因：后端在 setup 的异步任务里自动激活已启用插件，前端首次查询
-      // plugin_list_loaded 时可能尚未完成，插件仍处于 Loaded 状态，若据此
-      // 跳过会导致重启后 UI 扩展点（工具箱/导航/设置/终端）丢失，直到手动
-      // 重开插件才恢复。启用状态是持久化存储，查询时立即可用，不受该竞态影响。
-      const isEnabled = await pluginCmds.pluginIsEnabled(manifest.id)
-      if (!isEnabled) {
-        logger.log(`[PluginLoader] Plugin ${manifest.id} not enabled, skipping frontend load`)
+      // 门禁取「启动时自动激活」偏好（`plugin.autostart.{id}`，缺省关），
+      // 而非插件运行时状态、也不是启用偏好：
+      // - 不用运行时状态：后端 boot 自动激活是异步任务，前端首次查
+      //   `plugin_list_loaded` 可能拿到尚未完成的 Loaded 态，据此跳过会
+      //   让本应自启的应用漏载；偏好是持久化存储，查询时立即可用。
+      // - 不用启用偏好（`plugin.enabled.{id}`）：启用只表示「应用可用」，
+      //   与 boot 是否启动解耦（持久化 ≠ 自启动）。默认一个应用都不自启，
+      //   前端自然也不预载，避免「前端已加载但后端未运行」的悬空状态
+      //   （loader.activate 会因 plugins Map 已有记录而短路后端激活）。
+      const isAutostart = await pluginCmds.pluginIsAutostart(manifest.id)
+      if (!isAutostart) {
+        logger.log(`[PluginLoader] Plugin ${manifest.id} not autostart, skipping frontend load`)
         continue
       }
 
       // 按运行时状态补充门禁（意图优先，状态辅助）：
-      // - Activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
-      // - Degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // - activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
+      // - degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      // 状态值取线上 camelCase（真源 = 共享 crate 的 PluginState serde 属性）
       const st = manifest.state
-      if (st.state === 'Activating') {
+      if (st.state === 'activating') {
         logger.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
         continue
       }
-      if (st.state === 'Degraded') {
+      if (st.state === 'degraded') {
         logger.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
       }
 
@@ -148,6 +161,10 @@ class PluginLoaderClass {
    * WASM 实例也可能因 plugin_activate 成功而存活（持有 mDNS browse 句柄等），
    * 必须通知后端停用，保证「前端注册表为空 ⇔ 后端非存活」。前端侧各步存在则
    * 执行、缺失则跳过；重复调用无副作用（后端对未激活/已停用状态幂等早退）。
+   *
+   * 除资源回收外还作废运行期 store 作用域（disposeAppRunScope）：停止应用 =
+   * store 停止运行，再次 activate 是全新 store；模块在内不在内都执行（无作用域时
+   * 为 no-op）。
    */
   async deactivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId)
@@ -191,6 +208,13 @@ class PluginLoaderClass {
       logger.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
     }
 
+    // 运行期 store 作用域作废：等一次 Vue flush 让运行面组件随注册表清理先卸载，
+    // 再 $dispose 本次运行期的全部 store——组件仍持有 store 时提前作废会把半死的
+    // store 留在渲染路径上（后端停用是 IPC 往返，回来时 flush 通常已跑完，此处兜底）。
+    // 作用域丢弃后，再次激活 useStore() 会新建 store（回到初始 state）
+    await nextTick()
+    disposeAppRunScope(pluginId)
+
     logger.log(`[PluginLoader] Plugin deactivated: ${pluginId}`)
   }
 
@@ -204,11 +228,17 @@ class PluginLoaderClass {
     try {
       // 经 Tauri asset protocol 从插件目录直读前端模块
       // Android 上自动变为 http://tauri.localhost/，与桌面端 convertFileSrc 方案一致
-      const module = await this.importWithTimeout(this.convertFileUrl(manifest.extensionPath, manifest.main))
+      //
+      // 装载走运行期作用域的「装载窗口」：窗口内插件顶层 defineStore 绑定到本插件，
+      // 之后每次 useStore 解析本插件当前运行期的 Pinia（停止即作废，见 app-run-scope.ts）。
+      // 窗口是全局标记，内部已串行化——并发装载不会让两个插件的 store 串绑
+      const module = await loadPluginModuleScoped(manifest.id, () =>
+        this.importWithTimeout(toPluginAssetUrl(manifest.extensionPath, manifest.main)),
+      )
 
       const context = createPluginContext(manifest)
-      // 关键：先注册 context 再激活 —— activate 内 registerToolboxPage 等会立即更新响应式
-      // 注册表，宿主可能随之渲染插件组件（如 ToolboxView 入口卡），必须保证
+      // 关键：先注册 context 再激活 —— activate 内 registerSurface / registerSlot 等会立即
+      // 更新壳注册表的响应式状态，宿主可能随之渲染插件组件，必须保证
       // PluginViewHost provide 能取到 context，否则插件组件 inject 得到 undefined 崩溃
       getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context)
@@ -219,6 +249,8 @@ class PluginLoaderClass {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       // 激活失败：摘除激活期间可能残留的注册（含动态路由），避免半激活状态
       getPluginRegistry().clearPlugin(manifest.id)
+      // 装载失败可能已建过运行期作用域（模块求值到一半抛错）：一并作废，不留半截状态
+      disposeAppRunScope(manifest.id)
       // 对称拆解后端：plugin_activate 可能已成功（WASM 实例存活，状态
       // Activated/Degraded），必须先于 markError 停用——后端 deactivate 仅对
       // Activated/Degraded 生效，markError 置 Error 后实例将无法再拆解。
@@ -230,12 +262,6 @@ class PluginLoaderClass {
       }
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
-  }
-
-  /** 将插件路径转换为可导入的 URL（通过 Tauri asset protocol） */
-  private convertFileUrl(extensionPath: string, main: string): string {
-    const filePath = `${extensionPath}/${main}`.replace(/\\/g, '/')
-    return convertFileSrc(filePath)
   }
 
   /** 带超时的动态导入 */

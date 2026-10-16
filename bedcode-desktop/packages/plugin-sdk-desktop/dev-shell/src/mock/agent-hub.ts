@@ -65,20 +65,156 @@ interface UsageSessionRow {
   [key: string]: unknown
 }
 
-let detection: (Record<string, any> & { clis: Record<string, DetectCliInfo> }) | null = null
-let install: (Record<string, any> & { runScripts?: Record<string, InstallRunScript> }) | null = null
-let skills: (Record<string, any> & { skillContents?: Record<string, string>; localImport?: { path: string; name: string } }) | null = null
-let providers: (Record<string, any> & {
-  importDiscoveries?: Array<{ name: string; baseUrl: string; apiStyle: string; models: string[]; notes: string | null }>
+// ==================== 领域种子状态（最小本地形状） ====================
+// 已知字段具名化（mock 内类型安全），未知种子字段经 `[key: string]: unknown`
+// 索引透传——形状真源在插件 `types.ts` / `devMockTypes.ts`，dev-shell 不收录插件包
+
+/** 宽松透传基底（替代 Record<string, any>：既有属性有契约，未知字段不逃逸） */
+interface Seed {
+  [key: string]: unknown
+}
+
+/** 探测域（AgentHubState 子集） */
+interface DetectionSeed extends Seed {
+  envStatus: string
+  env: unknown
+  authGranted?: boolean
+  clis: Record<string, DetectCliInfo>
+}
+
+/** npm 镜像域（InstallDomainState.mirror 子集） */
+interface MirrorSeed extends Seed {
+  speed: { status: string }
+  npmrc: {
+    backupExists?: boolean
+    fileRegistry?: string | null
+    appliedAt?: number
+    restoredAt?: number
+  }
+}
+
+/** 运行中安装/卸载（ActiveRun 子集） */
+interface ActiveRunSeed extends Seed {
+  runId: string
+  cli: string
+  action: 'install' | 'update' | 'uninstall'
+  command: string
+  startedAt: number
+  cancelRequested: boolean
+}
+
+/** 安装域（InstallDomainState 子集 + 剧本扩展） */
+interface InstallSeed extends Seed {
+  runScripts?: Partial<Record<string, InstallRunScript>>
+  mirror: MirrorSeed
+  active: ActiveRunSeed | null
+  last: Seed | null
+  updates: Record<string, { outdated: boolean | null; checkedAt?: number } | null>
+}
+
+/** Skills 域（SkillsDomainState 子集 + 编辑器扩展） */
+interface SkillsSeed extends Seed {
+  skillContents?: Record<string, string>
+  skills: SkillEntry[]
+  status?: string
+  scannedAt?: number | null
+  libraryRoot?: string
+  localImport?: { path: string; name: string }
+  import?: { last: Record<string, unknown> | null }
+  github?: { last: Record<string, unknown> | null }
+}
+
+/** Claude 桥接视图（ProvidersDomainState 子集） */
+interface ClaudeSeed extends Seed {
+  bridge: { providerConfigSh?: boolean }
+  env: { authTokenMask: string | null; baseUrl: string; model: string | null }
+}
+
+/** 供应商域（ProvidersDomainState 子集 + 导入/应用扩展） */
+interface ProvidersSeed extends Seed {
+  presets: ProviderPreset[]
+  claude: ClaudeSeed
+  importDiscoveries?: Array<{
+    name: string
+    baseUrl: string
+    apiStyle: string
+    models: string[]
+    notes: string | null
+  }>
   importKeys?: Record<string, string>
   applyFiles?: Record<string, string[]>
   applyBridges?: string[]
-}) | null = null
-let usage: { state: Record<string, any>; stats: Record<string, any>; sessions: UsageSessionRow[]; sessionDetails?: Record<string, Record<string, any>> } | null = null
+  import?: { last: Record<string, unknown> | null }
+  apply?: { last: Record<string, unknown> | null }
+}
+
+/** 来源的一个目录（wire 装饰形状：内置默认目录 `removable=false`） */
+interface UsageSourcePathSeed {
+  path: string
+  removable: boolean
+}
+
+/** 使用统计域状态（UsageDomainState 子集：sources/adapters/home 为自由域） */
+interface UsageStateSeed extends Seed {
+  status?: string
+  syncedAt?: number
+  home?: string
+  /** 选目录 mock 的递增计数（每次 pick 换一个演示目录，避免与已登记目录撞上） */
+  pickSeq?: number
+  /**
+   * 来源 = 名称 + 多个目录（与 guest `usage::sources` 现行 wire 同构）
+   *
+   * `paths` 是**已装饰**的 wire 形态（`[{ path, removable }]`）：内置默认目录
+   * `removable=false` 不可移除，用户追加的目录 `removable=true`。种子即此形状，
+   * 故增删目录时只追加/剔除 `removable:true` 的项，不重新推导默认值。
+   */
+  sources?: Array<{ name: string; paths: UsageSourcePathSeed[]; builtin?: boolean; [key: string]: unknown }>
+  adapters?: Record<string, unknown>
+}
+
+/** 使用统计容器（usage devMock 形状） */
+interface UsageSeed {
+  state: UsageStateSeed
+  stats: Record<string, unknown>
+  sessions: UsageSessionRow[]
+  sessionDetails?: Record<string, Record<string, unknown>>
+}
+
+let detection: DetectionSeed | null = null
+let install: InstallSeed | null = null
+let skills: SkillsSeed | null = null
+let providers: ProvidersSeed | null = null
+let usage: UsageSeed | null = null
 
 /** 深拷贝（种子 → 工作状态 / 返回值出站，避免外部改动写回种子） */
 function clone<T>(v: T): T {
-  return JSON.parse(JSON.stringify(v))
+  // 种子为受控 JSON 数据基；structuredClone 失败（函数/类实例等不可克隆值）时
+  // 回退引用拷贝（外部只读使用，不写回）
+  try {
+    return structuredClone(v)
+  } catch {
+    return v
+  }
+}
+
+/** `~/x` 展开为绝对路径（与 guest `usage::sources::normalize_path` 同口径） */
+function expandHome(raw: string, home: string): string {
+  if (!raw) return ''
+  return raw.startsWith('~/') ? `${home}/${raw.slice(2)}` : raw
+}
+
+/**
+ * 目录是否已被任一来源登记（全局唯一）
+ *
+ * 与 guest `path_registered` 同口径：同一目录归属两个来源会让同一批会话文件
+ * 以两个适配器名各入一次库，统计重复，故 mock 也要拦（此前该查重用 `s.path`
+ * 字段，seed 早已改用 `paths` 数组 → 比较恒不成立，重复检查形同虚设）。
+ */
+function pathRegistered(
+  sources: Array<{ paths?: UsageSourcePathSeed[] }>,
+  path: string,
+): boolean {
+  return sources.some((s) => (s.paths ?? []).some((p) => p.path === path))
 }
 
 /** FNV-1a 32bit hex（guest skills.rs 同款逐文件 hash 算法） */
@@ -100,13 +236,13 @@ function maskKey(key: string): string {
 const NPMMIRROR = 'https://registry.npmmirror.com'
 const NPMJS = 'https://registry.npmjs.org'
 
-// ==================== 运行中安装模拟（单 run） ====================
+// ==================== 运行中安装/卸载模拟（单 run） ====================
 
 let runTimer: ReturnType<typeof setInterval> | null = null
 let runState: {
   runId: string
   cli: string
-  action: 'install' | 'update'
+  action: 'install' | 'update' | 'uninstall'
   command: string
   useMirror: boolean
   startedAt: number
@@ -123,20 +259,48 @@ function stopRunTimer(): void {
   }
 }
 
-/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送（返回待清理句柄） */
-function startRun(context: PluginContext, cli: string, useMirror: boolean): void {
-  const script = install?.runScripts?.[cli]
-  if (!script) return
-  const updates = (install?.updates ?? {}) as Record<string, { outdated: boolean | null }>
+/** 卸载剧本（与安装白名单同源包名；claude native/opencode standalone 官方命令） */
+const UNINSTALL_SCRIPTS: Record<string, { command: string; output: string[] }> = {
+  claude: {
+    command: 'npm uninstall -g @anthropic-ai/claude-code',
+    output: ['$ npm uninstall -g @anthropic-ai/claude-code', '', 'removed 1 package in 3s'],
+  },
+  codex: {
+    command: 'npm uninstall -g @openai/codex',
+    output: ['$ npm uninstall -g @openai/codex', '', 'removed 1 package in 4s'],
+  },
+  opencode: {
+    command: 'opencode uninstall --force',
+    output: ['$ opencode uninstall --force', '', 'opencode removed'],
+  },
+  pi: {
+    command: 'npm uninstall -g @earendil-works/pi-coding-agent',
+    output: ['$ npm uninstall -g @earendil-works/pi-coding-agent', '', 'removed 1 package in 3s'],
+  },
+}
+
+interface RunSpec {
+  cli: string
+  action: 'install' | 'update' | 'uninstall'
+  command: string
+  useMirror: boolean
+  lines: string[]
+  /** run 播完后的额外副作用（卸载：翻转探测为未安装） */
+  onDone?: () => void
+}
+
+/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送
+ * @returns 新 run 的 runId（启动失败时返回 null） */
+function startRunWith(context: PluginContext, spec: RunSpec): string | null {
   runState = {
     runId: `mock-run-${++runSeq}`,
-    cli,
-    action: updates[cli]?.outdated ? 'update' : 'install',
-    command: useMirror ? `${script.command} --registry=${NPMMIRROR}` : script.command,
-    useMirror,
+    cli: spec.cli,
+    action: spec.action,
+    command: spec.command,
+    useMirror: spec.useMirror,
     startedAt: Date.now(),
     cancelRequested: false,
-    lines: [...script.output],
+    lines: [...spec.lines],
     cursor: 0,
   }
   install!.active = {
@@ -144,7 +308,7 @@ function startRun(context: PluginContext, cli: string, useMirror: boolean): void
     cli: runState.cli,
     action: runState.action,
     command: runState.command,
-    useMirror,
+    useMirror: runState.useMirror,
     startedAt: runState.startedAt,
     cancelRequested: false,
   } as any
@@ -169,13 +333,58 @@ function startRun(context: PluginContext, cli: string, useMirror: boolean): void
         finishedAt: Date.now(),
       } as any
       install.active = null
+      const onDone = spec.onDone
       runState = null
       stopRunTimer()
+      onDone?.()
     } else if (install.active) {
       install.active.cancelRequested = runState.cancelRequested
     }
     emitInstall(context)
   }, 700)
+  return runState.runId
+}
+
+/** 安装/更新 run（剧本来自种子 runScripts；action 按 outdated 判定） */
+function startRun(context: PluginContext, cli: string, useMirror: boolean): string | null {
+  const script = install?.runScripts?.[cli]
+  if (!script) return null
+  const updates = (install?.updates ?? {}) as Record<string, { outdated: boolean | null }>
+  return startRunWith(context, {
+    cli,
+    action: updates[cli]?.outdated ? 'update' : 'install',
+    command: useMirror ? `${script.command} --registry=${NPMMIRROR}` : script.command,
+    useMirror,
+    lines: [...script.output],
+  })
+}
+
+/** 卸载 run：剧本固定（无用户输入），播完翻转探测为未安装（与 guest 完成
+ * 后自动重探测同效） */
+function startUninstallRun(context: PluginContext, cli: string): string | null {
+  const script = UNINSTALL_SCRIPTS[cli]
+  if (!script) return null
+  return startRunWith(context, {
+    cli,
+    action: 'uninstall',
+    command: script.command,
+    useMirror: false,
+    lines: [...script.output],
+    onDone: () => {
+      if (detection?.clis?.[cli]) {
+        detection.clis[cli] = {
+          installed: false,
+          version: null,
+          method: 'unknown',
+          paths: [],
+          dual: false,
+          status: 'not-installed',
+          error: null,
+        }
+        emitDetection(context)
+      }
+    },
+  })
 }
 
 function cancelRun(context: PluginContext): void {
@@ -239,6 +448,9 @@ function registerCommands(context: PluginContext): void {
     context.commands.register('agent-hub.get-state', () => ({ state: clone(detection) }))
     // 探测动画：env + 全 CLI 置 detecting → 每 500ms 逐 CLI 落终态 → env 终态
     context.commands.register('agent-hub.detect', () => {
+      // 早退守卫：模块级 detection 在闭包内 TS 收窄失效（setTimeout 里还有
+      // `if (!detection) return` 双保险）；种子缺失时返回错误而非崩溃
+      if (!detection) return { ok: false, error: 'detection seed unavailable' }
       const final = clone(detection)
       const detecting = clone(final)
       detecting.envStatus = 'detecting'
@@ -352,8 +564,19 @@ function registerCommands(context: PluginContext): void {
         return Promise.reject(new Error(`no install recipe for cli: ${cli}`))
       }
       if (runState) return Promise.reject(new Error('another run is active'))
-      startRun(context, cli, !!args?.mirror)
-      return { runId: runState?.runId ?? null }
+      // startRun 同步落 runState 并返回新 runId（无剧本时 null）——避免
+      // 早退收窄后 `runState?.runId` 落在 never 上（TS 不跟踪跨函数赋值）
+      const runId = startRun(context, cli, !!args?.mirror)
+      return { runId }
+    })
+    context.commands.register('agent-hub.uninstall', (args: any) => {
+      const cli: string = args?.cli ?? ''
+      if (!UNINSTALL_SCRIPTS[cli]) {
+        return Promise.reject(new Error(`no uninstall recipe for cli: ${cli}`))
+      }
+      if (runState) return Promise.reject(new Error('another run is active'))
+      const runId = startUninstallRun(context, cli)
+      return { runId }
     })
     context.commands.register('agent-hub.cancel-run', () => {
       cancelRun(context)
@@ -674,27 +897,36 @@ function registerCommands(context: PluginContext): void {
         limit,
       }
     })
-    // 来源清单：内置只读 + 自定义增删（state.sources 持久化，扫描计数合并）
+    // 来源清单：内置只读 + 自定义增删 + 每来源多目录（state.sources 持久化，扫描计数合并）
     context.commands.register('agent-hub.list-usage-sources', () => {
-      const sources = (usage!.state.sources as Record<string, any>[]).map((s) => {
-        const scan = (usage!.state.adapters as Record<string, any>)[s.name]
+      const sources = (usage!.state.sources ?? []).map((s) => {
+        const scan = (usage!.state.adapters ?? {})[s.name]
         return scan ? { ...s, scan: clone(scan) } : s
       })
       return { sources: clone(sources) }
     })
+    context.commands.register('agent-hub.pick-source-dir', () => {
+      // 浏览器里无法弹系统对话框：返回演示目录（项目 .pi/sessions 形态），
+      // 供前端完整走「选择 → 派生名 / 下拉选已有来源 → 添加」链路。
+      // 首个来源（claude）换个目录，让下拉追加路径在 demo 里看得见区别。
+      const home = usage!.state.home ?? '/home/dev'
+      const n = (usage!.state.pickSeq = (usage!.state.pickSeq ?? 0) + 1)
+      const tail = n === 1 ? 'projects/tauriProject/BedCode/.pi/sessions' : `work/pick-${n}`
+      return { picked: true, path: `${home}/${tail}` }
+    })
     context.commands.register('agent-hub.add-usage-source', (args: any) => {
       const name = String(args?.name ?? '').trim()
-      let path = String(args?.path ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
       if (!name || !path) return Promise.reject(new Error('add-source: name and path required'))
-      if (path.startsWith('~/')) path = `${usage!.state.home}/${path.slice(2)}`
-      const srcs = usage!.state.sources as Record<string, any>[]
-      if (
-        srcs.some((s) => s.name === name || s.path === path) ||
-        !/^[a-z][a-z0-9-]{0,31}$/.test(name)
-      )
-        return Promise.reject(new Error('add-source: name or path already registered'))
-      srcs.push({ name, path, builtin: false })
-      ;(usage!.state.adapters as Record<string, any>)[name] = {
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(name))
+        return Promise.reject(new Error('add-source: invalid name'))
+      const srcs = usage!.state.sources ?? []
+      if (srcs.some((s) => s.name === name))
+        return Promise.reject(new Error('add-source: source name already registered'))
+      if (pathRegistered(srcs, path))
+        return Promise.reject(new Error('add-source: path already registered'))
+      srcs.push({ name, paths: [{ path, removable: true }], builtin: false, kind: 'jsonl' })
+      ;(usage!.state.adapters ?? {})[name] = {
         files: 0,
         parsed: 0,
         skipped: 0,
@@ -705,14 +937,45 @@ function registerCommands(context: PluginContext): void {
       emitUsage(context)
       return { state: clone(usage!.state) }
     })
+    context.commands.register('agent-hub.add-usage-source-path', (args: any) => {
+      const name = String(args?.name ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
+      if (!name || !path) return Promise.reject(new Error('add-source-path: name and path required'))
+      const srcs = usage!.state.sources ?? []
+      const target = srcs.find((s) => s.name === name)
+      if (!target) return Promise.reject(new Error('add-source-path: source not found'))
+      if (pathRegistered(srcs, path))
+        return Promise.reject(new Error('add-source-path: path already registered'))
+      target.paths = [...(target.paths ?? []), { path, removable: true }]
+      usage!.state = { ...usage!.state }
+      emitUsage(context)
+      return { state: clone(usage!.state) }
+    })
+    context.commands.register('agent-hub.remove-usage-source-path', (args: any) => {
+      const name = String(args?.name ?? '').trim()
+      const path = expandHome(String(args?.path ?? '').trim(), usage!.state.home ?? '')
+      const srcs = usage!.state.sources ?? []
+      const target = srcs.find((s) => s.name === name)
+      if (!target) return Promise.reject(new Error('remove-source-path: source not found'))
+      const hit = (target.paths ?? []).find((p) => p.path === path)
+      if (!hit) return Promise.reject(new Error('remove-source-path: path not in source'))
+      if (hit.removable === false)
+        return Promise.reject(new Error('remove-source-path: builtin path protected'))
+      if ((target.paths ?? []).length <= 1)
+        return Promise.reject(new Error('remove-source-path: last path protected'))
+      target.paths = target.paths.filter((p) => p.path !== path)
+      usage!.state = { ...usage!.state }
+      emitUsage(context)
+      return { state: clone(usage!.state) }
+    })
     context.commands.register('agent-hub.remove-usage-source', (args: any) => {
       const name = String(args?.name ?? '')
-      const srcs = usage!.state.sources as Record<string, any>[]
+      const srcs = usage!.state.sources ?? []
       const target = srcs.find((s) => s.name === name)
       if (!target) return Promise.reject(new Error(`remove-source: ${name} not found`))
       if (target.builtin) return Promise.reject(new Error('remove-source: builtin sources cannot be removed'))
       usage!.state.sources = srcs.filter((s) => s.name !== name)
-      delete (usage!.state.adapters as Record<string, any>)[name]
+      delete (usage!.state.adapters ?? {})[name]
       usage!.state = { ...usage!.state }
       emitUsage(context)
       return { state: clone(usage!.state) }
@@ -735,6 +998,15 @@ function registerCommands(context: PluginContext): void {
   }
 }
 
+/** devMock 种子容器（插件 AgentHubDevMock 的本地镜像，见 wasm-apps/agent-hub/src/devMockTypes.ts） */
+interface AgentHubSeed {
+  detection?: DetectionSeed
+  install?: InstallSeed
+  skills?: SkillsSeed
+  providers?: ProvidersSeed
+  usage?: UsageSeed
+}
+
 // ==================== 注入入口 ====================
 
 /** 待清理定时器（探测动画/测速/扫描等模拟延时） */
@@ -748,7 +1020,10 @@ let timers: number[] = []
 export function registerAgentHubMock(context: PluginContext, pluginId: string): {
   dispose(): void
 } {
-  const seed = getDevMock(pluginId) as Record<string, any> | undefined
+  // SAFETY: dev-shell 刻意不收录插件包类型（SDK 不依赖插件），种子形状按
+  // 插件 devMockTypes.ts 的领域接口本地镜像后 cast——运行期种子字段是这些
+  // 接口的超集（额外字段经索引签名透传），cast 只收窄不丢字段
+  const seed = getDevMock(pluginId) as unknown as AgentHubSeed | undefined
   if (!seed) return { dispose() {} }
 
   detection = seed.detection ? clone(seed.detection) : null

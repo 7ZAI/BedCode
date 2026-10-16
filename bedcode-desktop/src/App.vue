@@ -18,6 +18,9 @@
     <!-- File System Auth Dialog -->
     <FsAuthDialog />
 
+    <!-- Network Auth Dialog（票 05：出站 origin 询问，与 fs 弹窗分开） -->
+    <NetworkAuthDialog />
+
     <!-- Exit Confirm Dialog -->
     <ExitConfirmModal v-model:visible="showExitConfirm" :sessions="runningSessions" />
   </div>
@@ -47,18 +50,22 @@ import { Toaster, type ToasterProps } from 'vue-sonner'
 import DesktopLayout from '@/components/DesktopLayout.vue'
 import SplashLoading from '@/components/SplashLoading.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
+import NetworkAuthDialog from '@/components/NetworkAuthDialog.vue'
 import ExitConfirmModal from '@/components/ExitConfirmModal.vue'
-import { useGlobalNotifications } from '@/composables/useGlobalNotifications'
 import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { useSettingsStore } from '@/stores/settings'
 import { usePlatform } from '@/composables/usePlatform'
 
+// 关窗守卫经 `window-close-requested` 事件透传的会话视图数组
+// （插件登记域 SessionInfoView 超集，宿主零解析 2026-09-25）；弹窗只消费 id/name/status，
+// 其余字段（configId/taskStatus 等）随透传存在。
 interface RunningSession {
   id: string
   name: string
   status: string
+  [key: string]: unknown
 }
 
 const router = useRouter()
@@ -89,15 +96,18 @@ const toastOptions: ToasterProps['toastOptions'] = {
   },
 }
 
-// 全局通知监听
-const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } =
-  useGlobalNotifications()
-
-// 键盘快捷键
+// 键盘快捷键（会话 / 设备配对页已下沉插件，宿主无对应页面，快捷键随之删除）
 useKeyboardShortcuts([
-  { key: ',', ctrl: true, handler: () => router.push('/settings') },
-  { key: '1', ctrl: true, handler: () => router.push('/sessions') },
-  { key: '2', ctrl: true, handler: () => router.push('/devices') },
+  {
+    key: ',',
+    ctrl: true,
+    // 设备壳路由（/shell）自带 Ctrl+, 快捷键（打开设置卡），旧布局的
+    // 全局快捷键让位，避免在壳内按 Ctrl+, 被弹回旧设置页
+    handler: () => {
+      if (router.currentRoute.value.path.startsWith('/shell')) return
+      router.push('/settings')
+    },
+  },
 ])
 
 // 启动画面：保证最低展示时长避免闪烁，初始化完成后淡出
@@ -112,7 +122,6 @@ let unlistenCloseRequested: UnlistenFn | null = null
 onMounted(async () => {
   setupTheme()
   setupFontSize()
-  startGlobalNotifications()
 
   // 首帧渲染完成即开始计时，最低展示 900ms 后淡出启动画面
   splashTimer = setTimeout(() => {
@@ -130,7 +139,6 @@ onMounted(async () => {
 onUnmounted(() => {
   if (splashTimer) clearTimeout(splashTimer)
   cleanupTheme()
-  stopGlobalNotifications()
   unlistenCloseRequested?.()
 })
 </script>

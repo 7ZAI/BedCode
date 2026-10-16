@@ -1,7 +1,7 @@
 {
   "productName": "BedCode",
   "identifier": "com.bedcode.app",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1420",
@@ -26,7 +26,17 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self' asset: http://asset.localhost",
+        "connect-src": "'none'",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "style-src": "'unsafe-inline' 'self' asset: http://asset.localhost",
+        "font-src": "'self' asset: http://asset.localhost",
+        "script-src": "'self' 'unsafe-eval' 'wasm-unsafe-eval' asset: http://asset.localhost"
+      },
+      "devCsp": {
+        "connect-src": "'self' ipc: http://ipc.localhost ws: wss: http: https:"
+      },
       "assetProtocol": {
         "enable": true,
         "scope": {
@@ -45,7 +55,7 @@
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "deb"],
     "category": "Utility",
-    "shortDescription": "局域网远程终端——移动端控制桌面端 Claude Code 会话",
+    "shortDescription": "基于 wasmtime 的多 WASM 应用运行平台",
     "resources": [
       "resources/config.properties",
       "resources/plugins/"

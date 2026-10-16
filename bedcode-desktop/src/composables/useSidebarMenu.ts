@@ -6,7 +6,7 @@
  * 全部按 order 升序稳定排列 —— 插件/自定义项可通过 order 值插入到任意内置项之间。
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
-import { getPluginRegistry } from '@/plugin/registry'
+import { getPluginRegistry, isContributionActiveState } from '@/plugin/registry'
 
 /** 统一侧边栏菜单项 */
 export interface SidebarMenuItem {
@@ -41,14 +41,11 @@ export interface SidebarMenuItemDescriptor {
   prefix?: boolean
 }
 
-/** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位；插件管理(9998) 与 设置(9999) 置于所有插件
- * 排序值之后，保证这两个入口永远排在菜单最末。说明：server 槽位(300)
- * 保留不复用，防止插件排序撞位 */
+/** 内置菜单项排序槽位 — 插件管理与设置恒在最末（9998/9999）。
+ * 业务域槽位（设备配对 100 / 终端会话 200）已随票 13/14 下沉 com.bedcode.terminal-session
+ * 插件，宿主不再占用；插件贡献目录按自身 order 排布（同域约定仍为 100/200，
+ * 见插件侧目录注册，宿主不感知） */
 export const BUILTIN_MENU_ORDERS = {
-  devices: 100,
-  sessions: 200,
-  server: 300,
   plugins: 9998,
   settings: 9999,
 } as const
@@ -59,38 +56,15 @@ const DEFAULT_MENU_ICON = 'M4 6h16M4 12h16M4 18h7'
 /**
  * 内置菜单项（与插件共用 Heroicons outline 图标体系）
  *
+ * 会话 / 设备配对入口已随票 13/14 下沉 com.bedcode.terminal-session 插件：宿主不再提供
+ * 兜底菜单与页面（路由 /sessions、/devices 及其兜底壳已删除），插件未激活时
+ * 侧边栏不显示这两个入口；插件激活后由其贡献目录接管菜单排序槽位。
+ *
  * 服务器管理页面（/server）已从导航中移除入口（产品决策：服务器常驻，
  * 用户不可开关，见 ServerSupervisor）。路由与页面代码保留，调试者可直接
  * 访问 /server URL 预览，未来 CLI 开发工具可复用此页面。
  */
 export const builtinMenuItems: SidebarMenuItem[] = [
-  {
-    id: 'sessions',
-    path: '/sessions',
-    labelKey: 'desktop.sidebar.terminalSession',
-    isI18nKey: true,
-    // 终端图标（与 /sessions 页面头部一致），替代原文档图标以符合"终端会话"含义
-    icon: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
-    order: BUILTIN_MENU_ORDERS.sessions,
-  },
-  // 服务器管理入口已移除：页面保留于 /server 供调试者直接访问 URL 预览。
-  // 原菜单项：
-  // {
-  //   id: 'server',
-  //   path: '/server',
-  //   labelKey: 'desktop.sidebar.server',
-  //   isI18nKey: true,
-  //   icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01',
-  //   order: BUILTIN_MENU_ORDERS.server,
-  // },
-  {
-    id: 'devices',
-    path: '/devices',
-    labelKey: 'desktop.sidebar.devicePairing',
-    isI18nKey: true,
-    icon: 'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z',
-    order: BUILTIN_MENU_ORDERS.devices,
-  },
   {
     id: 'plugins',
     path: '/plugins',
@@ -170,15 +144,21 @@ function toMenuItem(view: {
 /**
  * 侧边栏菜单组合子 — 合并内置 + 自定义 + 插件视图，按 order 升序稳定排列
  *
- * sort 为稳定排序：同 order 时保持 内置 → 自定义 → 插件注册 的先后顺序
+ * sort 为稳定排序：同 order 时保持 内置 → 自定义 → 插件注册 的先后顺序。
+ * 插件贡献目录经 `isContributionActiveState` 过滤：插件 error / 停用后目录随之
+ * 摘除，避免点开空目录（D7）；宿主不再提供业务域兜底入口（票 13/14 已下沉插件），
+ * 故无让位逻辑。
  */
 export function useSidebarMenu(): { menuItems: ComputedRef<SidebarMenuItem[]> } {
   const registry = getPluginRegistry()
 
   const menuItems = computed<SidebarMenuItem[]>(() => {
-    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(
-      toMenuItem,
+    const states = registry.pluginStatesRef.value
+    const pluginViews = [...registry.sidebarViews.value, ...registry.toolboxViews.value].filter(
+      (view) => isContributionActiveState(states[view.pluginId]),
     )
+    const pluginItems = pluginViews.map(toMenuItem)
+
     const all = [...builtinMenuItems, ...customItemsRef.value, ...pluginItems]
     all.sort((a, b) => a.order - b.order)
     return all

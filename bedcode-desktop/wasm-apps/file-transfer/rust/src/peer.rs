@@ -1,0 +1,2081 @@
+//! 数据面命令编排与存储运行时（双端单产物）
+//!
+//! 设备缓存自持后，本模块只保留两类逻辑：
+//! 1. 目标解析：显式 endpoint 参数 > endpoint memo；session 句柄优先、缺失时
+//!    静默重拨（endpoint 已知场景），旧式 node-id 直呼作为最后兜底；
+//! 2. 存储运行时：transfer_store 纯函数之上的装载/持久化/视图派发，
+//!    拉取 retryMeta 的挂载匹配，以及设置/注册表命令的宿主 I/O 编排。
+//!
+//! ## 单产物后的平台分支（规格 `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`）
+//!
+//! 双端共享一份产物，产品差异不消除、表达为「同一 trait 双实现 + platform 分支」：
+//! 持久化（桌面 plugin-db 表 / 移动 storage KV）、mount-local（桌面多选目录 /
+//! 移动 SAF 单选）、settings 落点（桌面可自定义 / 移动固定 MediaStore）各自两个
+//! 实现，由 [`crate::platform`] 探测结果选择。桌面专属能力（节点电源、目录多选、
+//! reveal-in-dir、认证中心互调）只在桌面分支触达；移动分支误触即 fail-visible。
+
+use crate::device_bridge::{self, DialEndpoint};
+use crate::platform::{self, Platform};
+use crate::roots_registry::{self, SharedRoot};
+use crate::settings_store::{self, TransferSettings};
+use crate::transfer_store::{self, RetryMeta, PullFileSpec, TransferEntry};
+use bedcode_plugin_api::host::{
+    HostEvents, HostLog, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
+};
+use bedcode_plugin_api::wasm_host::WasmHost;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+type Result<T> = anyhow::Result<T>;
+
+pub(crate) const PLUGIN_ID: &str = "com.bedcode.file-transfer";
+
+/// 预授权 storage key：宿主 `preauthorize_plugin` 读取（启用插件时收集路径并合并
+/// 弹窗授权）。与共享目录生命周期同步：mount-local 追加、update-roots 剔除——
+/// 缺失该写入方时 file-transfer 启用永远命中「请先配置共享目录」门禁（Bug A）。
+pub(crate) const PREAUTH_PATHS_KEY: &str = "preauth_paths";
+
+/// 读取预授权路径数组（storage 缺失/损坏视为空数组，幂等）
+fn load_preauth_paths(h: &impl HostStorage) -> anyhow::Result<Vec<String>> {
+    let Some(v) = h.storage_get(PREAUTH_PATHS_KEY)? else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<String>>(v)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s: &String| !s.trim().is_empty())
+        .collect())
+}
+
+/// 追加预授权路径（去重后写回；已存在时无操作）
+pub(crate) fn push_preauth_path(h: &impl HostStorage, path: &str) -> anyhow::Result<()> {
+    let mut paths = load_preauth_paths(h)?;
+    if !paths.iter().any(|p| p == path) {
+        paths.push(path.to_string());
+        h.storage_set(PREAUTH_PATHS_KEY, &serde_json::to_value(&paths)?)?;
+    }
+    Ok(())
+}
+
+/// 按路径剔除预授权（不存在时无操作）
+pub(crate) fn remove_preauth_path(h: &impl HostStorage, path: &str) -> anyhow::Result<()> {
+    let mut paths = load_preauth_paths(h)?;
+    let before = paths.len();
+    paths.retain(|p| p != path);
+    if paths.len() != before {
+        h.storage_set(PREAUTH_PATHS_KEY, &serde_json::to_value(&paths)?)?;
+    }
+    Ok(())
+}
+
+// ==================== 任务存储运行时 ====================
+
+static STORE: OnceLock<Mutex<Vec<TransferEntry>>> = OnceLock::new();
+static STORE_LOADED: OnceLock<()> = OnceLock::new();
+
+/// 待挂载拉取元数据队列：(nodeId, spec)。pull-files 入队时压入，新接收条目
+/// 首次出现在快照中且文件集匹配时消费挂载（引擎按文件逐批铸造 batchId，
+/// 调用点拿不到 id，只能事后匹配）。
+static PENDING_PULLS: OnceLock<Mutex<Vec<(String, RetryMeta)>>> = OnceLock::new();
+
+const PENDING_PULLS_CAP: usize = 8;
+
+fn store() -> &'static Mutex<Vec<TransferEntry>> {
+    STORE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn pending_pulls() -> &'static Mutex<Vec<(String, RetryMeta)>> {
+    PENDING_PULLS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 装载持久层（进程内一次）：载入 → 重启恢复标注 → 回写标注结果。
+/// 持久化异常降级为内存空表起步（如实记日志）。
+fn ensure_loaded(h: &WasmHost) -> std::sync::MutexGuard<'static, Vec<TransferEntry>> {
+    let mut guard = store().lock().expect("transfer store lock");
+    if STORE_LOADED.set(()).is_ok() {
+        match load_entries(h) {
+            Ok(mut entries) => {
+                let restored = entries.len();
+                let marked = restore_entries(h, &mut entries);
+                h.log_info(&format!(
+                    "restored {restored} transfers, {marked} marked interrupted"
+                ));
+                *guard = entries;
+            }
+            Err(e) => h.log_warn(&format!("transfer store load deferred: {e}")),
+        }
+    }
+    guard
+}
+
+/// 任务台账持久层（平台分支）：
+/// - 桌面 = `host-plugin-database` 独立表 `transfer_entries`（SQL 事务批）；
+/// - 移动 = `host-storage` 单键 JSON 数组（无 plugin-db 是历史约束；整读整写）。
+///
+/// 两种落点都是**端上既有事实**：换落点 = 用户历史任务凭空消失，属迁移事故。
+fn load_entries<H: HostPluginDatabase + HostStorage + ?Sized>(
+    h: &H,
+) -> Result<Vec<TransferEntry>> {
+    match platform::current() {
+        Platform::Desktop => {
+            h.plugin_db_execute(
+                "CREATE TABLE IF NOT EXISTS transfer_entries (
+                batch_id TEXT PRIMARY KEY,
+                direction TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL
+            )",
+            )?;
+            let Some(rows) = h.plugin_db_query("SELECT payload FROM transfer_entries ORDER BY rowid")?
+            else {
+                return Ok(vec![]);
+            };
+            Ok(rows
+                .as_array()
+                .map(|a| a.iter())
+                .unwrap_or_default()
+                .filter_map(|r| r.get("payload").and_then(|p| p.as_str()))
+                .filter_map(|p| serde_json::from_str::<TransferEntry>(p).ok())
+                .collect())
+        }
+        Platform::Mobile => {
+            let Some(v) = h.storage_get(ENTRIES_KEY)? else {
+                return Ok(vec![]);
+            };
+            Ok(serde_json::from_value(v).unwrap_or_default())
+        }
+    }
+}
+
+/// 移动端台账存储键（与退役前逐字一致）
+const ENTRIES_KEY: &str = "transfer_entries";
+
+/// 全量回写（平台分支）。桌面：**单事务**包裹 DELETE + N INSERT（此前逐条独立
+/// 事务 ⇒ 每次 flush N+1 次日志写入与 fsync，真机实证传输中插件库持续 EXCLUSIVE
+/// 锁、`list-*` 全被阻塞——表现即「传输面板没有任务卡片」；execute-batch 失败即
+/// 整体回滚：半写状态等于整段历史丢失）。移动：KV 整读改整写（封顶 200 规模可控）。
+fn persist_entries<H: HostPluginDatabase + HostStorage + HostLog + ?Sized>(
+    h: &H,
+    entries: &[TransferEntry],
+) -> Result<()> {
+    match platform::current() {
+        Platform::Desktop => {
+            // 宿主拒绝跨调用 BEGIN/COMMIT；execute-batch 在一次调用内持有独立库锁
+            // 并保证全部提交或全部回滚。批量 INSERT 合并成一条多值语句，避免超过
+            // 宿主 64 条语句上限。
+            let mut sqls = vec!["DELETE FROM transfer_entries".to_string()];
+            if !entries.is_empty() {
+                let values = entries
+                    .iter()
+                    .map(|entry| {
+                        let payload = serde_json::to_string(entry).map_err(|e| {
+                            anyhow::anyhow!(
+                                "serialize transfer entry {} failed: {e}",
+                                entry.batch_id
+                            )
+                        })?;
+                        Ok(format!(
+                            "({}, {}, {}, {})",
+                            sql_string_literal(&entry.batch_id),
+                            sql_string_literal(&entry.direction),
+                            sql_string_literal(&entry.status),
+                            sql_string_literal(&payload),
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                sqls.push(format!(
+                    "INSERT INTO transfer_entries (batch_id, direction, status, payload) VALUES {}",
+                    values.join(", ")
+                ));
+            }
+            h.plugin_db_execute_batch(&sqls)
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("persist transfer entries failed: {e}"))
+        }
+        Platform::Mobile => {
+            let value = match serde_json::to_value(entries) {
+                Ok(v) => v,
+                Err(e) => {
+                    // 持久化退化不打断数据面编排（下次变更会整读改整写重试）
+                    h.log_warn(&format!("transfer entries serialize failed: {e}"));
+                    return Ok(());
+                }
+            };
+            if let Err(e) = h.storage_set(ENTRIES_KEY, &value) {
+                h.log_warn(&format!("transfer entries persist failed: {e}"));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// 重启恢复：把在册进行中条目标注 `interrupted` 并回写（「载入 → 标注 → 落盘」
+/// 三步抽为可测 seam）。标注是**如实呈现**：原批随宿主进程消亡，保留 running
+/// 会让历史里永远挂着「正在传」的死条目。返回标注数量。
+fn restore_entries<H: HostPluginDatabase + HostStorage + HostLog + ?Sized>(
+    h: &H,
+    entries: &mut [TransferEntry],
+) -> usize {
+    let marked = transfer_store::mark_active_interrupted(entries);
+    if marked > 0 {
+        if let Err(e) = persist_entries(h, entries) {
+            h.log_error(&format!("restore transfer entries failed: {e}"));
+        }
+    }
+    marked
+}
+
+/// 将内部字符串安全编码为 SQLite 字符串字面量。
+/// 这里的值来自插件自身序列化结果，仍显式转义单引号以避免 SQL 语法破坏。
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 变更后统一出口：持久化 + 四路视图派发（tasks/receiving 仅进行中，
+/// 终态条目由 history 视图承接——「完成/失败自动归档历史」）
+fn flush(h: &WasmHost, mut guard: std::sync::MutexGuard<'static, Vec<TransferEntry>>, changed: bool) {
+    if changed {
+        transfer_store::evict_overflow(&mut guard);
+        if let Err(e) = persist_entries(h, &guard) {
+            h.log_error(&format!("persist transfer entries failed: {e}"));
+        }
+    }
+    let tasks: Vec<&TransferEntry> = transfer_store::active_send_entries(&guard);
+    let batches: Vec<&TransferEntry> = guard
+        .iter()
+        .filter(|e| e.direction == "receive" && e.status == "pending")
+        .collect();
+    let receiving: Vec<&TransferEntry> = transfer_store::active_receive_entries(&guard);
+    let history = history_view(&guard);
+
+    let dump = |list: Vec<&TransferEntry>| {
+        list.iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect::<Vec<_>>()
+    };
+    h.emit_event("plugin:file-transfer:tasks-changed", &serde_json::Value::Array(dump(tasks)));
+    h.emit_event("plugin:file-transfer:batches-changed", &serde_json::Value::Array(dump(batches)));
+    h.emit_event("plugin:file-transfer:receiving-changed", &serde_json::Value::Array(dump(receiving)));
+    h.emit_event("plugin:file-transfer:history-changed", &serde_json::Value::Array(dump(history)));
+}
+
+// ==================== 事件编排 ====================
+
+/// 展示名解析（票 2 peer_name 自持）：设备快照（前端 debounce 落盘的
+/// device_snapshot）广播名优先，短指纹兜底——宿主不再解析展示名
+/// （peer_engine_resolve_peer_name 随编排下沉退役）
+fn resolve_peer_name(h: &WasmHost, node_id: &str) -> String {
+    let fallback = node_id.get(..8).unwrap_or(node_id).to_string();
+    device_bridge::load_snapshot(h)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|d| d.node_id == node_id)
+                .map(|d| d.device_name.clone())
+                .filter(|n| !n.is_empty())
+        })
+        .unwrap_or(fallback)
+}
+
+/// 引擎原始事件归约入口（peer:transfer-event / peer:receive-event，票 2）：
+/// 事件 → store 状态推进（建行/进度/终态/暂停同步），变更后统一 flush。
+/// 建行锚点事件（offer-pending / pull-served）的展示名在此解析（I/O 锁外）。
+pub(crate) fn reduce_and_emit(h: &WasmHost, direction: &str, event: &serde_json::Value) {
+    let peer_name = event
+        .get("nodeId")
+        .and_then(|v| v.as_str())
+        .map(|nid| resolve_peer_name(h, nid))
+        .unwrap_or_default();
+    let is_pull_started = event.get("kind").and_then(|v| v.as_str()) == Some("pull-started");
+    let changed = {
+        let mut guard = ensure_loaded(h);
+        let changed = transfer_store::reduce_event(&mut guard, direction, event, &peer_name);
+        // 拉取批次挂重试元数据（票 08）：batch_id 由引擎铸造（pull-files 调用点
+        // 拿不到），按 rel_path 匹配本插件发起的拉取意图，命中即消费
+        changed | (is_pull_started && attach_pull_meta(&mut guard, event))
+    };
+    if !changed {
+        return;
+    }
+    // send 方向终态/暂停会空出发送槽位：放行插件侧排队批（并发闸门自控）
+    dispatch_pending_sends(h);
+    let guard = ensure_loaded(h);
+    flush(h, guard, true);
+}
+
+/// 接收方向事件入口（`peer:receive-event`，票 07）：引擎原始事件归约 +
+/// auto 策略即时应答 + 节点停止的在册中断标注
+///
+/// `node-stopped` 额外清空 session 句柄表（票 08）：引擎通道关闭即节点下线，
+/// 陈旧句柄会让后续数据面命令全打在死会话上（重拨路径 `ensure_target` 因此
+/// 永远走不到）；endpoint memo 保留 —— 重启后按memo 重拨即可。
+///
+/// **单产物后双端共用本入口**（桌面随共享获得 node-stopped 处理——与引擎契约
+/// 一致的修正，ADR 0044 D6/T7=B 同款「以较正确一边为准」）。
+pub(crate) fn on_receive_event(h: &WasmHost, event: &serde_json::Value) {
+    match event.get("kind").and_then(|v| v.as_str()) {
+        Some("node-stopped") => {
+            let marked = {
+                let mut guard = ensure_loaded(h);
+                transfer_store::mark_active_interrupted(&mut guard)
+            };
+            let stale: Vec<String> = device_bridge::drain_sessions();
+            if marked > 0 || !stale.is_empty() {
+                h.log_info(&format!(
+                    "peer-net stopped: {marked} in-flight transfers marked interrupted, \
+                     {} stale session handles dropped (endpoints kept for redial)",
+                    stale.len()
+                ));
+            }
+            let guard = ensure_loaded(h);
+            flush(h, guard, marked > 0);
+        }
+        Some("offer-pending") => {
+            // 先归约建行（视图出现待应答批），再按策略自动应答
+            reduce_and_emit(h, "receive", event);
+            auto_answer_offer(h, event);
+        }
+        _ => reduce_and_emit(h, "receive", event),
+    }
+}
+
+/// 首屏兜底（票 2 开放点 4）：激活晚于事件时经 active-transfers 原语查询
+/// 宿主在册活跃批，补最小占位行（方向取行内 direction；peer_name/files
+/// 缺失，progress 事件随后补全）。原语不可用（节点未起）降级日志不阻断激活。
+pub(crate) fn rebuild_from_active_transfers(h: &WasmHost) {
+    let rows = match h.peer_active_transfers() {
+        Ok(v) => v,
+        Err(e) => {
+            h.log_warn(&format!("active-transfers bootstrap deferred (non-fatal): {e}"));
+            return;
+        }
+    };
+    let Some(arr) = rows.as_array() else { return };
+    let inserted = {
+        let mut guard = ensure_loaded(h);
+        transfer_store::insert_active_projections(&mut guard, arr, "")
+    };
+    if inserted > 0 {
+        h.log_info(&format!("active-transfers bootstrap: +{inserted} rows"));
+        let guard = ensure_loaded(h);
+        flush(h, guard, true);
+    }
+}
+
+/// 拉取批次的重试元数据挂载（票 07 建锚点，票 08 收窄为「凭证取出」）：
+/// `pull-started` 事件的 rel_path × 待挂载意图队列匹配——命中即把该单文件
+/// 规格与共享根 id 写入 retryMeta 并消费队列项（多选拉取逐文件成批，故按
+/// 单文件匹配而非整批文件集相等）
+fn attach_pull_meta(store: &mut [TransferEntry], event: &serde_json::Value) -> bool {
+    let Some(batch_id) = event.get("batchId").and_then(|v| v.as_str()) else { return false };
+    let Some(node_id) = event.get("nodeId").and_then(|v| v.as_str()) else { return false };
+    let rel_path = event
+        .get("files")
+        .and_then(|v| v.as_array())
+        .and_then(|files| files.first())
+        .and_then(|f| f.get("path"))
+        .and_then(|v| v.as_str());
+    let Some(rel_path) = rel_path else { return false };
+    let Some(entry) = store
+        .iter_mut()
+        .find(|e| e.batch_id == batch_id && e.retry_meta.is_none())
+    else {
+        return false;
+    };
+    let intent = transfer_store::take_pull_intent(
+        &mut pending_pulls().lock().expect("pending pulls lock"),
+        node_id,
+        rel_path,
+    );
+    match intent {
+        Some(meta) => {
+            entry.retry_meta = Some(meta);
+            true
+        }
+        // 未命中：引擎铸造的批不属于本插件（如对端发起的入站供流），如实不挂
+        None => false,
+    }
+}
+
+/// auto 分支自动应答（accept/reject 策略）：入站询问批建行后立即
+/// respond-transfer。ask 分支不动作（弹窗编排在 UI 层，倒计时到点由前端
+/// 主动应答；宿主闸门 sweeper 兜底不变）。
+///
+/// kind 判据内聚在本函数（调用方只对 receive 事件路由）：两条入口
+/// （事件通路 / 旧快照通路）都不得越口径应答。
+fn auto_answer_offer(h: &WasmHost, event: &serde_json::Value) {
+    if event.get("kind").and_then(|v| v.as_str()) != Some("offer-pending") {
+        return;
+    }
+    let policy = match settings_store::load(h) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let Some(answer) = settings_store::auto_answer(&policy) else {
+        return;
+    };
+    let Some(batch_id) = event.get("batchId").and_then(|v| v.as_str()) else { return };
+    if h.peer_respond_transfer(batch_id, answer).is_ok() {
+        h.log_info(&format!("auto-answer ({answer}) batch {batch_id}"));
+    }
+}
+
+/// 快照合并入口（peer:transfer / peer:receive 共用，**桌面旧快照双写期专用**）：
+/// 对账（归约态 vs 快照偏差 warn 留痕，票 2 双写验收）→ 缺席剪枝 → 拉取元数据
+/// 挂载 → 合并 → 持久化派发。快照仍是校正源（merge 覆盖补全），归约态是主写。
+///
+/// 移动端旧快照通路已整条退役（`PluginProfile::uses_legacy_snapshot = false`，
+/// lib.rs 不订阅对应 topic）——本函数在移动端不可达。
+pub(crate) fn merge_and_emit(h: &WasmHost, snapshot: &[serde_json::Value], direction: &str) {
+    let mut guard = ensure_loaded(h);
+    let diffs = transfer_store::reconcile_diff(&guard, snapshot, direction);
+    if !diffs.is_empty() {
+        h.log_info(&format!("reconcile drift ({direction}): {}", diffs.join("; ")));
+    }
+    let ids: Vec<String> = snapshot
+        .iter()
+        .filter_map(|d| d.get("batchId").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .collect();
+    let mut changed = transfer_store::prune_absent(&mut guard, &ids, direction) > 0;
+    let known_before: std::collections::HashSet<String> =
+        guard.iter().map(|e| e.batch_id.clone()).collect();
+    changed |= transfer_store::merge_snapshot(&mut guard, snapshot);
+    changed |= attach_pending_pull_meta(&mut guard, &known_before);
+    flush(h, guard, changed);
+}
+
+/// 新出现条目 × 待挂载队列的文件集匹配（旧快照通路，桌面专用）
+fn attach_pending_pull_meta(
+    store: &mut [TransferEntry],
+    known_before: &std::collections::HashSet<String>,
+) -> bool {
+    let mut attached = false;
+    let mut consumed: Vec<usize> = vec![];
+    {
+        let mut pending = pending_pulls().lock().expect("pending pulls lock");
+        for (idx, (node_id, meta)) in pending.iter().enumerate() {
+            let RetryMeta::Pull { files, .. } = meta else { continue };
+            let spec_paths: std::collections::HashSet<&str> =
+                files.iter().map(|f| f.rel_path.as_str()).collect();
+            for entry in store.iter_mut() {
+                if known_before.contains(&entry.batch_id)
+                    || entry.node_id != *node_id
+                    || entry.retry_meta.is_some()
+                {
+                    continue;
+                }
+                let entry_paths: std::collections::HashSet<&str> = entry
+                    .files
+                    .iter()
+                    .filter_map(|f| f.get("path").and_then(|v| v.as_str()))
+                    .collect();
+                if !spec_paths.is_empty() && entry_paths == spec_paths {
+                    entry.retry_meta = Some(meta.clone());
+                    attached = true;
+                    consumed.push(idx);
+                    break;
+                }
+            }
+        }
+        // 后进先出地移除已消费项（索引从大到小删避免位移）
+        consumed.sort_unstable();
+        consumed.dedup();
+        for idx in consumed.into_iter().rev() {
+            pending.remove(idx);
+        }
+        // 队列封顶：最旧先出
+        while pending.len() > PENDING_PULLS_CAP {
+            pending.remove(0);
+        }
+    }
+    attached
+}
+
+/// auto 分支自动应答（accept/reject 策略，旧快照通路桌面专用）：对快照中的
+/// pending 批立即 respond-transfer。ask 分支不动作。
+pub(crate) fn auto_answer_pending(h: &WasmHost, snapshot: &[serde_json::Value]) {
+    let policy = match settings_store::load(h) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let Some(answer) = settings_store::auto_answer(&policy) else {
+        return;
+    };
+    for dto in snapshot {
+        let is_pending = dto.get("status").and_then(|v| v.as_str()) == Some("pending");
+        if !is_pending {
+            continue;
+        }
+        if let Some(batch_id) = dto.get("batchId").and_then(|v| v.as_str()) {
+            if h.peer_respond_transfer(batch_id, answer).is_ok() {
+                h.log_info(&format!("auto-answer ({answer}) batch {batch_id}"));
+            }
+        }
+    }
+}
+
+// ==================== 目标解析 ====================
+
+fn parse_endpoint(v: Option<&serde_json::Value>) -> Result<Option<DialEndpoint>> {
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => Ok(Some(
+            serde_json::from_value(v.clone())
+                .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?,
+        )),
+    }
+}
+
+/// 目标三元组解析：peerId 显式参数 > ACTIVE_NODE
+fn resolve_node(
+    args: &serde_json::Value,
+    active_node: &'static Mutex<String>,
+) -> Option<String> {
+    args.get("peerId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| Some(active_node.lock().expect("active node lock").clone()))
+        .filter(|s| !s.is_empty())
+}
+
+/// 连接保障：已有活跃会话直接用句柄；endpoint 可知则静默重拨铸新句柄；
+/// 都不行退回 node-id 直呼（过渡期兜底）。返回传给数据面原语的首参。
+fn ensure_target(h: &WasmHost, node_id: &str, endpoint: Option<DialEndpoint>) -> Result<String> {
+    if let Some(handle) = device_bridge::session_of(node_id) {
+        return Ok(handle);
+    }
+    let ep = device_bridge::resolve_endpoint(endpoint, node_id)
+        .ok_or_else(|| anyhow::anyhow!("no endpoint known for peer {node_id}"))?;
+    let handle = h.peer_dial(&serde_json::to_value(&ep)?)?;
+    device_bridge::remember_session(&ep, handle);
+    Ok(device_bridge::session_of(node_id).unwrap_or_else(|| node_id.to_string()))
+}
+
+// ==================== 连接命令 ====================
+
+pub(crate) fn dial_peer(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    // 允许两种传参形状：{ endpoint: {...} } 或直接顶层 { nodeId, addr, port }
+    let endpoint_value = args.get("endpoint").cloned().unwrap_or_else(|| args.clone());
+    let endpoint: DialEndpoint = serde_json::from_value(endpoint_value)
+        .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
+    let handle = h.peer_dial(&serde_json::to_value(&endpoint)?)?;
+    device_bridge::remember_session(&endpoint, handle);
+    Ok(serde_json::json!({ "status": "connected" }))
+}
+
+pub(crate) fn disconnect_peer(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let node_id = args
+        .get("nodeId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    // 仅会话句柄路径（Phase 4 收紧）：无句柄 = 本就未连接
+    let existed = match device_bridge::session_of(&node_id) {
+        Some(handle) => h.peer_close(&handle)?,
+        None => false,
+    };
+    device_bridge::forget_session(&node_id);
+    Ok(serde_json::json!({ "existed": existed }))
+}
+
+// ==================== 发送命令 ====================
+
+/// 元素级载荷构造：`{ path, encrypt }`（加密默认值取插件设置）。
+/// `concurrency` 并发脉冲字段已随宿主闸门退役（票 3：载荷携带即被宿主
+/// 显性拒绝）——发送节流完全由插件侧闸门自控
+fn send_payload(settings: &TransferSettings, paths: &[String]) -> Vec<serde_json::Value> {
+    paths
+        .iter()
+        .map(|p| serde_json::json!({ "path": p, "encrypt": settings.encryption }))
+        .collect()
+}
+
+/// 发送批发起（闸门放行后的公共路径）：解析目标 → send-files → 入店占位
+fn launch_send(
+    h: &WasmHost,
+    node_id: &str,
+    endpoint: Option<DialEndpoint>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value> {
+    let target = ensure_target(h, node_id, endpoint)?;
+    let settings = settings_store::load(h)?;
+    let batch_id = h.peer_send_files(&target, &send_payload(&settings, &paths))?;
+    // 返回已收窄为传输句柄；先入店最小条目占位，引擎快照事件随即补全明细
+    insert_send_entry(h, node_id, &batch_id, RetryMeta::Send { paths })
+}
+
+/// 发送方向 running 批数（插件并发闸门的槽位口径；与宿主闸门同语义：
+/// 只数本端发起的 running，serve 供流记账行不计——它无 retryMeta 且属
+/// 响应式供流）
+fn running_send_count(guard: &[TransferEntry]) -> usize {
+    guard
+        .iter()
+        .filter(|e| e.direction == "send" && e.status == "running" && e.retry_meta.is_some())
+        .count()
+}
+
+/// 插件侧排队中的发送批（并发槽位满时压入；终态/暂停归约空出槽位后放行）
+struct PendingSend {
+    node_id: String,
+    endpoint: Option<DialEndpoint>,
+    paths: Vec<String>,
+    /// 已派发失败次数（票 08：失败不再静默丢弃，见 [`MAX_SEND_ATTEMPTS`]）
+    attempts: u8,
+}
+
+static PENDING_SENDS: OnceLock<Mutex<Vec<PendingSend>>> = OnceLock::new();
+
+fn pending_sends() -> &'static Mutex<Vec<PendingSend>> {
+    PENDING_SENDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 排队上限（防失控积累；超出即拒绝新任务——与 `PULL_INTENT_CAP` 同风格）
+const PENDING_SENDS_CAP: usize = 32;
+
+/// 排队批最大派发尝试次数（票 08）
+///
+/// 排队批在 store 里**没有行**（引擎未铸造 batchId），失败即静默丢用户意图。
+/// 故给有限次重试（对端临时不可达 / 句柄陈旧时重拨可能成功），用尽后落一条
+/// 带 `retry_meta` 的终态失败行——用户从历史看得见、能重试。
+const MAX_SEND_ATTEMPTS: u8 = 2;
+
+/// 发送槽位是否空出（插件闸门唯一判据；设置真源 = 插件 storage 的
+/// `concurrency`，缺省 3）
+fn send_slot_available(h: &WasmHost) -> bool {
+    let guard = ensure_loaded(h);
+    let limit = settings_store::load(h)
+        .map(|s| settings_store::clamp_concurrency(s.concurrency))
+        .unwrap_or(settings_store::DEFAULT_CONCURRENCY);
+    transfer_store::send_slot_open(running_send_count(&guard), limit)
+}
+
+/// 并发闸门放行：running < 设置并发上限时逐个出队发起（每次发起后槽位
+/// 再检查）。派发失败按 [`MAX_SEND_ATTEMPTS`] 重排队，用尽后落终态失败行
+/// （票 08：排队批不再静默消失）。
+fn dispatch_pending_sends(h: &WasmHost) {
+    loop {
+        if !send_slot_available(h) {
+            return;
+        }
+        let Some(job) = pending_sends().lock().expect("pending sends lock").pop() else {
+            return;
+        };
+        match launch_send(h, &job.node_id, job.endpoint.clone(), job.paths.clone()) {
+            Ok(_) => h.log_info("pending send dispatched (plugin-side gate)"),
+            Err(e) => {
+                let detail = e.to_string();
+                if job.attempts + 1 < MAX_SEND_ATTEMPTS {
+                    h.log_error(&format!(
+                        "pending send dispatch failed (attempt {}/{}), requeued: {detail}",
+                        job.attempts + 1,
+                        MAX_SEND_ATTEMPTS
+                    ));
+                    let mut queue = pending_sends().lock().expect("pending sends lock");
+                    queue.push(PendingSend {
+                        attempts: job.attempts + 1,
+                        ..job
+                    });
+                    return;
+                }
+                // 用尽尝试：落终态行（带回放凭证），用户从历史可见可重试
+                h.log_error(&format!(
+                    "pending send dispatch abandoned after {} attempts: {detail}",
+                    MAX_SEND_ATTEMPTS
+                ));
+                if let Err(write_err) =
+                    insert_failed_send_entry(h, &job.node_id, job.paths, &detail)
+                {
+                    h.log_error(&format!(
+                        "pending send failure row persist failed: {write_err}"
+                    ));
+                }
+                // 本批已落终态，槽位仍空 → 继续放行下一批
+            }
+        }
+    }
+}
+
+/// 清空进程内意图（插件下线，票 08）：排队发送批与待挂载拉取意图随停用作废
+///
+/// 两者都只存在于内存：无行可查、用户无从重试，留到下次激活就是「凭空冒出
+/// 的旧任务」。任务真源（store）不在此列——它由持久层承接，停用不丢历史。
+pub(crate) fn reset_volatile_intents() -> (usize, usize) {
+    let queued = {
+        let mut queue = pending_sends().lock().expect("pending sends lock");
+        let n = queue.len();
+        queue.clear();
+        n
+    };
+    let intents = {
+        let mut pending = pending_pulls().lock().expect("pending pulls lock");
+        let n = pending.len();
+        pending.clear();
+        n
+    };
+    (queued, intents)
+}
+
+pub(crate) fn enqueue(
+    h: &WasmHost,
+    args: &serde_json::Value,
+    active_node: &'static Mutex<String>,
+) -> Result<serde_json::Value> {
+    let node_id = resolve_node(args, active_node).ok_or_else(|| anyhow::anyhow!("no active peer"))?;
+
+    let mut paths: Vec<String> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    if let Some(single) = args.get("localPath").and_then(|v| v.as_str()) {
+        if !single.is_empty() {
+            paths.push(single.to_string());
+        }
+    }
+    if paths.is_empty() {
+        anyhow::bail!("enqueue: no files to send");
+    }
+    let endpoint = parse_endpoint(args.get("endpoint"))?;
+
+    // 并发闸门自控（票 2）：发送编排归插件——running 批满额时新任务进
+    // 本地队列（不调 send-files），槽位空出后 dispatch 放行
+    if send_slot_available(h) {
+        launch_send(h, &node_id, endpoint, paths)
+    } else {
+        let mut queue = pending_sends().lock().expect("pending sends lock");
+        if queue.len() >= PENDING_SENDS_CAP {
+            // 发送队列满（用户可见拒绝；ADR 0030 业务码，前端经插件 i18n 展示）
+            bedcode_plugin_api::bail_with_code!("com.bedcode.file-transfer.transfer.error.queueFull");
+        }
+        queue.push(PendingSend {
+            node_id,
+            endpoint,
+            paths,
+            attempts: 0,
+        });
+        h.log_info("send queued by plugin-side concurrency gate");
+        Ok(serde_json::json!({ "queued": true }))
+    }
+}
+
+/// 发送入店（宿主只回传输句柄）——最小条目占位 + retryMeta，
+/// 引擎事件到达后按 batchId 补全文件清单/大小/时间戳
+fn insert_send_entry(
+    h: &WasmHost,
+    node_id: &str,
+    batch_id: &str,
+    meta: RetryMeta,
+) -> Result<serde_json::Value> {
+    insert_send_row(h, send_row(node_id, batch_id, "running", meta, None))
+}
+
+/// 本端发起的 send 行构造（发起与「排队批派发失败落终态」共用一个形状单点）
+fn send_row(
+    node_id: &str,
+    batch_id: &str,
+    status: &str,
+    meta: RetryMeta,
+    detail: Option<String>,
+) -> TransferEntry {
+    TransferEntry {
+        batch_id: batch_id.to_string(),
+        node_id: node_id.to_string(),
+        peer_name: String::new(),
+        direction: "send".to_string(),
+        status: status.to_string(),
+        files: vec![],
+        total_bytes: 0,
+        transferred_bytes: 0,
+        rate_bps: 0.0,
+        detail,
+        reject_reason: None,
+        // wasm32 无本地时钟（禁std::time）：时间戳由引擎事件补全；
+        // 本地终态行以 0 落历史末尾（排序口径见 history_view）
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        retry_meta: Some(meta),
+        // 落盘路径是核内字段（移动端票 07 加法）；本端引擎不发 localPath ⇒ 恒 None
+        local_path: None,
+    }
+}
+
+/// 排队发送批派发失败后的终态行（票 08）
+///
+/// batchId 由本地序号铸造（引擎从未见过这批——它连`send-files` 都没调通）；
+/// 携带 retryMeta 故用户可从历史直接重试。返回落库后的行 JSON。
+fn insert_failed_send_entry(
+    h: &WasmHost,
+    node_id: &str,
+    paths: Vec<String>,
+    detail: &str,
+) -> Result<serde_json::Value> {
+    let batch_id = next_local_failure_id();
+    insert_send_row(
+        h,
+        send_row(
+            node_id,
+            &batch_id,
+            "failed",
+            RetryMeta::Send { paths },
+            Some(format!("send dispatch failed: {detail}")),
+        ),
+    )
+}
+
+/// 本地终态行序号（wasm32 无时钟，用进程内自增序号保证 batchId 唯一）
+fn next_local_failure_id() -> String {
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    format!("local-fail-{n}")
+}
+
+/// 行入店统一出口（幂等 upsert + 封顶 + 持久化 + 视图派发）
+fn insert_send_row(h: &WasmHost, entry: TransferEntry) -> Result<serde_json::Value> {
+    let out = serde_json::to_value(&entry)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::merge_snapshot(&mut guard, &[out.clone()]);
+    flush(h, guard, changed);
+    Ok(out)
+}
+
+pub(crate) fn list_tasks(h: &WasmHost) -> Result<serde_json::Value> {
+    let guard = ensure_loaded(h);
+    let tasks: Vec<serde_json::Value> = transfer_store::active_send_entries(&guard)
+        .iter()
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect();
+    Ok(serde_json::Value::Array(tasks))
+}
+
+pub(crate) fn cancel_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let hit = h.peer_close(&batch_id)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::mark_cancelled(&mut guard, &batch_id);
+    flush(h, guard, changed);
+    Ok(serde_json::json!({ "ok": hit || changed }))
+}
+
+/// 显式暂停：宿主中断会话（任务保留含已传字节、不落历史），本地乐观标记
+/// paused 供前端即时反馈；引擎快照随后以 paused 状态合并确认。
+///
+/// 返回 `true` 字面量（双端前端契约：桌面 `r === true` 判定生效，移动忽略返回值）
+pub(crate) fn pause_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_pause_transfer(&batch_id)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::mark_paused(&mut guard, &batch_id);
+    flush(h, guard, changed);
+    Ok(serde_json::Value::Bool(true))
+}
+
+/// 恢复单个暂停任务：宿主入队并经并发闸门启动（接收端按已写偏移续传）。
+/// 返回 `true` 字面量（口径同 [`pause_task`]）。
+pub(crate) fn resume_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_resume_transfer(&batch_id)?;
+    // 状态推进由引擎快照事件（pending → running）接管，本地无需乐观改写
+    Ok(serde_json::Value::Bool(true))
+}
+
+/// 恢复全部暂停任务（传输编排下沉票 3：批量恢复编排归插件——遍历自身
+/// 暂停批逐个调 resume-transfer；宿主 resume-all-transfers 原语已退役，
+/// 并发节流由插件侧闸门自控）。返回实际恢复数。
+pub(crate) fn resume_all_tasks(h: &WasmHost) -> Result<serde_json::Value> {
+    let paused_ids: Vec<String> = {
+        let guard = ensure_loaded(h);
+        guard
+            .iter()
+            .filter(|e| e.direction == "send" && e.status == "paused")
+            .map(|e| e.batch_id.clone())
+            .collect()
+    };
+    let mut resumed = 0usize;
+    for batch_id in paused_ids {
+        if h.peer_resume_transfer(&batch_id).is_ok() {
+            resumed += 1;
+        }
+    }
+    Ok(serde_json::json!({ "resumed": resumed }))
+}
+
+/// 重试 = 批元数据回放重调原语：
+/// - send 条目：回放 send-files，新 batchId 顶替原条目（同一条历史）；
+/// - pull 条目：回放 pull-files（逐文件新批自然入账），原失败记录保留为历史。
+///
+/// 票 08 重排了次序——**判据与闸门前置到调引擎之前**：
+/// ① [`transfer_store::retry_source`] 先判可重试（终态 + 有回放凭证）；
+/// ② send 方向先过插件并发闸门。原实现先 `send-files` 再 `apply_retry`，
+/// 对不可重试条目会铸出无主会话：send 方向没有引擎建行事件（行由插件发起
+/// 时自建），该会话永不入店、进度事件打不中行，并永久占死一个发送槽位。
+pub(crate) fn retry_task(
+    h: &WasmHost,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let task_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let endpoint = parse_endpoint(args.get("endpoint"))?;
+
+    let (node_id, meta) = {
+        let guard = ensure_loaded(h);
+        transfer_store::retry_source(&guard, &task_id)
+            .map_err(|why| anyhow::anyhow!(why.message(&task_id)))?
+    };
+    // send 方向回放也占发送槽位：闸门满时显性拒绝（不排队——重试是用户对
+    // 特定历史行的显式操作，排队会让「点了没反应」无从追因）
+    if matches!(meta, RetryMeta::Send { .. }) && !send_slot_available(h) {
+        anyhow::bail!(
+            "retry rejected: send concurrency full, wait for a running transfer to finish"
+        );
+    }
+    let target = ensure_target(h, &node_id, endpoint)?;
+
+    match meta {
+        RetryMeta::Send { paths } => {
+            let settings = settings_store::load(h)?;
+            let new_batch = h.peer_send_files(&target, &send_payload(&settings, &paths))?;
+            let now = 0u64; // 时间戳由引擎事件补全（updated_at_ms 单调性由 merge 保证）
+            let mut guard = ensure_loaded(h);
+            // retryMeta 由 apply_retry 保留（新批仍是本端发起，仍可再重试）
+            let changed = transfer_store::apply_retry(&mut guard, &task_id, &new_batch, now);
+            if !changed {
+                // 判据已前置，理论上不可达；显性报错而非静默留无主会话
+                anyhow::bail!("retry replay lost its entry (concurrent mutation?): {task_id}");
+            }
+            flush(h, guard, true);
+            let guard = ensure_loaded(h);
+            let updated = guard
+                .iter()
+                .find(|e| e.batch_id == new_batch)
+                .map(|e| serde_json::to_value(e).unwrap_or_default())
+                .unwrap_or_default();
+            Ok(updated)
+        }
+        RetryMeta::Pull { dir_id, files } => {
+            let values: Vec<serde_json::Value> = files
+                .iter()
+                .map(|f| serde_json::json!({ "relPath": f.rel_path, "size": f.size }))
+                .collect();
+            // 意图先于引擎调用入队（票 08）：`pull-started` 事件随引擎铸造
+            // batchId 即回流，事后入队会错过挂载窗口 → 新行永不可重试
+            transfer_store::push_pull_intent(
+                &mut pending_pulls().lock().expect("pending pulls lock"),
+                &node_id,
+                RetryMeta::Pull {
+                    dir_id: dir_id.clone(),
+                    files: files.clone(),
+                },
+            );
+            let n = h.peer_pull_files(&target, &dir_id, &values)?;
+            Ok(serde_json::json!({ "requeued": n }))
+        }
+    }
+}
+
+// ==================== 接收侧视图 / 操作 ====================
+
+pub(crate) fn list_batches(h: &WasmHost) -> Result<serde_json::Value> {
+    let guard = ensure_loaded(h);
+    Ok(serde_json::Value::Array(
+        guard
+            .iter()
+            .filter(|e| e.direction == "receive" && e.status == "pending")
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect(),
+    ))
+}
+
+pub(crate) fn list_receiving(h: &WasmHost) -> Result<serde_json::Value> {
+    let guard = ensure_loaded(h);
+    Ok(serde_json::Value::Array(
+        transfer_store::active_receive_entries(&guard)
+            .iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect(),
+    ))
+}
+
+/// 历史视图：终态条目按 updatedAtMs 降序（flush 的 history-changed 派发与
+/// list-history 初始快照命令共用同一口径）
+fn history_view(guard: &[TransferEntry]) -> Vec<&TransferEntry> {
+    let mut history: Vec<&TransferEntry> = guard.iter().filter(|e| e.is_terminal()).collect();
+    history.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    history
+}
+
+/// 历史列表命令：与 history-changed 事件同形状（前端 refresh 初始快照）
+pub(crate) fn list_history(h: &WasmHost) -> Result<serde_json::Value> {
+    let guard = ensure_loaded(h);
+    Ok(serde_json::Value::Array(
+        history_view(&guard)
+            .iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect(),
+    ))
+}
+
+pub(crate) fn cancel_receiving(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id = args
+        .get("sessionId")
+        .or_else(|| args.get("batchId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let hit = h.peer_close(&batch_id)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::mark_cancelled(&mut guard, &batch_id);
+    flush(h, guard, changed);
+    Ok(serde_json::json!({ "ok": hit || changed }))
+}
+
+pub(crate) fn clear_history(h: &WasmHost) -> Result<serde_json::Value> {
+    let mut guard = ensure_loaded(h);
+    let cleared = transfer_store::clear_terminal(&mut guard);
+    flush(h, guard, cleared > 0);
+    // 破坏性操作留痕：真机「点了没反应」需要能区分「命令没到」与「到了没清」
+    h.log_info(&format!("clear-history cleared {cleared} terminal entries"));
+    Ok(serde_json::json!({ "cleared": cleared }))
+}
+
+// ==================== 远端浏览 / 拉取 ====================
+
+/// list-remote 目标解析：dirId 非空即权威根（path = 根内相对路径，两端前端
+/// 目录导航维护的契约）；缺失 dirId 的旧形态（path 首段即根）从 path 推根。
+/// 返回 (root, rel)，rel 已去首尾斜杠
+fn split_root_rel<'a>(dir_id: &'a str, path: &'a str) -> (&'a str, &'a str) {
+    if dir_id.is_empty() {
+        match path.split_once('/') {
+            Some((head, rest)) => (head, rest.trim_matches('/')),
+            None => (path, ""),
+        }
+    } else {
+        (dir_id, path.trim_matches('/'))
+    }
+}
+
+pub(crate) fn list_remote(
+    h: &WasmHost,
+    args: &serde_json::Value,
+    active_node: &'static Mutex<String>,
+) -> Result<serde_json::Value> {
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let dir_id = args.get("dirId").and_then(|v| v.as_str()).unwrap_or("");
+    let node_id =
+        resolve_node(args, active_node).ok_or_else(|| anyhow::anyhow!("no active peer"))?;
+    let endpoint = parse_endpoint(args.get("endpoint"))?;
+    let target = ensure_target(h, &node_id, endpoint)?;
+
+    if path.is_empty() && dir_id.is_empty() {
+        let roots = h.peer_list_shared_roots(&target)?;
+        return Ok(serde_json::json!({ "roots": roots }));
+    }
+
+    // dirId 非空即权威根，path = 根内相对路径（前端目录导航维护）。旧实现按
+    // root 前缀剥离 path——根内子目录名与根 id 同名时误剥离、列错目录
+    let (root, rel) = split_root_rel(dir_id, path);
+
+    let listing = h.peer_browse_directory(&target, root, rel)?;
+    // 引擎 RemoteBrowseDto.filtered → 旧 notice 提示字段（双端前端 useRemoteFs
+    // 契约一致：data.entries + data.notice）
+    let filtered = listing.get("filtered").and_then(|v| v.as_bool()).unwrap_or(false);
+    Ok(serde_json::json!({
+        "entries": listing.get("entries").cloned().unwrap_or_default(),
+        "notice": if filtered { serde_json::json!("filtered") } else { serde_json::Value::Null },
+    }))
+}
+
+pub(crate) fn pull_files(
+    h: &WasmHost,
+    args: &serde_json::Value,
+    active_node: &'static Mutex<String>,
+) -> Result<serde_json::Value> {
+    let dir_id = args
+        .get("dirId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing dirId"))?
+        .to_string();
+    let base = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let names: Vec<String> = args
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .ok_or_else(|| anyhow::anyhow!("missing files"))?;
+    if names.is_empty() {
+        anyhow::bail!("pull-files: no files selected");
+    }
+    let node_id =
+        resolve_node(args, active_node).ok_or_else(|| anyhow::anyhow!("no active peer"))?;
+    let endpoint = parse_endpoint(args.get("endpoint"))?;
+    let target = ensure_target(h, &node_id, endpoint)?;
+
+    let specs: Vec<PullFileSpec> = names
+        .iter()
+        .map(|name| {
+            let rel = if base.is_empty() { name.clone() } else { format!("{base}/{name}") };
+            PullFileSpec { rel_path: rel, size: 0 }
+        })
+        .collect();
+    let values: Vec<serde_json::Value> = specs
+        .iter()
+        .map(|f| serde_json::json!({ "relPath": f.rel_path, "size": f.size }))
+        .collect();
+
+    // 意图先于引擎调用入队（票 08）：`pull-started` 事件随引擎铸造 batchId
+    // 即回流，事后入队会错过挂载窗口 → 新行永不可重试
+    transfer_store::push_pull_intent(
+        &mut pending_pulls().lock().expect("pending pulls lock"),
+        &node_id,
+        RetryMeta::Pull {
+            dir_id: dir_id.clone(),
+            files: specs.clone(),
+        },
+    );
+    let n = h.peer_pull_files(&target, &dir_id, &values)?;
+    Ok(serde_json::json!({ "count": n }))
+}
+
+// ==================== 设置 / 注册表命令 ====================
+
+pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
+    let s = settings_store::load_or_migrate(h)?;
+    let roots = roots_registry::load_all(h)?;
+    match platform::current() {
+        Platform::Desktop => Ok(serde_json::json!({
+            "roots": roots.iter().map(|r| serde_json::json!({
+                "id": r.id, "name": r.name, "path": r.path,
+            })).collect::<Vec<_>>(),
+            "policy_mode": settings_store::policy_to_host(&s.receiving_policy),
+            "ask_timeout_sec": settings_store::clamp_timeout(s.approval_timeout_sec),
+            "download_dir": s.download_dir.unwrap_or_default(),
+            "encryption": s.encryption,
+            "concurrency": s.concurrency,
+        })),
+        Platform::Mobile => {
+            // 内置条目 local-downloads 由引擎注入、不进注册表；此处以只读形状
+            // 合并展示（前端按 builtin 标记渲染「私有下载」分区，不可移除）
+            let builtin = serde_json::json!({
+                "id": "local-downloads", "name": "下载", "builtin": true, "treeUri": "",
+            });
+            let registry: Vec<serde_json::Value> = roots
+                .iter()
+                .map(|r| serde_json::json!({
+                    "id": r.id, "name": r.name, "builtin": false, "treeUri": r.path,
+                }))
+                .collect();
+            let mut all_roots = vec![builtin];
+            all_roots.extend(registry);
+            Ok(serde_json::json!({
+                "roots": all_roots,
+                "policy_mode": settings_store::policy_to_host(&s.receiving_policy),
+                "ask_timeout_sec": settings_store::clamp_timeout(s.approval_timeout_sec),
+                // 移动端固定落点 MediaStore.Downloads（只读展示，不支持自定义）
+                "download_dir": "MediaStore/Downloads",
+                "encryption": s.encryption,
+                "concurrency": s.concurrency,
+            }))
+        }
+    }
+}
+
+/// 设置写入：未指定的键沿用现值；storage 真源 + 宿主配置原语推送。
+/// `downloadDir` 仅桌面形态生效（移动固定落点，静默忽略——与退役前逐字一致）。
+pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let mut s = settings_store::load_or_migrate(h)?;
+    if let Some(policy) = args.get("receivingPolicy").and_then(|v| v.as_str()) {
+        s.receiving_policy = policy.to_string();
+    }
+    if let Some(t) = args.get("approvalTimeoutSec").and_then(|v| v.as_u64()) {
+        s.approval_timeout_sec = settings_store::clamp_timeout(t);
+    }
+    if platform::current().supports_custom_download_dir() {
+        if let Some(dir) = args.get("downloadDir").and_then(|v| v.as_str()) {
+            s.download_dir = if dir.is_empty() { None } else { Some(dir.to_string()) };
+        }
+    }
+    if let Some(enabled) = args.get("encryption").and_then(|v| v.as_bool()) {
+        s.encryption = enabled;
+    }
+    if let Some(n) = args.get("concurrency").and_then(|v| v.as_u64()) {
+        s.concurrency = settings_store::clamp_concurrency(n as u8);
+    }
+    settings_store::save_and_push(h, &s)?;
+    h.log_info("set-settings: policy/download-dir applied (plugin-sourced)");
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 选择接收落点目录（桌面形态命令；移动 lib.rs 直接返回 unsupported 不入本模块）
+///
+/// 2026-10-13 功能级统一（ADR 0052 D3）：目录选择统一走 core
+/// `host-platform.pick-folders`（多选形）；落点语义单值 ⇒ 取首个结果，
+/// 空数组 = 用户取消。
+pub(crate) fn pick_download_dir(h: &WasmHost) -> Result<serde_json::Value> {
+    let folder = h.platform_pick_folders()?;
+    let Some(folder) = folder.into_iter().next() else {
+        return Ok(serde_json::json!({ "cancelled": true }));
+    };
+    set_settings(
+        h,
+        &serde_json::json!({ "downloadDir": folder }),
+    )?;
+    Ok(serde_json::json!({ "path": folder }))
+}
+
+/// 添加共享目录（平台分支）：
+/// - 桌面：`args.path` 显式单路径，否则弹系统**多目录**选择器（一次可选多个）；
+///   同根去重在注册表层完成（id=路径哈希）；推送失败自动回滚；
+/// - 移动：弹 SAF 目录树选择器（core `host-platform.pick-folders`，宿主返回
+///   0/1 项树 URI）；引擎注册表校验 `content://` 根（真实路径会被整批拒绝导致
+///   「多次选择只显示一条」）；展示名由树 URI 末段解码（卷前缀剥离）派生。
+/// 用户取消以错误上抛（调用方按 'cancelled' 字样分流）。
+pub(crate) fn mount_local(
+    h: &(impl HostPlatform + HostPluginDatabase + HostPeer + HostStorage),
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match platform::current() {
+        Platform::Desktop => mount_local_desktop(h, args),
+        Platform::Mobile => mount_local_mobile(h),
+    }
+}
+
+/// 桌面 mount-local：显式 path 或系统多目录选择器
+fn mount_local_desktop(
+    h: &(impl HostPlatform + HostPluginDatabase + HostPeer + HostStorage),
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let paths =
+        match args.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            Some(p) => vec![p.to_string()],
+            None => {
+                let picked = h.platform_pick_folders()?;
+                if picked.is_empty() {
+                    anyhow::bail!("cancelled");
+                }
+                picked
+            }
+        };
+    // 显式 name 仅单路径注册（args.path + args.name）时生效；选择器多选按
+    // 各自路径末段取默认名
+    let explicit_name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let entries: Vec<SharedRoot> = paths
+        .into_iter()
+        .map(|path| {
+            let name =
+                explicit_name.clone().unwrap_or_else(|| default_root_name(&path));
+            SharedRoot { id: roots_registry::root_id(&path), name, path }
+        })
+        .collect();
+    let next = roots_registry::apply_and_push(h, |list| {
+        for entry in &entries {
+            roots_registry::upsert(list, entry.clone());
+        }
+    })?;
+    let mut added = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        if let Some(r) = next.iter().find(|r| r.id == entry.id) {
+            // 预授权路径与共享目录同步：追加后宿主启用插件时才能收集到（缺失时
+            // 启用命中「请先配置共享目录」门禁）。storage 写失败如实上抛——共享目录
+            // 已落库但预授权缺失会再次锁死启用，宁可让用户看到错误重试
+            push_preauth_path(h, &r.path)?;
+            added.push(serde_json::json!({ "id": r.id, "name": r.name, "path": r.path }));
+        }
+    }
+    Ok(serde_json::json!({ "added": added }))
+}
+
+/// 移动 mount-local：SAF 目录树选择器（单选）+ 树 URI 展示名派生
+///
+/// 2026-10-13 功能级统一后走 core `host-platform.pick-folders`（多选形）；
+/// 移动宿主底层是 SAF 单选选择器，返回 0/1 项 ⇒ 取首项，空数组 = 用户取消。
+fn mount_local_mobile(
+    h: &(impl HostPlatform + HostPluginDatabase + HostPeer + HostStorage),
+) -> Result<serde_json::Value> {
+    let picked = h.platform_pick_folders()?;
+    let Some(uri) = picked.into_iter().next() else {
+        anyhow::bail!("cancelled");
+    };
+    // 展示名：树 URI 末段 URL 解码 + 去卷前缀（primary:Download → Download）；
+    // 空则固定占位
+    let name = tree_uri_display_name(&uri);
+    let name = if name.is_empty() { "共享目录".to_string() } else { name };
+    let entry = SharedRoot { id: roots_registry::root_id(&uri), name, path: uri.clone() };
+    let next = roots_registry::apply_and_push(h, |list| {
+        roots_registry::upsert(list, entry.clone());
+    })?;
+    let added = next.iter().find(|r| r.id == entry.id);
+    if let Some(r) = &added {
+        push_preauth_path(h, &r.path)?;
+    }
+    Ok(added
+        .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "treeUri": r.path }))
+        .unwrap_or_default())
+}
+
+/// 路径默认展示名：去尾分隔符后的最后一段（Windows / Unix 分隔符均适配）
+fn default_root_name(path: &str) -> String {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// SAF 树 URI → 展示名：末段 URL 解码 + 去卷前缀
+///
+/// `content://com.android.externalstorage.documents/tree/primary%3ADownload`
+/// → 末段 `primary%3ADownload` → 解码 `primary:Download` → 剥离 `primary:`
+/// → `Download`（SD 卡卷号 `ABCD-1234:Music` 同理）。解码/剥离失败回退原文。
+fn tree_uri_display_name(uri: &str) -> String {
+    let last = uri
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|seg| !seg.is_empty())
+        .unwrap_or("");
+    let decoded = percent_decode(last);
+    match decoded.split_once(':') {
+        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
+        _ => decoded,
+    }
+}
+
+/// 最简 percent-decode（%XX → 字节；UTF-8 校验失败回退原文）
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// 移除共享目录：args.remove = 条目 id；推送失败自动回滚
+pub(crate) fn update_roots(
+    h: &(impl HostPluginDatabase + HostPeer + HostStorage),
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let id = args
+        .get("remove")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing remove id"))?
+        .to_string();
+    let (existed, removed_path) = {
+        let list = roots_registry::load_all(h)?;
+        let removed_path = list.iter().find(|r| r.id == id).map(|r| r.path.clone());
+        (list.iter().any(|r| r.id == id), removed_path)
+    };
+    roots_registry::apply_and_push(h, |list| {
+        roots_registry::remove(list, &id);
+    })?;
+    if let Some(path) = removed_path {
+        // 预授权路径同步剔除：共享目录移除后启用插件不再收集该路径
+        remove_preauth_path(h, &path)?;
+    }
+    Ok(serde_json::json!({ "removed": existed }))
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        load_entries, load_preauth_paths, mount_local, percent_decode, persist_entries,
+        restore_entries, roots_registry, tree_uri_display_name, update_roots,
+    };
+    use crate::platform::{self, Platform};
+    use crate::transfer_store;
+    use bedcode_plugin_api::host::{
+        HostError, HostEvents, HostLog, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
+    };
+    use std::cell::{Cell, RefCell};
+
+    /// 历史视图口径：仅终态条目、按 updatedAtMs 降序（list-history 初始快照与
+    /// flush 的 history-changed 派发共用本函数，防两路口径漂移）
+    #[test]
+    fn history_view_returns_terminal_entries_sorted_desc() {
+        let mk = |id: &str, status: &str, updated: u64| {
+            serde_json::from_value::<super::TransferEntry>(serde_json::json!({
+                "batchId": id, "direction": "send", "status": status, "updatedAtMs": updated,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("run", "running", 9),
+            mk("b-old", "completed", 1),
+            mk("pend", "pending", 8),
+            mk("b-new", "failed", 5),
+        ];
+        let ids: Vec<&str> =
+            super::history_view(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(ids, vec!["b-new", "b-old"]);
+    }
+
+    /// list-remote 根/相对路径解析：dirId 权威、根内同名子目录不误剥离、
+    /// 旧形态回落（回归：strip_prefix 误命中致列错目录）
+    #[test]
+    fn split_root_rel_prefers_dir_id_and_keeps_root_relative_path() {
+        // 根内子目录与根 id 同名：path 原样保留（旧实现误剥离成 ""，列出根目录）
+        assert_eq!(super::split_root_rel("docs", "docs"), ("docs", "docs"));
+        assert_eq!(super::split_root_rel("docs", "docs/sub"), ("docs", "docs/sub"));
+        assert_eq!(
+            super::split_root_rel("local-downloads", "a/b.txt"),
+            ("local-downloads", "a/b.txt")
+        );
+        assert_eq!(super::split_root_rel("r", "/a/"), ("r", "a"));
+        // 旧形态：缺失 dirId，path 首段即根
+        assert_eq!(super::split_root_rel("", "r/sub"), ("r", "sub"));
+        assert_eq!(super::split_root_rel("", "solo"), ("solo", ""));
+    }
+
+    /// 内存版宿主 mock：覆盖 mount_local / update_roots / 持久化两分支所需 trait
+    /// （storage 键值 + shared_roots 行集 + transfer_entries SQL 日志 + 选择器桩）
+    struct MockHost {
+        kv: RefCell<std::collections::HashMap<String, serde_json::Value>>,
+        rows: RefCell<Vec<serde_json::Value>>,
+        pushed_roots: RefCell<Vec<serde_json::Value>>,
+        /// platform_pick_folders 预设返回值（目录选择器桩：桌面多选 / 移动 SAF 单选 0/1 项）
+        picked: RefCell<Vec<String>>,
+        /// 全部 SQL 调用序列（persist_entries 事务形态断言用）
+        sql_log: RefCell<Vec<String>>,
+        /// 参数化执行故障注入（共享根回滚路径断言用）
+        fail_params: Cell<bool>,
+        /// 事务批执行故障注入（传输历史持久化断言用）
+        fail_batch: Cell<bool>,
+        logs: RefCell<Vec<String>>,
+    }
+
+    impl MockHost {
+        fn new() -> Self {
+            MockHost {
+                kv: RefCell::new(std::collections::HashMap::new()),
+                rows: RefCell::new(vec![]),
+                pushed_roots: RefCell::new(vec![]),
+                picked: RefCell::new(vec![]),
+                sql_log: RefCell::new(vec![]),
+                fail_params: Cell::new(false),
+                fail_batch: Cell::new(false),
+                logs: RefCell::new(vec![]),
+            }
+        }
+
+        fn preauth(&self) -> Vec<String> {
+            load_preauth_paths(self).unwrap()
+        }
+    }
+
+    impl HostStorage for MockHost {
+        fn storage_get(&self, key: &str) -> Result<Option<serde_json::Value>, HostError> {
+            Ok(self.kv.borrow().get(key).cloned())
+        }
+        fn storage_set(&self, key: &str, value: &serde_json::Value) -> Result<(), HostError> {
+            self.kv.borrow_mut().insert(key.to_string(), value.clone());
+            Ok(())
+        }
+        fn storage_delete(&self, key: &str) -> Result<(), HostError> {
+            self.kv.borrow_mut().remove(key);
+            Ok(())
+        }
+    }
+
+    impl HostLog for MockHost {
+        fn log_info(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn log_debug(&self, _message: &str) {}
+        fn log_warn(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn log_error(&self, message: &str) {
+            self.logs.borrow_mut().push(message.to_string());
+        }
+        fn mark_plugin_error(&self, _error: &str) {}
+    }
+
+    impl HostEvents for MockHost {
+        fn emit_event(&self, name: &str, payload: &serde_json::Value) {
+            self.logs
+                .borrow_mut()
+                .push(format!("event {name}: {payload}"));
+        }
+    }
+
+    impl HostPluginDatabase for MockHost {
+        fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
+            self.sql_log.borrow_mut().push(sql.to_string());
+            if sql.contains("CREATE TABLE IF NOT EXISTS shared_roots") {
+                // 建表幂等：不触碰已有行（load_all 每次都会调 ensure_table）
+                return Ok(0);
+            }
+            if sql == "DELETE FROM shared_roots" {
+                self.rows.borrow_mut().clear();
+                return Ok(0);
+            }
+            Ok(0)
+        }
+        fn plugin_db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
+            if sql.contains("SELECT id, name, path FROM shared_roots") {
+                return Ok(Some(serde_json::Value::Array(self.rows.borrow().clone())));
+            }
+            if sql.contains("SELECT payload FROM transfer_entries") {
+                // 桌面台账读路径：行数据存在 kv 的 SQL 投影里（测试直接写行集）
+                return Ok(Some(serde_json::Value::Array(
+                    self.rows
+                        .borrow()
+                        .iter()
+                        .filter(|r| r.get("payload").is_some())
+                        .cloned()
+                        .collect(),
+                )));
+            }
+            Ok(None)
+        }
+        fn plugin_db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
+            self.sql_log.borrow_mut().push(sql.to_string());
+            if self.fail_params.get() {
+                return Err(HostError {
+                    code: -1,
+                    message: "injected failure".to_string(),
+                });
+            }
+            if sql.contains("INSERT INTO shared_roots") {
+                self.rows.borrow_mut().push(serde_json::json!({
+                    "id": params[0],
+                    "name": params[1],
+                    "path": params[2],
+                }));
+                return Ok(1);
+            }
+            Ok(0)
+        }
+        fn plugin_db_query_params(
+            &self,
+            _sql: &str,
+            _params: &[serde_json::Value],
+        ) -> Result<Option<serde_json::Value>, HostError> {
+            Ok(None)
+        }
+        fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+            // 事务批：逐条记日志（与 plugin_db_execute 同口径），不触碰行数据
+            // （桌面台账读路径的往返由 KV 分支与 SQL 日志形态断言覆盖）
+            for sql in sqls {
+                self.sql_log.borrow_mut().push(sql.clone());
+            }
+            if self.fail_batch.get() {
+                return Err(HostError {
+                    code: -1,
+                    message: "injected batch failure".to_string(),
+                });
+            }
+            Ok(0)
+        }
+    }
+
+    impl HostPeer for MockHost {
+        fn peer_dial(&self, _endpoint: &serde_json::Value) -> Result<String, HostError> {
+            unimplemented!()
+        }
+        fn peer_close(&self, _handle: &str) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_respond_consent(&self, _request_id: &str, _accepted: bool) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_revoke_trusted(&self, _node_id: &str) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_send_files(&self, _session: &str, _paths: &[serde_json::Value]) -> Result<String, HostError> {
+            unimplemented!()
+        }
+        fn peer_respond_transfer(&self, _batch_id: &str, _accept: bool) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_set_receive_policy(&self, _mode: &str, _timeout_secs: u64) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
+            self.pushed_roots.borrow_mut().clear();
+            self.pushed_roots.borrow_mut().extend_from_slice(dirs);
+            Ok(())
+        }
+        fn peer_list_shared_roots(&self, _session: &str) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_browse_directory(&self, _session: &str, _dir_id: &str, _rel_path: &str) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_pull_files(&self, _session: &str, _dir_id: &str, _files: &[serde_json::Value]) -> Result<u32, HostError> {
+            unimplemented!()
+        }
+        fn peer_set_download_dir(&self, _path: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_start_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_stop_node(&self) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_collect_outgoing(&self, _paths: &[serde_json::Value]) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+    }
+
+    impl HostPlatform for MockHost {
+        fn platform(&self) -> String {
+            "mock".to_string()
+        }
+        fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
+            unimplemented!()
+        }
+        fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
+            Ok(self.picked.borrow().clone())
+        }
+        fn platform_wsl_distros(&self) -> Result<Vec<String>, HostError> {
+            // file-transfer 不消费 WSL 枚举（票 13 为会话配置表单引入）
+            unimplemented!()
+        }
+        fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError> {
+            // file-transfer 不消费本机地址枚举（票 14 为设备页 QR 引入）
+            unimplemented!()
+        }
+        fn platform_reveal_in_dir(&self, _path: &str) -> Result<(), HostError> {
+            // 「打开本地目录」命令（`file-transfer.reveal-in-dir`）只在 wasm 侧 dispatch
+            // 触达（`invoke_command` 经 `host()`），peer.rs 用例不涉及
+            unimplemented!()
+        }
+    }
+
+    /// mount-local 追加预授权路径：新增目录落 preauth_paths（宿主启用门禁读取）；
+    /// 同路径重复挂载幂等（注册表 upsert + 预授权去重，均不重复）
+    #[test]
+    fn mount_local_appends_preauth_paths_and_dedupes() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        let r1 = mount_local(&h, &serde_json::json!({ "path": "/tmp/share-x", "name": "x" })).unwrap();
+        assert_eq!(r1["added"][0]["path"], "/tmp/share-x");
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string()]);
+
+        // 同路径重复挂载：预授权不重复、注册表不重复
+        let r2 = mount_local(&h, &serde_json::json!({ "path": "/tmp/share-x", "name": "x" })).unwrap();
+        assert_eq!(r2["added"][0]["id"], r1["added"][0]["id"]);
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string()]);
+        assert_eq!(roots_registry::load_all(&h).unwrap().len(), 1);
+
+        // 第二个目录追加
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-y", "name": "y" })).unwrap();
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string(), "/tmp/share-y".to_string()]);
+        // 注册表与预授权保持一致（宿主收集的就是共享目录）
+        let roots: Vec<String> = roots_registry::load_all(&h).unwrap().into_iter().map(|r| r.path).collect();
+        assert_eq!(roots, h.preauth());
+    }
+
+    /// mount-local 多选：一次注册多个目录，注册表 + 预授权同步追加；
+    /// 默认名取各路径末段（显式 name 仅单路径注册生效）
+    #[test]
+    fn mount_local_multi_pick_registers_all() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        *h.picked.borrow_mut() =
+            vec!["/tmp/multi-a".to_string(), "/tmp/media/multi-b".to_string()];
+        let out = mount_local(&h, &serde_json::json!({})).unwrap();
+        let added = out["added"].as_array().unwrap();
+        assert_eq!(added.len(), 2);
+        assert_eq!(added[0]["path"], "/tmp/multi-a");
+        assert_eq!(added[0]["name"], "multi-a");
+        assert_eq!(added[1]["name"], "multi-b");
+        assert_eq!(
+            h.preauth(),
+            vec!["/tmp/multi-a".to_string(), "/tmp/media/multi-b".to_string()]
+        );
+        assert_eq!(roots_registry::load_all(&h).unwrap().len(), 2);
+    }
+
+    /// mount-local 取消选择：空数组视为用户取消，注册表与预授权不变
+    #[test]
+    fn mount_local_cancelled_when_no_folders_picked() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        let err = mount_local(&h, &serde_json::json!({})).unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        assert!(h.preauth().is_empty());
+        assert!(roots_registry::load_all(&h).unwrap().is_empty());
+    }
+
+    /// 移动 mount-local：SAF 单选 + 树 URI 展示名派生 + safTreeUri 推送字段
+    #[test]
+    fn mount_local_mobile_registers_saf_tree_uri() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Mobile);
+        let h = MockHost::new();
+        *h.picked.borrow_mut() =
+            vec!["content://com.android.externalstorage.documents/tree/primary%3AShareX".to_string()];
+        let out = mount_local(&h, &serde_json::json!({})).unwrap();
+        assert_eq!(out["name"], "ShareX", "展示名 = 树 URI 末段解码去卷前缀");
+        assert_eq!(
+            out["treeUri"],
+            "content://com.android.externalstorage.documents/tree/primary%3AShareX"
+        );
+        // 推送 wire 用 safTreeUri（引擎按 SAF 树 URI 解析目录）
+        assert_eq!(h.pushed_roots.borrow()[0]["safTreeUri"], out["treeUri"]);
+        assert_eq!(h.preauth(), vec![out["treeUri"].as_str().unwrap().to_string()]);
+    }
+
+    /// 移动 mount-local 取消：空串视为用户取消
+    #[test]
+    fn mount_local_mobile_cancelled_on_empty_uri() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Mobile);
+        let h = MockHost::new();
+        let err = mount_local(&h, &serde_json::json!({})).unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        assert!(h.preauth().is_empty());
+    }
+
+    /// update-roots 移除共享目录：预授权路径同步剔除；全删后回到空数组
+    /// （宿主 file-transfer 门禁恢复「未配置共享目录」拒绝语义）
+    #[test]
+    fn update_roots_removes_preauth_path() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-a", "name": "a" })).unwrap();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-b", "name": "b" })).unwrap();
+        assert_eq!(h.preauth().len(), 2);
+
+        let id_a = roots_registry::root_id("/tmp/share-a");
+        let out = update_roots(&h, &serde_json::json!({ "remove": id_a })).unwrap();
+        assert_eq!(out["removed"], true);
+        assert_eq!(h.preauth(), vec!["/tmp/share-b".to_string()]);
+
+        let id_b = roots_registry::root_id("/tmp/share-b");
+        let out = update_roots(&h, &serde_json::json!({ "remove": id_b })).unwrap();
+        assert_eq!(out["removed"], true);
+        assert!(h.preauth().is_empty());
+    }
+
+    /// 移除不存在的 id：幂等，预授权不受影响
+    #[test]
+    fn update_roots_unknown_id_is_noop() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-c", "name": "c" })).unwrap();
+        let out = update_roots(&h, &serde_json::json!({ "remove": "root-deadbeef" })).unwrap();
+        assert_eq!(out["removed"], false);
+        assert_eq!(h.preauth(), vec!["/tmp/share-c".to_string()]);
+    }
+
+    /// 构造持久化用条目（事务形态断言只需最小字段集）
+    fn entry_for(batch_id: &str) -> super::TransferEntry {
+        serde_json::from_value::<super::TransferEntry>(serde_json::json!({
+            "batchId": batch_id, "direction": "send", "status": "running",
+        }))
+        .unwrap()
+    }
+
+    /// 桌面持久化事务形态：execute-batch 内完成 DELETE + 单条多值 INSERT，
+    /// 不跨调用发送裸 BEGIN/COMMIT（宿主会拒绝后者）。
+    #[test]
+    fn persist_entries_uses_single_supported_transaction_batch() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        persist_entries(&h, &[entry_for("batch-a"), entry_for("batch-b")]).unwrap();
+        let log = h.sql_log.borrow().clone();
+        assert_eq!(log.first().map(String::as_str), Some("DELETE FROM transfer_entries"));
+        assert_eq!(log.len(), 2, "DELETE + one multi-value INSERT stay in one batch");
+        assert!(log[1].starts_with("INSERT INTO transfer_entries"));
+        assert!(log[1].contains("'batch-a'") && log[1].contains("'batch-b'"));
+        assert!(!log.iter().any(|s| s.starts_with("BEGIN") || s == "COMMIT" || s == "ROLLBACK"));
+    }
+
+    /// 故障注入：execute-batch 失败必须向调用方返回错误，不得伪装成成功。
+    #[test]
+    fn persist_entries_surfaces_batch_failure() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Desktop);
+        let h = MockHost::new();
+        h.fail_batch.set(true);
+        let err = persist_entries(&h, &[entry_for("batch-a")]).unwrap_err();
+        assert!(err.to_string().contains("persist transfer entries failed"));
+    }
+
+    /// 移动持久化落 storage 单键（整读整写）；不回退 plugin-db 事务
+    #[test]
+    fn persist_entries_mobile_writes_storage_key() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Mobile);
+        let h = MockHost::new();
+        persist_entries(&h, &[entry_for("batch-a")]).unwrap();
+        assert!(
+            h.kv.borrow().contains_key("transfer_entries"),
+            "移动台账落 storage 键（换键 = 用户历史任务凭空消失）"
+        );
+        assert!(
+            !h.sql_log.borrow().iter().any(|s| s.contains("transfer_entries")),
+            "移动端不得发桌面台账 SQL"
+        );
+        // 读回一致
+        let loaded = load_entries(&h).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].batch_id, "batch-a");
+    }
+
+    #[test]
+    fn sql_string_literal_escapes_quotes() {
+        assert_eq!(super::sql_string_literal("a'b"), "'a''b'");
+    }
+
+    /// 恢复标注 seam：running/paused 标 interrupted 并回写，二次恢复幂等
+    #[test]
+    fn restore_entries_marks_and_is_idempotent() {
+        let _g = platform::test_lock().lock().unwrap();
+        platform::set_for_test(Platform::Mobile);
+        let h = MockHost::new();
+        let mut entries = vec![entry_for("live"), entry_for("done")];
+        entries[1].status = "completed".to_string();
+        persist_entries(&h, &entries).unwrap();
+        let mut loaded = load_entries(&h).unwrap();
+        assert_eq!(restore_entries(&h, &mut loaded), 1, "仅进行中被标注");
+        assert_eq!(loaded[0].status, "interrupted");
+        assert_eq!(loaded[1].status, "completed", "终态原样保留");
+        // 二次恢复不再重复标注（已落盘为终态）
+        assert_eq!(restore_entries(&h, &mut loaded), 0);
+    }
+
+    /// SAF 树 URI → 展示名：URL 解码 + 卷前缀剥离
+    #[test]
+    fn tree_uri_display_name_decodes_and_strips_volume() {
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload"
+            ),
+            "Download"
+        );
+        // 嵌套目录：末段解码后含路径分隔，保留路径部分
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload%2FFoo"
+            ),
+            "Download/Foo"
+        );
+        // SD 卡卷号
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/ABCD-1234%3AMusic"
+            ),
+            "Music"
+        );
+        // 已解码段（无 %）直接剥离卷前缀；无卷前缀原样返回
+        assert_eq!(tree_uri_display_name("content://x/tree/primary:DCIM"), "DCIM");
+        assert_eq!(tree_uri_display_name("content://x/tree/plain"), "plain");
+        // 空/尾斜杠 → 空（尾斜杠被 trim 后取末段，非空段即其名）
+        assert_eq!(tree_uri_display_name(""), "");
+        assert_eq!(tree_uri_display_name("content://x/tree/"), "tree");
+    }
+
+    /// percent-decode：合法 %XX 解码，非法/孤立 % 原样保留，非 UTF-8 回退原文
+    #[test]
+    fn percent_decode_handles_valid_and_broken_escapes() {
+        assert_eq!(percent_decode("primary%3ADownload"), "primary:Download");
+        assert_eq!(percent_decode("a%2Fb%20c"), "a/b c");
+        assert_eq!(percent_decode("%GG"), "%GG");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%E4%B8%AD%E6%96%87"), "中文");
+    }
+
+    /// 插件并发闸门的槽位口径（票 06）：只数「本端发起且 running 且带
+    /// retryMeta」的批——serve 供流记账行（无 retryMeta）、paused/pending/
+    /// 终态行、以及接收方向都不占发送槽
+    #[test]
+    fn running_send_count_counts_only_initiated_running_sends() {
+        let mk = |id: &str, direction: &str, status: &str, retry: bool| {
+            let mut e: super::TransferEntry = serde_json::from_value(serde_json::json!({
+                "batchId": id, "direction": direction, "status": status,
+            }))
+            .unwrap();
+            if retry {
+                e.retry_meta = Some(super::RetryMeta::Send { paths: vec!["C:/a.txt".into()] });
+            }
+            e
+        };
+        let store = vec![
+            mk("run-1", "send", "running", true),
+            mk("run-2", "send", "running", true),
+            // serve 供流记账行：无 retryMeta（响应式供流，不占发起方向槽位）
+            mk("serve", "send", "running", false),
+            mk("paused", "send", "paused", true),
+            mk("pend", "send", "pending", true),
+            mk("done", "send", "completed", true),
+            mk("recv", "receive", "running", true),
+        ];
+        assert_eq!(super::running_send_count(&store), 2);
+    }
+
+    /// 票 08：排队发送批派发失败落终态行——本地序号唯一、failed 行可见且
+    /// 携带回放凭证（用户从历史可直接重试）
+    #[test]
+    fn locally_failed_send_row_is_visible_and_replayable() {
+        let first = super::next_local_failure_id();
+        let second = super::next_local_failure_id();
+        assert_ne!(first, second, "本地终态行 batchId 必须唯一（无引擎铸号）");
+
+        let row = super::send_row(
+            "aa",
+            &first,
+            "failed",
+            super::RetryMeta::Send {
+                paths: vec!["/tmp/a.bin".into()],
+            },
+            Some("send dispatch failed: dial refused".to_string()),
+        );
+        assert!(row.is_terminal());
+        assert_eq!(row.direction, "send");
+        assert!(row.detail.as_deref().unwrap().contains("dial refused"));
+        let (node_id, meta) =
+            transfer_store::retry_source(&[row], &first).expect("可从历史重试");
+        assert_eq!(node_id, "aa");
+        assert_eq!(
+            meta,
+            super::RetryMeta::Send {
+                paths: vec!["/tmp/a.bin".into()]
+            }
+        );
+    }
+
+    /// 票 08：事件通路 pull 挂载——意图先于引擎调用入队后，`pull-started`
+    /// 事件即命中挂载；未入队的引擎批（对端发起的入站供流）如实不挂
+    #[test]
+    fn attach_pull_meta_mounts_only_after_intent_pushed() {
+        // 本端拉取意图先入队（票 08 修的顺序：先于 peer-pull-files）；入两条
+        // 同 rel_path 意图：第二次 attach 不得越过 `retry_meta.is_none()`
+        // 判据去消费第二条（否则同一批会被重复挂凭证）
+        let spec = transfer_store::PullFileSpec { rel_path: "docs/a.bin".into(), size: 7 };
+        for _ in 0..2 {
+            transfer_store::push_pull_intent(
+                &mut super::pending_pulls().lock().expect("pending pulls lock"),
+                "aa",
+                transfer_store::RetryMeta::Pull {
+                    dir_id: "docs".into(),
+                    files: vec![spec.clone()],
+                },
+            );
+        }
+        let mut store = vec![serde_json::from_value::<super::TransferEntry>(
+            serde_json::json!({
+                "batchId": "pull-aa-0", "direction": "receive", "status": "running",
+                "nodeId": "aa",
+                "files": [{"path": "docs/a.bin", "size": 7}],
+                "totalBytes": 7u64, "transferredBytes": 0u64,
+            }),
+        )
+        .unwrap()];
+        let own = serde_json::json!({
+            "kind": "pull-started", "batchId": "pull-aa-0", "nodeId": "aa",
+            "files": [{ "path": "docs/a.bin", "size": 7 }], "totalSize": 7u64, "tsMs": 5u64,
+        });
+        assert!(
+            super::attach_pull_meta(&mut store, &own),
+            "意图命中即挂载（rel_path 单文件匹配）"
+        );
+        assert!(store[0].retry_meta.is_some(), "挂载后行可回放");
+        // 已挂载的行不重复消费（幂等）：第二条意图必须留在队列里
+        assert!(!super::attach_pull_meta(&mut store, &own), "已挂载再触发应无变化");
+        let left = super::pending_pulls().lock().expect("pending pulls lock").len();
+        assert_eq!(left, 1, "同 rel_path 的第二条意图不得被越判据消费");
+        // 清理残留，避免污染后续用例
+        super::pending_pulls().lock().expect("pending pulls lock").clear();
+
+        // 对端发起的批：意图队列已空 / node 不匹配 → 如实不挂
+        let mut foreign_store = vec![serde_json::from_value::<super::TransferEntry>(
+            serde_json::json!({
+                "batchId": "pull-bb-0", "direction": "receive", "status": "running",
+                "nodeId": "bb",
+                "files": [{"path": "docs/a.bin", "size": 7}],
+                "totalBytes": 7u64, "transferredBytes": 0u64,
+            }),
+        )
+        .unwrap()];
+        let foreign = serde_json::json!({
+            "kind": "pull-started", "batchId": "pull-bb-0", "nodeId": "bb",
+            "files": [{ "path": "docs/a.bin", "size": 7 }], "totalSize": 7u64, "tsMs": 6u64,
+        });
+        assert!(
+            !super::attach_pull_meta(&mut foreign_store, &foreign),
+            "非本端发起的拉取批不可挂凭证"
+        );
+        assert!(foreign_store[0].retry_meta.is_none());
+    }
+
+    /// 票 08：停用清空进程内意图——排队发送批与待挂载拉取凭证都只存在
+    /// 内存，留到下次激活就是「凭空冒出的旧任务」
+    #[test]
+    fn reset_volatile_intents_clears_both_queues() {
+        {
+            let mut queue = super::pending_sends().lock().expect("pending sends lock");
+            queue.push(super::PendingSend {
+                node_id: "aa".into(),
+                endpoint: None,
+                paths: vec!["/tmp/a.bin".into()],
+                attempts: 0,
+            });
+        }
+        transfer_store::push_pull_intent(
+            &mut super::pending_pulls().lock().expect("pending pulls lock"),
+            "aa",
+            transfer_store::RetryMeta::Pull {
+                dir_id: "docs".into(),
+                files: vec![],
+            },
+        );
+        let (queued, intents) = super::reset_volatile_intents();
+        assert_eq!(queued, 1, "排队发送批随停用清空");
+        assert_eq!(intents, 1, "待挂载拉取凭证随停用清空");
+        assert!(super::pending_sends().lock().expect("pending sends lock").is_empty());
+        assert!(super::pending_pulls().lock().expect("pending pulls lock").is_empty());
+    }
+
+    // 票 08 场景链 / 终态历史持久化往返（断点续传时序）拆至子模块
+    mod redial_and_history;
+}

@@ -140,7 +140,7 @@ ls target/wasm32-unknown-unknown/release/bedcode_plugin_ai_chatbox.wasm
 ### 需要更新的文档
 
 - `bedcode-desktop/docs/knowledge/plugin-system.md` — 架构图和说明从 cdylib 改为 WASM
-- `bedcode-desktop/docs/knowledge/plugin-dev-guide.md` — 开发指南增加 WASM 编译步骤
+- `bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md` — 开发指南增加 WASM 编译步骤
 - `bedcode-desktop/docs/code-map.md` — 模块列表更新
 
 ### 新增文档

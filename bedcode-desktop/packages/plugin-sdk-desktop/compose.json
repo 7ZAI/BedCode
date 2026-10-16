@@ -1,0 +1,19 @@
+{
+  "package": "bedcode:plugin",
+  "world": "plugin",
+  "core": "packages/bedcode-wasm-core/wit/core.wit",
+  "out": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit",
+  "caps": {
+    "pty": "packages/bedcode-pty-engine/wit/pty.wit",
+    "mdns": "packages/bedcode-discovery-engine/wit/mdns.wit",
+    "peer": "packages/bedcode-server-peer-net/wit/peer.wit",
+    "http": "packages/bedcode-server-http/wit/http.wit",
+    "ws": "packages/bedcode-ws-client-engine/wit/ws.wit",
+    "notify": "packages/bedcode-notify-engine/wit/notify.wit",
+    "http-endpoint": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-http.wit",
+    "ws-server": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-ws.wit",
+    "desktop": "bedcode-desktop/packages/plugin-sdk-desktop/rust/wit-src/cap-desktop.wit"
+  },
+  "worlds": ["plugin", "plugin-binary", "plugin-ws", "plugin-task", "plugin-auth-policy", "plugin-system", "desktop-compat"],
+  "abi": { "version": 38 }
+}

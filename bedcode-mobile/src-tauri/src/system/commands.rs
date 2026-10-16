@@ -1,40 +1,12 @@
 //! Shared System Commands
 //!
 //! 桌面端和移动端共享的系统命令
+//!
+//! 本地配对码命令（生成 / 读取 / 校验 / 清除）已于票 14 随
+//! `connection::pairing_service` 一并退役——移动端不再是配对码颁发方，配对码由
+//! 桌面端生成、移动端只做提交（`commands::auth::ws_verify_pairing_code`）。
 
-use crate::auth::pairing::PairingCode;
-use crate::Result;
-use std::sync::Arc;
-use tauri::{Manager, State};
-
-use crate::connection::PairingService;
-
-// ==================== Pairing Commands ====================
-
-/// 生成配对码
-#[tauri::command]
-pub async fn generate_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<PairingCode> {
-    Ok(pairing_service.generate_code().await)
-}
-
-/// 获取当前配对码
-#[tauri::command]
-pub async fn get_current_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<Option<PairingCode>> {
-    Ok(pairing_service.get_current_code().await)
-}
-
-/// 验证配对码
-#[tauri::command]
-pub async fn verify_pairing_code(pairing_service: State<'_, Arc<PairingService>>, code: String) -> Result<bool> {
-    Ok(pairing_service.verify_and_consume_code(&code).await)
-}
-
-/// 清除当前配对码
-#[tauri::command]
-pub async fn clear_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<()> {
-    pairing_service.clear_code().await;
-    Ok(())
-}
+use tauri::Manager;
 
 // ==================== Settings Commands ====================
 
@@ -90,12 +62,6 @@ pub fn get_system_info() -> crate::system::info::SystemInfo {
     crate::state::try_get_system_info()
         .map(|i| i.as_ref().clone())
         .unwrap_or_else(crate::system::info::SystemInfo::fallback)
-}
-
-/// 获取自应用启动以来的耗时（毫秒）
-#[tauri::command]
-pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {
-    start_time.0.elapsed().as_millis() as u64
 }
 
 /// 获取本地 IP 地址（移动端不适用，返回空列表）

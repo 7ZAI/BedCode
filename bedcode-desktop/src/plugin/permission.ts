@@ -3,48 +3,22 @@
  *
  * 前端快速失败 — 调用 Rust API 前先检查权限
  * Rust 端做最终仲裁，前端检查仅用于 UI 反馈和避免无效 invoke
+ *
+ * 权限词汇与 API 映射都取自生成物 `permission-vocabulary.ts`（真源是桌面 SDK 的
+ * `rust/src/permission.rs`）；在本文件里另立清单会让「加一个权限位」变成三处手抄，
+ * 由宿主 `src-tauri/src/plugin/permission.rs` 的词汇漂移锁守住三处一致。
  */
 
-/** 合法权限列表 */
-const VALID_PERMISSIONS = new Set([
-  'terminal:input',
-  'terminal:output',
-  'terminal:observe',
-  'session:read',
-  'session:write',
-  'ui:sidebar',
-  'ui:toolbox',
-  'ui:statusbar',
-  'ui:dialog',
-  'ui:pageToolbar',
-  'ui:input',
-  'ui:fileHandler',
-  'network:http',
-  'storage',
-  'broadcast',
-  'peer',
-])
+import {
+  GENERATED_PERMISSION_API_MAP,
+  GENERATED_VALID_PERMISSIONS,
+} from './permission-vocabulary'
 
-/** 权限到 API 方法的映射 */
-const PERMISSION_API_MAP: Record<string, string[]> = {
-  'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
-  'terminal:output': ['terminal.onOutput'],
-  'terminal:observe': ['terminal.onInputSubmitted'],
-  'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
-  'session:write': ['session.create', 'session.stop'],
-  'ui:sidebar': ['ui.registerSidebarPanel'],
-  'ui:toolbox': ['ui.registerToolboxPage'],
-  'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
-  'ui:dialog': ['ui.showDialog'],
-  'ui:pageToolbar': ['ui.registerPageToolbarItem'],
-  'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
-  'ui:fileHandler': ['ui.registerFileHandler'],
-  'network:http': ['http.registerEndpoint'],
-  storage: ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
-  'system:open': ['system.revealInDir'],
-  // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
-  peer: [],
-}
+/** 合法权限列表（生成物） */
+const VALID_PERMISSIONS = new Set<string>(GENERATED_VALID_PERMISSIONS)
+
+/** 权限到 API 方法的映射（生成物） */
+const PERMISSION_API_MAP: Record<string, readonly string[]> = GENERATED_PERMISSION_API_MAP
 
 /** 检查权限是否合法 */
 export function isValidPermission(permission: string): boolean {
@@ -60,13 +34,4 @@ export function hasPermissionForApi(grantedPermissions: string[], apiMethod: str
     }
   }
   return false
-}
-
-/** 过滤非法权限 */
-export function filterValidPermissions(permissions: string[]): string[] {
-  const result = permissions.filter(isValidPermission)
-  if (!result.includes('storage')) {
-    result.push('storage')
-  }
-  return result
 }

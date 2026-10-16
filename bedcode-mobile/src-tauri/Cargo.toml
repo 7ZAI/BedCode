@@ -1,18 +1,28 @@
 [package]
 name = "bedcode-mobile"
-version = "2.1.1"
+version = "3.0.0"
 description = "BedCode Mobile - Remote terminal for Claude Code"
 authors = ["binblink"]
 edition = "2021"
 
 [lib]
-name = "bedcode_lib"
+name = "bedcode_mobile_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+
+# 插件机制整核（fork crate，票 17 批次 2b：运行时/16 域/绑定层真源迁移至此，
+# 宿主 plugin/ 经垫片转发；路径基准 = AGENTS「能力域/引擎 crate 落仓库根 packages」
+# 的移动形态——本 crate 落 bedcode-mobile/packages/）
+# 单形态（2026-10-13 runtime-single-form）：wasm-core 无 common/bare 之分（形态
+# feature 已退役）——移动不开 `desktop-assembly`（桌面专属装配面），default-features
+# = false 拿统一机制 + 运行时壳；ABI 规格（AbiPolicy）由本宿主构造 WasmRuntime 时
+# 注入（移动 SDK 常量）。回接（fork crate / rename 别名）由
+# `tests/retired_mobile_wasm_core_fork_lock.rs` 拦截。
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false }
 tauri = { version = "2", features = ["protocol-asset", "test"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -62,7 +72,9 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 
-# mDNS service discovery
+# mDNS service discovery（共享引擎驱动；命令面 browse/广播仍用 mdns-sd 类型）
+# 双端共享 lib（spec M3）：引擎机制 + 守护单例真源（零 WIT 形态）
+bedcode-discovery-engine = { path = "../../packages/bedcode-discovery-engine" }
 mdns-sd = "0.20"
 flume = "0.12"
 
@@ -74,8 +86,13 @@ hostname = "0.4"
 futures-util = "0.3"
 
 # WASM runtime for plugin system
-# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
-wasmtime = "47"
+# 48（LTS，2026-08-24）：47 非 LTS，48 发布后支持期至 ~2026-10；48 为 12 倍数 LTS（支持 24 个月）。
+# 47 的 Android aarch64 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）在 48 线上延续。
+# 与桌面端同版本（ADR 0019 两端锁死）：桌面 2026-09-18 先行升 48 并显式偏离分叉，
+# 移动端 2026-09-26 补齐 → 双端重新对齐 48.0.x，分叉关闭。
+# 桌面端升级规格与 48.0.0 变更影响评估：.scratch/2026-09-18-wasmtime-48-upgrade/spec.md
+# （移动端评估：.scratch/2026-09-26-mobile-wasmtime-48-wasip3/spec.md）
+wasmtime = "48"
 
 # HTTP client (WASM plugin HTTP proxy + remote download + 认证端点 .json() 解析)
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
@@ -100,11 +117,37 @@ android_logger = "0.14"
 bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
 # 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
 bedcode-peer-net = { path = "../../packages/peer-net" }
+# 对等网络能力域（双端共享纯引擎形态：节点装配 / 会话控制面 / 引擎事件桥 +
+# 端口 + 平台缝；WIT 绑定层在 common-host feature，移动形态不引）——
+# 2026-10-10 能力域集中化：移动宿主引擎控制面下沉至此，宿主只留适配层
+bedcode-server-peer-net = { path = "../../packages/bedcode-server-peer-net" }
+# 端口 trait 词汇（BusPort / EventSink / PathsPort / SystemInfoPort / MdnsPort）
+# ——能力域端口面与宿主适配层共用同一套 trait，不新造第二套
+bedcode-server-base = { path = "../../packages/bedcode-server-base" }
+# 出站 HTTP 能力域（票 05 收口：host-http 的 WIT 实现随绑定层迁入宿主
+# `plugin/host_domains/http.rs`，执行本体仍在 serve-http 的 plugin_binding::egress）
+bedcode-server-http = { path = "../../packages/bedcode-server-http" }
+# WS 客户端引擎（票 05 收口：host-websocket 的 WIT 实现住宿主）
+bedcode-ws-client-engine = { path = "../../packages/bedcode-ws-client-engine" }
+# 共享机制实现核（票 05 收口：12 个 core 域 adapter 直连
+# `bedcode-host-api-core::{storage,bus,database,fs,log,gate}`，机制语义双端单点）
+bedcode-host-api-core = { path = "../../packages/bedcode-host-api-core" }
+# 插件机制内核（统一 state / HostModule / ModuleRegistry）——移动独有域 adapter
+# 自带 bindgen 需 host-kit 的 state 与自报面（wasm-core-mobile-purity 票 04，
+# 与桌面 src-tauri 同形）
+bedcode-host-kit = { path = "../../packages/bedcode-host-kit" }
+# 能力模块自报（ModuleEntry / expect_host_module! 的 linker-section 静态）
+inventory = "0.3"
 # 链路报文加密协议核心（issue 09 共享 crate，与桌面 server 共同消费）
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
+
+# 测试支持面（夹具构建器 + MockPorts；批次 2b 宿主集成测试消费）。
+# 票 06 批次 03：随主依赖切根 crate——`test-support` feature 的移动面
+# （test_support/bare.rs = fork test_support.rs 迁入）已就位；票 05 起无 rename 别名。
+bedcode-wasm-core = { path = "../../packages/bedcode-wasm-core", default-features = false, features = ["test-support"] }
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"
@@ -114,6 +157,8 @@ actix-web = { version = "4", default-features = false }
 # 仅测试用：X25519 公钥推导（crypto_envelope_roundtrip 的 mock 侧密钥；生产
 # 依赖同版本，锁文件不变）
 x25519-dalek = "2"
+# 注：`bedcode-server-http` 自票 05 起是**生产依赖**（host-http WIT 实现住宿主），
+# 见上方 [dependencies]——测试（session_http_flow）经同一条链路驱动真执行器。
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

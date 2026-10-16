@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateManifest } from '../bin/manifest-gen.js'
@@ -111,16 +111,19 @@ export async function activate(context: PluginContext): Promise<void> {
 
 describe('前端权限推断', () => {
   it('storage / terminal / session / http / broadcast', () => {
+    // v27（票 10）：样例改用**仍存在的** context API——`terminal.sendInput` /
+    // `terminal.onInputSubmitted` / `session.list` / `session.stop` 已随宿主会话
+    // 命令面与观察面退役（生成器的 apiMap 同步收缩），继续用它们会得到「推断不出
+    // 权限」的假红。本用例的意图是「按实际调用的 API 推断权限」，故换成同一批域的
+    // 存活 API（输入/输出/会话窗口原语）。
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
       'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
-  await context.terminal.sendInput('s', 'x')
+  context.terminal.onInput((s, d) => d)
   context.terminal.onOutput((s, d) => {})
-  context.terminal.onInputSubmitted((s, d) => {})
-  await context.session.list()
-  await context.session.stop('s')
+  await context.session.predictTerminalSize()
   context.http.registerEndpoint('/x', async () => ({ status: 200, body: {} }))
   context.events.on('evt', () => {})
 }`,
@@ -131,9 +134,7 @@ export async function activate(context: PluginContext): Promise<void> {
     expect(perms).toContain('storage')
     expect(perms).toContain('terminal:input')
     expect(perms).toContain('terminal:output')
-    expect(perms).toContain('terminal:observe')
     expect(perms).toContain('session:read')
-    expect(perms).toContain('session:write')
     expect(perms).toContain('network:http')
     expect(perms).toContain('broadcast')
   })
@@ -153,7 +154,37 @@ export async function activate(context: PluginContext): Promise<void> {
 // ==================== Rust 扫描 ====================
 
 describe('Rust 扫描', () => {
-  it('invoke_command 匹配臂 → commands（过滤 _ 前缀内置分支，保留旧 title）', () => {
+  /**
+   * 分派表夹具：`_http_endpoint` 是内置控制分支、`_ =>` 是未知命令兜底，
+   * 两者都不该进 commands 声明
+   */
+  const RUST_DISPATCH = `impl WasmPlugin for TestPlugin {
+  fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    match name {
+      "_http_endpoint" => Ok(serde_json::Value::Null),
+      "test.hello" => Ok(serde_json::Value::Null),
+      "test.world" => Ok(serde_json::Value::Null),
+      _ => Err(anyhow::anyhow!("unknown")),
+    }
+  }
+}`
+  it('manifest 未声明 commands → 从 invoke_command 匹配臂自动填充（过滤 _ 前缀内置分支）', () => {
+    scaffoldPlugin({
+      'plugin.json': BASE_MANIFEST,
+      'rust/src/lib.rs': RUST_DISPATCH,
+    })
+    generateManifest(cwd)
+    const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    const ids = manifest.contributes.commands.map((c: any) => c.id)
+    // 内置控制分支（_http_endpoint）不是插件命令；未知命令的 `_ =>` 臂也不在内
+    expect(ids).toEqual(['test.hello', 'test.world'])
+    expect(manifest.contributes.commands[0].title).toBe('test.hello')
+  })
+
+  // 票 17 口径（用户裁决 ①）：已声明的 commands 段是**人工裁剪过的用户可见命令面**，
+  // 生成器不再按匹配臂覆写。`com.bedcode.terminal-session` 实测 28 声明 / 50 臂——全量覆写会把
+  // 宿主桥接与闭环调试臂 advertise 成产品命令（`invoke_command` 的臂 ≠ 可调面）
+  it('manifest 已声明 commands → 人工裁剪优先，只报告差集不写回', () => {
     scaffoldPlugin({
       'plugin.json': JSON.stringify(
         {
@@ -165,25 +196,38 @@ describe('Rust 扫描', () => {
         null,
         2,
       ),
-      'rust/src/lib.rs': `impl WasmPlugin for TestPlugin {
-  fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    match name {
-      "_http_endpoint" => Ok(serde_json::Value::Null),
-      "test.hello" => Ok(serde_json::Value::Null),
-      "test.world" => Ok(serde_json::Value::Null),
-      _ => Err(anyhow::anyhow!("unknown")),
-    }
-  }
-}`,
+      'rust/src/lib.rs': RUST_DISPATCH,
     })
-    generateManifest(cwd)
+    const { report } = generateManifest(cwd)
     const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
-    const ids = manifest.contributes.commands.map((c: any) => c.id)
-    expect(ids).toEqual(['test.hello', 'test.world'])
-    // 旧 title 保留
-    expect(manifest.contributes.commands[0].title).toBe('Say Hello')
+    // 声明面原样保留：既不追加 test.world，也不覆写 title
+    expect(manifest.contributes.commands).toEqual([{ id: 'test.hello', title: 'Say Hello' }])
+    expect(
+      report.some((line) => line.includes('test.world') && line.includes('不自动写入')),
+      `差集未进报告: ${report.join(' | ')}`,
+    ).toBe(true)
   })
 
+  it('声明了但源码没有对应臂 → 报告为真漂移（必须人工修）', () => {
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(
+        {
+          ...JSON.parse(BASE_MANIFEST),
+          contributes: {
+            commands: [{ id: 'test.ghost', title: 'Ghost' }],
+          },
+        },
+        null,
+        2,
+      ),
+      'rust/src/lib.rs': RUST_DISPATCH,
+    })
+    const { report } = generateManifest(cwd)
+    expect(
+      report.some((line) => line.includes('声明但源码无对应臂') && line.includes('test.ghost')),
+      `漂移未进报告: ${report.join(' | ')}`,
+    ).toBe(true)
+  })
   it('on_terminal_input/output → terminal handlers + 权限', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
@@ -280,6 +324,85 @@ describe('合并策略', () => {
     expect(manifest.contributes.views).toEqual([
       { id: 'test.old', type: 'sidebar', title: 'Old', component: 'OldView' },
     ])
+  })
+
+  it('component 接受标识符（符号名就是清单值），order 不接受（常量值静态不可求）', () => {
+    // 反例锁：`order: SOME_ORDER` 曾经被当字符串写回（"order": "SOME_ORDER"），
+    // 宿主读成非数字 → 侧栏排序静默失效，而清单校验无类型检查不报错，
+    // 于是每次构建静默改写受版本跟踪的 plugin.json。判据：只有 component 走标识符。
+    const withViews = JSON.parse(BASE_MANIFEST)
+    withViews.contributes = {
+      views: [{ id: 'test.sidebar', type: 'sidebar', title: 'Old', order: 215, component: 'OldView' }],
+    }
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(withViews, null, 2),
+      'src/index.ts': `const SOME_ORDER = 215
+export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'Old', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    generateManifest(cwd)
+    const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    // component：标识符 → 符号名字符串（正例）
+    expect(manifest.contributes.views[0].component).toBe('MyView')
+    // order：保留清单既有数值，绝不被写成标识符字符串（反例）
+    expect(manifest.contributes.views[0].order).toBe(215)
+    expect(typeof manifest.contributes.views[0].order).toBe('number')
+  })
+
+  it('order 走标识符时构建日志点名（fail-visible，不静默保留）', () => {
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(
+        {
+          ...JSON.parse(BASE_MANIFEST),
+          contributes: { views: [{ id: 'test.sidebar', type: 'sidebar', order: 215 }] },
+        },
+        null,
+        2,
+      ),
+      'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    const warned: string[] = []
+    const orig = console.warn
+    console.warn = (...a: unknown[]) => warned.push(a.join(' '))
+    try {
+      generateManifest(cwd)
+    } finally {
+      console.warn = orig
+    }
+    expect(warned.some((w) => w.includes('order') && w.includes('SOME_ORDER'))).toBe(true)
+  })
+
+  it('order 走标识符时连跑两次构建第二次无改动（幂等，不反复改写清单）', () => {
+    const withViews = JSON.parse(BASE_MANIFEST)
+    withViews.contributes = {
+      views: [{ id: 'test.sidebar', type: 'sidebar', title: 'Old', order: 215, component: 'OldView' }],
+    }
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(withViews, null, 2),
+      'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
+  context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'Old', order: SOME_ORDER, component: MyView })
+}`,
+    })
+    const firstChanged = generateManifest(cwd).changed
+    const afterFirst = readFileSync(join(cwd, 'plugin.json'), 'utf-8')
+    const orig = console.warn
+    console.warn = () => {}
+    let secondChanged: boolean
+    try {
+      secondChanged = generateManifest(cwd).changed
+    } finally {
+      console.warn = orig
+    }
+    expect(readFileSync(join(cwd, 'plugin.json'), 'utf-8')).toBe(afterFirst)
+    expect(firstChanged).toBe(true) // 首次确有写入（component 改名）
+    expect(secondChanged).toBe(false) // 第二次必须无改动
+    // 幂等不等于「稳定地写错」：两次构建后 order 都必须仍是清单里的数值，
+    // 否则旧实现（把标识符当字符串写回）也能通过本用例（第二次同样「无改动」）
+    const afterSecond = JSON.parse(readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    expect(afterSecond.contributes.views[0].order).toBe(215)
   })
 
   it('check 模式不写入', () => {

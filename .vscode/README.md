@@ -1,42 +1,70 @@
 # `.vscode/` 目录说明
 
+## 两种入口，先确认一件事
+
+**rust-analyzer 1.98 起不再递归发现子目录 Cargo 工程**：仓库根没有 `Cargo.toml`，若不显式声明工程，打开仓库根直接报 `failed to find any projects`。因此**所有 RA 工程声明都走 `rust-analyzer.linkedProjects`**（schema 原文：*"Disable project auto-discovery in favor of explicitly specified set of projects"*）。两端各含约 14 个独立 Cargo 工程（宿主 `src-tauri` + 插件 `plugins/*/rust` + SDK `packages/plugin-sdk-*` + 测试组件 `packages/plugin-*-test`，合计约 28 个 `Cargo.toml`）——只声明宿主工程，插件/SDK/测试组件不随宿主加载（单独开发时直接打开对应目录，见下）。
+
+| 入口 | 配置位置 | RA 实例 | 内存 |
+| --- | --- | --- | --- |
+| **直接打开仓库根**（默认习惯） | 根 `.vscode/settings.json` 的 `linkedProjects` 声明两端 `src-tauri/Cargo.toml` | **单实例**加载两端宿主（+ path 依赖 `packages/peer-net`、`packages/link-crypto`、各自 `plugin-sdk-*`） | 中等；远小于旧递归发现（28 工程），因显式声明禁用了自动发现 |
+| **打开 `BedCode.code-workspace`**（内存隔离优先） | 各文件夹 `.vscode/settings.json` 的 `linkedProjects` 锁定各自 `src-tauri/Cargo.toml` | **每文件夹独立实例**，各自只编译一个宿主 | 单实例最低；两端合计与方案一相近 |
+
+单实例 RSS 若超过 ~2 GB，改用多根工作区拆分。
+
+**插件 / SDK / 测试组件的 Rust 工程**在两种入口下都不随宿主加载；需要单独开发时直接打开对应目录（如 `code bedcode-desktop/wasm-apps/terminal-session/rust`）——该目录是单 Cargo 工程，无需 linkedProjects。
+
+**调试与任务**：
+
+- 打开仓库根：用根 `.vscode/tasks.json` + `.vscode/launch.json`（`${workspaceFolder}` = 仓库根，路径带 `bedcode-desktop/` 前缀）
+- 打开多根工作区：用各文件夹 `.vscode/tasks.json` + `.vscode/launch.json`（`${workspaceFolder}` = 文件夹本身，无需前缀），与根版本等价
+
+## Git / SCM 可见性（与入口选择相关）
+
+仓库的 `.git` 在**根**，而 `BedCode.code-workspace` 只含 `bedcode-desktop` / `bedcode-mobile` 两个子文件夹——即 `.git` 在它们的**父目录**。由此产生两条与入口相关的坑（均在**用户级** `settings.json` 修，仓库内不锁死）：
+
+| 现象 | 根因 | 处理 |
+| --- | --- | --- |
+| 走多根工作区入口时 SCM 视图全空：无改动数量徽标、无文件绿/黄/红装饰 | git 扩展默认会问是否采用父目录仓库；一旦被设成 `git.openRepositoryInParentFolders: "never"`，就静默不开根仓库（`Git.log` 实证：`repositories (0), parent repositories (1)`） | 设为 `"prompt"`，或直接 `code /home/binblink/project/tauriProject/BedCode` 打开仓库根 |
+| 多根工作区下根级文件（`.scratch/**`、`CHANGELOG.md`、`AGENTS.md`）永不上色 | 这些路径不属任何工作区文件夹，git 状态再全也画不到 | 同上：打开仓库根 |
+| 窗口开着不动时颜色/数量不更新 | `git.autorefresh: false` 会把状态冻结在窗口启动那一刻 | 本仓 `git status -z -uall` 实测仅 18~30ms（`.gitignore` 已忽略 `**/target/`），开回 `true` 无性能顾虑；真正要防的 inotify 风暴由 `files.watcherExclude` 挡，与 autorefresh 无关 |
+
 ## `settings.json` 中的 rust-analyzer 内存限制
 
-**背景**：2026-09-04 23:55，`rust-analyzer`（PID 345132）膨胀到 3.2 GB RSS，触发 `systemd-oomd` 约束式杀进程；系统随后被手动 reboot。根因是 VS Code 打开 BedCode 工作区根时，rust-analyzer 同时索引 `bedcode-desktop/src-tauri` 和 `bedcode-mobile/src-tauri` 两个独立 Tauri 项目（根目录无 Cargo workspace），内存叠加。2026-09-07 优化时发现上一轮用的键在 rust-analyzer **0.3.3033 已移除**（`rust-analyzer --print-config-schema` 确认），本轮换成当前版本有效键。
+**背景**：2026-09-04 23:55，`rust-analyzer`（PID 345132）膨胀到 3.2 GB RSS，触发 `systemd-oomd` 约束式杀进程；系统随后被手动 reboot。根因是当时 RA 递归发现全部 ~28 个 Cargo 工程并在单实例内索引。2026-09-07 优化时发现上一轮用的键在 rust-analyzer 0.3.3033 已移除，换成有效键；2026-09-25 以当前版本 **1.98.1**（`rust-analyzer --print-config-schema`）复核全部键仍然有效，并确认 1.98 起需 `linkedProjects` 显式声明工程。
 
-**各文件职责**（内容一致，路径基准不同）：
+**各文件职责**：
 
-- `.vscode/settings.json`（仓库根）——打开工作区根、双项目同时加载时生效
-- `bedcode-desktop/.vscode/settings.json`、`bedcode-mobile/.vscode/settings.json`——单独打开子项目时生效
+- `.vscode/settings.json`（仓库根）——打开仓库根时生效：`linkedProjects` 声明两端宿主工程 + 下方内存键
+- `BedCode.code-workspace`（仓库根）——可选的多根入口：每文件夹独立 RA 实例（内存隔离）
+- `bedcode-desktop/.vscode/settings.json`、`bedcode-mobile/.vscode/settings.json`——多根工作区中按文件夹生效，也支持单独打开子项目；含各自的 `linkedProjects` + 下方内存键
 
-**做了什么**（当前 rust-analyzer 0.3.3033 有效键）：
+**做了什么**（rust-analyzer 1.98.1 有效键）：
 
-1. **`files.watcherExclude`（VSCode 原生键，支持 glob）**：排除 `**/target/**`（两项目合计约 43G，不排除则启动遍历即吃爆内存）、`**/gen/**`、`**/node_modules/**`、`**/.git/**`。替代已移除的 `rust-analyzer.files.watcherExclude`。
-2. **`rust-analyzer.files.exclude`（注意：0.3.3033 起不再支持 glob，须为相对路径）**：排除 `target`、`gen`（同时列根相对与工作区相对两种写法，兼容不同解析基准），让 RA 的 VFS 不加载编译产物与 Android 生成目录。
-3. **`rust-analyzer.cachePriming.enable: false`**：关闭启动时全工作区缓存预热——内存最大头，替代已移除的 `memoryUsage.*Limit`；代价是首次 hover / 跳转略慢。
-4. **`rust-analyzer.lru.capacity: 64`**：语法树 LRU 缓存默认 128 条 → 64 条（单位是条目数，不是 MB）。
-5. **`rust-analyzer.procMacro.processes: 1`**：proc-macro 服务进程 2 → 1（tauri+serde+tokio 宏栈每进程占用可观）。
-6. **`rust-analyzer.checkOnSave: false`**：不再后台跑 `cargo check`，省一个常驻 rustc 进程；编译错误改由 `cargo check` / `cargo test` 自查。
-7. **`rust-analyzer.numThreads: 4`**：主循环并行线程默认全核（16）→ 4，压低双工作区并行索引峰值内存。
-8. **`linkedProjects`**：保持注释掉不强制——VS Code 打开工作区根时若同时识别到两个 `Cargo.toml`，需要手动通过命令面板 `Rust Analyzer: Switch LSPCargo target` 或在 `linkedProjects` 显式指定一个。若只编辑单项目，也可用 `linkedProjects` 锁定单个 `Cargo.toml` 直接减半内存。
+1. **`rust-analyzer.linkedProjects`**：禁用项目自动发现，只加载显式列出的 `Cargo.toml`（根：两端宿主；各文件夹：各自宿主）。
+2. **`files.watcherExclude`（VSCode 原生键，支持 glob）**：排除 `**/target/**`（两项目合计约 43G，不排除则启动遍历即吃爆内存）、`**/gen/**`、`**/node_modules/**`、`**/.git/**`。
+3. **`rust-analyzer.files.exclude`（不再支持 glob，须为相对路径）**：排除 `target`、`gen`（同时列根相对与工作区相对两种写法，兼容不同解析基准），让 RA 的 VFS 不加载编译产物与 Android 生成目录。
+4. **`rust-analyzer.cachePriming.enable: false`**：关闭启动时全工作区缓存预热——内存最大头；代价是首次 hover / 跳转略慢。
+5. **`rust-analyzer.lru.capacity: 64`**：语法树 LRU 缓存默认 128 条 → 64 条（单位是条目数，不是 MB）。
+6. **`rust-analyzer.procMacro.processes: 1`**：proc-macro 服务进程 2 → 1（tauri+serde+tokio 宏栈每进程占用可观）。
+7. **`rust-analyzer.checkOnSave: false`**：不再后台跑 `cargo check`，省一个常驻 rustc 进程；编译错误改由 `cargo check` / `cargo test` 自查。
+8. **`rust-analyzer.numThreads: 4`**：主循环并行线程默认全核（16）→ 4，压低并行索引峰值内存（多根工作区下两个实例合计 8 线程，仍在预算内）。
 
 **没有改的**：
 
 - 没改 `rust-analyzer.procMacro.enable` 为 `false`——Tauri 项目重度用 `#[tauri::command]`、`generate_context!`、`serde` 派生宏，关掉会丢补全/跳转质量且满屏假报错。`procMacro.enable` 隐含要求 build script 开启，故 `cargo.buildScripts.enable` 保持 `true`。
-- 没强制 `linkedProjects`——工作区可能同时编辑 desktop 和 mobile，强制会切错。
 
 ## 复现验证
 
 ```bash
-# 重启 VS Code（或 Reload Window）后看 rust-analyzer 内存
+# 打开仓库根（或 Reload Window）后看 rust-analyzer 内存
 ps -eo pid,user,rss,comm | grep rust-analyzer
-# 期望 RSS < 1.5 GB（之前峰值 3.2 GB）
+# 单实例（两端宿主）期望 RSS < 2 GB（旧递归发现峰值 3.2 GB）；超过则改用 BedCode.code-workspace
 ```
 
-如果仍超 2 GB，再加：
+如果单实例仍超 2 GB，再加：
 
 ```jsonc
-// settings.json 末尾追加
+// 对应 settings.json 末尾追加
 "rust-analyzer.cargo.features": "lean"
 ```
 

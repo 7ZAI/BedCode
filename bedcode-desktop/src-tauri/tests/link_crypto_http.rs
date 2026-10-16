@@ -1,18 +1,43 @@
-//! 链路加密 HTTP 集成测试（issue 02）
+//! 链路加密 HTTP 集成测试（issue 02；server-lib-split 票 08 曾迁入 `bedcode-server-http`，
+//! crate 单测纯净性轮次迁回宿主）
 //!
 //! 真 TrafficFilter 中间件全链路：客户端加密请求 → 过滤器解密 → handler 收明文
 //! → 响应加密 → 客户端用 k_resp 解回。全局链为进程级单例，串行化触碰。
+//!
+//! ## 为什么住在宿主 `tests/`（crate 单测纯净性）
+//!
+//! 被测单元**跨三个 crate**：`TrafficFilter`（`bedcode-server-http` ×
+//! `link_crypto` / `TrafficFilterChain`（`bedcode-server-core`）× `bedcode-crypto-engine`
+//! （算法原语）。拆分产物的纯净性口径是「crate 只保留单元测试，跨 crate 集成测试归宿主」
+//! ——组合测试的天然归属就是宿主：那里**全部依赖都是生产依赖**，既不需要
+//! `[dev-dependencies]`，也不需要给任何 crate 开一个只测对外行为的 `tests/` 二进制。
+//!
+//! 票 08 的二选一论证（放 core 面 ⇒ dev-depend 横向 / 放 http 面 ⇒ 零新增横向）漏掉了
+//! 第三个选项：**宿主**。它当时把权衡限定在「两个被测 crate 之间选一个」，于是选了
+//! 代价看起来更小的一侧，代价转嫁成了：http 面多一个 `tests/` 目录（对外行为面）+ 一条
+//! 只为测试存在的内部 dev 依赖（`bedcode-crypto-engine`）。两条都已在本次搬迁中消除。
+//!
+//! 票 08 附带"修掉"的反向依赖问题（客户端侧经 `bedcode_desktop_lib::utils::crypto` 取
+//! x25519 = 给「面认识宿主」开了一条只在测试里存在的口子）依旧不成立：本文件直取
+//! `bedcode_crypto_engine`（D5 下沉后的算法真源），宿主清单本来就直接声明它。
+//!
+//! 依赖面：搬迁后本文件零新增依赖——`bedcode-server-http` / `bedcode-server-core` /
+//! `bedcode-crypto-engine` / `base64` / `actix-web` 全在宿主 `[dependencies]`，
+//! `tempfile` 在 `[dev-dependencies]`。
+//!
+//! 防复发：`tests/capability_crates_unit_tests_only.rs`（拆分产物不得有 crate 根
+//! `tests/`，也不得有 dev-only 内部依赖）。
 
 use std::sync::Mutex;
 
 use actix_web::{test, web, App, HttpResponse};
 use base64::Engine as _;
 
-use bedcode_lib::server::filter::TrafficFilterChain;
-use bedcode_lib::server::link_crypto::{
+use bedcode_crypto_engine::x25519::{x25519_diffie_hellman, x25519_generate};
+use bedcode_server_core::filter::TrafficFilterChain;
+use bedcode_server_core::link_crypto::{
     self, decrypt_http_body, derive_http_traffic_keys, encrypt_http_body, LinkCryptoConfig, NEGOTIATION_HEADER,
 };
-use bedcode_lib::utils::crypto::x25519::{x25519_diffie_hellman, x25519_generate};
 
 /// 全局链 + 配置快照均为进程级单例，测试串行化
 static GLOBAL_LOCK: Mutex<()> = Mutex::new(());
@@ -55,7 +80,7 @@ impl ClientCtx {
             encrypt_http_body(
                 &self.keys.request,
                 plaintext,
-                &http_aad_shim(bedcode_lib::server::filter::Direction::Inbound, self.path),
+                &http_aad_shim(bedcode_server_core::filter::Direction::Inbound, self.path),
             )
             .unwrap(),
             self.negotiation.clone(),
@@ -67,22 +92,22 @@ impl ClientCtx {
         decrypt_http_body(
             &self.keys.response,
             envelope,
-            &http_aad_shim(bedcode_lib::server::filter::Direction::Outbound, self.path),
+            &http_aad_shim(bedcode_server_core::filter::Direction::Outbound, self.path),
         )
         .unwrap()
     }
 }
 
-/// AAD 构造是模块私有 fn，这里经 pub API 无法直接拿到——集成测试用等价字节
+/// AAD 构造是模块私有 fn，集成测试（独立二进制，只能经 `pub` API）拿不到——用等价字节
 /// 序列复刻（spec §3 固定格式：b"v1" || dir || u32be(len) || path），并断言与
 /// 单元测试一致；若协议变更此处会先红。
 mod crate_aad_shim {
-    pub fn http_aad_shim(direction: bedcode_lib::server::filter::Direction, path: &str) -> Vec<u8> {
+    pub fn http_aad_shim(direction: bedcode_server_core::filter::Direction, path: &str) -> Vec<u8> {
         let mut aad = Vec::with_capacity(7 + path.len());
         aad.extend_from_slice(b"v1");
         aad.push(match direction {
-            bedcode_lib::server::filter::Direction::Inbound => 0x01,
-            bedcode_lib::server::filter::Direction::Outbound => 0x02,
+            bedcode_server_core::filter::Direction::Inbound => 0x01,
+            bedcode_server_core::filter::Direction::Outbound => 0x02,
         });
         aad.extend_from_slice(&(path.len() as u32).to_be_bytes());
         aad.extend_from_slice(path.as_bytes());
@@ -104,7 +129,7 @@ fn test_app() -> actix_web::App<
     >,
 > {
     App::new()
-        .wrap(bedcode_lib::server::middleware::http_filter::TrafficFilter)
+        .wrap(bedcode_server_http::middleware::http_filter::TrafficFilter)
         .route("/echo", web::post().to(echo_handler))
 }
 
@@ -242,7 +267,8 @@ async fn gcm_ciphertext_tamper_rejected_with_400() {
 }
 
 #[actix_web::test]
-async fn strict_policy_rejects_unnegotiated_requests() {    let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+async fn strict_policy_rejects_unnegotiated_requests() {
+    let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     init_identity_once();
 
     // allowPlaintextFallback=false：未携带协商头的非豁免请求一律拒绝

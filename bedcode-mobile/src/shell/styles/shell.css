@@ -1,0 +1,665 @@
+/* ============================================================================
+   宿主壳（Host Shell）层样式
+   ----------------------------------------------------------------------------
+   纪律：本文件**不新增任何颜色**。除品牌层（固定暖炭 + 白，不随用户色板变化）外，
+   所有视觉值都引用 --mobile-* token，主题切换由既有 token 负责。
+
+   品牌层真源：应用图标 bedcode-mobile/src-tauri/icons/icon.svg
+     （BedCode 标志 = 暖炭斜向渐变底 #2E2A22 → #0A0907 + 白色 `>` 终端提示符）
+     · 品牌位恒为深底，图形是白字——浅色主题下也不翻转（翻成浅底白字即不可见）
+     · 品牌底与图形都不跟 --mobile-accent / data-palette 走
+   品牌层只服务品牌标志，不用于任何可点击控件；系统宫格启动器瓦片（.shell-sys-tile）
+经 --shell-tile-* 复用品牌层两枚固定色作图形色，是真源在下、组件在上的同一套值。
+   ============================================================================ */
+
+.shell-ui {
+  /* 品牌暖炭底恒定（斜向渐变亮端 / 暗端）：标志底板不随主题翻转 */
+  --shell-brand-ink: #2e2a22;
+  --shell-brand-ink-deep: #0a0907;
+  /* 品牌图形恒为白：`>` 提示符在暖炭底上 11.4:1，SVG fill 走它（L6 禁壳内硬编码色值） */
+  --shell-brand-glyph: #ffffff;
+  /* 壳内结构 token：只定义与平台 token 无关的几何量，避免各处硬编码同一数值 */
+  --shell-radius-card: 12px;
+  --shell-radius-control: 10px;
+  --shell-radius-pill: 999px;
+  --shell-radius-lg: 18px;   /* 多任务卡等大卡 */
+  --shell-radius-sheet: 16px; /* 底部抽屉面板 */
+  /* 应用图标规格（列表行 / 宫格运行卡 / 多任务预览位）：同一图标同一尺寸策略 */
+  --shell-icon-row: 32px;
+  --shell-icon-app: 44px;
+  --shell-icon-preview: 76px;
+
+  /* ==========================================================================
+     动效时长与缓动（按角色取，不逐处写死数值）
+     --------------------------------------------------------------------------
+     时长分三档，缓动分三类——入场减速 / 退场加速 / 位置对调用标准：
+     ui-ux-pro-max `--domain ux / Easing Functions` 明确把
+     「ease-in-out for every motion」列为反模式，这里把缓动绑到角色意图上，
+     避免全壳共用一个值。匀速旋转（spinner）例外，用 linear。
+     ========================================================================== */
+  --shell-dur-fast: 150ms;   /* 按压反馈、色值切换等即时响应 */
+  --shell-dur-base: 240ms;   /* 屏幕栈 / 抽屉 / 覆盖层等空间位移 */
+  --shell-dur-slow: 320ms;   /* 大件入场、内容展开 */
+  --shell-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --shell-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --shell-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* ==========================================================================
+     系统宫格图标层（启动器风格瓦片）
+     --------------------------------------------------------------------------
+     形态对齐 wasm 应用图标（双端 wasm-apps/<app>/icon.svg 的同一套语言）：满幅圆角方
+     + 135° 斜向渐变底 + 实心块面图形。BLUEPRINTS.md 的 stroke 图标标准不适用
+     于此——那套是 UI 线性图标，这里是启动器位，与旁边满幅贴图的应用图标同层
+     编排，三枚系统入口读起来就是「平台自带的应用」而不是另一种控件。
+     色相沿用入口辨识：应用管理=绿（内容活跃）、权限管理=琥珀（安全裁决需关注）、
+     设置=品牌暖炭（平台本体面，与头部 BrandTile 同族，不引入第三块彩色）。
+     渐变深浅两端按「图形色在整条渐变上 ≥3:1」逐主题选锚：深色主题统一向 bg 混；
+     浅色主题下 bg 是亮锚，绿瓦片改向 accent（浅色下的墨色锚）混深，琥珀瓦片仍向
+     bg 混但收窄混比——白字在亮琥珀上不足 3:1，故琥珀底图形恒用暖墨（"白字在
+     黄底上对比度不足"的同一处置，见 ui-ux-pro-max --domain color）。
+     图形色固定不随主题翻转：渐变底板是恒亮面，与品牌层同理；取值引品牌层两枚
+     固定色（绿/暖炭底=brand-glyph 白，琥珀底=brand-ink 暖墨），零新 hex。
+     ========================================================================== */
+  --shell-tile-apps-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-success) 80%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-success) 46%, var(--mobile-bg-primary))
+  );
+  --shell-tile-apps-glyph: var(--shell-brand-glyph);
+  --shell-tile-perms-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-warning) 88%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-warning) 66%, var(--mobile-bg-primary))
+  );
+  --shell-tile-perms-glyph: var(--shell-brand-ink);
+  --shell-tile-settings-bg: linear-gradient(135deg, var(--shell-brand-ink), var(--shell-brand-ink-deep));
+  --shell-tile-settings-glyph: var(--shell-brand-glyph);
+  /* 快捷磁贴 hover 光晕：由强调色派生，随主题与色板变化（原为硬编码青色 rgba） */
+  --shell-action-glow: 0 0 15px color-mix(in srgb, var(--mobile-accent) 12%, transparent);
+}
+
+/* ============================================================================
+   排版层级（壳内语义级）
+   ----------------------------------------------------------------------------
+   为什么不用 Tailwind 的 text-[var(--font-size-*)]：
+   `text-[...]` 在 Tailwind v3 里 color 与 font-size 共用前缀，裸 var() 不带类型
+   线索，编译器按 color 生成规则（实测产物为 `.text-\[var\(--font-size-lg\)]{
+   color:var(--font-size-lg)}`），字号声明整体失效并回落继承值——壳内 95 处字号
+   声明因此全部不生效，全屏只剩 14px 一档，层级完全塌陷。
+
+   这里改用语义级：名字直接说明用途，尺寸仍取 --font-size-* 流式 token
+   （用户字号偏好与窄屏缩放照常生效）。层级由「尺寸 + 字重 + 字距」承担；
+   字色刻意不在此层——本文件是未分层样式，会整体压过 Tailwind 的 utilities 层，
+   若在此写死颜色，各处想换别档语义色会被静默忽略。尺寸轴与颜色轴正交，
+   调用点用 text-[var(--mobile-text-*)] 自取语义色。
+
+   挂在 .shell-ui 下而非裸类名：style.css 的旧规则 `.mobile-ui h2` 特异度
+   (0,1,1) 高于任何单类名 (0,1,0)，会盖住分组标题字号；`.shell-ui .shell-type-*`
+   为 (0,2,0)，稳定压过它。
+   ============================================================================ */
+.shell-ui .shell-type-display {
+  font-size: var(--font-size-2xl);
+  font-weight: 650;
+  letter-spacing: -0.022em;
+  line-height: 1.18;
+}
+/* 主屏品牌 / 屏幕主标题：比 display 低一档 */
+.shell-ui .shell-type-title {
+  font-size: var(--font-size-xl);
+  font-weight: 650;
+  letter-spacing: -0.014em;
+  line-height: 1.25;
+}
+/* 分组标题：字距 + 字重区分，在 16px 尺寸下也能与同尺寸的列表标题拉开 */
+.shell-ui .shell-type-section {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  line-height: 1.3;
+}
+/* 列表行标题：与 body 同尺寸，靠字重建立层级 */
+.shell-ui .shell-type-label {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  letter-spacing: -0.004em;
+  line-height: 1.35;
+}
+.shell-ui .shell-type-body {
+  font-size: var(--font-size-base);
+  font-weight: 400;
+  line-height: 1.5;
+}
+/* 元信息行（版本 / 权限数 / 体积）：降一档，让主标题独占视觉重量 */
+.shell-ui .shell-type-caption {
+  font-size: var(--font-size-sm);
+  font-weight: 450;
+  line-height: 1.45;
+}
+/* 角标 / 徽章 / 计数：最小档 + 明显字距，读作标签而非正文 */
+.shell-ui .shell-type-micro {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+}
+
+/* ============================================================================
+   可读宽度上限（横屏 / 平板）
+   ----------------------------------------------------------------------------
+   各屏内容原本随视口等比拉伸：横屏 852px 宽时四列宫格被拉到每列约 200px，
+   图标成了 vast 空白里的孤岛（ui-ux-pro-max `--domain ux` 「Adaptive gutters
+   by breakpoint / Consistent content width」）。给内容块封顶并居中，宽屏下形成
+   一条稳定的阅读栏；窄屏下 max-width 不生效，行为不变。
+   作用在滚动容器的直接子元素上，因此无需在各屏的标记里逐层包一层。
+   ============================================================================ */
+.shell-ui .shell-content-cap > * {
+  max-width: 600px;
+  margin-inline: auto;
+}
+
+/* ============================================================================
+   两行截断（图标宫格的应用名）
+   ----------------------------------------------------------------------------
+   应用名长度不可控（中英混排、插件自填），单行 truncate 在窄屏上会把
+   「终端 Terminal」砍成「终端 Term⋯」。两行夹是启动器的通行做法：短名占一行，
+   长名换行仍可读，超出两行才省略。行高压到 1.3 让两行不至于松散。
+   ============================================================================ */
+.shell-ui .shell-type-clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  /* 文本顶对齐（启动器的通行做法）：一行名与两行名的首行齐平，图标行不受影响。
+     曾试过 -webkit-box-pack:center + min-height 做垂直居中，实测在 line-clamp
+     下不生效（单行名不落进两行框中心），故不保留无效声明。 */
+}
+
+/* ============================================================================
+   全屏氛围底（主屏之外的各屏共用）
+   ----------------------------------------------------------------------------
+   主屏有自己的壁纸层；应用管理 / 权限 / 设置这些次级屏原本是纯底色，底部一大片
+   死黑，页面读起来像被截断。给根容器垫一层顶部渐隐的柔光，让各屏共享同一套
+   空气感、与主屏同源又不抢列表对比度（列表卡自带 --mobile-bg-card 表面）。
+   主屏不受影响：它的壁纸层是 .shell-ui 的子元素，本层在壁纸之下。
+   ============================================================================ */
+.shell-ui::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  top: calc(-1 * var(--shell-safe-top, 0px));
+  height: calc(100% + var(--shell-safe-top, 0px));
+  background: radial-gradient(
+    132% 66% at 50% 0%,
+    color-mix(in srgb, var(--mobile-accent) 7%, transparent) 0%,
+    transparent 82%
+  );
+  pointer-events: none;
+}
+
+/* ============================================================================
+   屏幕栈过渡
+   ----------------------------------------------------------------------------
+   只动 transform / opacity（compositor 友好），时长 ≤300ms。
+   横向位移用 26% 而非 100%：与移动端系统「上一级屏幕轻微后退」的手感一致，
+   全屏位移在低端机上容易掉帧。
+   ============================================================================ */
+.shell-screen-enter-active,
+.shell-screen-leave-active {
+  transition:
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-base) var(--shell-ease-standard);
+}
+
+.shell-screen-forward-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+.shell-screen-forward-leave-to {
+  transform: translateX(-26%);
+  opacity: 0;
+}
+
+.shell-screen-backward-enter-from {
+  transform: translateX(-26%);
+  opacity: 0;
+}
+.shell-screen-backward-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+/* 屏幕层叠：进出场期间两屏共存，用绝对定位避免父容器被撑高 */
+.shell-screen-leave-active {
+  position: absolute;
+  inset: 0;
+}
+
+/* ============================================================================
+   底部抽屉（胶囊菜单 / 授权弹窗共用）
+   ============================================================================ */
+.shell-sheet-enter-active,
+.shell-sheet-leave-active {
+  transition: transform var(--shell-dur-slow) var(--shell-ease-out);
+}
+.shell-sheet-enter-from,
+.shell-sheet-leave-to {
+  transform: translateY(100%);
+}
+
+.shell-scrim-enter-active,
+.shell-scrim-leave-active {
+  transition: opacity var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-scrim-enter-from,
+.shell-scrim-leave-to {
+  opacity: 0;
+}
+
+/* ============================================================================
+   字母头像渐变档位（LetterAvatar 用）
+   ----------------------------------------------------------------------------
+   迁移自旧 `components/LetterAvatar.vue` 的六组硬编码渐变：颜色落点收归本文件
+   （唯一允许出现字面色值的落点），组件只按 seed 哈希选档。档位固定不随主题
+   反转——头像底不是主题语义面，因此不做深浅两套。
+   ============================================================================ */
+.shell-avatar-g0 { background: linear-gradient(135deg, #7c3aed, #4f46e5); }
+.shell-avatar-g1 { background: linear-gradient(135deg, #0ea5e9, #6366f1); }
+.shell-avatar-g2 { background: linear-gradient(135deg, #10b981, #0d9488); }
+.shell-avatar-g3 { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+.shell-avatar-g4 { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+.shell-avatar-g5 { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+
+/* ============================================================================
+   主屏系统宫格瓦片（启动器风格，.shell-sys-tile）
+   ----------------------------------------------------------------------------
+   形态 = 满幅圆角方 + 斜向渐变底 + 实心块面图形，与 wasm 应用图标同语言
+   （token 定义与取色理由见 .shell-ui 内 --shell-tile-* 注释）。
+   · 无描边：wasm 图标本身无描边，加一条 border 会立刻显出「控件感」；
+     层次由卡片阴影承担，与同屏运行卡一致。
+   · 圆角 10px（--shell-radius-control）≈ 23%：对齐 wasm 图标的 20% 大圆角，
+     比 12px 卡片角更接近启动器形态。
+   · 按压反馈 = 瓦片缩放（0.92）+ 颜色过渡走 fast：启动器的按压语言是「按下去」
+     而不是底色变灰；外层按钮只保留 active 底色，刻意不带 active:opacity——
+     半透明会让渐变底板在壁纸上泛白，缩放本身就是足够的按下语义。
+   ============================================================================ */
+.shell-sys-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--shell-icon-app);
+  height: var(--shell-icon-app);
+  border-radius: var(--shell-radius-control);
+  box-shadow: var(--mobile-card-shadow);
+  transition: transform var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-sys-tile:active {
+  transform: scale(0.92);
+}
+.shell-sys-tile[data-tile='apps'] {
+  background: var(--shell-tile-apps-bg);
+  color: var(--shell-tile-apps-glyph);
+}
+.shell-sys-tile[data-tile='permissions'] {
+  background: var(--shell-tile-perms-bg);
+  color: var(--shell-tile-perms-glyph);
+}
+.shell-sys-tile[data-tile='settings'] {
+  background: var(--shell-tile-settings-bg);
+  color: var(--shell-tile-settings-glyph);
+}
+
+/* 浅色主题：bg 变亮锚后逐瓦片重选混锚（绿向 accent 混深 / 琥珀向 bg 混亮），
+   保持图形色全渐变 ≥3:1；品牌暖炭瓦片固定不翻。详见 --shell-tile-* 注释。 */
+html:not(.dark) .shell-ui {
+  --shell-tile-apps-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-success) 92%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-success) 55%, var(--mobile-accent))
+  );
+  --shell-tile-perms-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--mobile-warning) 92%, var(--mobile-bg-primary)),
+    color-mix(in srgb, var(--mobile-warning) 74%, var(--mobile-bg-primary))
+  );
+}
+
+/* ============================================================================
+   通知卡（滑动删除 + 点击打开 + 删除动画）
+   ----------------------------------------------------------------------------
+   拖动中不播过渡（跟手），松手播回弹/滑出。transition 只动 transform/opacity。
+   删除表达三层：滑动时卡下露红色删除层 → 松手滑出（淡出）→ 列表剩余项经
+   TransitionGroup 归位上移（.notify-list-move）。
+   ============================================================================ */
+.notify-card {
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard), opacity var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.notify-card--dragging {
+  transition: none;
+}
+/* 滑动删除时露出的指示层：卡片滑开，底下是删除表达（垃圾桶图标）。
+   底色刻意不用破坏色实心大块（红色铺满整张卡背太抢眼、与「滑动」这个轻动作
+   不匹配）：把 --mobile-error 以低比例混进浮起底色，只留一层薄薄的危险信号；
+   图标本身仍着 --mobile-error，破坏语义不丢。双主题都由 token 派生，零新色值。 */
+.notify-swipe-reveal {
+  background: color-mix(in srgb, var(--mobile-error) 14%, var(--mobile-bg-elevated));
+  color: var(--mobile-error);
+}
+
+/* 列表删除后的归位（TransitionGroup 只定义 move；enter/leave 走默认即无动画） */
+.notify-list-move {
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard);
+}
+/* X 按钮删除 / 取消时的离开动画：淡出 + 微缩（滑动删除的卡此时已在屏外，无感） */
+.notify-list-leave-active {
+  transition: opacity var(--shell-dur-fast) var(--shell-ease-in), transform var(--shell-dur-fast) var(--shell-ease-in);
+}
+.notify-list-leave-to {
+  opacity: 0;
+  transform: scale(0.97);
+}
+/* 全部删除级联：每张卡按 index 等差延迟（组件绑定 animation-delay），
+   依次加速向右飞出（cubic-bezier 末段加速 = 离手甩出的手感），飞出后淡出。
+   animation 的 transform 覆盖卡片拖动时的内联 transform（无拖动共存场景）。 */
+.notify-card--flee {
+  animation: notify-flee var(--shell-dur-slow) cubic-bezier(0.5, 0, 1, 0.4) forwards;
+  pointer-events: none;
+}
+@keyframes notify-flee {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(120vw);
+    opacity: 0.25;
+  }
+}
+
+/* ============================================================================
+   壁纸上的浮空文字（主屏专用）
+   ----------------------------------------------------------------------------
+   主屏内容直接压在壁纸上，而壁纸（渐变档位与用户自选图片）的亮度与色相不可控：
+   次级字色（--mobile-text-secondary）在壁纸亮处对比度不足，读起来像糊了
+   （ui-ux-pro-max `--domain ux` Color Contrast：正文需 4.5:1）。
+   这里给这类文字叠一层由页面底色派生的柔和描边：深色主题是暗晕、浅色主题是亮晕，
+   双主题都提高字形边缘与壁纸的分离度，且不引入新色值、不改布局。
+   无壁纸时晕色与页面底色同色，等于不可见；卡片内的文字不受影响（不挂在这个类下）。
+   ============================================================================ */
+.shell-text-over-wall {
+  text-shadow:
+    0 0 2px color-mix(in srgb, var(--mobile-bg-primary) 78%, transparent),
+    0 1px 4px color-mix(in srgb, var(--mobile-bg-primary) 55%, transparent);
+}
+
+/* ============================================================================
+   破坏性动作工具类（平台统一危险样式）
+   ----------------------------------------------------------------------------
+   破坏性语义（卸载 / 停用 / 清除全部）必须视觉上可识别，不允许与普通行同权：
+   outline = 红描边红字（面板级整宽按钮）；text = 红字透明底（列表行 / 菜单项）。
+   颜色全部走 --mobile-error / --mobile-error-muted，随主题与色板自动翻转。
+   ============================================================================ */
+.shell-btn-danger-outline {
+  border: 1px solid color-mix(in srgb, var(--mobile-error) 55%, transparent);
+  color: var(--mobile-error);
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-btn-danger-outline:active {
+  background: var(--mobile-error-muted);
+}
+.shell-btn-danger-text {
+  color: var(--mobile-error);
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-btn-danger-text:active {
+  background: var(--mobile-error-muted);
+}
+
+/* ============================================================================
+   分段视图切换（权限总览：按应用 / 按权限）
+   ----------------------------------------------------------------------------
+   凸起式选中（raised）：选中项用底卡 + 投影浮起，未选中保持平面，
+   双主题都由 token 派生（零新 hex）。
+   ============================================================================ */
+.shell-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--shell-radius-control);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+}
+.shell-segmented button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--mobile-touch-target-min) - 8px);
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-secondary);
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard), color var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-segmented button:active {
+  opacity: 0.85;
+}
+.shell-segmented button[aria-pressed='true'] {
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+  box-shadow: var(--mobile-card-shadow);
+}
+
+/* ============================================================================
+   内容入场（主屏分区淡入上移）
+   ----------------------------------------------------------------------------
+   只动 transform / opacity（compositor 友好）；一次性动画（both 保持终态），
+   不循环不常驻；prefers-reduced-motion 下整体关闭（见文末块）。
+   ============================================================================ */
+.shell-reveal {
+  animation: shell-reveal var(--shell-dur-slow) var(--shell-ease-out) both;
+}
+@keyframes shell-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================================
+   通知栏（Android 式独立覆盖层：自顶部滑下）
+   ============================================================================ */
+.shell-shade-enter-active,
+.shell-shade-leave-active {
+  transition:
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-shade-enter-from,
+.shell-shade-leave-to {
+  transform: translateY(-100%);
+  opacity: 0;
+}
+
+/* ============================================================================
+   分组标题行动作（图标按钮）
+   ----------------------------------------------------------------------------
+   分分组头右侧的动作位：单图标 + 可访问名（ui-ux-pro-max `--domain icons`：
+   图标控件必须有 accessible name）。44px 触控目标与壳内其它图标按钮同口径。
+   ============================================================================ */
+.shell-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: var(--mobile-touch-target-min);
+  min-height: var(--mobile-touch-target-min);
+  border-radius: var(--shell-radius-control);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+  transition:
+    background-color var(--shell-dur-fast) var(--shell-ease-standard),
+    color var(--shell-dur-fast) var(--shell-ease-standard),
+    opacity var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-icon-action:active {
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
+}
+.shell-icon-action:disabled {
+  opacity: 0.35;
+}
+
+/* ============================================================================
+   主屏快捷卡片轨道（横向轮播）
+   ----------------------------------------------------------------------------
+   定宽卡片 + 原生 scroll-snap：一次滑动定格一张，轨道自身滚动而不把页面
+   撑宽（组件内滚动，无页面级横向滚动条）。
+   ============================================================================ */
+.shell-slot-track {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 16px 6px;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 16px;
+  scrollbar-width: none;
+}
+.shell-slot-track::-webkit-scrollbar {
+  display: none;
+}
+.shell-slot-item {
+  flex: 0 0 min(76vw, 300px);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+/* ============================================================================
+   应用运行页胶囊（菜单 / 多任务 / 回主屏）
+   ----------------------------------------------------------------------------
+   平台叠加在应用之上的控制项：半透明 + 毛玻璃，下丝 44px 触控目标。
+   ============================================================================ */
+.shell-capsule {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: var(--shell-radius-pill);
+  border: 1px solid var(--mobile-border);
+  background: color-mix(in srgb, var(--mobile-bg-card) 92%, transparent);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.shell-capsule-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
+  color: var(--mobile-text-primary);
+  transition: background-color var(--shell-dur-fast) var(--shell-ease-standard);
+}
+.shell-capsule-btn:active {
+  background: var(--mobile-accent-muted);
+}
+.shell-capsule-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--mobile-border);
+}
+
+/* ============================================================================
+   多任务卡片轨道（deck track）
+   ----------------------------------------------------------------------------
+   卡片**并排**成一行，不叠放：轨道整体平移，把当前卡片送到视口中间。轨道两端
+   的等量留白（padding-inline）让第一张 / 最后一张也能居中，于是「平移 = 序号 ×
+   步长」成立，卡宽与间距改这里即可，组件不必做布局计算。
+
+   视口比轨道窄时（多任务只剩这一屏的常态）相邻卡片在边缘被裁掉半张——那是裁切，
+   不是叠压：卡片之间永远不重叠。
+   ============================================================================ */
+.shell-deck {
+  --deck-card-w: min(72vw, 300px);
+  --deck-gap: 12px;
+  /* 步长 = 卡宽 + 间距；轨道平移量 = 步长 × 序号（真源在组件的 trackStyle） */
+  --deck-step: calc(var(--deck-card-w) + var(--deck-gap));
+  position: relative;
+  overflow: hidden;
+}
+.shell-deck-track {
+  display: flex;
+  align-items: center;
+  gap: var(--deck-gap);
+  height: 100%;
+  /* 首尾卡也能居中：两端各留「半个视口 - 半个卡宽」 */
+  padding-inline: calc(50% - var(--deck-card-w) / 2);
+  transition: transform var(--shell-dur-base) var(--shell-ease-standard);
+}
+.shell-deck-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--deck-card-w);
+  width: var(--deck-card-w);
+  height: min(calc(100% - 24px), 440px);
+  border-radius: var(--shell-radius-lg);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-card);
+  box-shadow: var(--mobile-card-shadow);
+  overflow: hidden;
+  transition:
+    transform var(--shell-dur-base) var(--shell-ease-standard),
+    opacity var(--shell-dur-base) var(--shell-ease-standard);
+}
+/* 拖拽期间关掉过渡并开启 will-change，抬起后交回 CSS 过渡——否则手指与卡片之间会慢半拍 */
+.shell-deck--dragging .shell-deck-track,
+.shell-deck--dragging .shell-deck-card {
+  transition: none;
+  will-change: transform;
+}
+
+/* ============================================================================
+   底部系统条已退役（2026-10-14）：常驻导航条占掉一截应用可视高度且与 Android
+   系统手势条重复。导航入口：各非根屏页头返回 + 应用运行页胶囊（多任务 / 回主屏）。
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  /* 覆盖壳内全部自带过渡的面：屏幕栈 / 抽屉 / 通知栏 / 多任务卡 / 通知卡拖拽与
+     删除归位 / 分段器 / 图标动作 / 胶囊按钮 / 破坏性按钮 / 遮罩 / 系统宫格瓦片。
+     ui-ux-pro-max `--domain ux / Reduced Motion`：用户关闭动效后位移与缩放类
+     动画一律收敛为瞬时，只保留不产生位移的状态色变化（不列在此，靠 duration
+     极短而非归零，色变仍可见）。 */
+  .shell-screen-enter-active,
+  .shell-screen-leave-active,
+  .shell-sheet-enter-active,
+  .shell-sheet-leave-active,
+  .shell-scrim-enter-active,
+  .shell-scrim-leave-active,
+  .shell-shade-enter-active,
+  .shell-shade-leave-active,
+  .shell-deck-track,
+  .shell-deck-card,
+  .shell-reveal,
+  .notify-card--flee {
+    transition-duration: 0.01ms;
+    animation: none;
+  }
+  /* 位移 / 缩放型过渡收敛为瞬时 */
+  .notify-card,
+  .notify-list-move,
+  .notify-list-leave-active,
+  .shell-segmented button,
+  .shell-icon-action,
+  .shell-capsule-btn,
+  .shell-btn-danger-outline,
+  .shell-btn-danger-text,
+  .shell-sys-tile {
+    transition-duration: 0.01ms;
+  }
+}

@@ -1,0 +1,515 @@
+/**
+ * Terminal Styles - 终端视图布局、xterm 覆盖、滚动条、选择模式样式
+ *
+ * 从 TerminalView.vue 提取，供终端视图及相关组件共用
+ */
+
+/* Terminal View Layout */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--mobile-terminal-bg);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  overflow: hidden;
+  /* 只负责顶部安全区域（键盘避让由 movable-area 的 transform 抬升） */
+  transition: padding-top 0.25s cubic-bezier(0.4, 0, 0, 0.2, 1);
+}
+
+/* 可移动区域的裁剪容器
+ * 双重职责：① 限制 movable-area 不突破 Header 底部边界（快捷键面板展开时内容
+ * 仍收敛在终端页内）；② 键盘避让时裁掉上移出去的顶部若干行（lift 语义）。
+ * 裁切点是「Header 下沿」这一固定常量：平移距离随键盘高度变化，但可见上界恒定，
+ * 因此不会像逐行 clip-path 那样出现随内容摆动的色块 */
+.movable-clip {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* 创建新的 stacking context，确保 clip 生效 */
+  position: relative;
+}
+
+/* 可移动区域：终端内容 + 输入栏
+ * 键盘避让（lift 语义，位移量 = 实测键盘高度，由 TerminalView 内联
+ * transform 提供）把整块内容上移，使输入栏底边落在键盘上沿。
+ * 终端网格尺寸（cols/rows）不变：键盘弹/收不触发 ResizeObserver 重新 fit，
+ * 不改 PTY 尺寸，TUI 无整屏重排。代价是上移量对应高度的顶部行被上方
+ * .movable-clip 裁在 Header 之下（横屏 + 键盘时可见行数会明显变少）。
+ * 不在此层做高度/内边距避让：历史上的高度收缩会与 WebView 聚焦呈现的视口 pan
+ * 叠加产生空白（旧实现已注释保留在 useTerminalKeyboardAvoidance.ts 文件末） */
+.movable-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* Loading Overlay
+ * 底色跟随终端主题画布（--terminal-canvas-bg，TerminalView 按当前色板写入）：
+ * 遮罩淡出时与 xterm 画布同色，不闪浅色底 */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--terminal-canvas-bg, var(--mobile-terminal-bg));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mobile-border);
+  border-top-color: var(--mobile-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: var(--font-size-base);
+  color: var(--mobile-text-muted);
+  margin: 0;
+}
+
+/* ============================================
+   链路重连提示（2026-10-04）
+   终端链路断线退避时的非阻断横幅：置于终端区域顶部，不占布局、不遮输出。
+   所有值走 token（TOKENS.md 的 --mobile-warning / --mobile-text-*），
+   跟随主题；pointer-events:none 保证不阻断 xterm 原生交互。
+   ============================================ */
+.reconnect-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-warning-muted, rgba(245, 158, 11, 0.16));
+  border-bottom: 1px solid var(--mobile-warning, #f59e0b);
+  color: var(--mobile-text-primary);
+  font-size: var(--font-size-sm, 13px);
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.reconnect-banner-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--mobile-border);
+  border-top-color: var(--mobile-warning, #f59e0b);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.reconnect-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 与 .loading-fade 同档：纯 opacity，200ms 内完成 */
+.reconnect-fade-enter-active,
+.reconnect-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.reconnect-fade-enter-from,
+.reconnect-fade-leave-to {
+  opacity: 0;
+}
+
+/* Loading fade transition */
+.loading-fade-enter-active,
+.loading-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.loading-fade-enter-from,
+.loading-fade-leave-to {
+  opacity: 0;
+}
+
+/* Main Content Area */
+.main-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Sidebar overlay */
+.sidebar-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-hidden {
+  transform: translateX(100%);
+  pointer-events: none;
+}
+
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+}
+
+/* Terminal Area
+ * 底色跟随终端主题画布（--terminal-canvas-bg，TerminalView 按当前色板写入），
+ * 回退 App 主题 token：网格贴合后顶部 0~1 行余量与右侧行尾余量区（约 1 列 +
+ * 滚动条预留宽）露的都是这层底色，必须与 xterm 画布同色——用 App 主题 token
+ * （浅色取暖白）时，深色 TUI 下顶部/右侧会露出浅色带；行尾字形溢出墨迹
+ * （.xterm-rows > div overflow visible）也依赖本层与画布同色才视觉无感 */
+.terminal-output-area {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--terminal-canvas-bg, var(--mobile-terminal-bg));
+}
+
+/* 触摸滚动容器 */
+.terminal-scroll-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* 自定义滚动条轨道 */
+.scrollbar-track {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
+  width: 4px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* 自定义滚动条滑块 */
+.scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 20px;
+  border-radius: 2px;
+  background: rgba(160, 160, 180, 0.3);
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.15s ease;
+  pointer-events: none;
+}
+
+.scrollbar-thumb.visible {
+  opacity: 1;
+  background: rgba(0, 212, 255, 0.4);
+}
+
+/* xterm 容器 */
+.xterm-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+/* 终端视口铺满容器：.xterm 拉满整个容器高度，行网格（.xterm-screen）在其
+ * 内部贴底。原先 .xterm 仅贴底、高度=行网格（882px），行数取整余量
+ * （0~1 行，本设备 11px）被推到顶部，露出 .terminal-output-area 的浅色底，
+ * 与 TUI 深色内容形成刺眼空隙。
+ * 余量无法靠行网格消除：xterm DOM 渲染器对 cell 高做物理像素量化
+ * （device.cell.height = floor(⌈charH×dpr⌉ × lineHeight)，单元格只能整物理
+ * 像素步进），rows 不裁字的前提下网格必然差 0~1 行——所以让余量带归属
+ * 终端自身：scrollable-element 拉满高度后，其内联底色（xterm 按主题
+ * background 着色，随主题切换自动跟随；system 主题下 background 为
+ * var() 串不可解析，落回默认深色 #2e3440，正好与深色 TUI 融合）覆盖顶部。
+ * 滚动/触摸/选择不受影响：xterm 6 为虚拟滚动，Viewport._sync 显式写入
+ * 滚动维度（height=css.canvas.height），与 DOM 层高度无关；最后一行仍
+ * 紧贴输入栏（保留「终端与输入栏贴合」的修复效果） */
+.xterm-container .xterm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+.xterm-container .xterm .xterm-scrollable-element {
+  height: 100%;
+}
+
+.xterm-container .xterm .xterm-scrollable-element > .xterm-screen {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  /* 行尾裁切的**唯一**裁切点，必须留在 .xterm-screen 这一层（理由见文件末
+   * 「行尾软裁切」注释）：逐行 clip-path 会给每行造出层叠上下文，把选区内的
+   * 文字关进行内、压在选区块下面（长按选中后一片死色、看不到字）。 */
+  clip-path: inset(0 -6px 0 0);
+}
+
+/* xterm 核心样式 */
+/* 调试验证：隐藏 xterm 6 自定义 slider 滚动条，验证右侧遮挡是否与其相关 */
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
+.xterm {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+.xterm::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.xterm-screen {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  scrollbar-width: none;
+}
+
+.xterm-screen::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+/* 选择模式：允许选中 */
+.selection-mode .xterm {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.selection-mode .xterm-screen {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 选择模式：高亮 xterm 区域
+ * 取色跟随当前终端主题（--terminal-selection-frame 由 TerminalView 按色板
+ * cursor 写入），避免浅色主题下写死的青蓝描边在暖白底上突兀 */
+.selection-mode .xterm-container {
+  outline: 2px solid var(--terminal-selection-frame, transparent);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* 选择模式操作栏 */
+.selection-action-bar {
+  position: absolute;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-secondary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  white-space: nowrap;
+}
+
+.selection-action-btn {
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.375rem;
+  background: var(--mobile-accent);
+  border: none;
+  color: var(--mobile-text-on-accent);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.selection-action-btn.cancel {
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+.selection-action-btn:active {
+  opacity: 0.8;
+}
+
+/* 选择栏过渡动画 */
+.selection-bar-enter-active,
+.selection-bar-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.selection-bar-enter-from,
+.selection-bar-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* 滚动到底部按钮 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: background 0.2s ease, opacity 0.15s ease;
+}
+
+.scroll-to-bottom-btn:active {
+  opacity: 0.7;
+}
+
+.scroll-to-bottom-icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* 滚动指示器过渡 */
+.scroll-indicator-enter-active,
+.scroll-indicator-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.scroll-indicator-enter-from,
+.scroll-indicator-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* 禁用 xterm-viewport 原生滚动 */
+.xterm-viewport {
+  overflow-y: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
+  scrollbar-width: none !important;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+}
+
+/* 禁用 xterm-scrollable-element 原生滚动和滚动条
+ * xterm 新版本使用 SmoothScrollableElement 管理 viewport 滚动，
+ * 在移动端由自定义触摸滚动接管，必须禁用 xterm 内部的滚动条和触摸 */
+.xterm-scrollable-element {
+  overflow: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
+}
+
+.xterm-scrollable-element .scrollbar {
+  display: none !important;
+}
+
+/* 禁用 xterm-scroll-area 滚动条 */
+.xterm-scroll-area {
+  scrollbar-width: none;
+}
+
+.xterm-scroll-area::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题（USE_WEBGL_RENDERER 开启时生效） */
+/* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
+/* 本文件为全局注入样式（非 SFC scoped），后代选择器直接书写，无需 :deep() */
+.xterm-hidden-cursor .xterm-cursor {
+  display: none !important;
+}
+
+/* 防止渲染器滚动时出现重影：
+ * 1. 禁止 xterm-screen 使用 GPU 合成层（will-change），持续开启会导致
+ *    scrollToLine 时新旧帧同时可见
+ * 2. 确保 xterm 渲染层不创建独立的合成层 */
+.xterm-screen {
+  will-change: auto !important;
+}
+
+/* 行尾软裁切（DOM 渲染器 CJK advance 累计漂移的静态止血；2026-09-15 重做，
+ * 取代已停用的 terminalRowClip JS 补丁；2026-09-27 裁切点上移到 .xterm-screen；
+ * 2026-10-01 漂移源头已修，见下）：
+ *
+ * 问题（真机 CDP 实测）：xterm 内联给每行注入 width=网格宽 + overflow:hidden
+ * （行级硬裁），而行内 span 依浏览器真实 advance 流式排布——CJK 字体 advance
+ * ≠ 精确 2× 格宽时，亚像素误差逐字符累积，于是：
+ *   (a) 满行末字墨迹溢出网格右界「数 px」→ 被硬裁右半（pi 等中文满行输出必现）
+ *   (b) TUI（opencode）用「背景色 + 空格」填充面板时，背景盒被推出网格右界
+ *       7~22px → 行尾余量区出现随内容重绘左右摆动的色块（右侧视觉抖动来源）
+ *
+ * ★ 2026-10-01 起 (a)(b) 的根因已根治：随包内置 CJK 严格等宽字体
+ *   （styles/terminal-font.css：拉丁 0.5em / CJK 1em = 2 格 / 制表符 0.5em），
+ *   CJK advance 恰为 2×格宽，累计漂移归零。残留触发面只有「子集外汉字落回
+ *   系统 CJK 字体」（其 advance 恒为 1em = 2×0.5em，仍对齐）与 hinting 舍入，
+ *   量级为亚像素 → 本裁切规则退居静态安全网，继续保留（零逐帧写入、无抖动）。
+ *
+ * 方案：保留行级 overflow:visible 解除行级硬裁（(a) 得以落墨进行尾余量区），
+ * 裁切本身放在 **.xterm-screen 一层**（见其规则内的 clip-path）统一右扩 6px
+ * （常量，与网格预留宽解耦：2026-10-03 起 terminalMetrics.TERMINAL_RIGHT_RESERVE_PX
+ * 归 0，右缘差额只剩「容器宽 mod 格宽」的发丝线，见该常量注释）：
+ *   - (a) 末字超格数 px 落在 6px 内 → 完整可见
+ *   - (b) 背景盒超出 6px 的部分被裁掉，且裁切线是**固定常量**、不随内容/重绘
+ *         变化 → 色块不再摆动
+ * 逐行等宽等高，屏幕盒恰好是全部行的并集，故「整屏一次裁切」与原「逐行裁切」
+ * 的可见区域完全等价（垂直方向同理：行盒上下界即屏幕上下界）。
+ *
+ * ★ 裁切点为什么必须留在 .xterm-screen（勿改回逐行 clip-path）：
+ * `clip-path` 值非 none 会让该元素**成为层叠上下文**（CSS Masking L1）。xterm 6
+ * DOM 渲染器的选区是一组 `.xterm-selection` 内的**不透明** div（z-index: 1），
+ * 被选中的文字则是靠行内 span 上的 `.xterm-decoration-top`
+ * （xterm.css: position:relative; z-index:2）浮到选区**之上**才可见。
+ * 一旦 clip-path 落到每行 div 上，span 的 z-index:2 就被关进行内的层叠上下文，
+ * 无法再越过选区块——行内文字随层叠顺序（常规流）先于定位元素绘制，于是
+ * **整块选区盖住文字，长按拖选后选区里一片死色**（2026-09-27 修复的问题）。
+ * .xterm-screen 本身是整块选区与行文字的共同祖先，在这一层造层叠上下文
+ * 不影响 z-index 1（选区）与 2（选区内文字）的相对次序。
+ *
+ * 为什么静态裁切不会像旧补丁那样抖：
+ *   - 裁切量是 CSS 常量，**零逐帧样式写入**——不存在「漂移量在 1px 容差阈值
+ *     两侧振荡 → clip-path 反复写/清」触发的合成层/重绘抖动
+ *   - 无 MutationObserver/ResizeObserver 回调，无 getBoundingClientRect 强制布局
+ *   - 纯 paint 级裁切，不新增 GPU 合成层（与下方 .xterm-screen will-change:auto
+ *     约束一致——合成层会导致 scrollToLine 新旧帧同显的重影）
+ *   - 若未来切到 WebGL/canvas 渲染器（逐格绘制无漂移），本规则自然失效无害 */
+.xterm-rows > div {
+  overflow: visible !important;
+}

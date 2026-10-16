@@ -17,7 +17,8 @@
  * - 启用路径中 pluginLoader.loadInline 的「动态 import 插件入口」在 vitest 内
  *   必然失败（asset:// 协议无服务器可解析）——断言到「后端激活通知已发 +
  *   plugin_mark_error 恢复」为止，前端模块加载属 Tauri 资产服务器能力，
- *   非前端逻辑；loader 的失败恢复路径（mark_error + 列表重载）正是被测行为
+ *   非前端逻辑；loader 的失败恢复路径（mark_error + 激活失败上抛给 toggle，
+ *   统一消费层展示友好提示——不再假成功）正是被测行为
  * - fake timers：togglePlugin 有 500ms 最小遮罩时长，用 fake timers 推进；
  *   期间 togglingId 保持非空 → 按钮禁用态可观测（联动断言）
  */
@@ -139,12 +140,12 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Activated' },
+        state: { state: 'activated' },
       }),
       makePluginInfo({
         id: 'com.bedcode.other',
         name: 'Other Plugin',
-        state: { state: 'Deactivated' },
+        state: { state: 'deactivated' },
       }),
     ]
     await mountView()
@@ -160,6 +161,15 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     // Demo Plugin 行的开关是「停用」语义，Other Plugin 是「启用」语义
     expect(wrapper!.find('[aria-label="停用"]').exists()).toBe(true)
     expect(wrapper!.find('[aria-label="启用"]').exists()).toBe(true)
+    // 开关视觉由状态注入的 --toggle-on 驱动（1=启用态 / 0=未启用态）。
+    // 状态词表若是 PascalCase，isRunning 恒不命中 → 两个开关都渲染成未启用——
+    // 这是用户可见症状（点启用后按钮样式不变）的直接回归锁
+    expect(wrapper!.find('[aria-label="停用"]').attributes('style')).toContain(
+      '--toggle-on: 1',
+    )
+    expect(wrapper!.find('[aria-label="启用"]').attributes('style')).toContain(
+      '--toggle-on: 0',
+    )
   })
 
   it('降级插件：进已启用分区 + 显示「已降级」徽章 + 开关保持停用语义', async () => {
@@ -167,13 +177,13 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Activated' },
+        state: { state: 'activated' },
       }),
       // on_startup 失败的 Degraded：实例在运行，归属已启用分区但带降级标识
       makeDegradedPluginInfo({
         id: 'com.bedcode.other',
         name: 'Other Plugin',
-        state: { state: 'Degraded', error: 'on_startup failed: db locked' },
+        state: { state: 'degraded', error: 'on_startup failed: db locked' },
       }),
     ]
     await mountView()
@@ -186,10 +196,36 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     // 降级行开关保持「停用」语义（实例在运行），不误入未启用分区
     const disableToggles = wrapper!.findAll('[aria-label="停用"]')
     expect(disableToggles.length).toBe(2)
-    // 悬停可见原始降级原因
-    const badge = wrapper!.find('span[title="on_startup failed: db locked"]')
+    // Degraded 与 Activated 同为「运行中」：线上值 degraded 必须命中，故两个开关均为启用态
+    for (const toggle of disableToggles) {
+      expect(toggle.attributes('style')).toContain('--toggle-on: 1')
+    }
+    // 悬停只给通用降级文案 + 应用名（票 03 / ADR 0030 决定 11：失败原因原文不上 UI）
+    const badge = wrapper!.find('span[title="应用「Other Plugin」降级运行，部分功能不可用"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('已降级')
+    expect(text).not.toContain('on_startup failed')
+  })
+
+  it('错误态插件：只出红色「错误」状态 + 通用提示，错误原文不渲染（ADR 0030 决定 11）', async () => {
+    // 宿主把完整错误串写进状态（故障诊断事实），UI 不得直显——这是票 03 退役的最严重泄漏面
+    backendPlugins = [
+      makePluginInfo({
+        id: 'com.bedcode.broken',
+        name: 'Broken App',
+        state: { state: 'error', error: 'activate() panicked: boom at 0x1234' },
+      }),
+    ]
+    await mountView()
+
+    const text = wrapper!.text()
+    // 状态徽标仍是状态语义（红色「错误」），不是错误原文
+    expect(text).toContain('错误')
+    expect(text).toContain('⚠ 发生了未知错误，详情见日志')
+    // 硬不变量：完整错误串（panic 消息 / 地址 / 英文技术句）一个字符都不许出现
+    expect(text).not.toContain('activate() panicked')
+    expect(text).not.toContain('0x1234')
+    expect(text).not.toContain('boom')
   })
 
   it('停用联动：toggle → loader 停用 → 列表重载 → 行从已启用迁到未启用', async () => {
@@ -198,7 +234,7 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Activated' },
+        state: { state: 'activated' },
       }),
     ]
     await mountView()
@@ -208,7 +244,7 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Deactivated' },
+        state: { state: 'deactivated' },
       }),
     ]
 
@@ -219,6 +255,8 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     const movingToggle = wrapper!.find('[aria-label="启用"]')
     expect(movingToggle.exists()).toBe(true)
     expect(movingToggle.attributes('disabled')).toBeDefined()
+    // 行已迁到未启用分区，开关样式同步回未启用态（状态驱动，不是恒定的）
+    expect(movingToggle.attributes('style')).toContain('--toggle-on: 0')
     await vi.advanceTimersByTimeAsync(600)
     await flushAsync()
 
@@ -233,13 +271,13 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     expect(wrapper!.text()).toContain('0/1')
   })
 
-  it('启用联动：toggle → 后端激活通知 + 前端加载失败恢复（mark_error + 列表重载）', async () => {
+  it('启用联动：toggle → 后端激活通知 + 前端加载失败恢复（mark_error + 失败上抛，无假成功）', async () => {
     vi.useFakeTimers()
     backendPlugins = [
       makePluginInfo({
         id: 'com.bedcode.other',
         name: 'Other Plugin',
-        state: { state: 'Deactivated' },
+        state: { state: 'deactivated' },
       }),
     ]
     await mountView()
@@ -254,12 +292,14 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     // 启用链路真实执行：loader 先取插件信息，再通知后端激活
     expect(invokeCalls('plugin_get_info')).toEqual([[{ pluginId: 'com.bedcode.other' }]])
     expect(invokeCalls('plugin_activate')).toEqual([[{ pluginId: 'com.bedcode.other' }]])
-    // 动态 import 入口失败（asset 协议无服务器）→ 失败恢复：mark_error + 列表重载
+    // 动态 import 入口失败（asset 协议无服务器）→ 失败恢复：mark_error 上报 + 激活失败
+    // 上抛给 toggle（票 05：loader 不再吞错假成功，统一消费层出友好提示）
     expect(invokeCalls('plugin_mark_error')).toHaveLength(1)
     expect(invokeCalls('plugin_mark_error')[0]).toEqual([
       { pluginId: 'com.bedcode.other', error: expect.any(String) },
     ])
-    expect(invokeCalls('plugin_list_loaded').length).toBeGreaterThanOrEqual(2)
+    // 失败路径不重载列表（没有「成功」可报），清单只有挂载时一次拉取
+    expect(invokeCalls('plugin_list_loaded')).toHaveLength(1)
     // 后端状态未变 → 行留在未启用；toggle 结束 → 按钮恢复可用
     expect(wrapper!.find('[aria-label="启用"]').exists()).toBe(true)
     expect(wrapper!.find('[aria-label="启用"]').attributes('disabled')).toBeUndefined()
@@ -272,7 +312,7 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Deactivated' },
+        state: { state: 'deactivated' },
       }),
     ]
     // DesktopLayout 对所有路由页面套 KeepAlive，这里包一层模拟真实缓存行为
@@ -296,7 +336,7 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
       makePluginInfo({
         id: 'com.bedcode.demo',
         name: 'Demo Plugin',
-        state: { state: 'Activated' },
+        state: { state: 'activated' },
       }),
     ]
     // 切走（列表页入缓存）
@@ -310,5 +350,9 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     expect(invokeCalls('plugin_list_loaded')).toHaveLength(2)
     expect(wrapper!.text()).toContain('1/1')
     expect(wrapper!.find('[aria-label="停用"]').exists()).toBe(true)
+    // 开关样式也已同步到启用态（KeepAlive 恢复后不是缓存前的旧样式）
+    expect(wrapper!.find('[aria-label="停用"]').attributes('style')).toContain(
+      '--toggle-on: 1',
+    )
   })
 })

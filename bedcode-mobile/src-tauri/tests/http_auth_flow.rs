@@ -17,11 +17,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpResponse, HttpServer};
-use bedcode_lib::auth::http::{resolve_base_url, AuthHttpClient, DeviceAuthContext};
-use bedcode_lib::auth::{AuthManager, AuthStatus};
-use bedcode_lib::connection::manager::ConnectionManager;
-use bedcode_lib::state::{clear_global_token, get_global_token};
-use bedcode_lib::AppError;
+use bedcode_mobile_lib::auth::http::{resolve_base_url, AuthHttpClient, DeviceAuthContext};
+use bedcode_mobile_lib::auth::{AuthManager, AuthStatus};
+use bedcode_mobile_lib::connection::manager::ConnectionManager;
+use bedcode_mobile_lib::state::{clear_global_token, get_global_token};
+use bedcode_mobile_lib::AppError;
 use serde_json::{json, Value};
 
 // 复用 WS 协议 mock（resolve_base_url happy path 需真实建连保存 target）

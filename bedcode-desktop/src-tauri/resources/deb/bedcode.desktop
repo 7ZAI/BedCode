@@ -10,4 +10,4 @@ Type=Application
 Categories=Utility;Development;Network;
 StartupNotify=true
 StartupWMClass={{exec}}
-Keywords=remote;terminal;claude;code;mobile;ssh;
+Keywords=wasm;wasmtime;webassembly;plugin;runtime;remote;terminal;claude;code;mobile;ssh;

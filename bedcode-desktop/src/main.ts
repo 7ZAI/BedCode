@@ -9,13 +9,14 @@ import i18n from './locales'
 import { initPlatform } from '@/composables/usePlatform'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
-import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
 import { setupPluginRuntimeListeners } from '@/plugin/runtime-listeners'
 import { initFrontendLogger } from '@/utils/frontendLogger'
+import { applyPageTransitionEffect, DEFAULT_PAGE_TRANSITION_EFFECT } from '@/utils/pageTransition'
 import 'vue-sonner/style.css'
 import './style.css'
+import '@/shell/shell.css'
 
 const app = createApp(App)
 
@@ -54,36 +55,43 @@ setupSharedRuntime(i18n, router)
 // 注册插件事件监听（notify / self-check error / runtime-error，实现见 plugin/runtime-listeners.ts）
 setupPluginRuntimeListeners()
 
-// 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存
-// WSL 命令执行较慢（可能触发虚拟机启动），提前加载避免弹窗卡顿
+// 预初始化：并行执行平台检测与设置加载
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
-const wslStore = useWslStore()
-Promise.all([initPlatform(), settingsStore.loadSettings(), wslStore.loadWslInfo()]).then(
-  ([platformInfo]) => {
-    // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
-    // - platform-desktop / platform-mobile：通用桌面/移动区分
-    // - platform-linux：仅 Linux，启用 font-size:115% + --ui-scale:1.15 体系修正
-    //   WebKitGTK 下字号偏小（issue 06 已移除 zoom，避免破坏 xterm 鼠标坐标系）
-    if (platformInfo.isDesktop) {
-      document.documentElement.classList.add('platform-desktop')
-    } else if (platformInfo.isMobile) {
-      document.documentElement.classList.add('platform-mobile')
-    }
-    if (platformInfo.isLinux) {
-      document.documentElement.classList.add('platform-linux')
-    }
+Promise.all([initPlatform(), settingsStore.loadSettings()]).then(([platformInfo]) => {
+  // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
+  // - platform-desktop / platform-mobile：通用桌面/移动区分
+  // - platform-linux：仅 Linux，启用 font-size:115% + --ui-scale:1.15 体系修正
+  //   WebKitGTK 下字号偏小（issue 06 已移除 zoom，避免破坏 xterm 鼠标坐标系）
+  if (platformInfo.isDesktop) {
+    document.documentElement.classList.add('platform-desktop')
+  } else if (platformInfo.isMobile) {
+    document.documentElement.classList.add('platform-mobile')
+  }
+  if (platformInfo.isLinux) {
+    document.documentElement.classList.add('platform-linux')
+  }
 
-    // 设置加载完成后初始化语言偏好
-    i18nStore.initLanguage()
-    logger.log('[Init] Platform, settings and WSL info pre-loaded')
-  },
-)
+  // 设置加载完成后初始化语言偏好
+  i18nStore.initLanguage()
+  logger.log('[Init] Platform and settings pre-loaded')
+})
+
+// 页面过渡效果写到根元素：必须在 app.mount 之前，否则首屏先按 CSS 缺省效果
+// 渲染一帧。启动路径不得被效果名拼写错误整死（D-06，2026-10-04 OCR）：
+// 拼错 → 记一条 error 并回落默认效果（测试路径仍保留 applyPageTransitionEffect
+// 的 throw 做精确断言）。
+try {
+  applyPageTransitionEffect(document.documentElement)
+} catch (e) {
+  console.error('[Init] page transition effect invalid, falling back to default', e)
+  document.documentElement.dataset.pageFx = DEFAULT_PAGE_TRANSITION_EFFECT
+}
 
 app.mount('#app')
 
-// 初始化插件系统（非阻塞，失败不影响主应用）
+// 初始化插件系统（非阻塞，失败不影响主应用）。
+// 走 ensureLoaded（幂等句柄）：视图宿主等同一句柄即可知道「插件注册完没有」，
+// 且不会把插件模块重复 import / activate
 import { pluginLoader } from '@/plugin/loader'
-pluginLoader.loadAll().catch((e) => {
-  logger.error('[PluginSystem] Failed to initialize:', e)
-})
+pluginLoader.ensureLoaded()

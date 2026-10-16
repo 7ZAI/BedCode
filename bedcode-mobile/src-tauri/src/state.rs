@@ -8,7 +8,6 @@ use std::sync::OnceLock;
 use crate::auth::AuthManager;
 use crate::connection::manager::ConnectionManager;
 use crate::plugin::manager::PluginManager;
-use crate::session::SessionManager;
 use crate::system::info::SystemInfo;
 
 // ==================== Global Token ====================
@@ -46,9 +45,6 @@ static CONNECTION_MANAGER: OnceLock<Arc<ConnectionManager>> = OnceLock::new();
 /// 全局认证管理器单例
 static AUTH_MANAGER: OnceLock<Arc<AuthManager>> = OnceLock::new();
 
-/// 全局会话管理器单例
-static SESSION_MANAGER: OnceLock<Arc<SessionManager>> = OnceLock::new();
-
 /// 获取连接管理器
 pub fn get_connection_manager() -> Arc<ConnectionManager> {
     CONNECTION_MANAGER.get_or_init(|| ConnectionManager::new()).clone()
@@ -60,16 +56,6 @@ pub fn get_auth_manager() -> Arc<AuthManager> {
         .get_or_init(|| {
             let conn = get_connection_manager();
             AuthManager::new(conn)
-        })
-        .clone()
-}
-
-/// 获取会话管理器
-pub fn get_session_manager() -> Arc<SessionManager> {
-    SESSION_MANAGER
-        .get_or_init(|| {
-            let conn = get_connection_manager();
-            SessionManager::new(conn)
         })
         .clone()
 }
@@ -86,15 +72,10 @@ pub fn init_system_info(info: SystemInfo) -> Arc<SystemInfo> {
     arc
 }
 
-/// 获取系统信息
+/// 尝试获取系统信息（未初始化返回 None）
 ///
-/// # Panics
-/// 如果 init_system_info 未调用则 panic
-pub fn get_system_info() -> Arc<SystemInfo> {
-    SYSTEM_INFO.get().expect("SystemInfo not initialized").clone()
-}
-
-/// 尝试获取系统信息（未初始化返回 None，供 best-effort 路径使用）
+/// 无 panic 版：系统信息在异步启动任务里采集，早于它到达的调用点（连接自愈、
+/// peer 预热）都必须能继续跑，故此处**不提供** `expect` 版本。
 pub fn try_get_system_info() -> Option<Arc<SystemInfo>> {
     SYSTEM_INFO.get().cloned()
 }
@@ -110,36 +91,33 @@ pub fn init_plugin_manager(manager: Arc<PluginManager>) -> Arc<PluginManager> {
     manager
 }
 
-/// 获取插件管理器
+/// 尝试获取插件管理器（未初始化返回 None）
 ///
-/// # Panics
-/// 如果 init_plugin_manager 未调用则 panic
-pub fn get_plugin_manager() -> Arc<PluginManager> {
-    PLUGIN_MANAGER.get().expect("PluginManager not initialized").clone()
-}
-
-/// 尝试获取插件管理器（未初始化返回 None，供 best-effort 路径使用）
+/// **不要新增会 panic 的 `get_plugin_manager()`**：本模块的 OnceLock 只是
+/// Tauri 托管态（`app.manage`）的镜像，两者指向同一个 `Arc`。在拿得到
+/// `AppHandle` 的地方一律用 `app_handle.state::<Arc<PluginManager>>()`（命令层
+/// 25 处皆如此）；拿不到的地方（`BusPort` 端口 trait 方法等无 AppHandle 的
+/// 上下文）才用本函数，且必须容忍 None——启动窗口内管理器尚未就绪是正常情形，
+/// 不是错误路径。曾经的 panic 版访问器已被删：它在 spawn 的重连监控任务里被
+/// 调用，一次 panic 会连带终止整个自愈循环且不留痕迹。
 pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
     PLUGIN_MANAGER.get().cloned()
 }
 
-// ==================== File Service ====================
-
 // ==================== Link Crypto Context（issue 09） ====================
 
-/// 链路加密运行期上下文
+/// 链路加密运行期上下文（HTTP 信封加密；WS 帧级加密已随桌面端插件端点
+/// 帧加密退役——`TrafficChannel::WsPlugin => false`，本结构不再含 WS 通道）
 ///
-/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而常驻
-/// 事件 WS 建连在 Rust 侧——前端经 `set_link_crypto_context` 命令把当前态
-/// 推送到此，建连时读取。缺省全关：未推送前事件 WS 保持明文（与现状一致）。
+/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而 HTTP
+/// 加密裁决在 Rust 侧（http_proxy）——前端经 `set_link_crypto_context` 命令把
+/// 当前态推送到此。缺省全关：未推送前 HTTP 载荷保持明文（与现状一致）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkCryptoContext {
     /// 主开关（对应移动端 trafficEncryption.enabled）
     pub enabled: bool,
-    /// 严格模式：协商被拒/失败时断连报错而非明文续跑
+    /// 严格模式：加密被拒/失败时断连报错而非明文续跑
     pub strict_mode: bool,
-    /// 事件通道子开关（对应桌面 encryptWsEvent）
-    pub encrypt_ws_event: bool,
     /// HTTP 通道子开关（对应桌面 encryptHttp；HTTP 代理收束后由 Rust 裁决）
     pub encrypt_http: bool,
     /// 已 pin 的桌面端身份公钥（base64）；None = 未配对/未下发
@@ -151,7 +129,6 @@ impl Default for LinkCryptoContext {
         Self {
             enabled: false,
             strict_mode: false,
-            encrypt_ws_event: true,
             encrypt_http: true,
             kd_public_b64: None,
         }
@@ -161,7 +138,6 @@ impl Default for LinkCryptoContext {
 static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> = std::sync::RwLock::new(LinkCryptoContext {
     enabled: false,
     strict_mode: false,
-    encrypt_ws_event: true,
     encrypt_http: true,
     kd_public_b64: None,
 });
@@ -186,15 +162,9 @@ pub fn update_link_crypto_pin(kd_public_b64: Option<String>) {
     }
 }
 
-/// 事件 WS 是否应发起加密协商：主开关 ∧ 事件子开关 ∧ 已持有 pin。
-/// 协商依赖配对期下发的桌面端身份公钥作信任锚，三者缺一即明文。
-pub fn is_event_encryption_active() -> bool {
-    let ctx = get_link_crypto_context();
-    ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some()
-}
-
 /// HTTP 通道是否应加密（HTTP 代理收束后由 Rust 裁决）：主开关 ∧ HTTP 子开关
 /// ∧ 已持有 pin——对齐前端 `isChannelEncryptionActive('http')` 的判定。
+/// （WS 通道加密已随桌面端插件端点帧加密退役，无对应判定函数）
 pub fn is_http_encryption_active() -> bool {
     let ctx = get_link_crypto_context();
     ctx.enabled && ctx.encrypt_http && ctx.kd_public_b64.is_some()

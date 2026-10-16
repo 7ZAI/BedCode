@@ -8,6 +8,7 @@
 //!
 //! 需要 `process:run` 权限（manifest `permissions` 声明，安装即信任）。
 
+use serde::{Deserialize, Serialize};
 use super::HostError;
 
 /// 宿主进程执行
@@ -35,4 +36,25 @@ pub trait HostProcess {
     /// 尽力而为：进程可能已结束（此时返回 Ok）。终止的是进程组
     /// （含子进程），与超时 kill 同一语义。
     fn process_kill(&self, run_id: &str) -> Result<(), HostError>;
+
+    /// 同步执行并捕获输出（v19 追加，票 03/04 工作区 git 域）
+    ///
+    /// request-json 同 [`Self::process_run`]（command / args / cwd / env /
+    /// timeout_ms，**无 output_path**——stdout/stderr 由宿主捕获）。同步阻塞
+    /// 等待进程结束，返回 [`ProcessSyncResult`]。权限 `process:run`。
+    ///
+    /// 适用场景：插件同步路径（HTTP 端点命令面）需要一次性拿到命令结果
+    /// （如 `git diff --name-only`）；长时任务仍用 [`Self::process_run`]。
+    fn process_run_sync(&self, request_json: &str) -> Result<ProcessSyncResult, HostError>;
+}
+
+/// 同步进程执行结果（v19：host-process run-sync）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessSyncResult {
+    /// 退出码（None = 被信号终止）
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
 }

@@ -1,11 +1,11 @@
 export default {
   settings: {
     title: 'Settings',
-    general: 'General',
-    dangerZone: 'Reset',
+    // Ticket 2026-10-10: `general` / `dangerZone` retired with the `actions` group
+    // (no UI callers left). 2026-10-14: the device-level wipe copy moved into this
+    // file's `about` group (entry moved from platform settings to "About BedCode").
     groups: {
       connection: 'Connection',
-      notification: 'Notifications',
       security: 'Security',
       system: 'System',
     },
@@ -29,17 +29,11 @@ export default {
     },
     appearance: {
       title: 'Appearance',
-      subtitle: 'Theme, language, font and terminal count',
+      subtitle: 'Theme, language, font and home background',
       theme: 'Theme',
       lightMode: 'Light Mode',
       darkMode: 'Dark Mode',
       followSystem: 'Follow System',
-      palette: 'Accent Palette',
-      paletteDefault: 'Default',
-      paletteForest: 'Forest',
-      paletteOcean: 'Ocean',
-      paletteSunset: 'Sunset',
-      paletteViolet: 'Violet',
       language: 'Language',
       languageChinese: '中文',
       languageEnglish: 'English',
@@ -47,26 +41,33 @@ export default {
       fontNormal: 'Normal',
       fontLarge: 'Large',
       fontXLarge: 'Extra Large',
-      maxOpenTerminals: 'Max Open Terminals',
-      maxOpenTerminalsDesc: 'Max concurrently running terminals; excess sessions are dropped when syncing',
       generalSection: 'General',
       displaySection: 'Display',
-      terminalSection: 'Terminal',
+      // Home wallpaper (moved from the shell settings page on 2026-10-15: background
+      // belongs to appearance config, same screen as theme mode; gradient & dim
+      // preview logic live in styles/wallpaper.css, shared with the home screen)
+      backgroundSection: 'Home background',
+      backgroundNote: 'Home screen only',
+      wallNone: 'None',
+      wallAurora: 'Aurora',
+      wallDune: 'Dune',
+      wallReef: 'Reef',
+      wallCustom: 'Custom',
+      wallPick: 'Choose from gallery',
+      wallReplace: 'Replace image',
+      wallRemove: 'Remove image',
+      wallDim: 'Overlay strength',
     },
     connection: {
       title: 'Connection Settings',
-      subtitle: 'Auto reconnect, port and other connection options',
-      autoReconnect: 'Auto Reconnect',
-      keepAlive: 'Keep Alive',
-      reconnectInterval: 'Reconnect Interval (s)',
-      defaultPort: 'Default Port',
-      reconnectSection: 'Reconnect',
-      networkSection: 'Network',
+      subtitle: 'Link encryption and transport security',
+      // Ticket 2026-10-10 C4: autoReconnect / keepAlive / defaultPort are business
+      // settings, now owned by the bedcode app's settings page.
+      businessElsewhere:
+        'Auto reconnect, keep-alive and default port now live in the BedCode app settings.',
       linkCryptoSection: 'Link Encryption',
       linkCryptoMaster: 'Enable Link Encryption',
       linkEncryptHttp: 'Encrypt HTTP Payloads',
-      linkEncryptWsTerminal: 'Encrypt Terminal Channel',
-      linkEncryptWsEvent: 'Encrypt Event Channel',
       linkStrictMode: 'Strict Mode (reject plaintext downgrade)',
       linkPeerFingerprint: 'Peer Fingerprint',
       linkNotPaired: 'Not paired',
@@ -76,10 +77,9 @@ export default {
     },
     authentication: {
       title: 'Authentication Settings',
-      subtitle: 'Pairing method and biometric credentials',
-      preferredMethod: 'Preferred Auth Method',
-      pairingCode: 'Pairing Code',
-      biometric: 'Biometric',
+      subtitle: 'Biometric credential',
+      // Ticket 2026-10-10 C4: preferred auth method is a business setting, now owned
+      // by the bedcode app.
       biometricSection: 'Biometric Credential',
       biometricDesc: 'The key is stored in system secure hardware and can only sign after fingerprint/face authentication. The private key never leaves the device.',
       bind: 'Bind Biometric Auth',
@@ -100,19 +100,10 @@ export default {
       unbindSuccess: 'Biometric credential unbound',
       unbindFailed: 'Unbind failed, please retry',
       notConnected: 'Not connected, cannot bind',
-      degradeHint: 'Falls back to pairing code when not bound',
     },
-    notification: {
-      title: 'Notification Settings',
-      subtitle: 'Notification timing, vibration and sounds',
-      notifyOnWaiting: 'Notify on Waiting Input',
-      notifyOnConnection: 'Notify on Connection Change',
-      vibrate: 'Vibrate',
-      notifyInBackground: 'Notify in Background',
-      soundOnTaskComplete: 'Sound on Task Complete',
-      pushSection: 'Push',
-      feedbackSection: 'Feedback',
-    },
+    // Ticket 2026-10-10 C4: the whole `notification` group is retired — every entry is a
+    // business setting, now owned by the bedcode app; the
+    // `mobile-settings-notifications` route retires with it.
     egress: {
       title: 'Network Access',
       subtitle: 'View and revoke external network grants',
@@ -124,6 +115,22 @@ export default {
       revokeHint: 'After revocation, previously approved external addresses will need to be re-authorized.',
       revokeConfirmTitle: 'Revoke all grants?',
       revokeConfirmMessage: 'This clears every remembered external address grant, including "don\'t ask again" entries.',
+      strategySection: 'Access Strategy',
+      strategyHint: 'Controls whether you are asked when a plugin requests access to an unapproved address.',
+      strategyEmpty: 'No plugins to configure',
+      alwaysAsk: 'Always Ask',
+      alwaysAskDesc: 'Ask on every access (skips remembered grants)',
+      defaultStrategy: 'Default',
+      defaultStrategyDesc: 'Allow remembered addresses, ask for the rest',
+      alwaysAllow: 'Always Allow',
+      alwaysAllowDesc: 'Allow without asking (grants marked "unconfirmed")',
+      recordsSection: 'Grant Records',
+      sourceUser: 'Confirmed',
+      sourceAlwaysAllow: 'Unconfirmed',
+      sourceUserDeny: 'Denied',
+      revokeOne: 'Revoke',
+      revokeOneConfirmTitle: 'Revoke this grant?',
+      revokeOneConfirmMessage: 'After revocation, this address needs to be re-approved before access.',
     },
     about: {
       title: 'About',
@@ -141,13 +148,18 @@ export default {
       installingUpdate: 'Installing update...',
       downloadUpdate: 'Update Now',
       currentVersion: 'Current Version',
-    },
-    actions: {
-      resetSettings: 'Reset Settings',
-      resetSettingsConfirm: 'Are you sure you want to reset all settings to defaults?',
+      // Danger zone (2026-10-14 revision): moved here from the top-level platform
+      // settings page. Its targets include device entry credentials and host
+      // connection state, so only the host may run it. See useClearAllData.ts.
+      dangerZone: 'Danger Zone',
       clearAllData: 'Clear All Data',
-      clearDataConfirm: 'Are you sure you want to clear all data? This includes preset tasks, connection history, paired devices, etc. This action cannot be undone.',
+      clearAllDataHint:
+        'Disconnects and wipes preset tasks, connection history, paired devices, session configs and local cache. This cannot be undone.',
+      clearAllDataFailed: 'Cleanup did not finish; some data may remain. Retry or restart the app.',
     },
+    // Ticket 2026-10-10: the `actions` group retired; both actions were moved by
+    // ownership — "reset settings" to the bedcode app, "clear all data"
+    // to this file's about group (device-level wipe, host-owned).
     browser: {
       confirmOpen: 'Are you sure you want to open this link in a browser?',
     },

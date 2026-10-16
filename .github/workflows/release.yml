@@ -39,37 +39,42 @@ jobs:
           # 这里改为状态机：命中版本头后跳过该行，遇到下一个版本头即停止；
           # index() 按字面匹配，避免版本号中的 . 被当作正则通配符；过滤段落间的 --- 分隔线。
           
-          # 提取英文 changelog
+          # 提取英文 changelog；首个 ### 章节标题转成带锚点的 <h3 id="en-V">（中英文切换跳转用，
+          # 参照 deepseek-harness 的 release body 写法）
           CHANGELOG_EN=$(awk -v v="$VERSION" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && /^## \[/ { exit }
             found && !started && $0 == "" { next }
+            found && !anchored && /^### / { print "<h3 id=\"en-" v "\">" substr($0, 5) "</h3>"; anchored = 1; next }
             found && $0 != "---" { started = 1; print }
           ' CHANGELOG.md)
           if [ -z "$CHANGELOG_EN" ]; then
             CHANGELOG_EN=$(cat CHANGELOG.md)
           fi
           
-          # 提取中文 changelog
+          # 提取中文 changelog；首个 ### 章节标题转成带锚点的 <h3 id="cn-V">（同英文侧）
           CHANGELOG_ZH=$(awk -v v="$VERSION" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && /^## \[/ { exit }
             found && !started && $0 == "" { next }
+            found && !anchored && /^### / { print "<h3 id=\"cn-" v "\">" substr($0, 5) "</h3>"; anchored = 1; next }
             found && $0 != "---" { started = 1; print }
           ' CHANGELOG_zh.md)
           if [ -z "$CHANGELOG_ZH" ]; then
             CHANGELOG_ZH=$(cat CHANGELOG_zh.md)
           fi
           
-          # 合并为双语 release body：英文在前，中文在后，用分隔符隔开
+          # 合并为双语 release body：参照 deepseek-harness —— 顶部放中英文切换锚点链接，
+          # 中文版在前、英文版在后，切换锚点挂在各自语言块的首个章节标题上
+          # （<h3 id="cn-V"> / <h3 id="en-V">），语言块之间用分隔线隔开
           {
-            echo "$CHANGELOG_EN"
+            echo "[中文](#cn-$VERSION) | [English](#en-$VERSION)"
+            echo ""
+            echo "$CHANGELOG_ZH"
             echo ""
             echo "---"
             echo ""
-            echo "## 🇨🇳 中文版"
-            echo ""
-            echo "$CHANGELOG_ZH"
+            echo "$CHANGELOG_EN"
           } > /tmp/changelog.txt
           
           {
@@ -83,6 +88,10 @@ jobs:
   build-windows:
     needs: prepare-release
     runs-on: windows-latest
+    env:
+      # sccache 缓存上限：CI 磁盘有限 + 跨 run 缓存由 rust-cache 负责，2GiB 够 job 内命中；
+      # 根 .cargo/config.toml [env] force=false，外部值优先于 20GiB 默认。
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-desktop
@@ -104,10 +113,23 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
-          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
+          # 桌面插件构建目标两种：agent-hub / ai-chatbox / terminal-session 是
+          # wasm32-wasip3（由下方 pinned nightly 提供）；file-transfer 是
+          # wasm32-unknown-unknown + 仓库级组件化（packages/bedcode-componentize，
+          # 见其 scripts/build.js 头注）。宿主构建用宿主 target；wasm32-wasip2 仅
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
           targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 不设 SCCACHE_GHA_ENABLED → 仅 job 内缓存，不写 GHA cache 配额。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -144,6 +166,15 @@ jobs:
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
       - name: Build plugins (WASM artifacts)
         run: pnpm run plugins:build
+
+      # tauri 插件 build script 的权限产物与 rust-cache 的交互（详见脚本头部注释）：
+      # 不刷新时 Windows 构建实测报 “Permission wdio:default not found, expected one of
+      # core:default, ...”（插件 build script 指纹被缓存为 fresh，DEP_* 未重建）。
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        # job 级 defaults 把 cwd 设成 bedcode-desktop/，这里显式回仓库根；
+        # 脚本用仓库根相对路径传 app 目录，并以 bash 调（scripts/ 下文件不入库 +x 位）。
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/refresh-tauri-plugin-permissions.sh bedcode-desktop/src-tauri
 
       - name: Verify updater artifacts enabled in config
         shell: bash
@@ -191,6 +222,8 @@ jobs:
   build-android:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-mobile
@@ -215,6 +248,11 @@ jobs:
           # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）。
           # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
           targets: aarch64-linux-android, wasm32-unknown-unknown, wasm32-wasip2
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -259,17 +297,23 @@ jobs:
         run: pnpm run build
 
       # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
-      # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
+      # 插件清单由 wasm-apps/ 实际内容推导（原手写名单与目录漂移：已退役的 `ocr`
+      # 仍在名单里靠「目录不存在就跳过」掩盖，新增 app 忘登记则会在构建期以缺依赖报错）
       - name: Install plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer ocr; do
-            if [ ! -d "plugins/$p" ]; then
-              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing plugins/$p =="
-            (cd plugins/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
+
+      # 同上（本 job 编宿主移动 crate：edge-to-edge 的 permissions/autogenerated/** 由插件
+      # build script 生成，缓存后不重跑即读不到）
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        # job 级 defaults 把 cwd 设成 bedcode-mobile/，这里显式回仓库根 + bash 调用；
+        # --target：android 构建的产物落 target/aarch64-linux-android/，默认 target 桶里没它们。
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/refresh-tauri-plugin-permissions.sh --target aarch64-linux-android bedcode-mobile/src-tauri
 
       - name: Build Android APK
         env:
@@ -296,6 +340,8 @@ jobs:
   build-linux:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     defaults:
       run:
         working-directory: bedcode-desktop
@@ -326,9 +372,23 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2）
+          # 桌面插件构建目标两种：agent-hub / ai-chatbox / terminal-session 是
+          # wasm32-wasip3（由下方 pinned nightly 提供）；file-transfer 是
+          # wasm32-unknown-unknown + 仓库级组件化（packages/bedcode-componentize，
+          # 见其 scripts/build.js 头注）。宿主构建用宿主 target；wasm32-wasip2 仅
+          # wasm-core 的 WASI preopen E2E 夹具（plugin-wasi-test）需要。
           targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -348,6 +408,12 @@ jobs:
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
       - name: Build plugins (WASM artifacts)
         run: pnpm run plugins:build
+
+      # 同上（本 job 编宿主桌面 crate：Linux 已能绿，但缓存状态一变即同因变红）
+      - name: Refresh tauri plugin permissions (rust-cache interaction)
+        # 同 build-windows：显式回仓库根 + bash 调用
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/refresh-tauri-plugin-permissions.sh bedcode-desktop/src-tauri
 
       # deb 同样生成签名升级包（.deb.sig + latest.json 的 linux 平台记录），
       # 私钥缺失时 tauri 会静默跳过签名，必须显式校验
@@ -383,6 +449,8 @@ jobs:
   package-plugins:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -404,9 +472,25 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 WASM 产物 target：桌面 ai-chatbox 已迁移 WASI preview2（wasip2），
-          # 其余桌面插件与移动端用 wasm32-unknown-unknown
-          targets: wasm32-unknown-unknown, wasm32-wasip2
+          # 移动端插件与桌面 file-transfer 用 wasm32-unknown-unknown（后者再经
+          # packages/bedcode-componentize 组件化）；桌面 agent-hub / ai-chatbox /
+          # terminal-session 用 wasm32-wasip3，见下方 pinned nightly 步骤
+          targets: wasm32-unknown-unknown
+
+      # 桌面 agent-hub / ai-chatbox / terminal-session 的构建链注入
+      # RUSTUP_TOOLCHAIN=nightly-2026-09-16 并编 wasm32-wasip3（真源
+      # scripts/plugin-wasm-config.mjs 与 scripts/wasip3-toolchain.sh）。缺这一步时
+      # `pnpm run build` 直接失败，本 job 的插件 zip 永远产不出——build-windows /
+      # build-linux 已有同款步骤，本 job 曾漏装。
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
+
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -438,16 +522,13 @@ jobs:
         run: pnpm run build
 
       # mobile 插件是独立目录（无 workspace），bedcode-plugin CLI 需各插件自己的依赖；
-      # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
+      # 同 build-android：移动插件清单由目录推导，不再手写（防名单与目录漂移）
       - name: Install mobile plugin dependencies
         run: |
-          for p in ai-chatbox auto-task file-transfer; do
-            if [ ! -d "bedcode-mobile/plugins/$p" ]; then
-              echo "bedcode-mobile/plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
-              continue
-            fi
-            echo "== installing bedcode-mobile/plugins/$p =="
-            (cd bedcode-mobile/plugins/$p && pnpm install --frozen-lockfile) || exit 1
+          for dir in bedcode-mobile/wasm-apps/*/; do
+            [ -f "$dir/package.json" ] || continue
+            echo "== installing $dir =="
+            (cd "$dir" && pnpm install --frozen-lockfile) || exit 1
           done
 
       # 构建两端插件（前端 + WASM）并打 zip；插件清单默认 scripts/plugin-package-list.json
@@ -469,12 +550,14 @@ jobs:
 
   # ==================== SDK 发布包（独立产物 job） ====================
   # 构建两端插件 SDK（TS 前端 + Rust crate）并打包为 release 附件：
-  #   dist/sdk-packages/<target>/{*.tgz, *.crate, SHA256SUMS, <sdk>-<ver>.zip}
+  #   dist/sdk-packages/<target>/{*.tgz, *.crate, SHA256SUMS-<target>, <sdk>-<ver>.zip}
   # 构建/打包逻辑见 scripts/package-sdks.mjs；与平台构建 / 插件打包 job 并行执行。
   # 产物以 SDK 自身版本命名（package.json，与 Cargo.toml 一致性由脚本校验），与应用版本无关。
   package-sdks:
     needs: prepare-release
     runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 2147483648  # 2GiB 纯字节数（sccache 0.18 不认 GiB 后缀）
     steps:
       - uses: actions/checkout@v4
 
@@ -498,6 +581,11 @@ jobs:
           # package-sdks.mjs --rust-wasm 的 guest 编译检查需要 wasm32-unknown-unknown
           targets: wasm32-unknown-unknown
 
+      # sccache：根 .cargo/config.toml 强制 rustc-wrapper=sccache，CI 必须安装；
+      # 仅 job 内缓存（不写 GHA cache 配额）。
+      - name: Install sccache (build cache)
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
@@ -516,8 +604,15 @@ jobs:
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: pnpm install --frozen-lockfile
 
+      # dev-shell 也是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml）：
+      # SDK 单测会 import dev-shell 源码（i18n 单例 / 壳组件）而不只是 dist，
+      # 不装它的依赖时 vitest 报 "Cannot find package 'vue-i18n'"。
+      - name: Install dev-shell dependencies (plugin-sdk-mobile.dev-shell)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile/dev-shell
+        run: pnpm install --frozen-lockfile
+
       # 构建（TS 构建 + vitest + cargo check 宿主/wasm guest）并打包（pnpm pack / cargo package），
-      # 输出 dist/sdk-packages/<target>/：原始 .tgz / .crate + SHA256SUMS + 聚合 zip
+      # 输出 dist/sdk-packages/<target>/：原始 .tgz / .crate + SHA256SUMS-<target> + 聚合 zip
       - name: Build & package SDKs (npm + crates -> dist/sdk-packages)
         run: node scripts/package-sdks.mjs --rust-wasm
 

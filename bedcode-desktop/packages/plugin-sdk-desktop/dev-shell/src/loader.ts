@@ -5,7 +5,7 @@
  * 失败时置 Error 状态并记日志。
  */
 import { reactive, ref } from 'vue'
-import type { PluginContext, PluginModule } from '../../src/types'
+import type { PluginContext, PluginManifest, PluginModule } from '../../src/types'
 import { createMockContext } from './mock-context'
 import {
   getPluginRecord,
@@ -28,11 +28,12 @@ export async function loadPlugins(): Promise<void> {
   try {
     const records = (await import('virtual:dev-plugins')).default as Array<{
       dir: string
-      manifest: Record<string, any>
+      manifest: Partial<PluginManifest>
       entry: any
     }>
     for (const spec of records) {
-      const manifest = spec.manifest && spec.manifest.id ? spec.manifest : {}
+      const manifest: Partial<PluginManifest> =
+        spec.manifest && spec.manifest.id ? spec.manifest : {}
       const pluginId: string = manifest.id || `dev-plugin-${plugins.value.length}`
       const pluginName: string = manifest.name || pluginId
       const record: DevPluginRecord = reactive({

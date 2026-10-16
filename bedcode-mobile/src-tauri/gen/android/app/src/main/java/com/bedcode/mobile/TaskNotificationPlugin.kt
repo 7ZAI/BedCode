@@ -49,6 +49,14 @@ internal class ShowConnectionNotificationArgs {
 internal class ShowPluginNotificationArgs {
     var title: String = ""
     var body: String = ""
+    // host-notify（ABI v18）：震动/声音分控，缺省 true（与退役前 host-events.notify 行为一致）
+    var vibrate: Boolean = true
+    var sound: Boolean = true
+}
+
+@InvokeArg
+internal class PluginVibrateArgs {
+    var durationMs: Long = 300L
 }
 
 @InvokeArg
@@ -104,9 +112,11 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         private const val LOCAL_NOTIFICATIONS = "permissionState"
         /** 设置页预览震动的时长（毫秒），与通知渠道默认震动体感接近 */
         private const val PREVIEW_VIBRATE_MS = 300L
+        /** 插件面震动时长上限（毫秒；与 Rust 域侧钳制边界一致，此处防御性兜底） */
+        private const val MAX_PLUGIN_VIBRATE_MS = 5000L
     }
 
-    /** 当前预览提示音实例：重复触发时先停掉上一次，避免叠音 */
+    /** 当前提示音实例（设置页预览与插件面共用）：重复触发时先停掉上一次，避免叠音 */
     private var previewRingtone: Ringtone? = null
 
     private val manager by lazy { TaskNotificationManager.getInstance(activity) }
@@ -157,23 +167,48 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
     }
 
     /**
+     * 触发一次震动（直接走 Vibrator 服务，不经过通知渠道，
+     * 保证无论通知权限/渠道如何配置都能给出反馈）
+     */
+    private fun vibrateOnce(durationMs: Long) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val manager = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            manager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        vibrator.vibrate(
+            VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
+    }
+
+    /**
+     * 触发一次提示音（系统默认通知音 USAGE_NOTIFICATION 流，与实际通知提示音同源；
+     * 重复触发先停掉上一次播放，避免叠音）
+     */
+    private fun playSoundOnce() {
+        previewRingtone?.stop()
+        previewRingtone = null
+
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val ringtone = RingtoneManager.getRingtone(activity, uri)
+        ringtone.audioAttributes = attributes
+        ringtone.play()
+        previewRingtone = ringtone
+    }
+
+    /**
      * 预览震动一次（设置页开启「震动反馈」时触发）
-     *
-     * 直接走 Vibrator 服务，不经过通知渠道，保证无论通知权限/渠道如何配置都能给出反馈
      */
     @Command
     fun testVibrate(invoke: Invoke) {
         try {
-            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val manager = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                manager.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
-            vibrator.vibrate(
-                VibrationEffect.createOneShot(PREVIEW_VIBRATE_MS, VibrationEffect.DEFAULT_AMPLITUDE)
-            )
+            vibrateOnce(PREVIEW_VIBRATE_MS)
             val result = JSObject()
             result.put("success", true)
             invoke.resolve(result)
@@ -187,26 +222,51 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
 
     /**
      * 预览提示音一次（设置页开启「任务完成提示音」时触发）
-     *
-     * 播放系统默认通知音（USAGE_NOTIFICATION 流），与实际通知提示音同源；
-     * 重复触发先停掉上一次播放，避免叠音
      */
     @Command
     fun testSound(invoke: Invoke) {
         try {
-            previewRingtone?.stop()
-            previewRingtone = null
+            playSoundOnce()
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
 
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val attributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            val ringtone = RingtoneManager.getRingtone(activity, uri)
-            ringtone.audioAttributes = attributes
-            ringtone.play()
-            previewRingtone = ringtone
+    /**
+     * 插件面震动一次（WIT host-notify.vibrate，ABI v18）
+     *
+     * 时长由 Rust 域侧钳制到 [1, 5000]；此处防御性 coerceIn 兜底
+     */
+    @Command
+    fun pluginVibrate(invoke: Invoke) {
+        val args = invoke.parseArgs(PluginVibrateArgs::class.java)
 
+        try {
+            vibrateOnce(args.durationMs.coerceIn(1L, MAX_PLUGIN_VIBRATE_MS))
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /**
+     * 插件面播放提示音一次（WIT host-notify.play-sound，ABI v18）
+     */
+    @Command
+    fun pluginPlaySound(invoke: Invoke) {
+        try {
+            playSoundOnce()
             val result = JSObject()
             result.put("success", true)
             invoke.resolve(result)
@@ -268,7 +328,7 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
         val args = invoke.parseArgs(ShowPluginNotificationArgs::class.java)
 
         try {
-            manager.showPluginNotification(args.title, args.body)
+            manager.showPluginNotification(args.title, args.body, args.vibrate, args.sound)
             val result = JSObject()
             result.put("success", true)
             invoke.resolve(result)

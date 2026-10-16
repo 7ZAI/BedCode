@@ -2,10 +2,13 @@
  * 插件启动加载门禁测试（spec §3.6 / issue 02）+ 前端加载诊断上报（issue 04）
  *
  * 被测行为：pluginLoader.loadAll 按后端返回的插件状态决定是否加载前端模块——
- * - Activated：放行（现状）
- * - Degraded：也放行（实例在运行、扩展点已注册），且 console.warn 标注降级原因
- * - 其余状态（Activating 中间态 / Loaded / Error / NeedsApproval / Deactivated）：
- *   跳过；rust 类型（后端自管）与 isolated sandbox 同样跳过
+ * - activated：放行（现状）
+ * - degraded：也放行（实例在运行、扩展点已注册），且 console.warn 标注降级原因
+ * - 其余状态（activating 中间态 / loaded / error / needsApproval / deactivated）：
+ *   跳过；rust 类型（后端自管）同样跳过
+ *
+ * 状态值口径：宿主 `PluginState` 序列化为 camelCase（wasm-core manifest.rs），
+ * 夹具与断言一律用线上值，避免 PascalCase 夹具把门禁死代码测成「通过」
  *
  * issue 04：放行插件的导入失败路径经 plugin_frontend_load_report 上报一次
  * （宿主内部诊断通道，仅写 tracing 不入状态机）；跳过的插件零上报；
@@ -15,7 +18,7 @@
  * 「尝试加载前端模块」的可观测结果 = 动态 import 在 vitest 内必然失败（asset://
  * 协议无服务器可解析）→ loader 失败恢复路径调用 plugin_mark_error。
  * 因此断言：mark_error 恰好出现在门禁放行的插件上，跳过的插件零调用；
- * Degraded 的降级原因经 console.warn 上报（含插件 id 与原始错误串）。
+ * degraded 的降级原因经 console.warn 上报（含插件 id 与原始错误串）。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -54,6 +57,11 @@ function markErrorCount(pluginId: string): number {
   return mockInvoke.mock.calls.filter(
     ([c, args]) => c === 'plugin_mark_error' && args?.pluginId === pluginId,
   ).length
+}
+
+/** 取宿主对某命令的调用次数 */
+function invokeCount(cmd: string): number {
+  return mockInvoke.mock.calls.filter(([c]) => c === cmd).length
 }
 
 /** 取某插件的 plugin_frontend_load_report 上报参数列表（issue 04 诊断通道） */
@@ -95,32 +103,31 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
           makePluginInfo({
             id: 'com.bedcode.gate-ok',
             name: 'Gate Ok',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
           makeDegradedPluginInfo({
             id: 'com.bedcode.gate-degraded',
             name: 'Gate Degraded',
-            state: { state: 'Degraded', error: DEGRADED_REASON },
+            state: { state: 'degraded', error: DEGRADED_REASON },
           }),
           makeActivatingPluginInfo({ id: 'com.bedcode.gate-activating' }),
-          makePluginInfo({ id: 'com.bedcode.gate-loaded', state: { state: 'Loaded' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-loaded', state: { state: 'loaded' } }),
           makePluginInfo({
             id: 'com.bedcode.gate-error',
-            state: { state: 'Error', error: 'boom' },
+            state: { state: 'error', error: 'boom' },
           }),
-          makePluginInfo({ id: 'com.bedcode.gate-approval', state: { state: 'NeedsApproval' } }),
-          makePluginInfo({ id: 'com.bedcode.gate-off', state: { state: 'Deactivated' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-approval', state: { state: 'needsApproval' } }),
+          makePluginInfo({ id: 'com.bedcode.gate-off', state: { state: 'deactivated' } }),
           // rust 类型：后端自管，即使 Activated 也跳过
           makePluginInfo({
             id: 'com.bedcode.gate-rust',
             pluginType: 'rust',
-            state: { state: 'Activated' },
+            state: { state: 'activated' },
           }),
-          // isolated sandbox 不支持，跳过
+          // sandbox 字段已退役（审计票 06：前端不做隔离）：不再参与门禁，Activated 照常放行
           makePluginInfo({
-            id: 'com.bedcode.gate-isolated',
-            sandbox: 'isolated',
-            state: { state: 'Activated' },
+            id: 'com.bedcode.gate-retired-sandbox',
+            state: { state: 'activated' },
           }),
         ])
       }
@@ -140,7 +147,8 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     expect(markErrorCount('com.bedcode.gate-approval')).toBe(0)
     expect(markErrorCount('com.bedcode.gate-off')).toBe(0)
     expect(markErrorCount('com.bedcode.gate-rust')).toBe(0)
-    expect(markErrorCount('com.bedcode.gate-isolated')).toBe(0)
+    // 退役 sandbox 字段不再门禁：Activated 仍走加载（探针 = mark_error）
+    expect(markErrorCount('com.bedcode.gate-retired-sandbox')).toBe(1)
 
     // Degraded 的降级原因经 console.warn 标注（含插件 id 与原始错误串）
     const warns = consoleWarnSpy.mock.calls.map((args) => String(args[0]))
@@ -165,7 +173,6 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
       'com.bedcode.gate-approval',
       'com.bedcode.gate-off',
       'com.bedcode.gate-rust',
-      'com.bedcode.gate-isolated',
     ]) {
       expect(frontendReports(skipped)).toHaveLength(0)
     }
@@ -190,5 +197,21 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     // 加载流程未被阻塞：失败恢复路径（mark_error）仍执行，且诊断仍尝试过一次
     expect(markErrorCount('com.bedcode.diag-fail')).toBe(1)
     expect(frontendReports('com.bedcode.diag-fail')).toHaveLength(1)
+  })
+
+  it('ensureLoaded 幂等：多次（含并发）等待共用同一次启动加载', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'plugin_list_loaded') {
+        return Promise.resolve([makePluginInfo({ id: 'com.bedcode.ensure-fed', name: 'Ensure' })])
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await Promise.all([pluginLoader.ensureLoaded(), pluginLoader.ensureLoaded()])
+    await pluginLoader.ensureLoaded()
+
+    // 只拉取一次插件清单：重复等待不得把插件模块二次 import / activate
+    expect(invokeCount('plugin_list_loaded')).toBe(1)
+    expect(markErrorCount('com.bedcode.ensure-fed')).toBe(1)
   })
 })

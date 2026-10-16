@@ -22,6 +22,19 @@ pub fn ok_with_data(data: Value) -> Value {
     })
 }
 
+/// 成功响应（带 data + 附加响应头，票 03）
+///
+/// `headers` 为 `{ "Header-Name": "value" }` 字符串映射，宿主
+/// `plugin_controller` 透传进 HTTP 响应（如 file-tree-children 的
+/// `Cache-Control: private, max-age=30`，与宿主旧实现逐字节一致）。
+pub fn ok_with_data_headers(data: Value, headers: Value) -> Value {
+    serde_json::json!({
+        "status": 200,
+        "body": { "code": 0, "message": "ok", "data": data },
+        "headers": headers
+    })
+}
+
 /// 错误响应
 pub fn error(status: u16, message: &str) -> Value {
     serde_json::json!({

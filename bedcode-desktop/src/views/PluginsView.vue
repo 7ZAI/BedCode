@@ -85,10 +85,11 @@
                         >v{{ plugin.version }}</span
                       >
                       <!-- 降级徽章：实例运行中但启动初始化失败，与完全激活区分（spec §3.6） -->
+                      <!-- tooltip 只给通用降级文案 + 应用名（ADR 0030 决定 11：降级原因原文不再上 UI） -->
                       <span
                         v-if="isDegraded(plugin.state)"
                         class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[calc(10px*var(--ui-scale))] font-medium bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                        :title="getDegradedMessage(plugin.state)"
+                        :title="$t('errors.host.plugin.degraded', { name: plugin.name })"
                       >
                         ⚠ {{ $t(getStateKey(plugin.state)) }}
                       </span>
@@ -148,7 +149,7 @@
                     >{{ $t('desktop.plugin.config') }}</span
                   >
                   <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>）；
-                       Degraded 实例在运行，开关保持 ON 态（停用语义） -->
+                       degraded 实例在运行，开关保持 ON 态（停用语义） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
                     class="plugin-toggle"
@@ -240,11 +241,7 @@
                             : 'text-[var(--text-tertiary)]'
                         "
                       >
-                        {{
-                          isErrorState(plugin.state)
-                            ? getErrorMessage(plugin.state)
-                            : $t(getStateKey(plugin.state))
-                        }}
+                        {{ $t(getStateKey(plugin.state)) }}
                       </span>
                     </div>
                     <div class="mt-0.5">
@@ -258,8 +255,9 @@
                         ]"
                       >
                         {{
+                          // 错误态只出通用提示：宿主侧的错误原文（插件状态里的错误串）留在日志
                           isErrorState(plugin.state)
-                            ? '⚠ ' + getErrorMessage(plugin.state)
+                            ? '⚠ ' + $t('desktop.plugin.runtimeUnexpected')
                             : plugin.description || $t('desktop.plugin.noDescription')
                         }}
                       </div>
@@ -360,6 +358,9 @@
         </button>
       </template>
     </Modal>
+
+    <!-- ==================== 权限审批弹层（待授权插件启用前置） ==================== -->
+    <PluginApprovalDialog :plugin="approveTarget" @close="closeApprove" @approved="onApproved" />
   </div>
 </template>
 
@@ -378,17 +379,19 @@ import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
 import Modal from '@/components/Modal.vue'
+import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pluginInstallFromFile } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
+import { showUserError } from '@/utils/userError'
 import i18n from '@/locales'
+import type { PluginInfo } from '@/plugin/types'
 import {
   getContributionChips,
   getStateKey,
   isDegraded,
-  getDegradedMessage,
   isErrorState,
-  getErrorMessage,
+  isNeedsApproval,
   hasConfiguration,
   isRunning,
 } from '@/plugin/contributionKinds'
@@ -402,6 +405,8 @@ const t = i18n.global.t
 /** 加载插件弹窗状态 */
 const showInstallSheet = ref(false)
 const installing = ref(false)
+/** 权限审批弹层目标（待授权插件点启用时先审批，批准后自动继续启用） */
+const approveTarget = ref<PluginInfo | null>(null)
 
 /** 从文件安装：文件选择器选 zip 插件包 → 后端安装 → 刷新列表 */
 async function handleInstallFile(): Promise<void> {
@@ -417,7 +422,8 @@ async function handleInstallFile(): Promise<void> {
     toast.success(t('desktop.plugin.installSuccess', { name: pluginId }))
     await loadPlugins()
   } catch (e: any) {
-    toast.error(t('desktop.plugin.installFailed', { error: e.message || String(e) }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
   } finally {
     installing.value = false
     // 无论成功失败都收起弹窗（成功时列表已刷新，失败时 toast 已提示）
@@ -437,9 +443,26 @@ function goDetail(pluginId: string): void {
   router.push({ name: 'plugin-detail', params: { id: pluginId } })
 }
 
-/** 处理切换 */
+/** 处理切换：待授权插件的「启用」先走审批弹层（批准后自动继续启用） */
 async function handleToggle(id: string, enable: boolean): Promise<void> {
+  const target = plugins.value.find((p) => p.id === id)
+  if (enable && target && isNeedsApproval(target.state)) {
+    approveTarget.value = target
+    return
+  }
   await togglePlugin(id, enable)
+}
+
+/** 关闭审批弹层 */
+function closeApprove(): void {
+  approveTarget.value = null
+}
+
+/** 批准成功：刷新列表后继续启用（与详情页同语义） */
+async function onApproved(pluginId: string): Promise<void> {
+  closeApprove()
+  await loadPlugins()
+  await togglePlugin(pluginId, true)
 }
 
 onMounted(() => {

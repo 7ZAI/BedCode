@@ -5,9 +5,9 @@
 
 use crate::connection::MessageHandler;
 use crate::connection::{
-    heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager, reconnect::ReconnectManager,
-    ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, RequestResponseManager, WsClientConfig,
-    WsClientEvent,
+    heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager,
+    ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, MatchOutcome, RequestResponseManager,
+    WsClientConfig, WsClientEvent,
 };
 use crate::model::message::Message;
 use crate::Result;
@@ -19,8 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS, EVENT_FORWARDER_POLL_INTERVAL_MS,
-    LINK_CRYPTO_CHANNEL_EVENT, LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR,
-    RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
+    LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR, RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
 };
 
 /// WebSocket 客户端
@@ -30,7 +29,6 @@ pub struct WsClient {
     io: Arc<IoManager>,
     heartbeat: Arc<HeartbeatManager>,
     lifecycle: Arc<LifecycleManager>,
-    reconnect: Arc<ReconnectManager>,
     /// 请求-响应管理器
     request_manager: Arc<RequestResponseManager>,
     /// 推送消息处理器
@@ -43,9 +41,6 @@ pub struct WsClient {
     tasks: RwLock<ClientTasks>,
     /// 事件广播器（推送消息、连接状态等）
     event_tx: broadcast::Sender<WsClientEvent>,
-    /// 链路加密会话密码（issue 09）：None = 明文连接；协商成功后安装，
-    /// 收发双向帧经此加解密（心跳 Ping/Pong 控制帧除外）
-    link_crypto: Arc<RwLock<Option<bedcode_link_crypto::ClientWsCrypto>>>,
 }
 
 #[derive(Debug, Default)]
@@ -62,7 +57,6 @@ impl WsClient {
         let connection = WsConnectionManager::new(config.clone(), lifecycle.clone());
         let io = IoManager::new();
         let heartbeat = HeartbeatManager::from_client_config(config.heartbeat_interval_secs);
-        let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
         let request_manager = RequestResponseManager::new();
 
         let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -73,14 +67,12 @@ impl WsClient {
             io,
             heartbeat,
             lifecycle,
-            reconnect,
             request_manager,
             handler: RwLock::new(None),
             ws_sender: RwLock::new(None),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tasks: RwLock::new(ClientTasks::default()),
             event_tx,
-            link_crypto: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -132,20 +124,6 @@ impl WsClient {
         self.request_manager.clone()
     }
 
-    /// 安装链路加密会话密码（issue 09：认证回执派生成功后调用）
-    ///
-    /// 安装后收发双向帧立即进入加密模式；桌面端在发出 auth 回执后同样注册
-    /// 密码表，两端切换点对齐。解密失败按 fail-closed 处理（断连）。
-    pub async fn install_link_crypto(&self, crypto: bedcode_link_crypto::ClientWsCrypto) {
-        *self.link_crypto.write().await = Some(crypto);
-        info!("[WsClient] Link encryption installed, frames encrypted from now on");
-    }
-
-    /// 是否已处于加密模式
-    pub async fn is_link_encrypted(&self) -> bool {
-        self.link_crypto.read().await.is_some()
-    }
-
     pub async fn connect(self: &Arc<Self>) -> Result<()> {
         info!("[WsClient] Starting connection to {}", self.config.url());
 
@@ -180,7 +158,6 @@ impl WsClient {
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
         let heartbeat = self.heartbeat.clone();
-        let link_crypto = self.link_crypto.clone();
 
         let (write, read) = stream.split();
         // write（SplitSink）仅由 sender 任务独占访问：receiver 的 Ping/Pong 回复
@@ -208,31 +185,25 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    // 链路加密（issue 09）：已安装密码表则先解密。
-                                    // 解密失败按 fail-closed 处理（断连）——明文续跑
-                                    // 会把信封 JSON 泄漏给上层且破坏序号纪律
-                                    let text = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.open_text(LINK_CRYPTO_CHANNEL_EVENT, &text) {
-                                                Ok(plain) => plain,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link decrypt failed, closing: {}", e);
-                                                    let _ = event_tx.send(WsClientEvent::Error {
-                                                        message: format!("LINK_CRYPTO_DECRYPT_FAILED: {e}"),
-                                                    });
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            text
-                                        }
-                                    };
                                     debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
-                                    // 1. 尝试匹配 pending 请求
+                                    // 任意入站帧都证明链路还通：业务帧同样刷新心跳活动基准
+                                    // （on_activity），避免「事件通道空闲但链路活着」因收不到 Pong
+                                    // 被误判死（Pong 通路异常时，持续的业务流量就是兜底判活信号）
+                                    heartbeat.on_activity().await;
+
+                                    // 1. 尝试匹配 pending 请求：三态裁决（见 request_response.rs）
+                                    //    · Matched = 响应已按 id 投递，无需处理
+                                    //    · Push = 可解析的业务推送帧 → 广播 + 交给 handler
+                                    //    · Unroutable = 无法解析为业务 Message 的帧（插件端点事件帧/
+                                    //      畸形帧）→ **同样交 handler**——handler 内 PluginEventRouter
+                                    //      正是在此闭环；匹配层吞掉 = 事件帧到不了路由（票 03 必红）
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
-                                        Some(_) => {
+                                        MatchOutcome::Matched => {
+                                            // 已匹配 pending 请求，无需处理
+                                            debug!("[WsClient] Matched pending request");
+                                        }
+                                        MatchOutcome::Push(_) => {
                                             // 未匹配，是推送消息，交给 handler 处理
                                             debug!("[WsClient] Push message, handler is_some: {}", handler.is_some());
                                             if let Err(e) = event_tx.send(WsClientEvent::PushMessage {
@@ -260,32 +231,31 @@ impl WsClient {
                                                 warn!("[WsClient] No handler for push message!");
                                             }
                                         }
-                                        None => {
-                                            // 已匹配 pending 请求，无需处理
-                                            debug!("[WsClient] Matched pending request");
+                                        MatchOutcome::Unroutable => {
+                                            // 无法解析为业务 Message 的帧（插件端点事件帧 / 畸形帧）：
+                                            // 经 handler 侦察路由（PluginEventRouter 事件帧在此闭环；
+                                            // 其余按原样留痕丢弃）。不发 PushMessage——插件帧不进旧广播面
+                                            debug!(
+                                                "[WsClient] Undecodable frame (plugin event?), handler is_some: {}",
+                                                handler.is_some()
+                                            );
+                                            if let Some(h) = &handler {
+                                                h.handle(
+                                                    WsMsg::Text(text),
+                                                    PLACEHOLDER_CLIENT_ADDR.parse().unwrap(),
+                                                    None,
+                                                    None,
+                                                );
+                                            } else {
+                                                warn!("[WsClient] No handler for undecodable frame!");
+                                            }
                                         }
                                     }
                                 }
                                 Some(Ok(WsMsg::Binary(data))) => {
                                     debug!("[WsClient] <<< RECV Binary: {} bytes", data.len());
-                                    // 链路加密（issue 09）：同文本帧，fail-closed
-                                    let data = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.open_binary(LINK_CRYPTO_CHANNEL_EVENT, &data) {
-                                                Ok(frame) => frame,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link decrypt(binary) failed, closing: {}", e);
-                                                    let _ = event_tx.send(WsClientEvent::Error {
-                                                        message: format!("LINK_CRYPTO_DECRYPT_FAILED: {e}"),
-                                                    });
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            data
-                                        }
-                                    };
+                                    // 二进制业务帧同样算链路活跃（与 Text 分支同口径）
+                                    heartbeat.on_activity().await;
                                     // Binary 消息交给 handler 处理
                                     if let Some(h) = &handler {
                                         h.handle(
@@ -297,16 +267,33 @@ impl WsClient {
                                     }
                                 }
                                 Some(Ok(WsMsg::Close(reason))) => {
-                                    let reason_str = reason.map(|r| r.to_string()).unwrap_or_default();
-                                    info!("[WsClient] Server closed: {}", reason_str);
+                                    // M1：保留 close **code**（认证类 4001/4003 致命，
+                                    // 供 ConnMonitor/自愈监督判定「重连无意义」）；
+                                    // 未携带 CloseFrame 时按 1005（无状态码）处理
+                                    let code = reason
+                                        .as_ref()
+                                        .map(|f| u16::from(f.code))
+                                        .unwrap_or(1005);
+                                    let reason_str = reason
+                                        .as_ref()
+                                        .map(|r| r.reason.to_string())
+                                        .unwrap_or_default();
+                                    info!("[WsClient] Server closed: code={} reason={}", code, reason_str);
 
                                     // 通知所有 pending 请求
                                     request_manager.on_error("Server closed").await;
 
-                                    let _ = event_tx.send(WsClientEvent::ServerClosed { reason: reason_str });
+                                    let _ = event_tx.send(WsClientEvent::ServerClosed {
+                                        code,
+                                        reason: reason_str,
+                                    });
                                     break;
                                 }
                                 Some(Ok(WsMsg::Ping(data))) => {
+                                    // 收到服务端 Ping 本身就是**最密的保活信号**（桌面端每 5s 一发，
+                                    // 而客户端自发的 Ping 每 30s 一发）：即使服务端对客户端 Ping 的
+                                    // 回复不可达，持续到来的服务端 Ping 也能维持判活基准
+                                    heartbeat.on_activity().await;
                                     // 经发送 channel 回复 Pong（write 由 sender 任务独占）
                                     let Some(sender) = ws_sender.as_ref() else { break };
                                     if let Err(e) = sender.send(WsMsg::Pong(data)).await {
@@ -341,7 +328,6 @@ impl WsClient {
         let write_for_sender = write.clone();
         let sender_handle = {
             let running = running.clone();
-            let link_crypto = self.link_crypto.clone();
 
             tokio::spawn(async move {
                 let mut rx = rx;
@@ -351,21 +337,6 @@ impl WsClient {
                         msg = rx.recv() => {
                             match msg {
                                 Some(WsMsg::Text(text)) => {
-                                    // 链路加密（issue 09）：已安装密码表则先加密再写 socket
-                                    let text = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.seal_text(LINK_CRYPTO_CHANNEL_EVENT, &text) {
-                                                Ok(sealed) => sealed,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link encrypt failed, dropping frame: {}", e);
-                                                    continue;
-                                                }
-                                            }
-                                        } else {
-                                            text
-                                        }
-                                    };
                                     debug!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Text(text)).await {
@@ -374,21 +345,6 @@ impl WsClient {
                                     }
                                 }
                                 Some(WsMsg::Binary(data)) => {
-                                    // 链路加密（issue 09）：同文本帧
-                                    let data = {
-                                        let mut guard = link_crypto.write().await;
-                                        if let Some(crypto) = guard.as_mut() {
-                                            match crypto.seal_binary(LINK_CRYPTO_CHANNEL_EVENT, &data) {
-                                                Ok(frame) => frame,
-                                                Err(e) => {
-                                                    error!("[WsClient] Link encrypt(binary) failed, dropping frame: {}", e);
-                                                    continue;
-                                                }
-                                            }
-                                        } else {
-                                            data
-                                        }
-                                    };
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Binary(data)).await {
                                         error!("[WsClient] Send binary error: {}", e);
@@ -398,9 +354,36 @@ impl WsClient {
                                 Some(WsMsg::Close(_)) => {
                                     break;
                                 }
+                                // 控制帧必须真正上环（2026-10-16 定位断线根因：此前走 `_ => {}`
+                                // 被静默丢弃，客户端 Ping 从未到达服务端 → 服务端无从回 Pong →
+                                // 90s 无响应判死，每 2.5 分钟断线重连一次）
+                                Some(WsMsg::Ping(data)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Ping(data)).await {
+                                        error!("[WsClient] Send ping error: {}", e);
+                                        break;
+                                    }
+                                }
+                                // 对服务端 Ping 的回复：钨丝网会自动应答一帧，但此处
+                                // receiver 分支显式回发的 Pong 也要如实写出（双份无碍、
+                                // 路径语义完整）
+                                Some(WsMsg::Pong(data)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Pong(data)).await {
+                                        error!("[WsClient] Send pong error: {}", e);
+                                        break;
+                                    }
+                                }
+                                // 原始帧同样如实写出，不静默丢弃
+                                Some(WsMsg::Frame(frame)) => {
+                                    let mut write = write_for_sender.lock().await;
+                                    if let Err(e) = write.send(WsMsg::Frame(frame)).await {
+                                        error!("[WsClient] Send frame error: {}", e);
+                                        break;
+                                    }
+                                }
                                 // 所有发送方已关闭：队列排空完毕，优雅退出
                                 None => break,
-                                _ => {}
                             }
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_millis(SENDER_POLL_INTERVAL_MS)) => {
@@ -437,7 +420,12 @@ impl WsClient {
                                 let _ = event_tx.send(WsClientEvent::HeartbeatResponse);
                             }
                             Ok(IoEvent::ConnectionClosed { reason }) => {
-                                let _ = event_tx.send(WsClientEvent::ServerClosed { reason });
+                                // IoEvent::ConnectionClosed 无生产方（死路径）；
+                                // code 按 1006（异常关闭）兜底，语义 = 非致命网络断连
+                                let _ = event_tx.send(WsClientEvent::ServerClosed {
+                                    code: 1006,
+                                    reason,
+                                });
                             }
                             Ok(IoEvent::Error { message }) => {
                                 let _ = event_tx.send(WsClientEvent::Error { message });
@@ -471,6 +459,11 @@ impl WsClient {
         let ws_sender = self.ws_sender.read().await.clone();
         let heartbeat = self.heartbeat.clone();
         let event_tx = self.event_tx.clone();
+
+        // 握手已成功（connect() 在此之后才调本方法），此刻标记建连时刻作为
+        // 首个 Pong 到达前的半开检测基准。缺这一步会让这段窗口（默认 30s）
+        // 内的死连接既不报 send 错也不判超时。
+        heartbeat.mark_connected().await;
 
         let interval = heartbeat.config().interval;
         let max_timeouts = heartbeat.config().max_timeouts;
@@ -637,31 +630,13 @@ impl WsClient {
         }
     }
 
-    pub async fn reconnect(self: &Arc<Self>) -> Result<()> {
-        if !self.reconnect.should_retry().await {
-            return Err(crate::AppError::WebSocket("Max retries exceeded".to_string()));
-        }
 
-        if let Some(delay) = self.reconnect.start().await {
-            info!("[WsClient] Reconnecting in {:?}...", delay);
-            tokio::time::sleep(delay).await;
-
-            match self.connect().await {
-                Ok(_) => {
-                    self.reconnect.on_success().await;
-                    Ok(())
-                }
-                Err(e) => {
-                    self.reconnect.on_failure(e.to_string()).await;
-                    Err(crate::AppError::WebSocket(format!("Reconnect failed: {}", e)))
-                }
-            }
-        } else {
-            Err(crate::AppError::WebSocket("Reconnect abandoned".to_string()))
-        }
-    }
 }
 
+// ==================== Tests ====================
+
+// 用例按功能拆至 `ws_client/tests/`（本内联模块的子模块路径由 rustc
+// 自动解析到该目录；模块树 `connection::ws_client::tests::<文件>` 与内联形态等价，私有项可见性不受影响）。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +645,7 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::protocol::Message as ServerMsg;
+    // 跨分组共享的测试脚手架（子模块经 `use super::*` 可见）
 
     /// 本地 WS 服务端：accept 一次连接，收集文本消息直到连接关闭，Ping 回 Pong
     async fn spawn_local_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
@@ -693,144 +669,9 @@ mod tests {
         });
         (addr, handle)
     }
-
     fn test_config(addr: std::net::SocketAddr) -> WsClientConfig {
         WsClientConfig::new("127.0.0.1", addr.port())
     }
-
-    /// 高频发送不丢不乱：2000 条消息顺序与服务端收到顺序一致
-    #[tokio::test]
-    async fn send_high_frequency_preserves_order() {
-        let (addr, server) = spawn_local_server().await;
-        let client = WsClient::new(test_config(addr));
-        client.connect().await.unwrap();
-
-        const N: usize = 2000;
-        for i in 0..N {
-            client.send_text(&format!("msg-{i}")).await.unwrap();
-        }
-
-        // disconnect 触发连接关闭，服务端收满后返回
-        client.disconnect().await;
-        let received = tokio::time::timeout(Duration::from_secs(10), server)
-            .await
-            .expect("server should finish")
-            .unwrap();
-
-        assert_eq!(received.len(), N, "all messages must arrive");
-        for (i, msg) in received.iter().enumerate() {
-            assert_eq!(msg, &format!("msg-{i}"), "order must be preserved at index {}", i);
-        }
-    }
-
-    /// 对端关闭后 send 快速失败（channel 关闭），不永久挂起
-    #[tokio::test]
-    async fn send_fails_fast_after_peer_close() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        // 服务端完成握手后（通知主测试）再关闭连接
-        let (handshake_done_tx, mut handshake_done_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let _ws = accept_async(stream).await.unwrap();
-            let _ = handshake_done_tx.send(()).await;
-            // 等主测试确认已连接后 drop：模拟对端掉线
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        });
-
-        let client = WsClient::new(test_config(addr));
-        client.connect().await.unwrap();
-        // 确认服务端握手完成，随后服务端关闭连接
-        let _ = tokio::time::timeout(Duration::from_secs(3), handshake_done_rx.recv())
-            .await
-            .expect("server handshake must complete");
-        server.await.unwrap();
-
-        // 等待 receiver/sender task 感知连接关闭
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
-        // 发送应最终失败且不挂起（单条 3s 硬超时兜底断言）
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut last_result = Ok(());
-        while Instant::now() < deadline {
-            last_result = client.send_text("after-close").await;
-            if last_result.is_err() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        assert!(
-            last_result.is_err(),
-            "send must fail after peer close, got: {:?}",
-            last_result
-        );
-    }
-
-    /// disconnect 后 send 返回错误（ws_sender 已清空），不静默成功
-    #[tokio::test]
-    async fn send_after_disconnect_returns_error() {
-        let (addr, _server) = spawn_local_server().await;
-        let client = WsClient::new(test_config(addr));
-        client.connect().await.unwrap();
-        client.disconnect().await;
-
-        let result = client.send_text("after-disconnect").await;
-        assert!(result.is_err(), "send after disconnect must fail, got: {:?}", result);
-    }
-
-    /// 重连重建通道：disconnect 后再次 connect，新 channel 可正常收发
-    #[tokio::test]
-    async fn disconnect_then_reconnect_rebuilds_channel() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        // 服务端接受两次连接，分别收集各自的消息
-        let server = tokio::spawn(async move {
-            let mut rounds: Vec<Vec<String>> = Vec::new();
-            for _ in 0..2 {
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut ws = accept_async(stream).await.unwrap();
-                let mut received = Vec::new();
-                loop {
-                    match ws.next().await {
-                        Some(Ok(ServerMsg::Text(t))) => received.push(t.to_string()),
-                        Some(Ok(ServerMsg::Ping(d))) => {
-                            let _ = ws.send(ServerMsg::Pong(d)).await;
-                        }
-                        Some(Ok(ServerMsg::Close(_))) | None => break,
-                        _ => {}
-                    }
-                }
-                rounds.push(received);
-            }
-            rounds
-        });
-
-        let client = WsClient::new(test_config(addr));
-        client.connect().await.unwrap();
-        client.send_text("round-1").await.unwrap();
-        client.disconnect().await;
-
-        // 直接再次 connect：应成功（而非 "Already connected"）
-        let reconnect_result = tokio::time::timeout(Duration::from_secs(5), client.connect()).await;
-        assert!(
-            reconnect_result.is_ok(),
-            "reconnect must not hang, got: {:?}",
-            reconnect_result
-        );
-        assert!(
-            reconnect_result.unwrap().is_ok(),
-            "reconnect must succeed, running flag should be reset by disconnect"
-        );
-
-        client.send_text("round-2").await.unwrap();
-        client.disconnect().await;
-
-        let rounds = tokio::time::timeout(Duration::from_secs(10), server)
-            .await
-            .expect("server should finish")
-            .unwrap();
-        assert_eq!(rounds.len(), 2, "server must see two connections");
-        assert_eq!(rounds[0], vec!["round-1".to_string()]);
-        assert_eq!(rounds[1], vec!["round-2".to_string()]);
-    }
+    mod keepalive_activity;
+    mod send_high_frequency;
 }

@@ -1,24 +1,21 @@
 /**
- * Dev Shell 全局注册表
- *
+ * Dev Shell 调试注册表
+ * -----------------------------------------------------------------------------
  * 模块级响应式状态（跨组件共享单例）：
- * - 插件记录（state / error / context）
- * - 插件 UI 注册项（toolbox 页 / navTab / 终端工具栏 / 设置区 / 路由 / 挂载点）
+ * - 调试记录（内置应用 + 被调试插件：state / error / context）
+ * - 插件动态路由注册项（registerRoute 的真源，渲染由 vue-router 承载）
  * - 日志面板数据
- * - 当前打开的插件视图（activeView，由 AppShell 渲染）
  *
- * 与宿主 plugin/registry.ts 的职责对应，但只服务浏览器 dev-shell 场景。
+ * 与宿主 `src/plugin/registry.ts` 的分工：宿主那份存「插件 UI 扩展点」，dev-shell
+ * 原来也照抄了一份（surfaces / slots / capsules / settingsEntries + activeView 视图栈）。
+ * 票 2026-10-10 起宿主壳只认 registerSurface 一种运行面形态，且壳内导航是屏幕栈而非
+ * 视图栈——那份副本已整面退役：
+ *   · 界面贡献 → 改由 `src/shell/registry.ts`（壳注册表）持有，与宿主同构
+ *   · 视图栈 → 改由 `src/shell/composables/useShellNavigation.ts`（屏幕栈）承担
+ * 保留在这里的只有「调试对象」自身的事实与插件路由注册表。
  */
-import { reactive, ref } from 'vue'
-import type {
-  Disposable,
-  NavTabDescriptor,
-  PluginDevMock,
-  PluginRouteDescriptor,
-  SettingsSectionDescriptor,
-  TerminalToolbarItemDescriptor,
-  ToolboxPageDescriptor,
-} from '../../src/types'
+import { ref } from 'vue'
+import type { Disposable, PluginDevMock, PluginRouteDescriptor } from '../../src/types'
 
 // ==================== 插件 devMock（领域数据注册） ====================
 
@@ -81,20 +78,24 @@ export function clearLogs(): void {
   logs.value = []
 }
 
-// ==================== 插件记录 ====================
+// ==================== 调试记录（壳应用的数据源） ====================
 
 export type DevPluginState = 'loaded' | 'activated' | 'deactivated' | 'error'
 
 export interface DevPluginRecord {
   id: string
   name: string
-  manifest: Record<string, any>
+  /** plugin.json 原文（内置应用给等价的静态元信息） */
+  manifest: Record<string, unknown>
+  /** 入口模块（内置应用为 null） */
   entry: any
   state: DevPluginState
   error?: string
   context: any
   /** devMock 注册句柄（deactivate 时清理） */
   devMockDisposable?: Disposable
+  /** 内置应用标记（dev-shell 自带、非被调试插件）：壳里显示「官方」徽标 */
+  builtin?: boolean
 }
 
 const plugins = ref<DevPluginRecord[]>([])
@@ -103,88 +104,27 @@ export function getPluginRecord(pluginId: string): DevPluginRecord | undefined {
   return plugins.value.find((p) => p.id === pluginId)
 }
 
-// ==================== UI 注册项 ====================
+// ==================== 插件动态路由（渲染承载在 vue-router） ====================
 
-export interface ToolboxPageEntry {
-  pluginId: string
-  page: ToolboxPageDescriptor
-}
-export interface NavTabEntry {
-  pluginId: string
-  tab: NavTabDescriptor
-}
-export interface TerminalToolbarEntry {
-  pluginId: string
-  item: TerminalToolbarItemDescriptor
-}
-export interface SettingsSectionEntry {
-  pluginId: string
-  section: SettingsSectionDescriptor
-}
+/**
+ * 已注册路由条目
+ *
+ * 与宿主 `src/plugin/routes.ts` 同构：注册时既写这里（解析真源），也在 vue-router
+ * 上 addRoute（页面承载）；dispose 双向撤销。渲染组件见 `shell/components/screens/
+ * PluginRoutePage.vue`。
+ */
 export interface RouteEntry {
   pluginId: string
   route: PluginRouteDescriptor
   /** router 路由名（registerRoute 时 addRoute，dispose 时 removeRoute） */
   routeName: string
 }
-const toolboxPages = ref<ToolboxPageEntry[]>([])
-const navTabs = ref<NavTabEntry[]>([])
-const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
-const settingsSections = ref<SettingsSectionEntry[]>([])
+
 const routes = ref<RouteEntry[]>([])
 
-/** 从列表中移除条目（dispose 回调） */
-function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
-  return {
-    dispose() {
-      const idx = list.value.indexOf(entry)
-      if (idx !== -1) list.value.splice(idx, 1)
-    },
-  }
-}
-
-export function registerToolboxPage(pluginId: string, page: ToolboxPageDescriptor): Disposable {
-  const entry: ToolboxPageEntry = { pluginId, page }
-  toolboxPages.value.push(entry)
-  pushLog('debug', pluginId, `注册工具箱页: ${page.title || page.id}`)
-  return makeDisposable(toolboxPages, entry)
-}
-
-export function registerNavTab(pluginId: string, tab: NavTabDescriptor): Disposable {
-  const entry: NavTabEntry = { pluginId, tab }
-  navTabs.value.push(entry)
-  pushLog('debug', pluginId, `注册底部导航 Tab: ${tab.title}`)
-  return makeDisposable(navTabs, entry)
-}
-
-export function registerTerminalToolbarItem(
-  pluginId: string,
-  item: TerminalToolbarItemDescriptor,
-): Disposable {
-  const entry: TerminalToolbarEntry = { pluginId, item }
-  terminalToolbarItems.value.push(entry)
-  pushLog('debug', pluginId, `注册终端工具栏项: ${item.label}`)
-  return makeDisposable(terminalToolbarItems, entry)
-}
-
-export function registerSettingsSection(
-  pluginId: string,
-  section: SettingsSectionDescriptor,
-): Disposable {
-  const entry: SettingsSectionEntry = { pluginId, section }
-  settingsSections.value.push(entry)
-  pushLog('debug', pluginId, `注册设置区: ${section.section}`)
-  return makeDisposable(settingsSections, entry)
-}
-
-export function registerRoute(pluginId: string, route: PluginRouteDescriptor): Disposable {
-  const entry: RouteEntry = {
-    pluginId,
-    route,
-    routeName: `dev-plugin-route-${routes.value.length}-${Date.now()}`,
-  }
+/** 登记路由条目（router 侧由调用方 addRoute 后登记；dispose = 撤销登记） */
+export function registerRouteEntry(entry: RouteEntry): Disposable {
   routes.value.push(entry)
-  pushLog('debug', pluginId, `注册插件路由: ${route.id}`)
   return {
     dispose() {
       const idx = routes.value.indexOf(entry)
@@ -193,37 +133,19 @@ export function registerRoute(pluginId: string, route: PluginRouteDescriptor): D
   }
 }
 
-// ==================== 当前打开的插件视图（视图栈，与宿主路由栈语义一致） ====================
-
-export interface ActiveView {
-  kind: 'toolbox' | 'navtab' | 'settings' | 'route'
-  pluginId: string
-  title?: string
-  /** 是否渲染宿主页头（back + title），缺省 true */
-  header?: boolean
-  component: any
-  /** navTab 去重标记（内部） */
-  _tabId?: string
+/** 路由名（守卫与跳转共用，避免字符串漂移） */
+export function pluginRouteName(pluginId: string, routeId: string): string {
+  return `dev-plugin-route-${pluginId}-${routeId}`
 }
 
-const viewStack = ref<ActiveView[]>([])
-const activeView = ref<ActiveView | null>(null)
-
-/** 打开视图（压栈；null = 清空回 Tab 内容） */
-export function openActiveView(view: ActiveView | null): void {
-  if (view === null) {
-    viewStack.value = []
-    activeView.value = null
-    return
-  }
-  viewStack.value.push(view)
-  activeView.value = view
+/** 取指定插件的路由条目 */
+export function findRoute(pluginId: string, routeId: string): RouteEntry | undefined {
+  return routes.value.find((r) => r.pluginId === pluginId && r.route.id === routeId)
 }
 
-/** 返回上一视图（对应宿主 router.back()；无上层时回 Tab 内容） */
-export function goBackView(): void {
-  viewStack.value.pop()
-  activeView.value = viewStack.value[viewStack.value.length - 1] ?? null
+/** 取指定插件的全部路由 */
+export function routesOf(pluginId: string): RouteEntry[] {
+  return routes.value.filter((r) => r.pluginId === pluginId)
 }
 
-export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes }
+export { logs, plugins, routes }

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@binblink/bedcode-plugin-sdk-mobile": ["../../packages/plugin-sdk-mobile/src/index.ts"],
+      "@binblink/bedcode-plugin-sdk-mobile/vite": ["../../packages/plugin-sdk-mobile/src/vite-plugin.ts"],
+      "@binblink/bedcode-plugin-sdk-mobile/types": ["../../packages/plugin-sdk-mobile/src/types.ts"],
+      "@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs": ["../../packages/plugin-sdk-mobile/src/ui/useSwipeTabs.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue"],
+  "exclude": ["node_modules", "rust", "src/**/__tests__/**"]
+}

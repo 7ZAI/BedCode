@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "自动任务链路：terminal-session 任务域 → Agent 执行 → 真源与广播",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 620],
+    "output": "docs/diagrams/task-automation-flow-desktop.html"
+  },
+  "stages": [
+    { "label": "入口面" },
+    { "label": "插件 HTTP 接口" },
+    { "label": "任务域调度" },
+    { "label": "会话编排与执行" },
+    { "label": "Agent 集成与真源" }
+  ],
+  "nodes": [
+    {
+      "id": "ts_ui",
+      "type": "frontend",
+      "label": "桌面任务面板",
+      "sublabel": "队列 · 定时任务 · 记录",
+      "stage": 0,
+      "row": 0,
+      "width": 140
+    },
+    {
+      "id": "mobile_ui",
+      "type": "frontend",
+      "label": "移动端任务视图",
+      "sublabel": "只读 · 500 ms 去抖重拉",
+      "tag": "零本地状态",
+      "stage": 0,
+      "row": 2,
+      "width": 140
+    },
+    {
+      "id": "http_face",
+      "type": "backend",
+      "label": "插件 HTTP 端点",
+      "sublabel": "task-queue · scheduled-jobs",
+      "stage": 1,
+      "row": 1,
+      "width": 156
+    },
+    {
+      "id": "sched",
+      "type": "cloud",
+      "label": "定时任务域",
+      "sublabel": "pending → creating → executed",
+      "stage": 2,
+      "row": 0,
+      "width": 152
+    },
+    {
+      "id": "queue",
+      "type": "cloud",
+      "label": "队列调度域",
+      "sublabel": "pending → waiting → executing",
+      "stage": 2,
+      "row": 2,
+      "width": 152
+    },
+    {
+      "id": "launch",
+      "type": "backend",
+      "label": "launch 编排",
+      "sublabel": "config → spec · 自产 id",
+      "stage": 3,
+      "row": 1,
+      "width": 140
+    },
+    {
+      "id": "host_pty",
+      "type": "backend",
+      "label": "host-pty.spawn",
+      "sublabel": "PTY 引擎 · 属主仲裁",
+      "stage": 3,
+      "row": 2,
+      "width": 140
+    },
+    {
+      "id": "agent_pty",
+      "type": "external",
+      "label": "Agent CLI 会话",
+      "sublabel": "claude · pi · opencode · codex",
+      "stage": 3,
+      "row": 3,
+      "width": 140
+    },
+    {
+      "id": "hooks",
+      "type": "external",
+      "label": "Agent hooks",
+      "sublabel": "SessionStart · 终态",
+      "stage": 4,
+      "row": 3,
+      "width": 140
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "状态机 + 真源",
+      "sublabel": "task_history · 幂等去重",
+      "stage": 4,
+      "row": 2,
+      "width": 140
+    },
+    {
+      "id": "bus",
+      "type": "messagebus",
+      "label": "host-events 广播",
+      "sublabel": "Queue / Status / Scheduled",
+      "tag": "→ 移动端重拉",
+      "stage": 4,
+      "row": 1,
+      "width": 156
+    }
+  ],
+  "flows": [
+    {
+      "id": "ui-http",
+      "from": "ts_ui",
+      "to": "http_face",
+      "label": "入队 / 定时 / 重拉"
+    },
+    {
+      "id": "mobile-http",
+      "from": "mobile_ui",
+      "to": "http_face",
+      "label": "HTTP 全量重拉"
+    },
+    {
+      "id": "http-sched",
+      "from": "http_face",
+      "to": "sched",
+      "label": "scheduled-jobs/create"
+    },
+    {
+      "id": "http-queue",
+      "from": "http_face",
+      "to": "queue",
+      "label": "task-queue/add · remove"
+    },
+    {
+      "id": "sched-launch",
+      "from": "sched",
+      "to": "launch",
+      "label": "到期 → prompts 入队",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queue-launch",
+      "from": "queue",
+      "to": "launch",
+      "label": "出队 → 轮换会话",
+      "variant": "emphasis"
+    },
+    {
+      "id": "launch-pty",
+      "from": "launch",
+      "to": "host_pty",
+      "label": "host-pty.spawn",
+      "labelAt": [745, 315]
+    },
+    {
+      "id": "pty-agent",
+      "from": "host_pty",
+      "to": "agent_pty",
+      "label": "PTY 进程",
+      "labelAt": [745, 429]
+    },
+    {
+      "id": "agent-hooks",
+      "from": "agent_pty",
+      "to": "hooks",
+      "label": "hooks 回调"
+    },
+    {
+      "id": "hooks-state",
+      "from": "hooks",
+      "to": "state",
+      "label": "POST 任务状态",
+      "variant": "emphasis"
+    },
+    {
+      "id": "state-bus",
+      "from": "state",
+      "to": "bus",
+      "label": "TaskQueue / Status Changed",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "编排反转：插件是会话编排方",
+      "items": [
+        "任务域自 `com.bedcode.auto-task` 并入 com.bedcode.terminal-session（spec D8-P4，桌面 2026-09-20 · 移动 2026-10-08）——不再有独立的 auto-task 插件",
+        "会话创建由本插件经 `launch::create_via_host` 发起（互调 api `session-create` 的同一入口）：读配置真源（插件私有库）→ 命名唯一化 → config 映射 launch spec → `host-pty.spawn` 同步可见",
+        "集成注入由插件自己驱动：activate 注册生命周期监听，`on-session-lifecycle(Creating)` 即调 `hooks::ensure_agent_integration`（resource_dir 经 `host-app.plugin-resource-dir` 自取）",
+        "不再经 legacy `host-session.create(config-id)`：那条链要读主库配置投影，而票 08 之后新建的配置本就创建不出会话（伪可用），投影与 legacy 通道随之退役"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "双调度状态机",
+      "items": [
+        "队列：pending →（全新会话直接下发）executing → done；pending →（已有上下文：关闭旧会话 + 同配置新建）waiting →（idle 到达 / 宽限耗尽）executing —— 任务间上下文隔离不再靠 /clear 命令，改为轮换会话",
+        "waiting 态最多 3 次重试（3s / 5s / 8s 递增窗口）：agent CLI 完整启动（spawn shell → 加载 hooks → SessionStart）通常 2~5s；仍无 idle 信号按宽限直接下发（不取消），覆盖 opencode 这类首个 prompt 才建会话的 agent",
+        "定时：pending →（到期受理成功）creating →（Created 事件到达，prompts 入队）executed；创建失败 → failed；超 120 s 宽限仍未执行 → missed（不补跑，覆盖应用关闭期间的调度空洞）",
+        "executing 态静默看门狗 12 h：以「会话最新任务行事件时间静默时长」为判据而非总执行时长，长任务不受影响；终态推送链路断裂时靠关闭会话或手动取消兜底"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "真源与幂等",
+      "items": [
+        "task_queue · task_scheduled（旧 scheduled_jobs，幂等改名迁移）· task_history 全部落在插件私有库，SQL 一律参数绑定（`*_params` + `?N`）",
+        "`handle_update_task_status`：event_time 丢弃过期事件；终态 completed / interrupted 不可被 running / waiting 回退；重复 POST 去重——乱序与重投都不污染真源",
+        "WASM 无系统时钟，所有到期比较用宿主 tick 回调注入的 `now_utc`（与 SQLite datetime('now') 同格式，字符串可直接比较）",
+        "长循环统一经 `yield_guard`（每 64 次调一次廉价宿主原语）制造 await 点——wasip3 async store 下纯 guest 计算不触发让出，会阻塞同实例的配对回调"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "广播回环：跨端零本地队列状态",
+      "items": [
+        "广播终点即图中 `bus` 的 `→ 移动端重拉`：真源变更经 `host-events` 发 TaskQueue / TaskStatus / TaskScheduled Changed → 宿主同步链 → 移动端 WS SyncData → `app.emit` 三类事件（`ws_sync_task_{queue,status,scheduled}_changed`）",
+        "回环不在图内画线：跨 4 段回流线会与入口面所有前向边共走廊，故以节点标注 + 本卡承载；链路语义是「事件触发全量 HTTP 重拉」，不是把真源复制一份到移动端",
+        "移动端只订阅事件、不落任何本地状态：三路事件共用 500 ms 去抖后全量 HTTP 重拉；下拉刷新与重连重拉兜底断线期丢失的事件",
+        "HTTP 端点 path 段（task-queue/* · scheduled-jobs/*）一个不改，改的只是基址前缀所属的插件 id（`/api/plugin/com.bedcode.terminal-session/...`）——移动端无需改协议"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "让出、隔离与宿主红线",
+      "items": [
+        "三域（配对/信任、会话/配置、任务）各自 `Result` 边界、禁止跨域持锁；定时器回调按命令名分域计数失败，失败只降级本域",
+        "任务域只经宿主 `host-*` 基础服务取能力（host-fs · host-plugin-database · host-events/host-bus · host-config · host-timer）——不新增任何宿主命令（spec D2 红线）",
+        "反向回调兼容面（terminal-hooks / on-session-lifecycle / on-input-submitted）保留在 SDK，但本插件不再依赖它驱动主流程——回调只是资源目录与其它创建路径（移动端 HTTP）的传输载体"
+      ]
+    }
+  ]
+}

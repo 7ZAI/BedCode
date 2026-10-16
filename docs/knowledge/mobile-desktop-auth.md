@@ -1,6 +1,6 @@
 # 移动端连接桌面端 — 认证机制
 
-> **⚠️ 时效提示（2026-09-10 更新）**：本文主干（设备发现 / WS 连接 / 三种认证方式 / 重连机制）仍然有效；但自 2026-09-10 起，移动端认证请求体新增 `uidHash` 字段（设备唯一 ID 哈希，跨卸载重装稳定），桌面端据其合并同一设备的重复配对记录——本文字段表未覆盖。认证明细以 `bedcode-mobile/src-tauri/src/auth/http.rs`（DeviceAuthContext）与桌面端 `server/` DTO 为准。
+> **⚠️ 时效提示（2026-09-10 更新）**：本文主干（设备发现 / WS 连接 / 三种认证方式 / 重连机制）仍然有效；但自 2026-09-10 起，移动端认证请求体新增 `uidHash` 字段（设备唯一 ID 哈希，跨卸载重装稳定），桌面端据其合并同一设备的重复配对记录——本文字段表未覆盖。认证明细以 `bedcode-mobile/src-tauri/src/auth/http.rs`（DeviceAuthContext）与桌面端 `server/http/dtos/` 为准。
 
 本文档描述移动端（Mobile）连接桌面端（Desktop）的完整链路，包括设备发现、WebSocket 连接建立、三种认证方式（配对码 / QR 码 / JWT 重认证）以及断线重连机制。
 
@@ -23,7 +23,7 @@
 │             │ ◄─── WS Messages ───────  │  (Actor)         │
 │             │                            │                  │
 │  AuthManager│ ──── Auth Messages ─────► │  auth_service    │
-│             │ ◄─── JWT Token ─────────  │  JwtService      │
+│             │ ◄─── JWT Token ─────────  │  认证中心插件    │
 │             │                            │  PairingService  │
 │             │                            │  QrTokenManager  │
 └─────────────┘                            └─────────────────┘
@@ -36,10 +36,10 @@
 | Desktop | `MdnsAdvertiser` | 广播 `_bedcode._tcp.local.` 服务，含端口和设备名 |
 | Desktop | `Actix Web Server` | HTTP API + WebSocket 统一端口（默认 8765） |
 | Desktop | `TerminalWs` (Actor) | WebSocket 连接管理，消息路由 |
-| Desktop | `auth_service` | 处理 Auth 消息（配对码验证 / QR 认证 / JWT 重认证） |
+| Desktop | `auth_service` | 处理 Auth 消息（配对码验证 / QR 认证 / JWT 重认证）——**在认证中心插件 `com.bedcode.terminal-session` 内**（`auth_http/`） |
 | Desktop | `PairingService` | 配对码生成、验证、消耗 |
 | Desktop | `QrTokenManager` | QR Token 生成、验证、一次性消耗 |
-| Desktop | `JwtService` | JWT Token 生成与验证（HS256，7 天有效期） |
+| Desktop | `pairing::jwt`（**认证中心插件内**） | JWT 生成与验证（HS256，7 天有效期）+ 入场签发密钥的密钥环。**v33 / ADR 0033 起宿主不再持有任何设备入场密码学**（`utils/auth/jwt.rs` 已整模块退役） |
 | Mobile | `MdnsDiscovery` | 扫描局域网 BedCode 服务 |
 | Mobile | `ConnectionManager` | WebSocket 连接生命周期管理 |
 | Mobile | `AuthManager` | 认证流程编排（配对 / QR / JWT 重认证） |
@@ -58,7 +58,8 @@
 - **TXT 记录**: 包含 `platform=desktop`、`device_name=xxx` 等键值对
 - **端口**: 从配置读取，默认 `8765`
 
-源码: `bedcode-desktop/src-tauri/src/mdns/advertiser.rs`
+源码: `packages/bedcode-discovery-engine/src/advertiser.rs`（仓库根 `packages/`，宿主侧零 mdns 代码；
+广播经 `MdnsAdvertiserPort` 端口面由 server-core supervisor 调用）
 
 ### 2.2 移动端发现
 
@@ -101,21 +102,33 @@ GET http://{address}:{port}/api/health
 
 源码: `bedcode-mobile/src/composables/useHttpApi.ts` → `httpProbe()`
 
-### 3.2 WebSocket 连接
+### 3.2 WebSocket 连接（WS 面硬切后，插件端点双通道）
 
-探测通过后，建立 WebSocket 连接：
+> 2026-09-26 起移动端 WS 面整体对齐桌面插件端点。旧 `/ws/event` 与 `/ws/terminal/session/{id}`
+> 路径在桌面已 404；WS 只承载两条**插件端点**连接，帧永不加解密（桌面
+> `TrafficChannel::WsPlugin => false`——**WS 帧级链路加密已退役**，仅 HTTP 信封加密保留）。
 
-1. 前端调用 `invoke('ws_connect', { address, port, name })`
-2. Rust 端 `ConnectionManager::connect()` 创建 `WsClient`
-3. `WsClient` 配置:
-   - 路径: `/ws/terminal`
-   - 连接超时: 10 秒
-   - 心跳间隔: 30 秒
-4. 连接成功后状态: `Connected`（WebSocket 已建立，但**未认证**）
+探测通过并完成 HTTP 认证后（§4），Rust 侧经两条 WS 端点与桌面交换数据：
 
-**重要**: `Connected` 仅表示 WebSocket 握手完成，此时还不能发送业务消息。必须完成认证后状态才变为 `Paired`。
+1. **事件通道（常驻，信号面）**——`/ws/plugin/com.bedcode.terminal-session/session-control`：
+   - 首帧极简认证 `{"type":"auth","token":"<jwt>"}`（**不是** `Message::Auth` 信封：无加密提案、
+     不等待回执；认证失败由宿主 close 4001 显性表达）
+   - 入站只有事件帧 `{"type":"event","event":"<name>","payload":{...}}` → `MobileEvent` →
+     前端 `ws_sync_*`（session:created / stopped / removed、task:status-changed / queue-changed /
+     scheduled-changed、session:mode-changed）
+   - 事件**不重放**：连接建立/自愈后发射 `ws_event_channel_ready`，前端触发 HTTP 对账
+     （`loadActiveSessions` + 活动会话任务队列按需拉取）补齐重连期间缺口
+   - 意外断开按退避经 HTTP reauth 自愈后重建（`connection/event_ws.rs` 常驻监督）
+2. **终端流（终端页，按需）**——`/ws/plugin/com.bedcode.terminal-session/terminal`：新协议
+   （订阅回放 + 裸字节 + 本地计数 + `ring_resync` 重锚 + `session_stopped`），详情见
+   `bedcode-mobile/docs/code-map.md`「终端链路」
 
-源码: `bedcode-mobile/src-tauri/src/connection/manager.rs`、`bedcode-mobile/src-tauri/src/connection/ws_connection.rs`
+认证本身走 HTTP `/api/auth/*`（§4），WS 不再承载认证业务；会话控制 / 会话与配置加载 / 终端输入
+也全部走 HTTP（`/api/sessions/*`、`/api/configs`），调用口径见 `bedcode-mobile/docs/code-map.md`
+与根 `AGENTS.md` §9 协议节。
+
+源码: `bedcode-mobile/src-tauri/src/connection/{manager,event_ws}.rs`（事件通道）、
+`bedcode-mobile/src-tauri/src/terminal_link.rs`（终端流）
 
 ---
 
@@ -135,6 +148,44 @@ GET http://{address}:{port}/api/health
 └─────────────────────────────────────────────────────┘
 ```
 
+### 4.0 桌面端裁决面：认证中心 fail-closed（ADR 0031，2026-09-29）
+
+移动端发什么不影响**能不能连上**——能不能连上由桌面端的裁决面单方面决定，且现在是
+**fail-closed**（这是本节存在的理由：排障时「移动端一切正常但连不上」的根因往往在桌面端）：
+
+```text
+请求（HTTP /api/* 或 WS 插件端点首消息）
+  → 查认证中心注册表（单中心，O(1)）
+      ├─ 无中心在册      → 拒绝  deny_kind=no_center     「no auth center registered」
+      ├─ 中心调用失败    → 拒绝  deny_kind=unavailable   「auth center unavailable: …」
+      └─ 中心内部：先验签（HS256，密钥环）→ 再逐条做策略
+            ├─ 签名无效 / 过期 / 结构非法 / 已撤销 → 拒绝 deny_kind=policy
+            └─ 全部通过 → 放行，并交回连接身份（deviceId / deviceName / fingerprint）
+```
+
+- **验签与裁决收为同一次调用**（v33 / ADR 0033）：迁移前是「宿主先验签 → 再问中心策略」
+  两步，如今中心在 `policy::evaluate` 内部先做密码学验签（密钥来自中心自持的密钥环）
+  再逐条做策略，宿主只拿一份裁决结果 + 连接身份。**对称密码学下验签方必须持密钥**，
+  所以「验签执行点留宿主」与「密钥归中心」二者只能留其一（ADR 0033 §信任模型论证：
+  中心本来就有为任意设备签发凭证的权力，交出密钥**不增加**实际授权面）。
+- **token wire 格式逐字节未变**（HS256 + 三段 base64url + 既有 claims 形状），
+  `kid` 是**可选** claim 且声明在末尾 ⇒ 移动端把 token 当不透明串，**零改动**。
+
+- **「谁是认证中心」是注册事实，不是猜测**：中心插件激活时调
+  `host-auth.auth-center-register` 登记（第二注册者被拒并点名在册属主），停用时注销 /
+  宿主回收。旧的「能力探测 + 按 id 排序取首个」已退役——它在候选 > 1 时会选中未实现
+  策略的插件（2026-09-29 事故：600+ 次 4001 / 98 秒的拒绝洪水，根因即此）。
+- **没有 fail-open 降级**：「查不到中心就放行」「调用失败就放行」两条已删除。
+  代价是认证中心未激活时本机全部需认证面不可用——**这是有意的**（认证面失效时放行
+  等于无认证裸奔）。真因此状时桌面端日志会出现点名
+  「L2 插件激活完成但未注册为认证中心」的 `error` 行。
+- **对移动端的可观测后果**：以上三类拒绝对 WS 一律是 `close 4001`，对 HTTP 是 401。
+  移动端把 **4001 / 4003 判为致命**（见「重连机制」节），**不自愈**——重连不可能成功，
+  反复重试只会刷日志。界面提示「需重新配对」。
+
+源码: `bedcode-desktop/src-tauri/src/utils/auth/auth_center.rs`（裁决面）、
+`bedcode-desktop/src-tauri/src/wasm_core/host_api/auth_center.rs`（注册表）
+
 ### 4.1 AuthStage 枚举
 
 所有认证消息通过 `AuthStage` 区分阶段：
@@ -151,7 +202,9 @@ enum AuthStage {
 }
 ```
 
-源码: `bedcode-desktop/src-tauri/src/enums/auth.rs`、`bedcode-mobile/src-tauri/src/enums/auth.rs`
+源码: `bedcode-mobile/src-tauri/src/enums/auth.rs`（桌面端副本已随认证编排下沉
+session 插件删除，2026-09-25——宿主 WS 面不再解析 AuthStage/AuthPayload，只认
+`{"type":"auth","token":"<jwt>"}` 极简帧，见 `server/websocket/channel/plugin.rs`）
 
 ### 4.2 AuthPayload 结构
 
@@ -207,7 +260,7 @@ Mobile                              Desktop
 - **一次性**: 验证成功后立即消耗，不可复用
 - **每次请求生成新码**: 不复用现有配对码，确保用户有足够时间输入
 
-源码: `bedcode-desktop/src-tauri/src/utils/auth/pairing.rs`、`bedcode-desktop/src-tauri/src/server/services/pairing_service.rs`
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/pairing/`（配对码生成 / 验证编排已随认证记录下沉认证中心插件；宿主 `utils/auth/pairing.rs` 已删）
 
 ### 5.3 桌面端处理
 
@@ -217,7 +270,7 @@ Mobile                              Desktop
 4. 收到 `VerifyCode` + 配对码 → 调用 `PairingService::verify_and_consume_code()`
 5. 验证通过 → 生成 JWT Token，记录配对到数据库，回复 `Authenticated`
 
-源码: `bedcode-desktop/src-tauri/src/server/services/auth_service.rs`
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/pairing/`（`RequestPairing` → 配对码编排在认证中心插件；宿主侧 WS 首消息认证窗口在 `bedcode-desktop/src-tauri/src/server/websocket/conn.rs`，`PairingService` 已退役）
 
 ### 5.4 移动端处理
 
@@ -437,7 +490,17 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 ## 重连机制
 
 - **最大重试次数**: 3 次
-- **退避策略**: 指数退避
+- **退避策略**: 指数退避，**下限 1000ms**（`MIN_RECONNECT_DELAY_MS`，钳制在
+  `calculate_delay` 里而不是只在配置里——纵深防御：任何给出 0 / 负退避的调用方都不会
+  打出 6 Hz 风暴）
+- **同因熔断**: 连续 5 次**相同原因**的重连失败即放弃（`CIRCUIT_BREAKER_SAME_CAUSE_LIMIT`
+  + `same_cause_streak`）。原因变化即重置计数（网络抖动不会把临时故障打成永久放弃）；
+  手动 `reset` 同时清掉熔断态
+- **认证类关闭码不自愈**（M1，ADR 0031 配套）: `4001`（认证失败）与 `4003`
+  （链路完整性失败）属**致命**——`is_auth_fatal_close_code` 判真后
+  ① 跳过 supervisor 自愈、② 事件带 `fatal: true`、③ 前端只发**一次** toast
+  「需重新配对 / 重新连接」，不走 `handleUnexpectedDisconnect`
+  （桌面端此刻已 fail-closed 拒绝，重连不可能成功，见 §4.0）
 - **手动断开检测**: `manual_disconnect` 标记，用户主动断开时不触发重连
 - **重连流程**:
   1. 断开旧客户端
@@ -445,7 +508,13 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
   3. 连接成功 → 尝试 JWT 重认证
   4. JWT 认证失败 → 清除凭据，需用户重新配对
 
-源码: `bedcode-mobile/src-tauri/src/connection/manager.rs` → `reconnect()`
+> 关闭码曾被 `ws_client` 丢弃（只按连接是否 clean 处理），4001 与「网络掉线」不可区分——
+> 这正是 2026-09-29 事故里移动端无退避自愈、616 次 / 98 秒刷屏的放大器。
+> `ServerClosed { code, reason }` 起保留关闭码（未携带时按 1006 处理）。
+
+源码: `bedcode-mobile/src-tauri/src/connection/manager.rs` → `reconnect()`、
+`bedcode-mobile/src-tauri/src/connection/reconnect.rs`（退避 / 熔断）、
+`bedcode-mobile/src-tauri/src/system/constants/{connection,reconnect}.rs`（常量与判据）
 
 ---
 
@@ -460,7 +529,13 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `/api/auth/reauth` | POST | JWT 重认证 |
 | `/api/health` | GET | 健康检查（连接探测用） |
 
-源码: `bedcode-desktop/src-tauri/src/server/controllers/auth_controller.rs`
+源码: `bedcode-desktop/wasm-apps/terminal-session/rust/src/auth_http/`（`/api/auth/*` 端点编排已下沉认证中心插件，宿主不再注册认证业务路由——JWT 之前的入口经网关免验签转发）
+
+> **迁移提醒（2026-09-29，ADR 0033）**：入场签发密钥改由认证中心自持，**存量已配对设备需
+> 全量重新配对**（与 v24 退役 `pairings` / `connection_history` / `session_configs`
+> 三表的既有口径一致）。移动端侧的表现是 `handle_reauth` 返回「凭证失效」类业务码
+> 而非网络错误——文案区分见 ADR 0030 错误码口径。移动端把 token 当**不透明串**
+> （只存本地、只往上传，从不自行验签或解析），故 wire 格式变化对移动端零影响。
 
 ---
 
@@ -470,16 +545,16 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 
 | 文件 | 职责 |
 |------|------|
-| `src-tauri/src/utils/auth/jwt.rs` | JWT 生成/验证（HS256，7 天有效期） |
-| `src-tauri/src/utils/auth/pairing.rs` | 配对码数据结构（6 位数字，60 秒有效期） |
-| `src-tauri/src/utils/auth/qr_token.rs` | QR Token 管理（128-bit hex，一次性） |
-| `src-tauri/src/server/services/auth_service.rs` | WS 认证消息处理（核心路由） |
-| `src-tauri/src/server/services/pairing_service.rs` | 配对码业务逻辑 |
-| `src-tauri/src/server/controllers/auth_controller.rs` | HTTP 认证 API |
-| `src-tauri/src/server/ws/terminal_ws.rs` | WS Actor，消息分发 |
-| `src-tauri/src/server/ws/websocket_manager.rs` | WS 连接管理器（单例） |
-| `src-tauri/src/mdns/advertiser.rs` | mDNS 服务广播 |
-| `src-tauri/src/enums/auth.rs` | AuthStage / AuthPayload 定义 |
+| `src-tauri/src/utils/auth/auth_center.rs` | 认证中心宿主桥接：裁决面（`enforce_connection_policy`，**只问中心一次**）+ 注册表查询 + 组合式认证窄转发。**宿主无任何设备 JWT 密码学**（`utils/auth/jwt.rs` / `host_secrets.rs` 已随 ADR 0033 整模块删除） |
+| `wasm-apps/terminal-session/rust/src/pairing/code.rs` | 配对码生成/验证（6 位数字，60 秒有效期；编排已下沉认证中心插件） |
+| `wasm-apps/terminal-session/rust/src/pairing/qr.rs` | QR 配对 Token（一次性；编排已下沉认证中心插件） |
+| `src-tauri/src/server/websocket/conn.rs` | WS 连接骨架：首消息认证窗口（JWT 重连 / 配对流程） |
+| `wasm-apps/terminal-session/rust/src/pairing/` | 配对码业务逻辑（认证中心插件，宿主 `PairingService` 已退役） |
+| `wasm-apps/terminal-session/rust/src/auth_http/` | HTTP 认证 API（认证中心插件，宿主经网关免验签转发） |
+| `src-tauri/src/server/websocket/terminal_ws/` + `websocket/conn.rs` | WS 终端输出端子面（control_frame / forward / subscriber）+ 连接骨架 |
+| `src-tauri/src/server/websocket/websocket_manager.rs` | WS 连接管理器（单例） |
+| `packages/bedcode-discovery-engine/src/advertiser.rs` | mDNS 服务广播（自播面；`MdnsAdvertiser`，经 `MdnsAdvertiserPort` 端口面被 supervisor 调用） |
+| ~~`src-tauri/src/enums/auth.rs`~~（已删 2026-09-25） | AuthStage / AuthPayload 定义曾在此；wire 真源现仅移动端 |
 
 ### 移动端（Mobile）
 
@@ -496,3 +571,75 @@ Disconnected ──connect()──► Connecting ──WS握手──► Connect
 | `src/composables/useMobileConnection.ts` | 前端连接/认证状态管理 |
 | `src/composables/useMdnsDiscovery.ts` | 前端 mDNS 发现 composable |
 | `src/composables/useHttpApi.ts` | HTTP API 客户端 + 连接探测 |
+
+---
+
+## 跨端真实互连测试（2026-09-30 起）
+
+本文件描述的每一条链路（配对 / QR / 重认证 / WS 端点认证 / 终端流）都**有跨端
+测试守着**——不是「两端各自的 mock 自洽」，而是同一进程内**桌面端真实服务器 +
+真实 wasm 认证中心产物**与**移动端真实客户端代码**互连。
+
+```bash
+cd cross-end-tests && cargo test
+```
+
+工程：`cross-end-tests/`（仓库根，第三个 Rust 包；依赖两端 lib：
+`bedcode-desktop-lib` / `bedcode-mobile-lib`）。前置：桌面随包 wasm 产物须先构建
+（`cd bedcode-desktop && pnpm run plugins:build`）——认证中心是**真实产物**，
+缺失时测试**显性失败**而非跳过。
+
+| 场景文件 | 覆盖链路 |
+|---------|---------|
+| `harness_selfcheck.rs` | 台子自检：两端接线 + 端点登记 + 停机后不再应答 |
+| `pairing_auth_flow.rs` | §5 配对码 / §6 QR / §7 重认证（正例 + 错码 1005 / 篡改 token / QR 一次性 / 未绑定生物 1008） |
+| `jwt_rotate_reconnect.rs` | §7 + ADR 0033 密钥环轮换宽限期（**旧 token 轮换后仍可用**，含 WS 面） |
+| `session_http_flow.rs` | §HTTP API 会话域：`/api/sessions*` 契约 + 1002 错误信封 + remove 幂等 vs stop/input 严格 |
+| `terminal_ws_flow.rs` | §终端流：订阅 → **真实 bash PTY 输出字节到达移动端页面通道** → 终态 `session_stopped` |
+| `fail_closed_flow.rs` | ADR 0031 fail-closed：无中心在册 / 伪造凭证一律拒绝（HTTP + WS 两面） |
+| `lifecycle_flow.rs` | 桌面停用 / 激活插件对移动端连接的联动影响 |
+| `terminal_output_pressure.rs` | 终端输出压力：零缺口 / 重锚 fail-visible / 背压（环淘汰与拉取节奏） |
+| `event_channel_flow.rs` | 事件通道 `session-control`：7 类事件帧真实往返（会话生命周期 / 任务·模式·定时）+ 事件不重放 + 意外断链自愈 + 认证类致命关闭不自愈 + 未认证连接零事件落地 |
+| `http_proxy_flow.rs` | 移动端 HTTP 代理面：Egress L1 门禁 + JWT 注入 + **链路加密信封**（双端真实加解密互连，AAD 路由绑定）+ **两端开关不一致时的显性拒绝** + 生产端点抽样（resize / configs / quick-actions / task-queue）+ `http_cancel` |
+| `mdns_health_flow.rs` | 连接建立前的入口：桌面 mDNS 广播 → 移动端真实浏览发现（端口 / TXT / 地址逐字对齐）+ `/api/health` 探测形状 |
+
+**覆盖不到的部分（诚实边界）**：
+
+- `deny_kind` 三态（`no_center` / `unavailable` / `policy`）是宿主**日志结构化
+  字段**，不是 wire 字段——客户端一律看到 401，这是有意的（不泄露部署信息）。
+  三态分类的覆盖在宿主 `utils/auth/auth_center` 单测。
+- 生物认证正向路径：移动端私钥在 Android Keystore，无头进程构造不出真设备密钥，
+  只覆盖了「未绑定 → 1008」的反例。
+- QR 的「桌面扫码确认」UI 步骤：无头装配直接走插件 `qr-code-generate` 互调
+  （即桌面 UI 的同一入口）生成 token，跳过扫码动作本身。
+- peer-net 文件传输（移动端↔桌面 P2P）：走 peer-net 引擎的 mDNS + P2P 直连，
+  **不经桌面 HTTP/WS 服务器**，现 rig（Actix HTTP/WS）结构上不含它。
+- 移动端前端的 HTTP **调用点**本身（`useHttpApi.ts` 里的每个函数）：跨端覆盖的是
+  它们共用的 Rust 代理面 `execute_proxy`（`http_proxy_flow.rs`），请求构造与
+  `ApiResult` 归一化仍由前端单测负责。
+- mDNS 场景依赖**本机组播**；无组播环境（部分 CI 容器）下 `mdns_health_flow`
+  会**显性失败**（15s 内发现不到即 panic）而非静默 skip。
+
+每个场景 = 独立测试二进制（进程隔离）：桌面端 `AppContext` 是进程级 `OnceLock`
+单例，场景之间无法重装。
+
+**装配约束（踩过的坑，写下来免得重蹈）**：
+
+1. **加密面必须走非环回地址**：桌面端链路加密过滤器对**环回对端显式豁免**
+   （`link_crypto::is_exempt`：hook 脚本 / 本机工具直连 REST 不加密）。rig 两端同主机，
+   连 `127.0.0.1` 会静默命中豁免、加密分支永不执行 ⇒ `http_proxy_flow` 连本机自己的
+   LAN IP（内核路由 `local … src <同IP>`，服务器看到的对端就非环回）。
+2. **两端开关不一致 ⇒ 桌面端显性 4xx**：链路加密是**跨设备传输**属性，两端各有独立的
+   opt-in 主开关（`trafficEncryption`，默认关；桌面端关 ⇒ 过滤器不注册）。所以「移动端开 /
+   桌面端关」是真实可达的一格，而那一格下协商头没人读。现已 fail-visible：带协商头的请求
+   一律 `400` + 点名 `trafficEncryption`（契约 P-006 钉住），**不再**把密文当 JSON 喂给插件
+   报出 `1002 configId required` 这种误导性业务码。原始设计 spec 的 §6 第 3 条与
+   §6 实现语义段/§7 兼容矩阵**自相矛盾**，详见
+   `.scratch/2026-10-02-encryption-negotiation-fail-visible.md`。
+3. **服务器生命周期有两个入口**：`start_server`（`app::serve`，轻）与
+   `start_server_via_supervisor`（生产同款：写端口状态 + 起 mDNS 广播 + 重置指标）。
+   `mdns_health_flow` 必须用后者——否则既不广播，`/api/health` 还会报默认端口。
+4. **收尾必须能在断言失败时执行**：`WebSocketManager` 在**非 daemon OS 线程**上跑
+   actix runtime；`mdns_sd::ServiceDaemon` 被直接 drop（而非 `stop()`）会 join 其收包
+   线程约 2 分钟。两者叠加曾让一个失败断言跑 120s；现用 `catch_unwind` + 外层收尾，
+   失败路径实测 1.0s。

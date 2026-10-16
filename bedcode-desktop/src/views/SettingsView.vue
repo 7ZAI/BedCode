@@ -41,19 +41,13 @@
         :class="{ 'lang-fading': langFading }"
         :style="{ transitionDuration: animationsEnabled ? '0.4s' : '0s' }"
       >
-        <SettingsAppearanceSection
-          :language-options="languageOptions"
-          :current-language="currentLanguage"
-          :animations-enabled="animationsEnabled"
-          :on-switch-language="switchLanguage"
-          :on-toggle-animations="toggleAnimations"
+        <!-- 内置分组与插件贡献分组按 order 合并渲染（见 useSettingsSections） -->
+        <component
+          v-for="section in sections"
+          :key="section.key"
+          :is="section.component"
+          v-bind="section.props"
         />
-        <SettingsPairingSection />
-        <SettingsLinkCryptoSection />
-        <SettingsSessionSection />
-        <SettingsSystemSection />
-        <SettingsLoggingSection />
-        <SettingsAboutSection />
       </div>
     </div>
   </div>
@@ -64,8 +58,9 @@
  * 设置视图 — 桌面端设置页面（编排层）
  * Warm Workbench 风格：分段控件 + 方角开关 + section 分组；支持多主题色板预留。
  * 各分组拆分为 src/components/settings/ 下的独立组件（外观 / 配对 / 链路加密 /
- * 会话 / 系统 / 日志 / 关于），本组件仅保留工具栏、语言切换过渡状态
- * （作用于整个容器）与全局防抖保存编排。
+ * 会话 / 系统 / 日志 / 关于），并由 useSettingsSections 与插件贡献的分组按 order
+ * 合并渲染；本组件仅保留工具栏、语言切换过渡状态（作用于整个容器）、下传给分组的
+ * 共享状态与全局防抖保存编排。
  */
 import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -73,15 +68,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { useToast } from '@/composables/useToast'
+import { useSettingsSections, type SettingsSharedState } from '@/composables/useSettingsSections'
 import i18n from '@/locales'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
-import SettingsAppearanceSection from '@/components/settings/SettingsAppearanceSection.vue'
-import SettingsPairingSection from '@/components/settings/SettingsPairingSection.vue'
-import SettingsLinkCryptoSection from '@/components/settings/SettingsLinkCryptoSection.vue'
-import SettingsSessionSection from '@/components/settings/SettingsSessionSection.vue'
-import SettingsSystemSection from '@/components/settings/SettingsSystemSection.vue'
-import SettingsLoggingSection from '@/components/settings/SettingsLoggingSection.vue'
-import SettingsAboutSection from '@/components/settings/SettingsAboutSection.vue'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -118,6 +107,18 @@ const animationsEnabled = computed({
 function toggleAnimations() {
   animationsEnabled.value = !animationsEnabled.value
 }
+
+// 共享状态下传：语言与动画语义只有本组件一处真源，贡献分组只消费不推导。
+// 以取值器形式传入，让分组列表的 computed 挂上语言/动画的响应式依赖
+const { sections } = useSettingsSections(
+  (): SettingsSharedState => ({
+    languageOptions,
+    currentLanguage: currentLanguage.value,
+    animationsEnabled: animationsEnabled.value,
+    onSwitchLanguage: switchLanguage,
+    onToggleAnimations: toggleAnimations,
+  }),
+)
 
 // 语言切换过渡：先淡出当前内容，再在不可见时换语言，最后淡入新内容，
 // 避免新旧文案重叠造成的闪烁；总时长由「动画效果」开关与 0.4s 时长控制。

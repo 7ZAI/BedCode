@@ -3,11 +3,14 @@
  */
 export const zhCN = {
   'devshell.brand': 'BedCode Dev Shell',
+  'devshell.nav.navigation': '导航',
   'devshell.nav.terminal': '终端',
   'devshell.nav.toolbox': '工具箱',
   'devshell.nav.plugins': '插件',
   'devshell.nav.settings': '设置',
   'devshell.nav.rail': '导航条测试',
+  'devshell.sidebar.collapse': '收起侧边栏',
+  'devshell.sidebar.expand': '展开侧边栏',
   'devshell.toolbox.empty': '没有加载任何插件',
   'devshell.toolbox.emptyHint':
     '在插件目录运行 bedcode-plugin-desktop dev 启动本环境，插件入口将出现在这里',
@@ -18,6 +21,8 @@ export const zhCN = {
   'devshell.plugins.activate': '激活',
   'devshell.plugins.deactivate': '停用',
   'devshell.plugins.sidebar': '侧边栏面板',
+  'devshell.plugins.pages': '插件页（非菜单）',
+  'devshell.plugins.settings': '设置分组',
   'devshell.plugins.toolbar': '终端工具栏',
   'devshell.plugins.endpoints': 'HTTP 端点',
   'devshell.plugins.fileHandlers': '文件处理器',
@@ -65,11 +70,14 @@ export const zhCN = {
 
 export const en = {
   'devshell.brand': 'BedCode Dev Shell',
+  'devshell.nav.navigation': 'Navigation',
   'devshell.nav.terminal': 'Terminal',
   'devshell.nav.toolbox': 'Toolbox',
   'devshell.nav.plugins': 'Plugins',
   'devshell.nav.settings': 'Settings',
   'devshell.nav.rail': 'Nav Rail Test',
+  'devshell.sidebar.collapse': 'Collapse Sidebar',
+  'devshell.sidebar.expand': 'Expand Sidebar',
   'devshell.toolbox.empty': 'No plugin loaded',
   'devshell.toolbox.emptyHint':
     'Run "bedcode-plugin-desktop dev" inside a plugin project to load it here',

@@ -83,21 +83,32 @@
                 ></span>
                 {{ $t(getStateKey(plugin.state)) }}
               </span>
-              <!-- 降级原因：activate 成功但启动初始化失败，实例仍在运行 -->
+              <!-- 降级说明：activate 成功但启动初始化失败，实例仍在运行。
+                   ADR 0030 决定 11：只出带应用名的通用文案，失败原因原文留在日志 -->
               <p
                 v-if="isDegraded(plugin.state)"
                 class="mt-1 text-[calc(11px*var(--ui-scale))] leading-relaxed text-amber-600 dark:text-amber-400"
               >
-                {{
-                  $t('desktop.plugin.degradedReason', {
-                    error: getDegradedMessage(plugin.state),
-                  })
-                }}
+                {{ $t('errors.host.plugin.degraded', { name: plugin.name }) }}
               </p>
+              <!-- 待授权：权限清单未经人工确认，启用前必须审批（ADR 0020） -->
+              <div v-if="isNeedsApproval(plugin.state)" class="mt-2 flex items-center gap-2">
+                <span
+                  class="text-[calc(11px*var(--ui-scale))] leading-relaxed text-amber-600 dark:text-amber-400"
+                >
+                  {{ $t('desktop.plugin.approve.hint') }}
+                </span>
+                <button
+                  class="h-6 px-2 rounded-[6px] text-[calc(11px*var(--ui-scale))] font-medium bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90 transition-opacity shrink-0"
+                  @click="openApprove(plugin)"
+                >
+                  {{ $t('desktop.plugin.approve.action') }}
+                </button>
+              </div>
             </div>
             <!-- 操作列：启停 + 配置，上下并排 -->
             <div class="flex flex-col gap-2 shrink-0">
-              <!-- 启停按钮（Degraded 实例在运行，同样展示停用语义） -->
+              <!-- 启停按钮（degraded 实例在运行，同样展示停用语义） -->
               <button
                 v-if="plugin.pluginType !== 'rust'"
                 class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors flex items-center justify-center"
@@ -137,7 +148,7 @@
                 {{ $t('desktop.plugin.goConfig') }}
               </span>
               <!-- 卸载按钮（所有来源的插件都可卸载：内置随包 / 文件扫描 / zip 安装。
-                   规则：未启用的插件才能卸载——实例运行中（含 Degraded）按钮禁用并提示先停用） -->
+                   规则：未启用的插件才能卸载——实例运行中（含 degraded）按钮禁用并提示先停用） -->
               <button
                 class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--color-danger)] transition-colors flex items-center justify-center disabled:opacity-50"
                 :class="
@@ -232,9 +243,9 @@
               </div>
             </CollapseSection>
 
-            <!-- 权限（默认折叠） -->
+            <!-- 申请的权限（manifest 静态声明位，默认折叠） -->
             <CollapseSection
-              :title="$t('desktop.plugin.section.permissions')"
+              :title="$t('desktop.plugin.section.requestedPermissions')"
               emoji="🛡️"
               :badge="plugin.permissions.length"
               :default-open="false"
@@ -270,6 +281,84 @@
                   —
                 </div>
               </div>
+            </CollapseSection>
+
+            <!-- 授权记录（运行期落账，默认折叠；与「申请的权限」并列，spec §9.2） -->
+            <CollapseSection
+              :title="$t('desktop.plugin.section.authRecords')"
+              emoji="🗝️"
+              :badge="authBadge"
+              :default-open="false"
+            >
+              <div v-if="authLoading" class="px-1 pb-3">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                  {{ $t('settings.authorization.empty') }}
+                </p>
+              </div>
+              <div v-else-if="!authOverview" class="px-1 pb-3">
+                <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                  {{ $t('settings.authorization.sections.empty') }}
+                </p>
+              </div>
+              <template v-else>
+                <!-- 分区一：用户已授权 -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.userGranted')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="userGrantedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in userGrantedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="revokeRecord(record)"
+                  />
+                </AuthSection>
+                <!-- 分区二：免询问自动放行（未经确认标记） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.autoAllowed')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="autoAllowedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in autoAllowedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :unconfirmed="true"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="revokeRecord(record)"
+                  />
+                </AuthSection>
+                <!-- 分区三：内置免询问（第一方清单投影） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.firstParty')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="firstPartyDirsOf(authOverview).length > 0"
+                >
+                  <AuthFirstPartyRow
+                    v-for="entry in firstPartyDirsOf(authOverview)"
+                    :key="entry.kind + entry.value"
+                    :entry="entry"
+                    :busy="busyKey === 'first-party:' + entry.value"
+                    @revoke="revokeFirstParty"
+                  />
+                </AuthSection>
+                <!-- 分区四：硬拒绝（可移除 deny 记录） -->
+                <AuthSection
+                  :title="$t('settings.authorization.sections.denied')"
+                  :empty-text="$t('settings.authorization.sections.empty')"
+                  :has-records="deniedRecords(authOverview).length > 0"
+                >
+                  <AuthRecordRow
+                    v-for="record in deniedRecords(authOverview)"
+                    :key="record.id"
+                    :record="record"
+                    :busy="busyKey === recordKey(record)"
+                    @revoke="removeDeny(record)"
+                  />
+                </AuthSection>
+              </template>
             </CollapseSection>
 
             <!-- 详细信息（默认折叠） -->
@@ -315,6 +404,13 @@
         </template>
       </div>
     </div>
+
+    <!-- ==================== 权限审批弹层（待授权状态的启用前置） ==================== -->
+    <PluginApprovalDialog
+      :plugin="approveTarget"
+      @close="closeApprove"
+      @approved="onApproved"
+    />
 
     <!-- ==================== 启停遮罩弹窗 ==================== -->
     <Teleport to="body">
@@ -398,16 +494,32 @@
 /**
  * PluginDetailView - 插件详情页
  *
- * Hero + 操作行 + 统计条 + 四折叠区（简介/扩展点/权限/详细信息）。
+ * Hero + 操作行 + 统计条 + 折叠区（简介/扩展点/申请的权限/授权记录/详细信息）。
+ * 「申请的权限」是 manifest 静态声明位，「授权记录」是运行期落账——两者正交事实、
+ * 并列不合并不嵌套（spec §9.2）。授权记录区块四个分区（用户已授权 / 免询问自动放行
+ * / 内置免询问 / 硬拒绝），与设置页共用同一读模型命令 `plugin_auth_overview`（防漂移）；
+ * 三档策略控件只在设置页（职责切分：详情页看 + 撤销，设置页设策略）。
  * 从插件列表进入，返回直接回列表页。
  */
-import { ref, onMounted, onActivated, watch } from 'vue'
+import { ref, onMounted, onActivated, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { pluginListLoaded, pluginPreauthorize, pluginUninstall } from '@/plugin/commands'
+import {
+  pluginListLoaded,
+  pluginPreauthorize,
+  pluginUninstall,
+  pluginAuthOverview,
+  pluginAuthRevoke,
+  pluginAuthRemoveRecord,
+} from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
+import { IPC_TIMEOUT_CODE, showUserError } from '@/utils/userError'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
+import PluginApprovalDialog from '@/components/PluginApprovalDialog.vue'
+import AuthSection from '@/components/AuthSection.vue'
+import AuthRecordRow from '@/components/AuthRecordRow.vue'
+import AuthFirstPartyRow from '@/components/AuthFirstPartyRow.vue'
 import {
   getContributionChips,
   getPermissionMeta,
@@ -415,14 +527,23 @@ import {
   getStateKey,
   isActivated,
   isDegraded,
-  getDegradedMessage,
   isErrorState,
+  isNeedsApproval,
   hasConfiguration,
   isRunning,
   formatBytes,
 } from '@/plugin/contributionKinds'
 import { pluginLoader } from '@/plugin/loader'
 import type { PluginInfo, PluginState } from '@/plugin/types'
+import {
+  userGrantedRecords,
+  autoAllowedRecords,
+  deniedRecords,
+  firstPartyDirsOf,
+  type AuthRecord,
+  type FirstPartyDirEntry,
+  type PluginAuthOverview,
+} from '@/utils/authPolicy'
 
 const route = useRoute()
 const router = useRouter()
@@ -437,6 +558,9 @@ const togglingPluginInfo = ref<{ id: string; name: string; message: string } | n
 const showUninstallConfirm = ref(false)
 const uninstallTarget = ref<PluginInfo | null>(null)
 const uninstalling = ref(false)
+/** 权限审批弹层状态（approveThenEnable：由「启用」入口触发时批准后自动继续启用） */
+const approveTarget = ref<PluginInfo | null>(null)
+const approveThenEnable = ref(false)
 
 const TOGGLE_TIMEOUT_MS = 30000
 
@@ -449,8 +573,11 @@ async function loadPlugin(): Promise<void> {
     const found = list.find((p) => p.id === pluginId)
     if (!found) {
       plugin.value = null
+      authOverview.value = null
     } else {
       plugin.value = found
+      // 插件信息就绪后并行拉授权读模型（详情页与设置页共用同一命令，spec §9.3）
+      void loadAuthOverview()
     }
   } catch {
     toast.error(t('desktop.plugin.loadFailed'))
@@ -460,23 +587,164 @@ async function loadPlugin(): Promise<void> {
   }
 }
 
+// ==================== 授权记录区块（票 07：四分区，与「申请的权限」并列） ====================
+
+/**
+ * 授权读模型（与设置页共用同一命令 `plugin_auth_overview`，spec §9.3，防两页漂移）
+ *
+ * 宿主命令按 plugin_id 过滤：未知应用返回空数组而不是错误。加载失败时置空并显性
+ * toast（ADR 0030 统一消费层），不渲染原始错误——授权区块宁可显示空态也不报错页。
+ */
+const authOverview = ref<PluginAuthOverview | null>(null)
+const authLoading = ref(false)
+/** 进行中的记录操作 key（同一行按钮防重复点击） */
+const busyKey = ref<string | null>(null)
+
+async function loadAuthOverview(): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  authLoading.value = true
+  try {
+    const apps = await pluginAuthOverview(id)
+    authOverview.value = apps[0] ?? null
+  } catch {
+    authOverview.value = null
+    // 票 01（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(t('errors.host.internal'))
+  } finally {
+    authLoading.value = false
+  }
+}
+
+/** 徽标：四分区记录总数 + 内置免询问项数（无记录时显示 0） */
+const authBadge = computed(() => {
+  if (!authOverview.value) return 0
+  const { records } = authOverview.value
+  return records.length + authOverview.value.firstPartyDirs.length
+})
+
+function recordKey(record: AuthRecord): string {
+  return `${plugin.value?.id ?? ''}:${record.id}`
+}
+
+/** 撤销授权：删 allow + 落 deny（spec §8.4）；成功后刷新读模型（记录会移到硬拒绝分区） */
+async function revokeRecord(record: AuthRecord): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  const key = recordKey(record)
+  busyKey.value = key
+  try {
+    await pluginAuthRevoke(id, record.resource, record.target)
+    toast.success(
+      t(
+        record.resource === 'network'
+          ? 'settings.authorization.records.networkRevoked'
+          : 'settings.authorization.records.revoked',
+      ),
+    )
+    await loadAuthOverview()
+  } catch (e) {
+    // 票 01（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
+  } finally {
+    busyKey.value = null
+  }
+}
+
+/** 移除 deny 记录（spec §8.4 的恢复出口）：只删 deny，回到「默认」档未覆盖状态 */
+async function removeDeny(record: AuthRecord): Promise<void> {
+  const id = plugin.value?.id
+  if (!id) return
+  const key = recordKey(record)
+  busyKey.value = key
+  try {
+    await pluginAuthRemoveRecord(id, record.resource, record.target)
+    toast.success(t('settings.authorization.records.denyRemoved'))
+    await loadAuthOverview()
+  } catch (e) {
+    showUserError(e)
+  } finally {
+    busyKey.value = null
+  }
+}
+
+/**
+ * 撤销内置免询问（home 形态，spec §7：撤销 = 落一条 deny 记录，由判定链优先拦截）
+ *
+ * target 用 `~/` 前缀形态传给宿主（前端拿不到 $HOME），宿主 `AuthPolicyStore::revoke`
+ * 展开成绝对路径再落账；project-segment 形态（任意项目的具名段）落不成可复用的
+ * 授权记录，`AuthFirstPartyRow` 对它不渲染撤销按钮（票 08 定：只读展示）。
+ */
+async function revokeFirstParty(entry: FirstPartyDirEntry): Promise<void> {
+  const id = plugin.value?.id
+  if (!id || entry.kind !== 'home') return
+  const key = `first-party:${entry.value}`
+  busyKey.value = key
+  try {
+    await pluginAuthRevoke(id, 'fs', `~/` + entry.value)
+    toast.success(t('settings.authorization.records.revoked'))
+    await loadAuthOverview()
+  } catch (e) {
+    showUserError(e)
+  } finally {
+    busyKey.value = null
+  }
+}
+
 /** 返回列表页 */
 function goBack(): void {
   router.push({ path: '/plugins', query: { ...route.query } })
 }
 
-/** 状态徽章样式（Error 红 / Degraded 琥珀 / Activated 绿 / 其余中性） */
+/** 状态徽章样式（error 红 / degraded 与待授权 琥珀 / activated 绿 / 其余中性） */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) return 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
-  if (isDegraded(state))
+  if (isDegraded(state) || isNeedsApproval(state))
     return 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400'
   if (isActivated(state))
     return 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400'
   return 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'
 }
 
-/** 切换启停（带遮罩） */
+/** 打开权限审批弹层（approveThenEnable=false：仅审批，不自动启用） */
+function openApprove(target: PluginInfo): void {
+  approveThenEnable.value = false
+  approveTarget.value = target
+}
+
+/** 关闭审批弹层（遮罩/取消；不动插件状态） */
+function closeApprove(): void {
+  approveTarget.value = null
+  approveThenEnable.value = false
+}
+
+/** 批准成功：关闭弹层并刷新；由「启用」入口触发时继续启用 */
+async function onApproved(pluginId: string): Promise<void> {
+  const continueEnable = approveThenEnable.value
+  closeApprove()
+  await loadPlugin()
+  if (continueEnable) {
+    await runToggle(pluginId, true)
+  }
+}
+
+/**
+ * 切换启停入口：待授权状态的「启用」先走审批（批准后自动继续启用），
+ * 其余情况直接执行启停
+ */
 async function handleToggle(id: string, enable: boolean): Promise<void> {
+  if (togglingId.value) return
+  const target = plugin.value
+  if (enable && target && isNeedsApproval(target.state)) {
+    approveThenEnable.value = true
+    approveTarget.value = target
+    return
+  }
+  await runToggle(id, enable)
+}
+
+/** 执行启停（带遮罩） */
+async function runToggle(id: string, enable: boolean): Promise<void> {
   if (togglingId.value) return
   const name = plugin.value?.name || id
 
@@ -492,9 +760,10 @@ async function handleToggle(id: string, enable: boolean): Promise<void> {
     togglingPluginInfo.value = { id, name, message: t(key, { name }) }
     togglingId.value = id
     const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
+    // 票 02（ADR 0030）：超时承载为信封形状（统一超时码），不泄漏命令名/技术详情
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(t('desktop.plugin.toggleTimeout'))),
+        () => reject({ code: IPC_TIMEOUT_CODE, params: { seconds: TOGGLE_TIMEOUT_MS / 1000 } }),
         TOGGLE_TIMEOUT_MS,
       )
     })
@@ -503,8 +772,9 @@ async function handleToggle(id: string, enable: boolean): Promise<void> {
     const resultKey = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
     toast.success(t(resultKey, { name }))
   } catch (e: any) {
-    const errKey = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
-    toast.error(t(errKey, { error: e.message || 'Unknown error' }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文；
+    // 仅 host.invoke.timeout 提供「重试」按钮（重发原启停操作）
+    showUserError(e, { retry: () => runToggle(id, enable) })
   } finally {
     clearTimeout(timer)
     togglingId.value = null
@@ -524,7 +794,7 @@ async function copyPath(path: string): Promise<void> {
 
 /** 卸载可用条件：仅未启用的插件可卸载（运行中、激活进行中均不可，与后端守卫一致） */
 function canUninstall(target: PluginInfo): boolean {
-  return !isRunning(target.state) && target.state.state !== 'Activating'
+  return !isRunning(target.state) && target.state.state !== 'activating'
 }
 
 /** 请求卸载（弹确认框：删除插件所有数据，不可恢复） */
@@ -546,7 +816,8 @@ async function confirmUninstall(): Promise<void> {
     // 插件已删除，详情页无对象可展示，回列表页
     goBack()
   } catch (e: any) {
-    toast.error(t('desktop.plugin.uninstallFailed', { error: e.message || String(e) }))
+    // 票 02（ADR 0030）：统一消费层——友好文案 + 日志，永不渲染错误原文
+    showUserError(e)
     showUninstallConfirm.value = false
   } finally {
     uninstalling.value = false
@@ -573,7 +844,10 @@ watch(
 // 首次挂载在 KeepAlive 内同样触发一次（onMounted 已加载过），用标志位跳过
 let activatedOnce = false
 onActivated(() => {
-  if (activatedOnce) loadPlugin()
+  if (activatedOnce) {
+    loadPlugin()
+    loadAuthOverview()
+  }
   activatedOnce = true
 })
 </script>

@@ -8,7 +8,9 @@ pub mod constants;
 pub mod error;
 pub mod error_boundary;
 pub mod info;
+pub mod logging;
 pub mod settings;
+pub mod shell_ui;
 
 pub use config::AppConfig;
 pub use error::{AppError, Result};

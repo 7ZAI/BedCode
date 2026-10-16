@@ -1,0 +1,132 @@
+//! 认证中心宿主桥接（票 11 C2 落地 → 终端会话中心票 04/05 改指 → 2026-09-29
+//! ADR 0031 v32：注册表显式登记取代能力探测 → v33 / ADR 0033：验签执行一并下沉）
+//!
+//! **wasm-core 纯净性收口票 05（回迁 lib）**：本文件实现曾随 ADR 0037 迁入
+//! `bedcode-wasm-core`（spec M8）。用户裁定「auth/session 拆到宿主层面，不应留在
+//! wasm core 中」——本文件的裁决面（[`enforce_connection_policy`]）与桥接门
+//! （[`session_active`]）是**宿主薄壳**（ADR 0022 四类薄壳②安全闸门④窄转发），
+//! 回迁 lib。注册表真源仍在 `bedcode_wasm_core::host_api::auth_center`（WIT 绑定
+//! 面，wasm-core 内），lib 单向依赖取用。
+//!
+//! 认证语义（配对码 / QR / trust / consent / 生物 / **入场 JWT 签发与验签**）实现在
+//! 认证中心插件 `com.bedcode.terminal-session`（[`SESSION_PLUGIN_ID`]），本文件是宿主
+//! 侧唯一桥接门：
+//! - **裁决面**（[`enforce_connection_policy`]，K2/K3 + ADR 0033）：**验签与策略收为
+//!   一次调用**——中心内部先验签（入场密钥自持）再逐条做策略，宿主只拿一份
+//!   [`AuthenticatedIdentity`]。**无中心 / 调用失败 一律拒绝**（fail-closed，取代
+//!   两条 fail-open 降级）——三类拒绝以结构化字段
+//!   `deny_kind = no_center | unavailable | policy` 区分（AGENTS §8 结构化字段红线）
+//! - **桥接门**（[`session_active`]，K7）：查注册表（替代旧锚点判据）
+//!
+//! 消费方：
+//! - Tauri 命令面：`commands/system.rs`（配对码）、`commands/qr.rs`（QR）
+//! - server 配对端点：`controllers/auth_controller.rs`（/api/auth/pairing ·
+//!   /verify · /qr-connect）——移动端验签与前端展示必须同源
+//! - server 认证面：WS 插件端点 + HTTP 网关（**都只调本文件的裁决面**）
+//! - `utils/session_gateway.rs`：会话互调窄转发的激活门（[`session_active`]）
+
+use crate::wasm_core::manager::host::PluginHost;
+use crate::wasm_core::runtime_util::block_on_async;
+use bedcode_server_base::identity::AuthenticatedIdentity;
+
+/// 认证中心插件 id（互通面常量：注册 / 停用 / 互调目标）
+pub const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
+
+/// 认证中心是否在册（K7 桥接门：替代退役的 api_registry 锚点判据）。
+///
+/// 注册表 = 宿主进程内的发现协议：中心激活时调 `auth-center-register` 登记、
+/// 停用时注销 / 宿主 purge 回收，故在册 ⇔ 中心已就绪。
+///
+/// 无参：注册表是**进程级单例**（`bedcode_wasm_core::host_api::auth_center`），
+/// 不需要 `WasmHostContext`。ADR 0033 同批去掉了那个只为历史锚点判据保留、实际
+/// `let _ = host_ctx;` 的参数——留着会让人以为「在册与否」和某个上下文有关。
+pub fn session_active() -> bool {
+    crate::wasm_core::host_api::auth_center::is_registered()
+}
+
+// ==================== server 认证面（票 12 C3 → ADR 0031 v32 → ADR 0033 v33） ====================
+
+/// 连接建立认证：**问认证中心一次**（验签 + 策略在中心内部完成，ADR 0033）
+///
+/// 返回：
+/// - `Ok(identity)` = 中心放行，并交回连接身份（`device_id` / `device_name` /
+///   `fingerprint`，字段集被 L2 锁钉死）
+/// - `Err(reason)` = 拒绝原因
+///
+/// **v32（ADR 0031）**把角色发现从「能力探测 + 排序取首个」改为**查注册表**
+/// （`bedcode_wasm_core::host_api::auth_center`，O(1)，不复刻 2026-09-29 不住选错
+/// 中心的病灶）；两条 fail-open 降级（无候选放行 / 传输失败放行）删除，改
+/// **fail-closed**（K3）：
+/// - 无中心在册 → 拒绝（`no auth center registered`，`deny_kind=no_center`）
+/// - 中心调用失败（实例缺失 / trap / 超时）→ 拒绝（`auth center unavailable: …`，
+///   `deny_kind=unavailable`）
+/// - 中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（`deny_kind=policy`）
+/// - 中心放行但给不出身份 → 拒绝（`deny_kind=unavailable`，见下方注释）
+///
+/// **v33（ADR 0033）**：中心内部先验签（入场密钥自持）再裁决，宿主**不再有任何
+/// JWT 密码学**。失败面从迁移前的「宿主验签 → 问中心策略」两次调用收窄为一次。
+/// **失败面收窄的代价**：宿主不再有独立的验签层，故中心**必须**先把签名验过才
+/// 谈策略；中心放行却给不出 `sub` 视为中心侧故障（`deny_kind=unavailable`），
+/// 宿主绝不回查本地凭据表——那正是 ADR 0022 §5.1.4 的「宿主侧回查」红线。
+///
+/// 三类拒绝必须可区分（ADR 0031 §规格）：`no_center` / `unavailable` 是部署/故障
+/// 问题，`policy` 是产品语义问题（如设备被撤销），排障路径完全不同。
+///
+/// 调用方：`bedcode-server-websocket` 的 `channel/plugin.rs::authenticate_endpoint_connection`
+/// （WS 插件端点首消息认证）+ `bedcode-server-http` 的 `middleware/auth_gateway.rs::
+/// authenticate_with_center`（HTTP `/api` 网关）。
+pub fn enforce_connection_policy(
+    plugin_host: &PluginHost,
+    token: &str,
+) -> std::result::Result<AuthenticatedIdentity, String> {
+    // 注册表查询（O(1)，无候选遍历、无“取第一个”启发式）：无中心 = 拒绝（K3）
+    let Some(entry) = crate::wasm_core::host_api::auth_center::center() else {
+        tracing::warn!(
+            deny_kind = "no_center",
+            "auth center not registered, denying connection (fail-closed)"
+        );
+        return Err("no auth center registered".to_string());
+    };
+    let center_owner = entry.owner.clone();
+    let center_id = entry.center_id.clone();
+    let token = token.to_string();
+    // 闭包 move 用克隆副本（center_owner 在 match 分支还要读）
+    let call_owner = center_owner.clone();
+    let result = block_on_async(async move { plugin_host.call_auth_policy(&call_owner, token).await });
+    match result {
+        Ok(Ok(claims_json)) => AuthenticatedIdentity::from_center_claims(&claims_json).map_err(|e| {
+            tracing::error!(
+                deny_kind = "unavailable",
+                center_id = %center_id,
+                center_owner = %center_owner,
+                error = %e,
+                "auth center admitted a token without a usable identity, denying (fail-closed)"
+            );
+            e
+        }),
+        Ok(Err(reason)) => {
+            // 中心策略拒绝（撤销 / 签名无效 / 过期 / 结构非法）：deny_kind=policy，
+            // 原因透出（中心侧才是判定方，宿主不解释）
+            tracing::warn!(
+                deny_kind = "policy",
+                center_id = %center_id,
+                center_owner = %center_owner,
+                %reason,
+                "auth center policy rejected connection"
+            );
+            Err(reason)
+        }
+        Err(e) => {
+            // 调用传输失败（实例缺失/trap/超时）：deny_kind=unavailable，拒绝（K3），
+            // 不得降级成放行——中心不可用就拒（exp：fail-safe 默认“无应答/超时即拒”）
+            tracing::error!(
+                deny_kind = "unavailable",
+                center_id = %center_id,
+                center_owner = %center_owner,
+                error = %e,
+                "auth center call failed, denying connection (fail-closed)"
+            );
+            Err(format!("auth center unavailable: {e}"))
+        }
+    }
+}

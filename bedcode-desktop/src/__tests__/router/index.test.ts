@@ -1,24 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import router from '@/router'
 
+// 懒激活守卫会调用后端命令，测试环境无 Tauri：桩掉加载器，只验路由定义本身
+vi.mock('@/plugin/loader', () => ({
+  pluginLoader: {
+    getActivePlugin: vi.fn(() => ({ id: 'com.bedcode.terminal-session' })),
+    activate: vi.fn(async () => {}),
+  },
+}))
+
 describe('Router Configuration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   describe('route definitions', () => {
-    it('should have root route redirecting to sessions', () => {
+    it('should have root route redirecting to plugins', () => {
       const route = router.getRoutes().find((r) => r.path === '/')
 
       expect(route).toBeDefined()
-      expect(route?.redirect).toBe('/sessions')
-    })
-
-    it('should have sessions route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/sessions')
-
-      expect(route).toBeDefined()
-      expect(route?.name).toBe('session')
+      // 服务器页已无侧边栏入口（服务器常驻不可开关），落地页取插件管理
+      expect(route?.redirect).toBe('/plugins')
     })
 
     it('should have server route', () => {
@@ -26,13 +28,6 @@ describe('Router Configuration', () => {
 
       expect(route).toBeDefined()
       expect(route?.name).toBe('server')
-    })
-
-    it('should have devices route', () => {
-      const route = router.getRoutes().find((r) => r.path === '/devices')
-
-      expect(route).toBeDefined()
-      expect(route?.name).toBe('devices')
     })
 
     it('should have settings route', () => {
@@ -51,14 +46,6 @@ describe('Router Configuration', () => {
   })
 
   describe('detail routes', () => {
-    it('should have device history route with id param', () => {
-      const route = router.getRoutes().find((r) => r.path === '/devices/:id/history')
-
-      expect(route).toBeDefined()
-      expect(route?.name).toBe('device-history')
-      expect(route?.path).toContain(':id')
-    })
-
     it('should have plugin config route with id param', () => {
       const route = router.getRoutes().find((r) => r.path === '/plugins/:id/config')
 
@@ -81,6 +68,13 @@ describe('Router Configuration', () => {
       expect(route?.path).toBe('/plugin/toolbox/:pluginId/:viewId')
     })
 
+    it('should have generic plugin window route with pluginId/viewId params', () => {
+      const route = router.getRoutes().find((r) => r.name === 'plugin-window-view')
+
+      expect(route).toBeDefined()
+      expect(route?.path).toBe('/plugin/window/:pluginId/:viewId')
+    })
+
     it('should have terminal window route with id param', () => {
       const route = router.getRoutes().find((r) => r.path === '/terminal-window/:id')
 
@@ -90,18 +84,33 @@ describe('Router Configuration', () => {
     })
   })
 
+  describe('bare window routes', () => {
+    // 独立窗口（终端窗口 / 通用插件窗口）不套宿主桌面外壳：判据取 meta 而非路径前缀
+    it('should mark both plugin-facing window routes as bareWindow', () => {
+      for (const name of ['terminal-window', 'plugin-window-view']) {
+        const route = router.getRoutes().find((r) => r.name === name)
+        expect(route?.meta.bareWindow, name).toBe(true)
+      }
+    })
+
+    it('should not mark layout routes as bareWindow', () => {
+      for (const name of ['plugins', 'settings', 'plugin-sidebar-view']) {
+        const route = router.getRoutes().find((r) => r.name === name)
+        expect(route?.meta.bareWindow, name).toBeUndefined()
+      }
+    })
+  })
+
   describe('route structure', () => {
     it('should have correct route names', () => {
       const expectedNames = [
-        'session',
         'server',
-        'devices',
-        'device-history',
         'settings',
         'plugins',
         'plugin-config',
         'plugin-sidebar-view',
         'plugin-toolbox-view',
+        'plugin-window-view',
         'terminal-window',
       ]
 
@@ -113,7 +122,7 @@ describe('Router Configuration', () => {
     })
 
     it('should have correct paths for desktop routes', () => {
-      const desktopPaths = ['/sessions', '/server', '/devices', '/settings', '/plugins']
+      const desktopPaths = ['/server', '/settings', '/plugins']
 
       desktopPaths.forEach((path) => {
         const route = router.getRoutes().find((r) => r.path === path)
@@ -144,8 +153,8 @@ describe('Router Configuration', () => {
     it('should have all expected routes', () => {
       const routes = router.getRoutes()
 
-      // 包含 redirect 路由和全部业务路由
-      expect(routes.length).toBeGreaterThanOrEqual(11)
+      // 包含 redirect 路由和全部业务路由（会话 / 设备配对兜底路由已随票 13/14 删除）
+      expect(routes.length).toBeGreaterThanOrEqual(9)
     })
   })
 

@@ -15,14 +15,17 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
-    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess,
-    HostSession, HostStorage, HostTerminal,
+    ConfigKey, CryptoKeypair, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig,
+    HostConnection, HostCrypto, HostError, HostEvents, HostFs, HostHttp, HostLog, HostMdns,
+    HostNotify, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty, HostStorage,
+    HostTask, HostWebsocket, NotifyOptions, ProcessSyncResult, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_bus, host_config, host_database, host_events, host_fs,
-    host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
-    host_session, host_storage, host_terminal, host_timer,
+    host_app, host_auth_center, host_bus, host_config, host_connection_registry, host_crypto, host_events,
+    host_fs, host_fs_desktop, host_http, host_http_endpoint, host_log,
+    host_mdns, host_notify, host_peer, host_platform, host_platform_desktop, host_plugin_database,
+    host_process, host_pty, host_storage, host_task, host_timer, host_websocket,
+    host_websocket_server,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -71,6 +74,68 @@ mod tests {
     }
 }
 
+// ==================== HostAuth（v15 secret-store + v18 认证记录面） ====================
+
+impl HostAuth for WasmHost {
+    fn auth_secret_get(&self, key: &str) -> Result<Option<String>, HostError> {
+        host_auth_center::secret_get(key).map_err(|e| host_err("auth_secret_get", e))
+    }
+
+    fn auth_secret_set(&self, key: &str, value: &str) -> Result<(), HostError> {
+        host_auth_center::secret_set(key, value).map_err(|e| host_err("auth_secret_set", e))
+    }
+
+    fn auth_secret_delete(&self, key: &str) -> Result<(), HostError> {
+        host_auth_center::secret_delete(key).map_err(|e| host_err("auth_secret_delete", e))
+    }
+
+    fn auth_secret_keys(&self) -> Result<Vec<String>, HostError> {
+        host_auth_center::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
+    }
+
+    fn auth_setting_set(&self, key: &str, value: &str) -> Result<(), HostError> {
+        host_auth_center::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
+    }
+
+    fn auth_link_identity_parts(&self) -> Result<Option<serde_json::Value>, HostError> {
+        host_auth_center::link_identity_parts()
+            .map_err(|e| host_err("auth_link_identity_parts", e))
+            .and_then(|v| match v {
+                Some(s) => parse_json("auth_link_identity_parts", s).map(Some),
+                None => Ok(None),
+            })
+    }
+
+    // v33（ADR 0033）：`auth_device_token_issue` / `auth_device_token_verify` 随
+    // WIT `host-auth` 两函数一起退役——入场密钥的签发/验签归认证中心自持，宿主不再
+    // 持有设备 JWT 密码学。密钥材料仍经 `auth_secret_get/set` 出入（属主隔离）。
+    // v34（B-downsink）：`auth_biometric_credential_bound` /
+    // `auth_biometric_verify_signature` / `auth_biometric_credential_bind` 随 WIT
+    // `host-auth` 三函数一起退役——生物凭证公钥托管与验签执行下沉认证中心插件
+    // 私有库（`auth_records::biometric_key_*` + WASM 内 p256），宿主不再持有任何
+    // 设备侧凭证材料。
+
+    // ==================== v32：认证中心显式注册 + 组合式认证原语（ADR 0031） ====================
+    // 认证中心角色经注册表显式登记（唯一性仲裁在宿主），methods 声明式列表宿主
+    // 不解释；auth-method-invoke 零解析窄转发（宿主只校验 method 在注册表内）。
+
+    fn auth_center_register(&self, methods: Vec<String>) -> Result<String, HostError> {
+        host_auth_center::auth_center_register(&methods).map_err(|e| host_err("auth_center_register", e))
+    }
+
+    fn auth_center_unregister(&self) -> Result<(), HostError> {
+        host_auth_center::auth_center_unregister().map_err(|e| host_err("auth_center_unregister", e))
+    }
+
+    fn auth_methods_list(&self) -> Result<Vec<String>, HostError> {
+        host_auth_center::auth_methods_list().map_err(|e| host_err("auth_methods_list", e))
+    }
+
+    fn auth_method_invoke(&self, method: &str, params: &str) -> Result<String, HostError> {
+        host_auth_center::auth_method_invoke(method, params).map_err(|e| host_err("auth_method_invoke", e))
+    }
+}
+
 // ==================== HostStorage ====================
 
 impl HostStorage for WasmHost {
@@ -92,43 +157,7 @@ impl HostStorage for WasmHost {
     }
 }
 
-// ==================== HostDatabase / HostPluginDatabase ====================
-
-impl HostDatabase for WasmHost {
-    fn db_execute(&self, sql: &str) -> Result<i32, HostError> {
-        host_database::execute(sql)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute", e))
-    }
-
-    fn db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_database::query(sql).map_err(|e| host_err("db_query", e))? {
-            Some(s) => parse_json("db_query", s).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    fn db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
-        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        host_database::execute_params(sql, &params_str)
-            .map(|n| n as i32)
-            .map_err(|e| host_err("db_execute_params", e))
-    }
-
-    fn db_query_params(
-        &self,
-        sql: &str,
-        params: &[serde_json::Value],
-    ) -> Result<Option<serde_json::Value>, HostError> {
-        let params_str = serde_json::to_string(params).unwrap_or_else(|_| "[]".to_string());
-        match host_database::query_params(sql, &params_str)
-            .map_err(|e| host_err("db_query_params", e))?
-        {
-            Some(s) => parse_json("db_query_params", s).map(Some),
-            None => Ok(None),
-        }
-    }
-}
+// ==================== HostPluginDatabase ====================
 
 impl HostPluginDatabase for WasmHost {
     fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
@@ -168,54 +197,41 @@ impl HostPluginDatabase for WasmHost {
             None => Ok(None),
         }
     }
-}
 
-// ==================== HostTerminal ====================
-
-impl HostTerminal for WasmHost {
-    fn terminal_send(&self, session_id: &str, data: &str) -> Result<(), HostError> {
-        host_terminal::send(session_id, data).map_err(|e| host_err("terminal_send", e))
+    fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+        let sqls_str = serde_json::to_string(sqls).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("plugin_db_execute_batch: serialize failed: {}", e),
+            )
+        })?;
+        host_plugin_database::execute_batch(&sqls_str)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute_batch", e))
     }
 }
 
-// ==================== HostSession ====================
+// ==================== HostTerminal（v27 已退役） ====================
 
-impl HostSession for WasmHost {
-    fn session_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::list_sessions().map_err(|e| host_err("session_list", e))? {
-            Some(s) => parse_json("session_list", s).map(Some),
-            None => Ok(None),
-        }
-    }
+// `host-terminal` 整 interface 在 ABI v27 删除（票 10）：`send` 是「宿主替插件往
+// 交互终端注入按键」的业务面入口，零生产消费者（属主判定查已清空的内核登记）。
+// 插件写自家会话输入走自有命令通道（`session.input` → `session::input_via_pty`）。
 
-    fn session_get(&self, session_id: &str) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::get(session_id).map_err(|e| host_err("session_get", e))? {
-            Some(s) => parse_json("session_get", s).map(Some),
-            None => Ok(None),
-        }
-    }
+// ==================== HostSession（v27 已退役） ====================
 
-    fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError> {
-        match host_session::config_list().map_err(|e| host_err("session_config_list", e))? {
-            Some(s) => parse_json("session_config_list", s).map(Some),
-            None => Ok(None),
-        }
-    }
+// `host-session` 整 interface 在 ABI v27 删除（票 10）：会话真源在
+// `com.bedcode.terminal-session` 登记域，宿主侧不再有「会话」原语域。
+// 插件要用会话能力一律经 `host-pty`（PTY 引擎）与自家登记域。
 
-    fn session_lifecycle_register(&self) -> Result<(), HostError> {
-        host_session::lifecycle_register().map_err(|e| host_err("session_lifecycle_register", e))
-    }
+// ==================== HostConnection ====================
 
-    fn session_input_register(&self) -> Result<(), HostError> {
-        host_session::input_register().map_err(|e| host_err("session_input_register", e))
-    }
-
-    fn session_create(&self, config_id: &str) -> Result<String, HostError> {
-        host_session::create(config_id).map_err(|e| host_err("session_create", e))
-    }
-
-    fn session_close(&self, session_id: &str) -> Result<(), HostError> {
-        host_session::close(session_id).map_err(|e| host_err("session_close", e))
+impl HostConnection for WasmHost {
+    /// 走 `host-connection`（票 04）：这份宿主 server 的连接事实
+    /// 不随会话原语域退役；权限判据是 `connection:read`。
+    fn connections_list(&self) -> Result<serde_json::Value, HostError> {
+        let raw =
+            host_connection_registry::connections_list().map_err(|e| host_err("connections_list", e))?;
+        parse_json("connections_list", raw)
     }
 }
 
@@ -237,6 +253,37 @@ impl HostProcess for WasmHost {
     fn process_kill(&self, run_id: &str) -> Result<(), HostError> {
         host_process::kill(run_id).map_err(|e| host_err("process_kill", e))
     }
+
+    fn process_run_sync(&self, request_json: &str) -> Result<ProcessSyncResult, HostError> {
+        let json =
+            host_process::run_sync(request_json).map_err(|e| host_err("process_run_sync", e))?;
+        serde_json::from_str(&json)
+            .map_err(|e| HostError::custom(-1, format!("process_run_sync: decode failed: {}", e)))
+    }
+}
+
+// ==================== HostTask ====================
+
+impl HostTask for WasmHost {
+    fn execute_batch(&self, plan_json: &str) -> Result<String, HostError> {
+        host_task::execute_batch(plan_json).map_err(|e| host_err("execute_batch", e))
+    }
+
+    fn submit(&self, plan_json: &str) -> Result<String, HostError> {
+        host_task::submit(plan_json).map_err(|e| host_err("submit", e))
+    }
+
+    fn task_status(&self, job_id: &str) -> Result<Option<String>, HostError> {
+        host_task::status(job_id).map_err(|e| host_err("task_status", e))
+    }
+
+    fn cancel(&self, job_id: &str) -> Result<bool, HostError> {
+        host_task::cancel(job_id).map_err(|e| host_err("cancel", e))
+    }
+
+    fn list_jobs(&self) -> Result<String, HostError> {
+        host_task::list_jobs().map_err(|e| host_err("list_jobs", e))
+    }
 }
 
 // ==================== HostApp ====================
@@ -251,6 +298,10 @@ impl HostApp for WasmHost {
         let payload = serde_json::json!({ "file_name": file_name, "bin_dir": bin_dir }).to_string();
         host_app::uninstall_cli(&payload).map_err(|e| host_err("cli_uninstall", e))
     }
+
+    fn plugin_resource_dir(&self) -> Result<String, HostError> {
+        host_app::plugin_resource_dir().map_err(|e| host_err("plugin_resource_dir", e))
+    }
 }
 
 // ==================== HostEvents ====================
@@ -260,15 +311,15 @@ impl HostEvents for WasmHost {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         host_events::emit(event_name, &payload_str);
     }
+}
 
-    fn broadcast_sync(&self, event: &crate::events::SyncEvent) {
-        // SyncEvent serde 表示即线协议（tag = "type"），宿主侧反序列化为同一类型
-        let payload_str = serde_json::to_string(event).unwrap_or_default();
-        host_events::broadcast_sync(&payload_str);
-    }
+// ==================== HostNotify（共享域契约 host-notify） ====================
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), HostError> {
-        host_events::notify(title, body).map_err(|e| host_err("notify", e))
+impl HostNotify for WasmHost {
+    fn notify(&self, title: &str, body: &str, options: &NotifyOptions) -> Result<(), HostError> {
+        let options_json = serde_json::to_string(options)
+            .map_err(|e| HostError::custom(-1, format!("notify: serialize options failed: {e}")))?;
+        host_notify::notify(title, body, &options_json).map_err(|e| host_err("notify", e))
     }
 }
 
@@ -285,6 +336,18 @@ impl HostHttp for WasmHost {
             Some(s) => parse_json("http_fetch", s).map(Some),
             None => Ok(None),
         }
+    }
+
+    /// v29 服务端域：注册插件 HTTP 端点（config-json 原样透传宿主）
+    fn http_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
+        host_http_endpoint::register_endpoint(config_json)
+            .map_err(|e| host_err("http_register_endpoint", e))
+    }
+
+    /// v29 服务端域：注销本插件 HTTP 端点
+    fn http_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
+        host_http_endpoint::unregister_endpoint(endpoint_id)
+            .map_err(|e| host_err("http_unregister_endpoint", e))
     }
 }
 
@@ -316,6 +379,28 @@ impl HostFs for WasmHost {
             HostError::custom(-1, format!("fs_request_auth: serialize failed: {}", e))
         })?;
         host_fs::request_auth(&paths_json).map_err(|e| host_err("fs_request_auth", e))
+    }
+
+    // ==================== v19 追加（票 03 文件浏览域） ====================
+
+    fn fs_read_dir(&self, path: &str) -> Result<Vec<FsDirEntry>, HostError> {
+        let json = host_fs_desktop::read_dir(path).map_err(|e| host_err("fs_read_dir", e))?;
+        serde_json::from_str(&json)
+            .map_err(|e| HostError::custom(-1, format!("fs_read_dir: decode failed: {}", e)))
+    }
+
+    fn fs_canonicalize(&self, path: &str) -> Result<Option<String>, HostError> {
+        host_fs_desktop::canonicalize(path).map_err(|e| host_err("fs_canonicalize", e))
+    }
+
+    fn fs_stat(&self, path: &str) -> Result<Option<FsStat>, HostError> {
+        let json = match host_fs_desktop::stat(path).map_err(|e| host_err("fs_stat", e))? {
+            Some(json) => json,
+            None => return Ok(None),
+        };
+        serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|e| HostError::custom(-1, format!("fs_stat: decode failed: {}", e)))
     }
 }
 
@@ -352,8 +437,16 @@ impl HostBus for WasmHost {
         host_bus::publish(topic, &payload_str).map_err(|e| host_err("bus_publish", e))
     }
 
+    fn bus_publish_binary(&self, topic: &str, payload: &[u8]) -> Result<(), HostError> {
+        host_bus::publish_binary(topic, payload).map_err(|e| host_err("bus_publish_binary", e))
+    }
+
     fn bus_subscribe(&self, topic: &str) -> Result<(), HostError> {
         host_bus::subscribe(topic).map_err(|e| host_err("bus_subscribe", e))
+    }
+
+    fn bus_subscribe_binary(&self, topic: &str) -> Result<(), HostError> {
+        host_bus::subscribe_binary(topic).map_err(|e| host_err("bus_subscribe_binary", e))
     }
 
     fn bus_unsubscribe(&self, topic: &str) -> Result<(), HostError> {
@@ -395,11 +488,15 @@ impl HostPeer for WasmHost {
     }
 
     fn peer_respond_consent(&self, request_id: &str, accepted: bool) -> Result<bool, HostError> {
-        host_peer::respond_consent(request_id, accepted).map_err(|e| host_err("peer_respond_consent", e))
+        host_peer::respond_consent(request_id, accepted)
+            .map_err(|e| host_err("peer_respond_consent", e))
     }
 
     fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_trusted", host_peer::list_trusted().map_err(|e| host_err("peer_list_trusted", e))?)
+        peer_json(
+            "peer_list_trusted",
+            host_peer::list_trusted().map_err(|e| host_err("peer_list_trusted", e))?,
+        )
     }
 
     fn peer_revoke_trusted(&self, node_id: &str) -> Result<bool, HostError> {
@@ -411,8 +508,10 @@ impl HostPeer for WasmHost {
         session: &str,
         paths: &[serde_json::Value],
     ) -> Result<String, HostError> {
-        let paths_json =
-            to_json_string("peer_send_files", &serde_json::to_value(paths).unwrap_or_default())?;
+        let paths_json = to_json_string(
+            "peer_send_files",
+            &serde_json::to_value(paths).unwrap_or_default(),
+        )?;
         // 返回值已收窄为传输句柄字符串（Phase 4），不再包一层 JSON
         host_peer::send_files(session, &paths_json).map_err(|e| host_err("peer_send_files", e))
     }
@@ -435,18 +534,20 @@ impl HostPeer for WasmHost {
         host_peer::resume_transfer(batch_id).map_err(|e| host_err("peer_resume_transfer", e))
     }
 
-    fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
-        host_peer::resume_all_transfers().map_err(|e| host_err("peer_resume_all_transfers", e))
-    }
-
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
-        let dirs_json =
-            to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
+        let dirs_json = to_json_string(
+            "peer_set_shared_roots",
+            &serde_json::to_value(dirs).unwrap_or_default(),
+        )?;
         host_peer::set_shared_roots(&dirs_json).map_err(|e| host_err("peer_set_shared_roots", e))
     }
 
     fn peer_list_shared_roots(&self, session: &str) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_shared_roots", host_peer::list_shared_roots(session).map_err(|e| host_err("peer_list_shared_roots", e))?)
+        peer_json(
+            "peer_list_shared_roots",
+            host_peer::list_shared_roots(session)
+                .map_err(|e| host_err("peer_list_shared_roots", e))?,
+        )
     }
 
     fn peer_browse_directory(
@@ -468,13 +569,46 @@ impl HostPeer for WasmHost {
         dir_id: &str,
         files: &[serde_json::Value],
     ) -> Result<u32, HostError> {
-        let files_json =
-            to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
-        host_peer::pull_files(session, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
+        let files_json = to_json_string(
+            "peer_pull_files",
+            &serde_json::to_value(files).unwrap_or_default(),
+        )?;
+        host_peer::pull_files(session, dir_id, &files_json)
+            .map_err(|e| host_err("peer_pull_files", e))
     }
 
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
         host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
+    }
+
+    fn peer_start_node(&self) -> Result<bool, HostError> {
+        host_peer::start_node().map_err(|e| host_err("peer_start_node", e))
+    }
+
+    fn peer_stop_node(&self) -> Result<bool, HostError> {
+        host_peer::stop_node().map_err(|e| host_err("peer_stop_node", e))
+    }
+
+    fn peer_active_transfers(&self) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_active_transfers",
+            host_peer::active_transfers().map_err(|e| host_err("peer_active_transfers", e))?,
+        )
+    }
+
+    fn peer_collect_outgoing(
+        &self,
+        paths: &[serde_json::Value],
+    ) -> Result<serde_json::Value, HostError> {
+        let paths_json = to_json_string(
+            "peer_collect_outgoing",
+            &serde_json::to_value(paths).unwrap_or_default(),
+        )?;
+        peer_json(
+            "peer_collect_outgoing",
+            host_peer::collect_outgoing(&paths_json)
+                .map_err(|e| host_err("peer_collect_outgoing", e))?,
+        )
     }
 }
 
@@ -488,31 +622,299 @@ impl HostMdns for WasmHost {
     fn mdns_stop_browse(&self, browser_id: &str) -> Result<bool, HostError> {
         host_mdns::stop_browse(browser_id).map_err(|e| host_err("mdns_stop_browse", e))
     }
+
+    fn mdns_advertise(&self, config_json: &str) -> Result<String, HostError> {
+        host_mdns::advertise(config_json).map_err(|e| host_err("mdns_advertise", e))
+    }
+
+    fn mdns_stop_advertise(&self, advertise_id: &str) -> Result<bool, HostError> {
+        host_mdns::stop_advertise(advertise_id).map_err(|e| host_err("mdns_stop_advertise", e))
+    }
+
+    fn mdns_is_advertising(&self, advertise_id: &str) -> Result<bool, HostError> {
+        host_mdns::is_advertising(advertise_id).map_err(|e| host_err("mdns_is_advertising", e))
+    }
+}
+
+// ==================== host-websocket（ABI v14）====================
+
+impl HostWebsocket for WasmHost {
+    fn ws_connect(&self, config_json: &str) -> Result<String, HostError> {
+        host_websocket::connect(config_json).map_err(|e| host_err("ws_connect", e))
+    }
+
+    fn ws_send_text(&self, handle: &str, text: &str) -> Result<(), HostError> {
+        host_websocket::send_text(handle, text).map_err(|e| host_err("ws_send_text", e))
+    }
+
+    fn ws_send_binary(&self, handle: &str, payload: &[u8]) -> Result<(), HostError> {
+        host_websocket::send_binary(handle, payload).map_err(|e| host_err("ws_send_binary", e))
+    }
+
+    fn ws_close(&self, handle: &str, close_json: &str) -> Result<bool, HostError> {
+        host_websocket::close(handle, close_json).map_err(|e| host_err("ws_close", e))
+    }
+
+    fn ws_is_connected(&self, handle: &str) -> Result<bool, HostError> {
+        host_websocket::is_connected(handle).map_err(|e| host_err("ws_is_connected", e))
+    }
+
+    fn ws_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
+        host_websocket_server::register_endpoint(config_json)
+            .map_err(|e| host_err("ws_register_endpoint", e))
+    }
+
+    fn ws_send_text_to_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        text: &str,
+    ) -> Result<(), HostError> {
+        host_websocket_server::send_text_to_client(endpoint_id, client_id, text)
+            .map_err(|e| host_err("ws_send_text_to_client", e))
+    }
+
+    fn ws_send_binary_to_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        payload: &[u8],
+    ) -> Result<(), HostError> {
+        host_websocket_server::send_binary_to_client(endpoint_id, client_id, payload)
+            .map_err(|e| host_err("ws_send_binary_to_client", e))
+    }
+
+    fn ws_broadcast_text(&self, endpoint_id: &str, text: &str) -> Result<u32, HostError> {
+        host_websocket_server::broadcast_text(endpoint_id, text)
+            .map_err(|e| host_err("ws_broadcast_text", e))
+    }
+
+    fn ws_broadcast_binary(&self, endpoint_id: &str, payload: &[u8]) -> Result<u32, HostError> {
+        host_websocket_server::broadcast_binary(endpoint_id, payload)
+            .map_err(|e| host_err("ws_broadcast_binary", e))
+    }
+
+    fn ws_close_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        close_json: &str,
+    ) -> Result<bool, HostError> {
+        host_websocket_server::close_client(endpoint_id, client_id, close_json)
+            .map_err(|e| host_err("ws_close_client", e))
+    }
+
+    fn ws_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
+        host_websocket_server::unregister_endpoint(endpoint_id)
+            .map_err(|e| host_err("ws_unregister_endpoint", e))
+    }
+
+    fn ws_list_clients(&self, endpoint_id: &str) -> Result<String, HostError> {
+        host_websocket_server::list_clients(endpoint_id).map_err(|e| host_err("ws_list_clients", e))
+    }
+
+    fn ws_list_endpoints(&self) -> Result<String, HostError> {
+        host_websocket_server::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
+    }
+
+    fn ws_connection_context(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+    ) -> Result<String, HostError> {
+        host_websocket_server::connection_context(endpoint_id, client_id)
+            .map_err(|e| host_err("ws_connection_context", e))
+    }
+}
+
+// ==================== host-pty（ABI v16 插件私有伪终端）====================
+
+impl HostPty for WasmHost {
+    fn pty_spawn(&self, config_json: &str) -> Result<String, HostError> {
+        host_pty::spawn(config_json).map_err(|e| host_err("pty_spawn", e))
+    }
+
+    fn pty_write(&self, pty_id: &str, data: &[u8]) -> Result<(), HostError> {
+        host_pty::write(pty_id, data).map_err(|e| host_err("pty_write", e))
+    }
+
+    fn pty_resize(&self, pty_id: &str, cols: u16, rows: u16) -> Result<(), HostError> {
+        host_pty::resize(pty_id, cols, rows).map_err(|e| host_err("pty_resize", e))
+    }
+
+    fn pty_kill(&self, pty_id: &str) -> Result<(), HostError> {
+        host_pty::kill(pty_id).map_err(|e| host_err("pty_kill", e))
+    }
+
+    fn pty_ring_fetch(
+        &self,
+        pty_id: &str,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<PtyRingFetch>, HostError> {
+        host_pty::ring_fetch(pty_id, from_offset, max_bytes)
+            .map(|result| {
+                result.map(|r| PtyRingFetch {
+                    data: r.data,
+                    next_offset: r.next_offset,
+                    truncated: r.truncated,
+                })
+            })
+            .map_err(|e| host_err("pty_ring_fetch", e))
+    }
+
+    fn pty_is_running(&self, pty_id: &str) -> Result<bool, HostError> {
+        host_pty::is_running(pty_id).map_err(|e| host_err("pty_is_running", e))
+    }
+}
+
+// ==================== host-crypto（v26 宿主加密引擎原语面） ====================
+
+impl HostCrypto for WasmHost {
+    fn aead_encrypt(
+        &self,
+        algorithm: &str,
+        key: &[u8],
+        nonce: &[u8],
+        plaintext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_encrypt(algorithm, key, nonce, plaintext, aad)
+            .map_err(|e| host_err("crypto_aead_encrypt", e))
+    }
+
+    fn aead_decrypt(
+        &self,
+        algorithm: &str,
+        key: &[u8],
+        nonce: &[u8],
+        ciphertext: &[u8],
+        aad: Option<&[u8]>,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_decrypt(algorithm, key, nonce, ciphertext, aad)
+            .map_err(|e| host_err("crypto_aead_decrypt", e))
+    }
+
+    fn aead_generate_key(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_generate_key(algorithm)
+            .map_err(|e| host_err("crypto_aead_generate_key", e))
+    }
+
+    fn aead_generate_nonce(&self, algorithm: &str) -> Result<Vec<u8>, HostError> {
+        host_crypto::aead_generate_nonce(algorithm)
+            .map_err(|e| host_err("crypto_aead_generate_nonce", e))
+    }
+
+    fn kdf_derive(
+        &self,
+        algorithm: &str,
+        salt: Option<&[u8]>,
+        ikm: &[u8],
+        info: &[u8],
+        length: u32,
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::kdf_derive(algorithm, salt, ikm, info, length)
+            .map_err(|e| host_err("crypto_kdf_derive", e))
+    }
+
+    fn key_agreement_generate(&self, algorithm: &str) -> Result<CryptoKeypair, HostError> {
+        // 宿主返回 private ‖ public 定长字节（x25519 各 32），前 32 私钥、后 32 公钥
+        let bytes = host_crypto::keyagreement_generate(algorithm)
+            .map_err(|e| host_err("crypto_keyagreement_generate", e))?;
+        if bytes.len() != 64 {
+            return Err(HostError::custom(
+                -1,
+                format!(
+                    "crypto_keyagreement_generate: expected 64 bytes, got {}",
+                    bytes.len()
+                ),
+            ));
+        }
+        let private = bytes[..32].to_vec();
+        let public = bytes[32..].to_vec();
+        Ok(CryptoKeypair { private, public })
+    }
+
+    fn key_agreement_shared(
+        &self,
+        algorithm: &str,
+        local_private: &[u8],
+        peer_public: &[u8],
+    ) -> Result<Vec<u8>, HostError> {
+        host_crypto::keyagreement_shared(algorithm, local_private, peer_public)
+            .map_err(|e| host_err("crypto_keyagreement_shared", e))
+    }
 }
 
 // ==================== host-platform（ADR 0022 v2）====================
 
 impl HostPlatform for WasmHost {
+    /// 宿主平台标识（v38，双端共享产物运行期分支用）
+    ///
+    /// 走 WIT import（宿主才是端值真源——未来若宿主声明新形态，guest 无需重编）；
+    /// import 无 result 包装故不可失败。
+    fn platform(&self) -> String {
+        host_platform::platform()
+    }
+
     fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_pick_files",
             host_platform::pick_files().map_err(|e| host_err("platform_pick_files", e))?,
         )?;
-        serde_json::from_value(v)
-            .map_err(|e| HostError::custom(-1, format!("platform_pick_files: invalid JSON from host: {e}")))
-    }
-
-    fn platform_pick_folder(&self) -> Result<String, HostError> {
-        host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_pick_files: invalid JSON from host: {e}"),
+            )
+        })
     }
 
     fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
         let v = peer_json(
             "platform_pick_folders",
+            // 2026-10-13 功能级统一：多选目录选择器已归 core `host-platform`
+            // （原桌面扩展 `host_platform_desktop::pick_folders` 退役）
             host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
-            HostError::custom(-1, format!("platform_pick_folders: invalid JSON from host: {e}"))
+            HostError::custom(
+                -1,
+                format!("platform_pick_folders: invalid JSON from host: {e}"),
+            )
         })
+    }
+
+    fn platform_wsl_distros(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_wsl_distros",
+            host_platform_desktop::wsl_distros()
+                .map_err(|e| host_err("platform_wsl_distros", e))?,
+        )?;
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_wsl_distros: invalid JSON from host: {e}"),
+            )
+        })
+    }
+
+    fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_local_ipv4_addresses",
+            host_platform_desktop::local_ipv4_addresses()
+                .map_err(|e| host_err("platform_local_ipv4_addresses", e))?,
+        )?;
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_local_ipv4_addresses: invalid JSON from host: {e}"),
+            )
+        })
+    }
+
+    fn platform_reveal_in_dir(&self, path: &str) -> Result<(), HostError> {
+        host_platform_desktop::reveal_in_dir(path)
+            .map_err(|e| host_err("platform_reveal_in_dir", e))
     }
 }

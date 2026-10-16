@@ -4,10 +4,10 @@
 
 **BedCode 的移动端远程终端** — 手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管桌面端运行的 Agent CLI / 终端会话（Claude Code、pi、opencode、Codex 等）。躺床上也能编程。
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
@@ -44,7 +44,7 @@
 | 认证 | JWT（HS256）、ECDSA 生物凭证（p256）、设备指纹                  |
 | 加密 | X25519 ECDH + AES-256-GCM（HKDF）、ChaCha20-Poly1305            |
 | 文件 | SAF（Storage Access Framework）目录树遍历与中转复制             |
-| 插件 | wasmtime 47（WASM 组件运行时）                                  |
+| 插件 | wasmtime 48（WASM 组件运行时，LTS；WIT 契约 `bedcode:plugin@0.2.0`） |
 | 其他 | shiki、html5-qrcode、marked、vue-i18n@9、tracing 日志（logcat） |
 
 ## 目录结构
@@ -71,24 +71,21 @@ bedcode-mobile/
 │   │   ├── router/         # 消息路由（路由上下文、事件、注册表）
 │   │   ├── auth/           # 认证状态与配对流程
 │   │   ├── file_service/   # 文件服务：SAF 目录树读取
-│   │   ├── plugin/         # 插件宿主：wasmtime 运行时（host_impl 按功能域拆分）、
-│   │   │                   #   APK assets 解压、downloader、saf_io、android_plugins 原生桥
+│   │   ├── plugin/         # 插件宿主：端差异域的 WIT 绑定 + Host impl、APK assets 解压、
+│   │   │                   #   downloader、saf_io、android_plugins 原生桥
 │   │   ├── mdns/           # mDNS 服务发现与广播
 │   │   ├── model/  enums/  # 数据模型（API DTO、WS 消息）/ 枚举类型
+│   │   ├── egress.rs       # 出站授权闸门（前端直连禁令的运行期封锁）
 │   │   ├── system/         # 共享命令、配置管理、常量分组、统一错误类型、JSON 设置持久化
-│   │   ├── session.rs      # 远程会话管理
-│   │   ├── state.rs        # 全局状态管理（单例管理器 + Token 存储）
-│   │   ├── peer_net.rs     # 对等网络接入（节点身份、信任闸门、节点生命周期）
-│   │   ├── peer_receive.rs # 入站连接处理与事件桥接
-│   │   ├── peer_remote.rs  # 远程节点访问（共享目录浏览等）
-│   │   ├── peer_transfer.rs# 共享目录批量断点续传
-│   │   └── peer_migration.rs# 旧文件服务 → 对等网络迁移
+│   │   └── state.rs        # 全局状态管理（单例管理器 + Token 存储）
+│   │   ├── peer/           # 对等网络适配模块（net 装配与委托 / ports 宿主端口 /
+│   │   │                   #   seam 平台缝 / transfer·receive·remote 委托 / migration 旧数据迁移）
 │   └── gen/android/        # Android 工程（含自定义 Kotlin 插件：前台服务、SAF、生物识别、
 │                           #   下载目录、全部文件访问、组播锁、通知等）
 ├── packages/
 │   ├── plugin-sdk-mobile/  # 插件开发 SDK（TS + Rust，含 dev-shell 与模板）
 │   └── plugin-component-test/ # 测试用 WASM 插件 crate
-├── plugins/                # 官方插件（ai-chatbox / auto-task / file-transfer）
+├── wasm-apps/              # 内置 wasm 应用（ai-chatbox / bedcode / file-transfer）
 ├── scripts/                # 开发构建脚本（Android dev 日志落盘、插件构建等）
 └── docs/                   # 项目文档（code-map.md 等）
 ```
@@ -97,7 +94,7 @@ bedcode-mobile/
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.95（wasmtime 48 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及 Android SDK / NDK 环境
 - 一台电脑运行 [BedCode Desktop](../bedcode-desktop/) 作为主机
 
@@ -141,28 +138,32 @@ cd src-tauri && cargo test         # Rust 测试
 | `pnpm run build` / `build:fast`     | 前端类型检查 + 构建 / 仅构建                                      |
 | `pnpm run tauri:android:build:fast` | 跳过类型检查的 debug 快速构建                                     |
 | `pnpm run tauri:android:build:emulator` | 模拟器（x86_64）debug 构建                                    |
-| `pnpm run plugins:build`            | 构建官方插件（WASM 产物）                                         |
+| `pnpm run plugins:build`            | 构建内置 wasm 应用（WASM 产物）                                   |
 | `pnpm run build:all`                | 先构建插件再构建前端                                              |
 | `pnpm run target:size`              | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
 
 ## 插件系统
 
-移动端插件与桌面端共享同一套插件架构（wasmtime 47、WASM Component Model、权限控制），并额外封装移动端专属能力：**SAF 存储访问**、对话框 / 系统通知、**动态路由**、生命周期钩子、Android 系统返回键接管，以及 dev-shell 演示数据协议（浏览器 HMR 开发环境）。宿主能力实现按功能域拆分于 `host_impl/`（storage/db/fs/http/terminal/event/bus/config/notify/peer/support），内置插件从 APK assets 解压到 app_data_dir 后扫描加载，支持远程下载 + SHA256 校验安装。
+移动端插件与桌面端共享同一套插件架构（wasmtime 48、WASM Component Model、权限控制），并额外封装移动端专属能力：**SAF 存储访问**、对话框 / 系统通知、**动态路由**、生命周期钩子、Android 系统返回键接管，以及 dev-shell 演示数据协议（浏览器 HMR 开发环境）。宿主能力实现拆为两层：与桌面共享的机制落在仓库根 `packages/bedcode-*`（wasm-core 整核 + 能力域 crate），端差异域落在 `src-tauri/src/plugin/`（host-fs-mobile / host-notify-mobile / host-terminal-stream / host-auth-client / host-connection-target）。内置应用从 APK assets 解压到 app_data_dir 后扫描加载，支持远程下载 + SHA256 校验安装。
 
-开发自己的插件：使用 [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README.md)（TS SDK + Rust `bedcode-plugin-api-mobile` crate），完整指南见 [plugin-dev-mobile.md](plugin-dev-mobile.md)。
+开发自己的 wasm 应用：使用 [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README.md)（TS SDK + Rust `bedcode-plugin-api-mobile` crate），完整指南见 [wasm-app-dev-mobile.md](wasm-app-dev-mobile.md)。
 
-### 官方插件
+### 内置 wasm 应用
 
-| 插件              | 版本       | 说明                                                                            |
+| 应用              | 版本       | 说明                                                                            |
 | ----------------- | ---------- | ------------------------------------------------------------------------------- |
 | **AI Chatbox**    | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘 |
-| **Auto Task**     | 1.0.0-beta | 自动任务队列：任务队列与自动执行、Agent 提问自动应答、预设任务、定时任务、任务历史与失败重试（后端逻辑在桌面端同名插件） |
+| **BedCode**<br>（id `com.bedcode.terminal-session`） | 1.0.0-beta | 远程终端控制端（「手机看、桌面管」）：终端订阅回放 + 实时输出、特殊键直达桌面 PTY、断线自动重连与 ring 重描、自动任务队列与自动应答、预设任务 / 定时任务 / 任务记录（桌面任务域的只读投影） |
 | **File Transfer** | 1.0.0-beta | 内网文件传输（基于对等网络直连）：浏览对端共享目录、多选批量传输、队列暂停/恢复/取消/重试与失败原因、接收策略（逐批批准 / 自动接受 / 自动拒绝）、SAF 自选保存位置、历史记录 |
+
+> 桌面端与移动端 **wasm 应用源码目录均名 `wasm-apps/`**；同一应用在双端各自独立契约（ADR 0018），
+> 文件传输已收敛为**双端单产物**（移动侧无自有 `rust/`，经 `bedcode.sharedRustManifest` 指向桌面端共享 crate）。
 
 ## 相关文档
 
 - 根仓库 [README](../README.md) — 项目总览与安全模型
-- [plugin-dev-mobile.md](plugin-dev-mobile.md) — 移动端插件开发指南
+- [wasm-app-dev-mobile.md](wasm-app-dev-mobile.md) — 移动端 wasm 应用开发指南（从零创建到真机验证）
+- [`../docs/knowledge/wasm-app-development-checklist.md`](../docs/knowledge/wasm-app-development-checklist.md) — 开发红线（权限 / 存储 / 事件 / 认证中心 / HTTP 面）
 - [docs/code-map.md](docs/code-map.md) — 代码结构索引
 - [docs/terminal-output-pipeline-optimization.md](docs/terminal-output-pipeline-optimization.md) — 终端输出链路优化记录
 

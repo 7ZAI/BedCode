@@ -1,82 +1,53 @@
 # AGENTS.md
 
-## 0. 规则优先级与冲突裁决
+## 0. 本文件的定位与冲突裁决
 
-当文档/规则冲突时，按下述优先级裁决：
+**定位**：只给**方向、判据与导航**。机制、清单、模块图、ABI 计数、历史与踩坑都在单一事实源里（代码本身、code-map、ADR、`docs/knowledge/`、`CHANGELOG*.md`）——**不在本文件复制**，需要时按指针去读。
+
+冲突按下述优先级裁决（高者胜）：
 
 1. **用户当前明确指令**（最新指令优先于一切文档规则）
-2. **安全与架构红线**（§8 安全红线、§5 高内聚低耦合等）——不可被普通任务越过；确实需要越线时停下向用户确认，禁止自行放松
-3. **本文档硬约束**（"必须/禁止"字眼，下同）
-4. **skill 规范**（`frontend-styles` 等在对应场景强制）
-5. **code-map / 领域文档**（含 docs/、docs/adr/）
+2. **安全与架构红线**（§5 宿主/插件边界、§8 安全红线）——不可被普通任务越过；确需越线时停下向用户确认，禁止自行放松
+3. **本文档硬约束**（"必须 / 禁止"字样，下同）
+4. **强制 skill**（§4 / §6 标注：`frontend-styles`、`unit-test-discipline`）
+5. **code-map / 领域文档**（含 `docs/adr/`）
 6. **通用工程经验**
 
-**最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖版本（升级先做双端影响评估，如 wasmtime / SDK）；不确定的设计取舍先问用户，不猜。
+- **路径基准**：不带端前缀的 Rust 路径相对 `bedcode-desktop/src-tauri/src/`（机制与引擎面真源在 `packages/bedcode-wasm-core/src/`，宿主侧只剩 `pub use` 垫片——ADR 0037）；**能力域 / 传输面 / 引擎 crate（含插件机制整核）一律落仓库根 `packages/bedcode-*`**（与机制内核 `bedcode-host-kit` 同族；**能力域默认形态 = 纯引擎 + 端口抽象，零 WIT / 零桌面 SDK 依赖，桌面 WIT 绑定层收进 `common-host` feature，长期门禁 `packages/bedcode-headless-host-probe`**——ADR 0035），`bedcode-desktop/packages/` 只剩插件契约 / 夹具 crate（`plugin-*`）；`wasm-apps/`、前端 `src/`、`src-tauri/gen/` 相对**所属端根目录**（双端业务应用源码目录均名 `wasm-apps/`）；`docs/`、`scripts/`、`.scratch/` 相对**仓库根**。
+- **文档字面 ≠ 事实**：引用任何路径 / 命令 / 锁名 / 版本前先用 `ls` / `rg` 核对；与事实不符**先修文档**再继续（命令字眼以 `docs/commands.md` 为准）。
+- **最小改动原则**：只改任务必要文件；禁止顺手重构相邻代码、擅自升级依赖（升级先做双端影响评估，如 wasmtime / SDK）；设计取舍不猜，先问用户。
+- **项目阶段（研发起步期）**：无真实用户、无对外 ABI 接口，**不承担任何向后兼容旧版本的义务**——ABI / WIT 破坏性变更可直接进行，禁止为兼容旧产物保留冗余路径；落地仍走 §5.1.4 顺序（ABI bump + 双端 WIT 副本同步 + 移动端影响评估）与 fail-visible 三形态；CHANGELOG 不随每次变更写条目，按 §2 规则在发布前一次性总结写入。§9 跨端协议「老端忽略未知字段」与 §5.4「移动不跟演」是双端同步部署 / 契约独立机制，**不是**用户兼容义务，照常适用。
 
 ---
 
 ## 1. 项目速览
 
-BedCode：局域网远程终端应用——桌面端作为主机运行终端会话，移动端作为远程终端控制，WebSocket + HTTP 通信，适配两端同一 WiFi 场景。
+**Tech Stack**：Tauri 2 + Vue 3 + TypeScript + TailwindCSS v3 + Rust (Tokio) + SQLite + vue-i18n@9 + WASM（wasmtime 48 组件模型，目标 `wasm32-wasip3`）
 
-**Tech Stack:** Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS + Rust (Tokio) + SQLite + vue-i18n@9 + wasmtimer + WASM（wasmtime Component Model）
-
-**Monorepo 结构：**
-
-- `bedcode-desktop/`（桌面主机）、`bedcode-mobile/`（移动远程终端）——各自独立 `src/`（前端）与 `src-tauri/`（Rust 后端），各自维护 `pnpm-lock.yaml`
-- `plugins/<plugin-id>/` 插件工程、`packages/plugin-sdk-*/` 插件 SDK（WIT 契约）
+**结构**：`bedcode-desktop/`（桌面主机）/ `bedcode-mobile/`（移动远程终端），各带独立前端 + `src-tauri/` + 独立锁文件；业务代码在端内插件工程（双端 `wasm-apps/<app-id>/`），插件契约 = 双端 `packages/plugin-sdk-*/`。**Rust 无根 workspace**，构建与测试各自 crate 根跑（§3）。目录树与模块职责见两端 `docs/code-map.md`。
 
 ---
 
-## 2. 环境与工具链
+## 2. 环境与工具链（只列与业界默认相反或双端锁步的项）
 
-| 项 | 版本/要求 | 来源 |
-| --- | --- | --- |
-| 包管理器 | **pnpm**（根与两端 `packageManager: pnpm@12.2.1`），全局禁止 npm | package.json |
-| Node | LTS（CI 用 `lts/*`；无 `.nvmrc`，本地对齐 LTS） | CI workflows |
-| Rust | stable + edition 2021（无 `rust-toolchain.toml`，与 CI `dtolnay/rust-toolchain@stable` 对齐） | CI workflows |
-| Tauri | 2（两端） | src-tauri/Cargo.toml |
-| wasmtime | **47，两端锁死**，升级必须双端同步（ADR 0019） | src-tauri/Cargo.toml |
-| 版本号 | 桌面/移动 package.json 与 Cargo.toml **同步维护**；变更记录根 `CHANGELOG.md` | 仓库现状 |
-| Android | JDK/Gradle 由 `gen/android` 分发包维护；SDK/NDK 随其管理 | — |
+| 项 | 要求 |
+| --- | --- |
+| 包管理器 | **pnpm**，全局禁止 npm |
+| Tauri | **2**——写 API 前确认是 v2 而非 v1 |
+| wasmtime | **双端 48**，升级必须双端同步（ADR 0019） |
+| 版本号 | 桌面/移动同步维护；**CHANGELOG 只在发布版本前按提交记录一次性总结写入**（`CHANGELOG.md` + `CHANGELOG_zh.md` 双语），日常修改代码不逐次记录 changelog |
+| Android | JDK/Gradle/SDK/NDK 由移动端 `src-tauri/gen/android` 分发包管理，不自行安装 |
+| sccache | **全仓 Rust 构建前置**（根 `.cargo/config.toml` 强制 `rustc-wrapper`），未装则一切 cargo 命令直接失败——这是显性失败设计，不要加降级绕过 |
+
+其余版本以 CI workflow 与 `Cargo.toml` 为准；构建资源治理见 `docs/knowledge/build-process.md`。
 
 ---
 
-## 3. 黄金命令（构建 / 测试 / 运行）
+## 3. 命令
 
-```bash
-# Desktop Development / Build
-cd bedcode-desktop && pnpm run tauri:dev
-cd bedcode-desktop && pnpm run tauri:build
+**命令与字眼的唯一事实源：[`docs/commands.md`](docs/commands.md)**（速查表 / 通用约定 / 双端开发与打包 / wasm 应用与插件 / 测试 / Rust 与代码质量 / 构建资源与 target 治理 / 端口与遗留进程）。写或执行任何命令前先读它；文档与实际不符**先修文档**再执行，不要在本文件另立一份。
 
-# Mobile Development / Build
-cd bedcode-mobile && pnpm run tauri:android:dev        # 开发
-cd bedcode-mobile && pnpm run tauri:android:dev:log    # 落盘日志（见 logging.md）
-cd bedcode-mobile && pnpm run tauri:android:build      # 发布（aarch64）
-
-# Frontend Test —— 统一 pnpm run test:run（= vitest run，跑完退出）
-# 禁止 pnpm run test（vitest watch 挂起不退出）；vite 不执行测试
-cd bedcode-desktop && pnpm run test:run
-cd bedcode-mobile && pnpm run test:run
-
-# Rust Test（桌面/移动各在各自 src-tauri 下）
-cd bedcode-desktop/src-tauri && cargo test
-cd bedcode-mobile/src-tauri && cargo test
-
-# Kotlin/Gradle 编译（改 gen/android 下 Kotlin 代码后必跑；离线加 --offline）
-cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin
-
-# Lint（根目录，覆盖两端前端；0 error 门禁，warning 暂不计入）
-pnpm exec eslint .
-```
-
-- **前端可单测过滤**：`pnpm exec vitest run <测试文件路径>`（测试文件在 `src/__tests__/`，两端同构）
-- **Rust 可单测过滤**：`cargo test <名称前缀>`
-- **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
-- **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档里提及测试/构建/安装命令，**必须**用本节字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止旧 `npm` / `npm run test` 字眼；审计文档时若发现不一致，先改文档再继续
-- 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`
-- **测试后清理进程**：每次跑完测试（`cargo test` / `pnpm run test:run` / `gradlew` 等）后，必须检查并关闭测试开启的后台进程/监听端口（如 cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon 等），避免残留进程占用端口或 CPU
-- 桌面 `tauri:build` 自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env`），未配置时自动禁用升级包，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（`docs/knowledge/release-workflow.md`）
+与本文件相关的两个判断：**禁 `pnpm run test`**（watch 不退出，一律 `test:run`，且必须在端目录执行）；**Rust 无根 workspace**，宿主、wasm 应用、移动插件、`cross-end-tests` 各自在自己的 crate 根跑测试，宿主 `cargo test` 不覆盖插件 crate。
 
 ---
 
@@ -84,28 +55,130 @@ pnpm exec eslint .
 
 | 任务 | 动手前必读 |
 | --- | --- |
-| 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（`.agents/skills/frontend-styles/SKILL.md`，强制）+ 对应端 code-map |
-| 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（`.agents/skills/unit-test-discipline/SKILL.md`，强制） |
-| 改 Rust 后端（任意模块） | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR（docs/adr/） |
-| 改插件 | §7 插件检查清单 + WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
-| 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
-| 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
-| 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `.scratch/adb-fd0-bug/bug-report.md` |
+| 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（强制）+ 对应端 code-map |
+| 改移动端前端（新功能 / 重构 / 样式，含宿主壳） | **§6「移动端前端：优先对接宿主壳」（强制）**——默认落点 `bedcode-mobile/src/shell/**`（新界面）；旧 `src/{components,views,composables,stores}` 只接受缺陷修复 |
+| 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（强制） |
+| 改 Rust 后端 | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR |
+| 改 wasm-core 机制 / 核心 WIT / 契约分片 | **ADR 0049（单形态 + 绑定归位，accepted）+ ADR 0045（单一 crate + WIT 分片组合）+ `.scratch/2026-10-11-wasm-core-single-form/spec.md`**——机制一份、绑定在宿主（§5.4）；WIT 改动只改真源（`packages/bedcode-wasm-core/wit/core.wit` 或能力域 `wit/<domain>.wit`），**禁止手改**端生成物 `rust/wit/`，改完重拼并跑 `pnpm run check:wit`（**仓库根**执行；CI + husky 同判据）。**要往 wasm-core 加 `bindgen!` / `impl … Host` 先停下**——内核唯一合法绑定是 `manager/runtime/core_binding.rs`（core 交集），其余全在各端宿主；反接锁 `packages/bedcode-wasm-core/src/lib.rs::binding_surface_must_not_return_to_wasm_core` |
+| 在宿主侧新增/修改任何能力、类型、状态、存储、路由 | **§5.1（六条判据 + 三问裁决 + 自检）+ ADR 0022**——先判归属再动手；越线必须停下问用户。插件分类 / 加载顺序 / 生命周期形态另读 ADR 0032 |
+| 改插件 | `docs/knowledge/wasm-app-development-checklist.md`（全文）+ 双端 WIT + ADR 0017/0019/0022 |
+| 改 wasm 应用 / 移动插件（业务代码主场） | 该应用自己的 crate + 自有测试命令（§3）；**不要拿宿主 `cargo test` 当它的验证** |
+| 改数据库 / schema | §9 + `packages/bedcode-wasm-core/src/db/`（schema / 迁移真源，ADR 0037 随整核迁入 crate）与同 crate `host_api/{database,storage}.rs`（插件面机制） |
+| 改跨端协议（HTTP/WS/QR/认证） | §9 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估；改完跑 `cross-end-tests` |
+| 排查日志 / 无日志问题 | `docs/knowledge/logging.md`、`adb-fd0-bug.md` |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
+| 改文档 / 改本文件规则 | 改**源文件**而非引用方（单一事实源见 §13），改完核对全仓引用是否失效 |
 | 定位代码 | §12 代码查找纪律 |
 
 ---
 
-## 5. 架构硬约束
+## 5. 架构硬约束：无业务内核
 
-**目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `.scratch/plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/platform-kernel/spec.md`。
+**一句话**：底座内核只含「应用无关的通用引擎」（进程 / 网络 / 存储 / 安全 / 通信 + wasmtime 运行时），一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。
 
-**架构红线（强制）：**
+**方向**：新增能力先问「这是机制还是产品语义」，机制归内核、产品归插件。演进路线与终态愿景见 `docs/knowledge/plugin-kernel-roadmap.md` 与 `businessless-kernel-vision.md`；边界裁决的单一事实源是 **ADR 0022**，本节只是它的可执行摘要 + 门禁。技术决策一律走 `docs/adr/`。
 
-- **高内聚、低耦合**：内核只做引擎原语与安全边界，禁止携带产品语义；业务代码内聚到各自插件工程；插件间只经互调 API（ADR 0017）与消息总线通信，**禁止跨插件直接耦合**
-- **新增能力优先评估「放哪个插件」而非「改内核」**；核心业务（会话/终端/设备连接/认证）暂留宿主侧，按上述路线逐步下沉
-- **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
-- 技术决策记录在 `docs/adr/`（Multi-Project Monorepo / Async Everywhere / Event-Driven / Graceful Shutdown / Flat Module Structure / Plugin System / 无业务内核 / 插件 Mock 归属），新增决策走 ADR
+### 5.1 宿主侧无业务代码（强制红线）
+
+**判定：宿主只回答「机制怎么做」，不回答「这件事是什么、给谁用、怎么组织」。**
+
+对桌面端宿主（`src-tauri/src/` 与 `src/`）生效；移动端形态不同但**同一判据**适用（§5.4）。
+
+#### 5.1.1 口径：六条判据（命中任一即业务代码）
+
+这是裁决词汇，报错信息与代码注释里直接用编号：
+
+- **B1** 产品类型 / 字段：宿主以业务名词定义数据结构、枚举、状态、常量
+- **B2** 业务编排 / 状态机：按产品语义推进的流程、队列、重试、封顶、状态迁移
+- **B3** 业务真源：宿主持有产品事实的权威存储并对外读写
+- **B4** 业务投影：把原语结果翻译成产品 wire 形状再对外消费
+- **B5** 业务默认值 / 策略：宿主替插件决定「业务上该怎样」
+- **B6** 业务生命周期挂钩：宿主解释产品事件并主动回调插件
+
+#### 5.1.2 归属裁决（三问，顺序不可颠倒）
+
+1. **离宿主能实现吗？** 能（插件已有 `host-*` 存储 / 总线 / 事件 / 任务原语自建）→ **放插件**。
+2. **携带产品语义吗？** 命中 B1-B6 → **放插件**。
+3. 都不命中 → **放宿主**，且必须满足：WIT 纯增量（或走 ABI bump 流程）、权限位有门禁落点、停用可回收。
+
+「宿主已经能拿到这些数据」**不是**留在宿主的理由；判不准时从严判并停下问用户（§0 优先级 2）。
+
+#### 5.1.3 宿主允许存在的四类薄壳
+
+① **引擎实现** · ② **安全闸门**（权限判定、fail-safe 默认如「无应答 / 超时即拒」、配额仲裁）· ③ **通用**注册表与寻址 · ④ **零解析窄转发**（`utils/session_gateway.rs`）。四类之外的任何「顺手加的」业务逻辑都是越线。
+
+#### 5.1.4 强制执行机制
+
+- **防回接锁**：越线回接会直接测红；锁名 → 文件的索引见 `bedcode-desktop/docs/code-map.md` 文末，新增退役面时同步补锁与索引。
+- **真源搬迁必配 fail-visible 三形态，缺一不可**：① 旧读路径删除或显性报错，**禁止**改成「查不到就返回空」（静默降级会让断链在测试全绿下长期存活）② 旧 ABI 产物在实例化期点名缺失 interface 与重建版本 ③ 退役权限位 / 命令字眼加载即抛。
+- **提交前自检**（改动落在宿主侧时逐条回答，答不出就停下问用户）：① 在宿主有第二个消费者吗？② 删掉它，第三方插件能用同一形状的既有原语自建吗？③ 是否新增了对产品事件的解释或回调（= B6）？
+- **越线处理**：确需越线时停下向用户确认并记 ADR，禁止自行放松红线。
+- **落地顺序**：ABI bump + 双端 WIT 副本同步（ADR 0019 / 0022 双端偏离条款）+ 移动端影响评估；`CHANGELOG` 不随本变更写条目，按 §2 规则在发布前一次性总结时并入。
+
+#### 5.1.5 高内聚低耦合
+
+内核只做引擎原语与安全边界，业务内聚到各自 wasm 应用；插件间**只经**互调 API（ADR 0017）与消息总线（`host-bus`）通信，**禁止跨插件直接耦合**；新增能力优先评估「放哪个 wasm 应用」而非「改内核」。会话真源已下沉插件终态（`docs/knowledge/session-engine-downsink.md`），宿主只剩 PTY 引擎、在册连接清单、窄转发层三样无业务语义的东西。
+
+### 5.2 桌面端架构（两层 · 四闸门 · 四通道）
+
+```text
+wasm 应用层（业务事实面：各自私有库 + 各自前端状态 + 自身命令面）
+        ↓ 下行只经四闸门：能力 · 身份 · 隔离 · 生命周期
+        ↓ 插件上行只经四通道：WIT host-* · bus · events · 互调
+宿主内核层（应用无关引擎）
+```
+
+方向：闸门与通道的具体接口、权限位、审批与回收落点见 `bedcode-desktop/docs/code-map.md` Core Modules 段与 `docs/adr/0029-plugin-concurrency-owner-and-on-demand-async.md`。宿主直调命令面（`commands.rs` / `src/composables/`）**只保留外壳**——业务面一律走插件命令面。
+
+
+### 5.4 双端差异（勿把桌面结论套到移动端）
+
+#### 5.4.1 单形态运行时（单一 crate · 一份壳）
+
+**wasm-core 是单一 crate + 单形态**（ADR 0045 / 0049；runtime-single-form 收口见
+`.scratch/2026-10-13-runtime-single-form/spec.md`）：`packages/bedcode-wasm-core` 双端共用
+**一份运行时壳**（无 common/bare 之分——形态 feature 已退役：桌面装配面在
+`desktop-assembly`，移动 `default-features = false`）。wasm-core 内**只有一份机制 + 一份壳**
+（Engine / 生命周期 / 事件循环 / 安全 / 存储 / 授权 / db / WASI 等机制 + `WasmRuntime`
+导出调用骨架），**WIT 绑定、端事实与端 SDK 依赖全部在宿主**：
+
+```text
+宿主（bedcode-{desktop,mobile}/src-tauri/src/plugin/*）
+  各端完整 world 的 bindgen + 各域 Host impl（HostModule 自报汇入同一 Linker）
+  + GuestEventDispatcher 注入（events 导出契约）+ AbiPolicy 注入（组件形态）
+        ↓ 消费 wasm-core 的纯机制 + 统一运行时壳
+wasm-core（packages/bedcode-wasm-core）
+  机制核心 + core.wit 机制绑定层（唯一合法绑定 = core 交集，ADR 0052 D1；
+  双端全等域单份实现，端差异域落宿主）
+  + 组件引擎机制 + WASI 装配（开/关走 CoreConfig::wasi）
+  + 事件派发契约（guest_events，各端宿主实现并注入）
+  + ABI 规格参数化（AbiPolicy 只管 abi-form）+ 端事实端口（HostFactsPort）
+        ↑ cap 与端差异由各端 HostModule 自报汇入同一个 Linker
+SDK（plugin-sdk-{desktop,mobile}）
+  compose.json 各自组合 core + 各自 cap 分片；包版本双端对齐（真源 = 仓根 contracts，ADR 0051）
+```
+
+#### 5.4.2 ABI 与组件形态（wasm-core 零端知识）
+
+**ABI 与 wasm-core 无关**：wasm-core 提供统一基础 ABI（core.wit），真正 ABI = 宿主组装
+各自 SDK WIT 后的产物——整数 ABI 已整体退役（ADR 0051 D2），**版本真源 = 仓根
+`contracts/bedcode-plugin-package.rs` 的 `PACKAGE_VERSION`**（semver；compose.json 只
+声明包名，源文件 package 行由 compose-wit.mjs 注入、`wit_package_version_lock.rs` 钉
+一致），**组件形态经 `AbiPolicy`**（只管 `abi-form`，桌面要求 form=1 / 移动 None）由宿主
+装配时注入；两端 SDK crate 均不在 wasm-core 依赖（`mobile_wasm_core_purity_lock`
+判据 7c 钉移动 SDK 词汇零命中）。
+
+#### 5.4.3 WASI 装配（共享机制）
+
+**WASI 面是双端共享机制不是形态差异轴**：p2/p3 装配住内核、双端默认全开，开 / 关走运行期配置 `CoreConfig::wasi`（为将来 worker 类别插件双端都要跑 wasm 预备，ADR 0034 L3.b）。
+
+#### 5.4.4 双端契约各自演进（compose 组合，不做 union）
+
+**双端契约各自演进**（ADR 0018 维持不撤销）：核心 WIT 真源 = `packages/bedcode-wasm-core/wit/core.wit`（core 只收机制必需面，白名单见 ADR 0052 D1），端差异在各端 `compose.json` 驱动的 cap 分片（**cap 清单与 ABI 版本以 `compose.json` 为准**）——**不做 union world、不合并 ABI**；能力域 crate 自持 `wit/<domain>.wit`（`world cap-<domain>`，双端功能级交集），可被任意端组合；端独有功能的声明与实现都住端宿主（ADR 0052 D4）。移动 WIT / ABI 与桌面各自演进，移动**不跟演**桌面部分 ABI 破坏性变更；跨端协议改动仍必须两端同步部署（§9）。
+
+#### 5.4.5 命名与落点纪律（ADR 0047）
+
+**命名与落点纪律**（ADR 0047）：wasm-core 内**自持标识符零端名**、零机制名（`wasi` / `wasip3` / `wasm32`）——单形态起无 `common` / `bare` 形态词（运行时壳只一份）；域落点三则：① **域逻辑进共享 crate**（WIT-无关函数 + 端口 trait），统一壳只做机制接线与薄转发（域 crate 落点以各端 `compose.json` 的 caps 真源为准）；② **端独有域整面落各自宿主**（桌面 cap 扩展与移动独有域——terminal_stream / fs_mobile / connection.primary-target / auth / 移动 events / 移动通知扩展（`host-notify-mobile`）——都在各端 `src-tauri/src/plugin/*`，**wasm-core 的 `#[cfg(test)]` 替身已删，别再照旧文加回来**；双端全等域由内核 `core_binding` 单份实现，移动 host_domains 只留端差异域）；③ 三条 + 端词汇全集（cap 零命中 / 声明位零端名 / 移动 SDK 词汇零命中）一起由 `bedcode-mobile/src-tauri/tests/mobile_wasm_core_purity_lock.rs` 七判据钉住（改 wasm-core 统一壳或端域 adapter 前先看它）。
 
 ---
 
@@ -113,150 +186,120 @@ pnpm exec eslint .
 
 ### Rust
 
-- 文件命名 snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs`；测试文件 `*_test.rs`
-- 统一错误类型 `AppError`：`pub type Result<T> = std::result::Result<T, AppError>`
-- 关键调用链在错误构造/转换处带操作描述（`AppError::X(format!(...))`、`io::Error` 自描述包装或 `anyhow::Context` 跨桥），**禁止裸 `?` 透传无上下文错误**（含 `io::Result` 契约内）；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装；重要路径禁止 `let _ =` 静默忽略错误
-- panic hook 中只用 `eprintln!`，禁止 `tracing::error!`
+- 文件与模块命名：snake_case，模块入口文件与目录同名（`module.rs`），不用 `mod.rs`
+- **单元测试放哪（两种形态，按体量选，别混用）**：① 少量用例 → 同文件末尾的
+  `#[cfg(test)] mod tests`（两端源码树的主流形态，60 个文件）；② 用例多到把生产文件
+  撑成两倍 → 同目录 `<模块名>_test.rs`（`packages/bedcode-wasm-core/src/manager/host/tests/`
+  全量采用）或 `<模块名>/tests/*.rs` 子目录。**新增测试文件时按 ②，勿新造第三种形态。**
+  ⚠️ 形态 ② 的前提是**必须有 `mod` 声明**：`tests/*.rs` 子目录不会像 `tests/` 集成测试
+  目录那样被 rustc 自动发现，漏写 `#[cfg(test)] mod tests { mod x; }` 会让用例静静躺着
+  永不编译（移动端 `src/peer_receive/tests/` 曾如此，见
+  `bedcode-mobile/src-tauri/tests/retired_mobile_receive_orchestration_lock.rs` 的对锁）
+- 统一错误类型 `AppError`；错误构造 / 转换处必须带操作描述，**禁止裸 `?` 透传无上下文错误**（含 `io::Result` 契约内）；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装；重要路径禁止 `let _ =` 静默忽略
+- panic hook 内只用 `eprintln!`，禁止 `tracing::error!`
 - 状态共享用 `Arc<Mutex<T>>` / `Arc<RwLock<T>>`
-- Tauri Commands 命名：`list_*`（多个）、`get_*`（单个）、`create_*`、`delete_*`、`start_*` / `stop_*`（生命周期）；用 `// ====================` 分隔注释按领域分组
+- Tauri Commands 命名：`list_*` / `get_*` / `create_*` / `delete_*` / `start_*` / `stop_*`，用 `// ====================` 分隔注释按领域分组
 
 ### Frontend（Vue 3 + TypeScript）
 
-- **任何 UI 改动（组件、布局、CSS/Tailwind 类、design token、动画/过渡、主题、响应式、安全区、字体/行高）必须先加载 `frontend-styles` skill 并以其规范为准**，禁止凭通用前端经验自行发挥
-- **禁止用 viewport 宽度 / UA 字符串推断平台**；平台判断统一走 Tauri API（如 `@tauri-apps/plugin-os` 的 `platform()`），两端渲染容器不一致时以 API 为准
-- **前端错误处理**：统一 `logger`（`logger.error/info` 带上下文），禁止静默 `catch`；用户可见错误/状态文案一律走 i18n，禁止 composable / 组件内硬编码中文字符串
-- **i18n**：文件位于两端 `src/locales/{zh-CN,en}/`；新增/修改 key 必须同步出现在 zh-CN 与 en 两文件，命名跟随既有分组；复数/日期/数字走 vue-i18n 机制
+- **UI 改动必须先加载 `frontend-styles` skill**（组件、布局、CSS/Tailwind 类、design token、动画、主题、响应式、安全区、字体），禁止凭通用前端经验自行发挥。
+- **前端零资源访问（强制红线）**：前端只做 UI 显示，**不含后端逻辑**；HTTP / WebSocket / 文件访问一律由 Rust 端发起并过权限闸门，前端直连即绕过闸门。三层封锁（源码 ESLint 静态锁 + Tauri ACL 运行期拒 + CSP 引擎级封）已落地且有防回接锁，**改前端代码时不要试图绕过**；确需新能力时把发起权收归 Rust（宿主命令 / `host-*` 原语 + 闸门），前端只拿元数据或事件，**撤 capability 与补宿主命令必须成对提交**。豁免只允许在 ESLint 层逐行写 `eslint-disable-next-line` 并注明理由（新增豁免须在交付说明里点名）；**ACL 与 CSP 两层无豁免机制**——要开就改锁并写清理由。
+- **禁止用 viewport 宽度 / UA 字符串推断平台**；平台判断统一走 Tauri API。
+- **错误处理**：统一 `logger`（真源 `src/utils/frontendLogger.ts`，带上下文），禁止静默 `catch`；用户可见文案一律走 i18n，禁止硬编码中文。
+- **i18n**：两端 `src/locales/{zh-CN,en}/`；新增 / 修改 key 必须**同步**出现在 zh-CN 与 en 两文件，命名跟随既有分组。
 
-### 单元测试（Unit Test Discipline）
+### 移动端前端：优先对接宿主壳（强制）
 
-- **单元测试的开发、编写、审查必须先加载 `unit-test-discipline` skill 并以其规范为准**：行为契约 → 测试矩阵 → 硬性门禁 G1-G6 → 实际运行 → 变异自检
-- 禁止交付无断言 / 恒真断言 / 只测 mock / 快照替代行为断言 / 只为覆盖率（完整反模式清单见 skill）
+**移动端前端的新功能 / 重构 / 样式调整，默认在宿主壳（新界面）里实现；旧界面只接受缺陷修复——直到旧界面被彻底替换。**
 
-### 注释与命名（通用）
+- **新界面（默认落点）** = 宿主壳 `bedcode-mobile/src/shell/**`（路由 `/mobile/shell`）。壳自带两层自足面：公共组件库 `src/shell/components/ui/**`、平台机制 `src/shell/composables/**`——两者都是旧组件 / 旧机制的**壳内副本**，契约逐字一致，迁移映射见 `src/shell/components/ui/index.ts` 头注。
+- **旧界面（只接受缺陷修复）** = `bedcode-mobile/src/{components,views,composables,stores}/**` 的既有页面与其 `/mobile/**` 路由。新功能、重构、样式统一不进旧目录。
+- **缺什么先复制进壳**：壳内需要旧目录的组件 / 机制时，复制进 `src/shell/**` 再按需改造，**禁止**把壳直接接到旧目录——防回接锁 L7 拦截 `@/components` / `@/composables` / `@/views` 的 import（`src/__tests__/shell/shellConstraintLocks.test.ts`，确需桥接必须在锁内白名单登记并写明理由）。旧目录也不得为了方便壳复用而改造共用形状。
+- **业务不落壳**：终端 / 文件 / 会话 / 设备 / AI 等业务页面按 §5.1 归各 wasm-app（`registerSurface` / `registerSlot` 注册运行面），壳只提供挂载、生命周期与权限闸门，壳内不实现业务。
+- **壳的职责边界（票 2026-10-10 批次 A/C 收口，ADR 0046）**：本节「默认落点」的表述只对**平台机制与壳内复制件**成立；**业务页面（含业务设置 UI 与业务设置真源）一律归 wasm app**，壳内不再落业务页面。壳自持的只有三类：① 运行面挂载与生命周期（`registerSurface` 的渲染位 / 胶囊 / 屏幕栈 / 底部系统条）② 平台机制与安全闸门（外观 / 语言 / 字号缩放 / 主屏壁纸 / 通知栏 / 权限总览与审批入口 / 出站授权 / 链路加密 / 生物凭证）③ 宿主公共组件（文件浏览器等跨应用通用能力，经 `bedcodeHostComponents` 注入给应用侧挂载位）。新增业务页面若落进 `src/shell/**`，视为越线。
+- **共享基础设施例外**：日志 `src/utils/frontendLogger.ts` 与全局设置 store 暂为跨新旧共用（复制会导致双写 / 双攒批），退役旧界面时随批迁入壳；新增第三份共用件前先问用户。
+- **迁移面不许缩水**：L7 正面钉住壳内复制面文件在场；新增复制件必须同步登记该清单与两端 code-map 的防回接锁索引。
+- **退役顺序**：旧页面只有在其新壳等价物可用之后才可删；新旧入口并存期以新壳为主入口。
+- 本规则在旧目录的界面代码归零（彻底替换完成）后自动失效。
 
-- 注释解释为什么而非是什么；语言中文，技术术语保留英文
-- Rust：模块级 `//!`、pub 项 `///`、内联 `//`；TS：文件头 `/** */`、export JSDoc、Vue 组件 `<script setup>` 顶部说明；分隔注释 `// ==================== Section ====================`
-- 注释掉的代码必须标注意图与恢复方式（如 `/* 临时调试：排查 X，恢复时取消注释 */`）；无说明的陈旧注释代码一律删除
-- 文件命名：Vue 组件 PascalCase（`TitleBar.vue`）、Composable camelCase 带 `use` 前缀、Store camelCase
+### 单元测试
+
+规范来源为 `unit-test-discipline` skill（§4 强制加载）：从需求与实现推导行为契约 → 测试矩阵 → 实际运行 → 变异自检。**禁止交付**无断言 / 恒真断言 / 只测 mock / 快照替代行为断言 / 只为覆盖率的用例。时机见 §10。
+
+### 注释与命名
+
+注释解释**为什么**而非是什么，语言中文、技术术语保留英文；注释掉的代码必须标注意图与恢复方式，无说明的陈旧代码一律删除。Vue 组件 PascalCase、composable `use` 前缀 camelCase。
+
+**注释禁止以 spec / ticket 引用替代说明（强制）**：注释必须**自解释当前代码**——写清楚这段逻辑做什么、关键分支 / 边界 / 陷阱是什么；禁止只写「见 spec xxx / 票 xxx」把理解成本踢给外部文档。确需追溯设计背景时可引用 ADR / 领域文档，但引用只是补充，正文仍须把当前代码的逻辑与关键点讲清楚。
+
+**注释与代码同步维护（强制）**：改动 / 重构代码时，必须**同步检查所改区域及其相关函数的注释**是否符合修改后的实际逻辑（含模块头文档、函数 doc、行内注解释义、引用的符号名 / 路径 / 版本号 / 计数与事实声明）。注释与实际不符时**同一提交内一并修正**，禁止只改代码留下已过时注释；对已删除、改名的符号与已迁移 / 退役的路径，注释里的引用必须同步改为当前真源或删去，不留「读者无法对照」的死引用。交付前按 §10 自检一遍所涉文件的注释是否仍逐条对得上当前代码。
 
 ---
 
 ## 7. 插件开发检查清单
 
-插件位于 `plugins/<plugin-id>/`（独立 package：`plugin.json` + `rust/` WASM 后端 + `src/` TS 前端 + `vite.config.ts`）。开发/修改插件逐项核对：
-
-- [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
-- [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 47 两端锁死）
-- [ ] 宿主能力经 `host-*` 原语访问（进程/网络/存储/安全/通信），能力**不得携带业务语义**（ADR 0022）
-- [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
-- [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
-- [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
+全文外移：[`docs/knowledge/wasm-app-development-checklist.md`](docs/knowledge/wasm-app-development-checklist.md)。开发 / 修改插件前**必须**通读并逐项核对（permissions / WIT·ABI / 能力与权限词汇 / 同实例串行 / 会话真源 / HTTP 面 / 存储隔离 / `wasmHash` / 日志等）。硬约束与本文件同级，冲突按 §0 裁决。
 
 ---
 
-## 8. 安全、日志与可观测性红线
+## 8. 安全与日志红线
 
 ### 安全红线（不可违反）
 
-- **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）
-- 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
+- **禁止提交密钥 / 凭据**：仓库内唯一例外是 Android 签名真源 `bedcode.keystore`；新增密钥、token、密码禁止入库、禁止进日志、禁止写进文档；泄露按仓库规范删除重建
+- **凭据只记长度不落明文**（日志与存储同此）；**认证链路只走既有 auth 模块**，禁止旁路
+- **认证 / 配对编排归插件**（ADR 0022 分层）：宿主只剩 `host-auth` 链路身份原语与认证中心桥接，**不得持有任何设备入场密码学与设备侧凭证材料**（入场签发密钥、生物公钥托管与验签执行均归认证中心，ADR 0033），有防回接锁
+- **认证裁决一律 fail-closed**：认证中心（ADR 0031 显式注册的单中心）未在册 / 调用失败 / 拒绝 → 一律拒绝，**没有「查不到就放行」「传输失败就放行」的降级路径**；**无宿主代签降级路径**，插件未激活时前端命令面显性报错
+- 输入校验与权限仲裁在 **Rust 端**，前端校验仅是 UX；WS / HTTP 接入必须过认证与过滤链
+- **`pty:spawn` 是「在宿主机执行任意命令」的高风险面**：只发确有 PTY 需求的第一方插件（argv 由插件算，宿主不包装），并发上限由 manifest 声明 + 加载期仲裁，不在运行期放宽
+- 真源搬迁的 fail-visible 三形态见 §5.1.3
 
 ### 日志红线
 
-统一 `tracing`（Android 自动转发 logcat）。级别语义：
-
-| 级别 | 适用场景 | 反例（禁止） |
-| --- | --- | --- |
-| `debug!` | 常规运行细节：连接/订阅建立、请求进出、状态迁移、过滤命中/放行 | 热路径逐帧日志（PTY 输出、WS 每帧）——高频循环内克制 |
-| `info!` | 关键生命周期：启动完成、服务器起停、会话创建/销毁、WS 连接/断开、配置保存 | 每个请求都打 info（高频 API 走 debug） |
-| `warn!` | 可恢复异常/重试：过滤拒绝、授权降级、超时重试、缓存禁用、队列丢弃 | 已由调用方处理的正常分支 |
-| `error!` | 不可恢复异常：操作失败且影响功能；`AppError` 传播点 | panic hook 内（只用 `eprintln!`）；guest 自报的可处理错误 |
-
-- **结构化字段（强制）**：`session_id` / `device_id` / `plugin_id` / `request_id` / `batch_id` / `node_id` 一律 `key = %value` 字段形式，**禁止拼进消息字符串**；消息只写人类可读描述（中文 + 英文术语），错误信息必须带操作上下文
-- 落盘机制 / 排障（non_blocking 缓冲、日志路径、移动端无日志排查、插件 WASM 日志细节）见 `docs/knowledge/logging.md`
+统一 `tracing`，级别语义：运行细节 `debug!` / 关键生命周期 `info!` / 可恢复异常 `warn!` / 影响功能的失败 `error!`。三条硬规则：① panic hook 内只用 `eprintln!` ② 热路径克制（PTY 输出 / WS 每帧不打逐帧日志，高频 API 走 `debug!`）③ guest 自报的可处理错误不升 `error!`。**结构化字段强制**：`session_id` / `device_id` / `plugin_id` / `request_id` / `batch_id` / `node_id` 一律 `key = %value`，**禁止拼进消息字符串**；错误信息必须带操作上下文。落盘与排障见 `docs/knowledge/logging.md`。
 
 ---
 
 ## 9. 数据、协议与产物
 
-### 数据库（SQLite）
+**数据库**：主库 schema 单一事实源在 `packages/bedcode-wasm-core/src/`（`db.rs` 入口 + `db/{database,models,operations}.rs` + `db/schema.sql`，随整核抽出迁入 crate——ADR 0037；宿主以 `pub use` 垫片引用），迁移**必须幂等**、禁止手改生产库、改 schema 必须补幂等测试。插件面的数据库机制（`host-plugin-database` / `host-storage`：权限门、表名前缀纵深、护栏、属主分区；原 `host-database` 主库面已随 ABI v19 退役，主库由 wasm-core 管理、不给插件直接调用）**留在 wasm 核心内**（同 crate `host_api/`，ADR 0036）——不拆 crate，机制实现与真源同侧；两域用例随 crate 与宿主 `cargo test` 跑。插件存储隔离见插件开发检查清单。测试数据走临时目录，禁止污染真实数据 / 日志目录。
 
-- **主库 schema 单一事实源**：`bedcode-desktop/src-tauri/src/db/schema.sql`；列级迁移写在 `database.rs::run_migrations()`，**迁移必须幂等**（可对旧库重跑），禁止手改生产库；改 schema 必须补迁移幂等测试
-- 插件存储隔离见 §7（独立库 / 主库 `plugin_id_` 前缀）
-- 测试数据：Rust 走临时目录 + `with_default`（日志），禁止污染真实数据/日志目录
+**跨端协议**：HTTP / WS / QR / 认证改动**必须两端同步部署**，遵循「老端忽略未知字段」的增量原则，禁止破坏性替换；协议现状与端点清单见 `docs/knowledge/mobile-desktop-auth.md`。wasmtime 升级必须两端同步（ADR 0019）。
 
-### 网络协议 / 跨端兼容
+**产物**：禁止提交 `**/target/`、`node_modules/`、`.dev-logs/`、Android 构建产物；`Cargo.lock` / `pnpm-lock.yaml` 只经包管理器变更，**禁止手工编辑**。移动端 `src-tauri/gen/android` 下手写 Kotlin 源码是版本跟踪的一部分，`tauri android init` 重建后需手工恢复，改 Kotlin 后必须跑 gradlew 验证（`docs/commands.md`）。
 
-- 协议（HTTP / WS / QR 配对 / 认证）改动**必须两端同步部署**（桌面主机 + 移动端），字段演进遵循「老端忽略未知字段」的增量原则，禁止破坏性替换
-- 认证/配对协议文档：`docs/knowledge/mobile-desktop-auth.md`；宿主/插件契约见 §7 WIT
-- wasmtime 版本升级必须两端同步（ADR 0019）
-
-### 产物与生成文件
-
-- **禁止提交**：`**/target/`、`node_modules/`、`.dev-logs/`、Android 构建产物（`build/`、`.gradle/`、`.cxx` 等）
-- **锁文件**：`Cargo.lock` / `pnpm-lock.yaml` 只经包管理器变更（`pnpm install` / `cargo update`），**禁止手工编辑**
-- **`gen/android` 例外**：`app/src/main/java/com/bedcode/mobile/*.kt` 等手写 Kotlin 源码是版本跟踪的一部分，`tauri android init` 重建后需手工恢复；改 Kotlin 后必须跑 gradlew 验证（§3）
-
-### Android 发布
-
-- 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- **签名唯一真源：仓库根 `bedcode.keystore`**。`gen/android/` 与 `android-backup/` 下的 keystore 必须是其副本；**勿用其他 keystore 签发布版**
-- 版本号两端同步维护（§2）；发布流程见 `docs/knowledge/release-workflow.md`
+**发布**：包名 Desktop `com.bedcode.app` / Mobile `com.bedcode.mobile`；**签名唯一真源是仓库根 `bedcode.keystore`**，勿用其他 keystore 签发布版；版本号两端同步（§2），流程见 `docs/knowledge/release-workflow.md`。
 
 ---
 
 ## 10. 完成定义与验证证据
 
-以下命令**必须实际运行并贴出结果**；无法运行（环境缺失 / 平台限制）必须说明原因与风险：
+**测试两段式（强制）**：开发中每次改动后**只跑针对性单元测试**自验（vitest 必须端目录执行、Rust 过滤按 crate 根，见 §3），红了立即修；**集成测试编写 + 全量套件回归统一留到任务收尾**——也就是下面这张清单。以下**必须实际运行并贴出结果**，无法运行要说明原因与风险：
 
-- 改了 Rust → `cargo test` 通过（两端各自）
-- 改了前端 → `pnpm run test:run` 通过（对应端）
-- 改了 `gen/android` 下 Kotlin → `./gradlew :app:compileUniversalDebugKotlin` 通过
-- 改了前端 → 根目录 `pnpm exec eslint .` 0 error（warning 不计入）；`cargo fmt` / `cargo clippy` 提交前自查（非 CI 门禁）
-- i18n key 同步出现在 zh-CN 和 en
-- 公开项有文档注释；错误处理用 `AppError` 而非裸字符串
-- 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
-- 单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
-- pi agent：收尾 `lens_diagnostics mode=all` 无 blocker（🔴 blocker 未清前不算 done）
+- 集成测试补齐 / 更新（Rust `src-tauri/tests/`、前端 `src/__tests__/integration/`）；与本任务无涉时写明理由跳过
+- 改了 Rust → 对应 crate 根 `cargo test` 全量通过（宿主两端各自 `src-tauri`；插件在各自 crate 根）
+- 改了跨端协议 / 任一端客户端或插件的认证·会话·终端面 → `cross-end-tests` 全量通过（两端各自的 mock 各自自洽，真实互连才是契约的真正门禁）
+- 改了前端 → 对应端 `pnpm run test:run` 全量 + 根 `pnpm exec eslint .` 0 error（warning 不计入）；`cargo fmt` / `cargo clippy` 提交前自查（非 CI 门禁）
+- **未纳入自动化门禁的手工验证项**（逐项写「跑了 / 没跑 + 原因」）：未接入 vitest 的目录测试 · wasm 应用完整构建（含 wasmHash 注入）· 移动端 `src-tauri/gen/android` gradlew 编译（改了 Kotlin 时必跑）· 真机 / 浏览器核验
+- 改动落在宿主侧时通过 §5.1 裁决与自检（B1-B6 零命中、未在宿主新增业务类型 / 状态 / 存储 / 路由 / 业务默认值、退役面回接被防回接锁覆盖）；真源搬迁附 fail-visible 三形态证据
+- i18n key 双语同步；公开项有文档注释；错误处理用 `AppError`；单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
 
-CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.yml`（两端 cargo test + vitest）。
+CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error + 根 `scripts/*.test.mjs` 的配置结构锁）+ `test.yml`（两端 cargo test + vitest + 根 `packages/*/` 各 crate 单测 + 跨端互连）+ `wit-drift-lock.yml`（WIT 拼装漂移锁，与 husky 同判据）。
 
 ---
 
 ## 11. 提交、回滚与 Git 规则
 
-### 提交与分支
+- **禁止 commit message 出现 AI 协作者标记**（Co-Authored-By 等）；格式 conventional commits `<type>(<scope>): <subject>`
+- 分支：`dev` 本地集成主线，`feature/*` 开发，`uat` / `master` 发布线；`origin/dev` 的 push 与 PR 不触发任何 workflow，CI 由合并到 master/uat 时接管
+- 开工先 `git status`：工作区已有未提交改动时先认领来源，**非本任务的改动一律不碰、不回滚**
+- 远程 dev 与本地 dev 分叉时**立即停手问用户**，禁止自动 `--force` 覆盖
+- 推送前过 husky pre-commit（doc-tracking + 暂存前端文件 eslint；钩子正则不含 `wasm-apps/`，全量口径用根 `pnpm exec eslint .`）
+- **分支级文档跟踪**：`docs/`、`README*`、`AGENTS.md` 全分支正常跟踪；`CLAUDE.md` / `CONTEXT.md` / `.pi` / `.scratch` 为受保护路径，只在 uat/master 之外入库（uat/master 仅从 index 剔除、不删磁盘文件）——行为细节**以 `scripts/doc-tracking.sh` 为准**，改动前先读它；`.pi/` 被 .gitignore 忽略，新增文件必须 `git add -f .pi/<子路径>` 精确添加
 
-- **禁止 commit message 中出现 AI 协作者标记（Co-Authored-By 等）**
-- 格式：conventional commits `<type>(<scope>): <subject>`；type ∈ feat/fix/docs/refactor/chore/test/perf，scope 常用 desktop / mobile / scratch / sdk
-- 分支：`dev` 为本地集成主线；`feature/*` 开发；`uat` / `master` 为远程发布线。开发过程通过 `.scratch/<task>/` 文档记录（项目未设计 GitHub PR 流程）
-- **CI 隔离**：`origin/dev` 的 push 事件与对 `origin/dev` 的 PR 不触发任何 workflow（lint/test/release/sdk-publish 均忽略 dev）；CI 验证由合并到 master/uat 时的 lint.yml / test.yml 接管。PR / 合并目标基线为 `master`
-- 远程 dev 与本地 dev 出现分叉时，**立即停手与用户确认处理方式，禁止自动 `--force` 覆盖**
-- 推送前过 pre-commit 钩子（husky）：eslint（根目录）+ 分支级文档跟踪
+**文件回滚规范（强制）**：回滚前先 `git status <file>` + `git diff <file>` 确认不含本次会话之外的未提交改动。
 
-### 分支级文档跟踪（Git Hooks）
-
-仓库内文档（`docs/`、`bedcode-desktop/docs`、`bedcode-mobile/docs`）**全分支正常跟踪**，含 uat/master，允许随发布分支提交并推送远程。受保护路径（`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置、`.scratch/`）只在除 **uat/master** 外的分支入库：uat/master 仅从 index 剔除、不提交删除，工作区保留副本。`README*` 与 `AGENTS.md` 全分支正常跟踪。实现在 `scripts/doc-tracking.sh`（husky pre-commit / post-checkout / post-merge 调用）。
-
-| 场景 | 行为 |
-| --- | --- |
-| dev / feature 提交 | 正常跟踪（含 docs/），hooks 不干预 |
-| uat / master `pre-commit` | 仅从 index 剔除受保护配置文件（`CLAUDE.md`/`CONTEXT.md`/`.pi`/`.scratch/`，工作区保留）；docs/ 正常入库 |
-| 切到 uat/master `post-checkout` | 剔除 index 中受保护配置文件 + 从 dev 恢复工作区副本；docs/ 不干预 |
-| 合并落到 uat/master `post-merge` | 剔除合并带入的受保护配置文件，以暂存删除形式待提交；docs/ 正常合并入库 |
-
-- `.pi/sessions/` 始终忽略不入库；`.pi/` 整目录被根 .gitignore 忽略，新增 .pi 文件必须 `git add -f .pi/<子路径>` 精确添加，**禁止 `git add -f .pi` 整目录**
-- `docs/`（含两端 `bedcode-desktop/docs`、`bedcode-mobile/docs`）**不受 .gitignore 忽略**，新文档文件正常 `git add`，uat/master 上提交后随分支推送远程
-- dev→uat/master 合并产生 modify/delete 冲突时（hooks 在冲突时不运行）手动解决：`sh scripts/doc-tracking.sh untrack && git commit`（仅针对受保护配置文件）
-- 新增受保护路径：同步修改 `scripts/doc-tracking.sh` 内 `PROTECTED_PATHS`；默认忽略类条目（如 CLAUDE.md / CONTEXT.md）另加 `.gitignore`；env：`DOC_UNTRACKED_BRANCHES`（默认 `uat master`）、`DOC_TRACKING_SOURCE`（默认 `dev`）
-
-### 文件回滚规范（强制）
-
-回滚/撤销某文件的修改前，先 `git status <file>` + `git diff <file>` 确认其不含本次会话之外的未提交改动：
-
-1. 含他人/其他任务在途改动的文件，**禁止 `git checkout -- <file>` / `git restore` 整文件回滚**（未提交内容无法从 git 恢复）
+1. 含他人 / 其他任务在途改动的文件，**禁止 `git checkout -- <file>` / `git restore` 整文件回滚**（未提交内容无法从 git 恢复）
 2. 正确做法：用 edit 工具逐段逆向替换，只精确还原本次修改的内容
 3. 本次新增且非他人创建的独立文件可直接删除
 4. 误用 `git checkout` 覆盖在途改动时立即停手上报（恢复源：`.pi/sessions/` 会话日志、`.scratch/` 交接文档），不得猜测重建
@@ -265,13 +308,7 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 
 ## 12. 代码查找纪律
 
-两端各有一份目录级代码地图：桌面 `bedcode-desktop/docs/code-map.md`、移动 `bedcode-mobile/docs/code-map.md`。
-
-**探索代码 / 定位模块 / 查找功能实现，必须先读对应端 code-map.md**，按 Project Structure → Core Modules → Quick Navigation 定位目标目录，再用 `ls` / `rg` 找具体文件。禁止未读 code-map 盲目全仓 grep。
-
-维护规则：只到目录层级；顶层模块目录增删或核心职责变化时同步更新；描述与实际不符时以实际为准并顺手修正文档。
-
-> pi agent 增强：见附录的 pi-lens 纪律（`docs/agents/pi-tools.md`）。
+探索代码 / 定位模块 / 查功能实现，**必须先读对应端 code-map.md**（桌面 `bedcode-desktop/docs/code-map.md`、移动 `bedcode-mobile/docs/code-map.md`），按其导航到目录后再用 `ls` / `rg` 找文件；禁止未读 code-map 盲目全仓 grep。code-map 只到目录层级、不逐文件列举（写成源码清单会既冗余又漂移），顶层模块增删或职责变化时同步更新。
 
 ---
 
@@ -280,18 +317,15 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | 需求 | 入口 |
 | --- | --- |
 | 命令参考 | `docs/commands.md` |
-| 代码地图 | `bedcode-desktop/docs/code-map.md` / `bedcode-mobile/docs/code-map.md` |
-| 领域模型 / 术语 | 根 `CONTEXT.md`（单上下文）+ `docs/adr/`，规范见 `docs/agents/domain.md` |
-| Issue tracker | issues 为 `.scratch/` 下的 markdown，见 `docs/agents/issue-tracker.md` |
-| Triage 标签 | needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix，见 `docs/agents/triage-labels.md` |
-| 发布流程 | `docs/knowledge/release-workflow.md`（桌面 updater / 移动发布）、`docs/knowledge/sdk-publish.md`（SDK 发布） |
-| 日志 / 排障 | `docs/knowledge/logging.md`、`.scratch/adb-fd0-bug/bug-report.md` |
-| 插件 WASM 日志 spec | `.scratch/plugin-wasm-logging/spec.md` |
-| 架构路线 | `.scratch/plugin-kernel-roadmap/spec.md`、`.scratch/platform-kernel/spec.md` |
-| pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
-
----
-
-## 附录：pi 工具专属（仅 pi agent）
-
-pi-lens 代码查询纪律（三阶段漏斗、符号级查询、诊断收尾）、subagents 编排、vision 视觉 subagent、scipq Rust 精确引用 —— 完整手册见 **`docs/agents/pi-tools.md`**。非 pi agent（Claude Code / Codex / Gemini / OpenCode）按 §12 code-map 默认规范执行。
+| 代码地图（含防回接锁索引） | 两端 `docs/code-map.md` |
+| 领域模型 / 术语 / 决策 | 根 `CONTEXT.md` + `docs/adr/`（规范见 `docs/agents/domain.md`） |
+| Issue tracker / triage | `.scratch/` 下的 markdown（`docs/agents/issue-tracker.md`、`triage-labels.md`） |
+| 发布 | `docs/knowledge/release-workflow.md`、`sdk-publish.md` |
+| 跨端协议 | `docs/knowledge/mobile-desktop-auth.md` + `cross-end-tests/` |
+| 日志 / 排障 | `docs/knowledge/logging.md`、`adb-fd0-bug.md`、`plugin-wasm-logging.md` |
+| 插件开发检查清单 | `docs/knowledge/wasm-app-development-checklist.md`、`plugin-http-endpoint-trust.md` |
+| 会话 / 终端下沉 | `docs/knowledge/session-engine-downsink.md` |
+| 分支隔离 / CI | `docs/knowledge/feature-branch-isolation.md`、`github-actions-setup.md` |
+| 构建与产物治理 | `docs/knowledge/build-process.md`、`wasip3-toolchain.md` |
+| 架构路线 | `docs/knowledge/plugin-kernel-roadmap.md`、`businessless-kernel-vision.md` |
+| **宿主 / 插件边界裁决（§5 红线的单一事实源）** | `docs/adr/0022-plugin-host-interface-primitive-boundary.md`（+ 0017 互调 / 0018 移动独立契约 / 0019 双端锁版 / 0029 并发 / 0031 认证中心注册 / 0032 插件分类 / 0033 认证中心自持签发验签 / 0035 能力域 crate 化 / 0037 wasm_core 整核抽出 / 0038 wasm-core 引擎面与薄壳纯净性 / 0039 host-pty 能力域整面迁出（含 WIT 接线） / 0049 wasm-core 单形态 + 绑定归位 / 0052 core.wit 收录判据与契约归属边界） |

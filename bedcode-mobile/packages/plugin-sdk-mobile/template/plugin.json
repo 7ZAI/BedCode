@@ -2,6 +2,7 @@
   "id": "{{ID}}",
   "name": "{{NAME}}",
   "version": "0.1.0",
+  "platform": "mobile",
   "description": "",
   "author": "{{AUTHOR}}",
   "icon": "",

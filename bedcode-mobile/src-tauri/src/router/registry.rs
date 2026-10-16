@@ -26,16 +26,11 @@ pub trait ClientRouteHandler: Send + Sync {
 /// 从 Message 获取变体名称作为路由 key
 pub fn message_type_key(msg: &Message) -> &'static str {
     match msg {
-        Message::Terminal { .. } => "Terminal",
         Message::Auth { .. } => "Auth",
-        Message::SyncData { .. } => "SyncData",
         Message::ServerClosed { .. } => "ServerClosed",
         Message::Error { .. } => "Error",
         Message::Ack { .. } => "Ack",
         Message::SessionControl { .. } => "SessionControl",
-        Message::SessionConfig { .. } => "SessionConfig",
-        Message::ClientDisconnected { .. } => "ClientDisconnected",
-        Message::SessionEvent { .. } => "SessionEvent",
     }
 }
 
@@ -81,9 +76,7 @@ impl Default for ClientRouteRegistry {
 mod tests {
     use super::*;
     use crate::enums::auth::{AuthPayload, AuthStage};
-    use crate::enums::control::{SessionConfigAction, SessionControlAction};
-    use crate::enums::sumary::SessionSummary;
-    use crate::enums::SyncPayload;
+    use crate::enums::control::SessionControlAction;
     use tokio::sync::broadcast;
 
     /// 测试用处理器：记录收到消息的 message_type_key，供断言分发路径
@@ -111,21 +104,9 @@ mod tests {
         })
     }
 
-    /// 构建 11 种 Message 变体 + 期望的 message_type_key，覆盖全枚举
+    /// 构建 5 种 Message 变体 + 期望的 message_type_key，覆盖全枚举
     fn all_variant_messages() -> Vec<(Message, &'static str)> {
-        let session = SessionSummary {
-            id: "s1".to_string(),
-            name: "session-1".to_string(),
-            status: "running".to_string(),
-            created_at: "2025-01-01T00:00:00Z".to_string(),
-            started_at: None,
-            session_type: None,
-            config_id: None,
-            task_status: None,
-            task_reason: None,
-        };
         vec![
-            (Message::output("s", b"hi", false, 0), "Terminal"),
             (
                 Message::auth(
                     None,
@@ -147,13 +128,6 @@ mod tests {
                 ),
                 "Auth",
             ),
-            (
-                Message::sync_data(SyncPayload::SessionCreated {
-                    session: session.clone(),
-                    source_device: "phone".to_string(),
-                }),
-                "SyncData",
-            ),
             (Message::server_closed("bye", false), "ServerClosed"),
             (Message::error("E1", "boom"), "Error"),
             (Message::ack("req-1"), "Ack"),
@@ -161,21 +135,12 @@ mod tests {
                 Message::session_control(SessionControlAction::ListSessions, None),
                 "SessionControl",
             ),
-            (
-                Message::session_config(SessionConfigAction::ListSessionConfigs, None),
-                "SessionConfig",
-            ),
-            (Message::client_disconnected("phone", "offline"), "ClientDisconnected"),
-            (
-                Message::session_event("created", session.clone(), "phone"),
-                "SessionEvent",
-            ),
         ]
     }
 
     #[test]
     fn message_type_key_covers_all_variants() {
-        // 全部 11 个变体都必须映射到固定路由 key（新增变体时此处应同步更新）
+        // 全部 5 个变体都必须映射到固定路由 key（新增变体时此处应同步更新）
         for (msg, expected) in all_variant_messages() {
             assert_eq!(
                 message_type_key(&msg),
@@ -258,14 +223,14 @@ mod tests {
         // 注册表 + 真实 handle 调用链：验证注册的处理器能收到消息
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut registry = ClientRouteRegistry::new();
-        registry.route("Terminal", handler("t", &calls));
+        registry.route("SessionControl", handler("sc", &calls));
 
-        let h = registry.get("Terminal").cloned().unwrap();
+        let h = registry.get("SessionControl").cloned().unwrap();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = ClientRouteContext::new(tx);
-        h.handle(Message::output("s", b"data", false, 0), &ctx)
+        h.handle(Message::session_control(SessionControlAction::ListSessions, None), &ctx)
             .await
             .expect("handle 不应失败");
-        assert_eq!(calls.lock().unwrap().as_slice(), &["Terminal"]);
+        assert_eq!(calls.lock().unwrap().as_slice(), &["SessionControl"]);
     }
 }

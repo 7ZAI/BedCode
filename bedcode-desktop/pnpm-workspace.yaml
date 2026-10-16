@@ -1,8 +1,9 @@
 # bedcode-desktop pnpm workspace（原 npm workspaces 字段迁移至此）
-# 成员：packages/* 下的 SDK/测试包 + plugins/* 下的插件工程
+# 成员：packages/* 下的 SDK/测试包 + wasm-apps/* 下的 wasm 应用工程（桌面端语义：
+# wasm 插件对外称 wasm 应用，2026-09-25；内部代码实现与插件 ID 契约不变）
 packages:
   - packages/*
-  - plugins/*
+  - wasm-apps/*
 
 # pnpm 10+ 默认拒绝依赖的构建脚本（安全策略），pnpm 12 用 allowBuilds 白名单：
 # - esbuild：vite/tsup 的原生二进制（postinstall 下载平台二进制）

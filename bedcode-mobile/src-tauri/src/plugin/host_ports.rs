@@ -1,0 +1,588 @@
+//! 宿主引擎端口装配（票 17 批次 2b）——[`HostEnginePorts`] 的宿主侧唯一实现
+//!
+//! 插件机制面（统一 wasm-core `bedcode-wasm-core`，单形态 2026-10-13 起无
+//! common/bare 之分）的所有「离宿主无法实现」
+//! 引擎调用经此注入：auth 引擎（C4 凭据零过境）/ egress 安全闸门（D5，判定 +
+//! 弹窗编排整体在宿主）/ 主连接事实 / WS 重连策略 / peer 四模块 / mDNS 共享
+//! 守护 / android 平台桥（android_plugins + SAF）。DTO 以原始值 / JSON 过界，
+//! 宿主类型（DialEndpoint / RemotePullFileDto / ConsentRequest…）不出宿主。
+//!
+//! 装配点：`PluginManager::init_wasm_runtime_with` 构造 `WasmHostContext` 时
+//! 注入 `Arc<HostPorts>`；fs_auth 闸门不再经端口投影——判定链已收敛到 wasm-core
+//! `security::fs_auth::FsAuthChecker`（用户裁决 2026-10-11「机制以桌面端为准
+//! 收敛一套」，宿主自实现退役），宿主只需构造它并交给上下文。
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bedcode_wasm_core::host_api::ports::{
+    AuthEnginePort, ConnectionEnginePort, HostEnginePorts, HostFactsPort, PrimaryTarget, SafIoPort,
+    WsReconnectPolicyPort,
+};
+use tauri::Manager;
+
+// ==================== 子 trait 实现（宿主引擎类型直接 impl 外部端口 trait） ====================
+
+/// 认证引擎端口投影（C4：密码学与凭据在 [`crate::auth::manager::AuthManager`]，
+/// 端口只透传调用结果；`get_credentials` 只投影存在性）
+#[async_trait]
+impl AuthEnginePort for crate::auth::manager::AuthManager {
+    async fn request_pairing(&self) -> bedcode_wasm_core::Result<()> {
+        crate::auth::manager::AuthManager::request_pairing(self)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn verify_pairing_code(&self, code: &str) -> bedcode_wasm_core::Result<bool> {
+        crate::auth::manager::AuthManager::verify_pairing_code(self, code)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn authenticate_with_qr(&self, token: &str) -> bedcode_wasm_core::Result<bool> {
+        crate::auth::manager::AuthManager::authenticate_with_qr(self, token)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn authenticate_with_biometric(&self) -> bedcode_wasm_core::Result<bool> {
+        crate::auth::manager::AuthManager::authenticate_with_biometric(self)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn has_credentials(&self) -> bool {
+        crate::auth::manager::AuthManager::get_credentials(self).await.is_some()
+    }
+}
+
+/// 主连接事实端口投影（票 12 `host-connection.primary-target` 引擎读数）
+#[async_trait]
+impl ConnectionEnginePort for crate::connection::manager::ConnectionManager {
+    async fn primary_target(&self) -> bedcode_wasm_core::Result<Option<(PrimaryTarget, bool)>> {
+        let target = crate::connection::manager::ConnectionManager::get_target(self).await;
+        let connected = crate::connection::manager::ConnectionManager::is_connected(self).await;
+        Ok(target.map(|t| (PrimaryTarget { address: t.address, port: t.port }, connected)))
+    }
+}
+
+/// SAF 桥端口投影（宿主 `SafIo` trait 对象的窄转发）
+struct SafIoBridge(Arc<dyn crate::plugin::saf_io::SafIo>);
+
+impl SafIoPort for SafIoBridge {
+    fn write_media_downloads(&self, src: &str, display_name: &str, mime_type: &str) -> std::result::Result<(), String> {
+        self.0
+            .write_media_downloads(src, display_name, mime_type)
+            .map_err(|e| e.to_string())
+    }
+
+    fn save_to_document(&self, src: &str, suggested_name: &str, mime_type: &str) -> std::result::Result<(), String> {
+        self.0
+            .save_to_document(src, suggested_name, mime_type)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// WS 重连策略端口投影（真源 = 宿主 `connection::reconnect` 全局退避单一
+/// 事实源：指数退避 + 抖动 + 1s 下限钳制）
+struct ReconnectPolicyBridge(Arc<crate::connection::reconnect::ReconnectManager>);
+
+#[async_trait]
+impl WsReconnectPolicyPort for ReconnectPolicyBridge {
+    async fn start(&self) -> Option<()> {
+        // ReconnectManager.start() 返回 Some(delay)/None(放弃)——端口只关心是否继续
+        crate::connection::reconnect::ReconnectManager::start(&self.0)
+            .await
+            .map(|_| ())
+    }
+
+    async fn get_delay(&self) -> Duration {
+        crate::connection::reconnect::ReconnectManager::get_delay(&self.0).await
+    }
+
+    async fn on_success(&self) {
+        crate::connection::reconnect::ReconnectManager::on_success(&self.0).await;
+    }
+}
+
+// ==================== 主端口实现 ====================
+
+/// 宿主引擎端口（装配于 `PluginManager::init_wasm_runtime_with`）
+///
+/// 下载目录是**宿主端事实**（`resolve_app_downloads_dir` 为 async，而
+/// `host-config.app.downloads_dir` 端口方法必须同步），故在装配时固化成快照：
+/// [`HostPorts::new`] 读运行时预热缓存，[`HostPorts::with_downloads_dir`] 供
+/// 无 `AppHandle` 的测试直接注入。
+pub struct HostPorts {
+    /// `host-config.app.downloads_dir` 投影值；`None` = 未预热 / 解析失败
+    /// （内核 config 域转显性错误，fail-visible）
+    downloads_dir: Option<String>,
+}
+
+impl HostPorts {
+    /// 生产装配：读 peer 平台缝预热的进程内缓存
+    ///
+    /// 调用点必须保证预热先行（`PluginManager::init_wasm_runtime_with` 在
+    /// 构造本结构前 `prewarm_downloads_dir`）——插件 `activate()` 期就可能读该键。
+    pub fn new() -> Self {
+        Self {
+            downloads_dir: crate::peer::ports::downloads_dir_cache(),
+        }
+    }
+
+    /// 测试装配：直接注入下载目录端事实（无 `AppHandle` 下驱动依赖该键的插件）
+    pub fn with_downloads_dir(dir: Option<String>) -> Self {
+        Self { downloads_dir: dir }
+    }
+}
+
+impl Default for HostPorts {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 宿主端事实（平台标识 / 入站服务器端口）——wasm-core 单形态收口后从内核迁出的
+/// 端差异实现（内核只持 `HostFactsPort` 端口词汇，零端 `#[cfg]` 分支）。
+///
+/// 装配点：`PluginManager::init_wasm_runtime_with` 构造上下文后立即
+/// `set_host_facts`——共享产物 file-transfer 在**激活期**经
+/// `host-platform.platform()` 探测端值，晚注入即激活失败（fail-visible）。
+impl HostFactsPort for HostPorts {
+    fn platform_id(&self) -> String {
+        // 双端契约取值之一（内核不再按 feature 二选一）
+        "mobile".to_string()
+    }
+
+    fn inbound_server_port(&self) -> Result<String, String> {
+        // 移动端无入站 HTTP/WS 服务器（协议面走客户端出站）：显性报错，
+        // 不静默返回空值（插件读到空端口会表现出「连不上」类难定位故障）
+        Err("network.port unavailable: this host has no inbound server".to_string())
+    }
+}
+
+#[async_trait]
+impl HostEnginePorts for HostPorts {
+    // ==================== egress（D5：闸门整体在宿主） ====================
+
+    /// 三层判定 + NeedConsent 授权弹窗一次完成（原 host_impl/http.rs
+    /// `check_egress` 的宿主侧完整形态）
+    async fn egress_check(&self, app: &tauri::AppHandle, url: &str, source: &str) -> std::result::Result<(), String> {
+        match crate::egress::policy().decide(url, source) {
+            crate::egress::EgressDecision::Allow(_) => Ok(()),
+            crate::egress::EgressDecision::Deny(e) => {
+                tracing::warn!(url = %url, code = %e.code, "egress: plugin url denied");
+                Err(format!("{}: {}", e.code, e.url))
+            }
+            crate::egress::EgressDecision::NeedConsent(mut req) => {
+                // 弹窗事务 id：插件路径无前端 request_id，宿主生成 UUID
+                req.id = uuid::Uuid::new_v4().to_string();
+                let allowed = crate::egress::policy()
+                    .request_consent(app, req)
+                    .await
+                    .map_err(|e| format!("egress consent flow failed: {e}"))?;
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(format!("{}: {}", crate::egress::ERROR_URL_DENIED, url))
+                }
+            }
+        }
+    }
+
+    fn egress_redirect_policy(&self) -> reqwest::redirect::Policy {
+        crate::egress::redirect_policy()
+    }
+
+    // ==================== auth / token（C4） ====================
+
+    fn auth_engine(&self) -> Option<Arc<dyn AuthEnginePort>> {
+        Some(crate::state::get_auth_manager())
+    }
+
+    fn global_token(&self) -> String {
+        crate::state::get_global_token()
+    }
+
+    // ==================== connection ====================
+
+    fn connection_engine(&self) -> Arc<dyn ConnectionEnginePort> {
+        crate::state::get_connection_manager()
+    }
+
+    // ==================== ws 重连 ====================
+
+    fn reconnect_policy(&self, max_retries: u32, base_ms: u64, max_ms: u64) -> Box<dyn WsReconnectPolicyPort> {
+        let policy = crate::connection::reconnect::ReconnectManager::new(
+            crate::connection::reconnect::ReconnectConfig::new(max_retries, base_ms, max_ms),
+        );
+        Box::new(ReconnectPolicyBridge(policy))
+    }
+
+    fn reconnect_bounds(&self) -> (u64, u64) {
+        (
+            crate::system::constants::reconnect::MIN_RECONNECT_DELAY_MS,
+            crate::system::constants::reconnect::DEFAULT_MAX_DELAY_MS,
+        )
+    }
+
+    fn current_node_id(&self, app: &tauri::AppHandle) -> Option<String> {
+        crate::peer::net::current_node_id(app)
+    }
+
+    // ==================== peer：`peer` 模块引擎适配层 ====================
+
+    async fn peer_dial_endpoint(
+        &self,
+        app: &tauri::AppHandle,
+        node_id: String,
+        addr: String,
+        port: u16,
+    ) -> bedcode_wasm_core::Result<String> {
+        let dto = crate::peer::net::dial_peer_endpoint(
+            app.clone(),
+            crate::peer::net::DialEndpoint { node_id, addr, port },
+        )
+        .await?;
+        Ok(dto.status)
+    }
+
+    async fn peer_disconnect(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::net::disconnect_peer(app.clone(), node_id).await
+    }
+
+    async fn peer_respond_consent(
+        &self,
+        app: &tauri::AppHandle,
+        request_id: String,
+        accepted: bool,
+    ) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::net::respond_peer_consent(app.clone(), request_id, accepted).await
+    }
+
+    async fn peer_list_trusted(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
+        let dtos = crate::peer::net::list_trusted_peers(app.clone()).await?;
+        serde_json::to_string(&dtos).map_err(|e| crate::AppError::Serialization(e))
+    }
+
+    async fn peer_revoke_trusted(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::net::revoke_trusted_peer(app.clone(), node_id).await
+    }
+
+    async fn peer_set_shared_roots(&self, app: &tauri::AppHandle, entries_json: String) -> bedcode_wasm_core::Result<()> {
+        let seeds: Vec<SharedRootSeed> = serde_json::from_str(&entries_json)
+            .map_err(|e| crate::AppError::Serialization(e))?;
+        let entries = seeds
+            .into_iter()
+            .map(|s| bedcode_peer_net::SharedDirEntry {
+                id: s.id,
+                name: s.name,
+                root: bedcode_peer_net::SharedDirRoot::Saf { tree_uri: s.saf_tree_uri },
+            })
+            .collect();
+        crate::peer::net::set_shared_roots(app.clone(), entries).await
+    }
+
+    async fn peer_start_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::net::start_node_owned(app, caller).await
+    }
+
+    async fn peer_stop_node(&self, app: &tauri::AppHandle, caller: &str) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::net::stop_node_owned(app, caller).await
+    }
+
+    // ==================== peer：transfer / receive / remote ====================
+
+    async fn peer_cancel_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::transfer::cancel_peer_transfer(app.clone(), batch_id).await
+    }
+
+    async fn peer_cancel_receiving(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::receive::cancel_peer_receiving(app.clone(), batch_id).await
+    }
+
+    async fn peer_send_files_with_policy(
+        &self,
+        app: &tauri::AppHandle,
+        node_id: String,
+        paths: Vec<String>,
+        force_encrypt: Option<bool>,
+    ) -> bedcode_wasm_core::Result<String> {
+        crate::peer::transfer::send_files_to_peer_with_policy(app.clone(), node_id, paths, force_encrypt).await
+    }
+
+    async fn peer_respond_transfer(&self, app: &tauri::AppHandle, batch_id: String, accept: bool) -> bedcode_wasm_core::Result<()> {
+        crate::peer::receive::respond_peer_transfer(app.clone(), batch_id, accept).await?;
+        Ok(())
+    }
+
+    async fn peer_set_receive_policy(&self, app: &tauri::AppHandle, mode: String, timeout_secs: u64) -> bedcode_wasm_core::Result<()> {
+        crate::peer::receive::set_peer_receive_policy(app.clone(), mode, timeout_secs).await
+    }
+
+    async fn peer_pause_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::transfer::pause_peer_transfer(app.clone(), batch_id).await
+    }
+
+    async fn peer_resume_transfer(&self, app: &tauri::AppHandle, batch_id: String) -> bedcode_wasm_core::Result<bool> {
+        crate::peer::transfer::resume_peer_transfer(app.clone(), batch_id).await
+    }
+
+    async fn peer_set_download_dir(&self, app: &tauri::AppHandle, path: Option<String>) -> bedcode_wasm_core::Result<()> {
+        crate::peer::receive::set_peer_download_dir(app, path).await
+    }
+
+    async fn peer_list_shared_roots(&self, app: &tauri::AppHandle, node_id: String) -> bedcode_wasm_core::Result<String> {
+        let roots = crate::peer::remote::list_peer_shared_roots(app.clone(), node_id).await?;
+        serde_json::to_string(&roots).map_err(|e| crate::AppError::Serialization(e))
+    }
+
+    async fn peer_browse_directory(
+        &self,
+        app: &tauri::AppHandle,
+        node_id: String,
+        dir_id: String,
+        rel_path: String,
+    ) -> bedcode_wasm_core::Result<String> {
+        let dto = crate::peer::remote::browse_peer_directory(app.clone(), node_id, dir_id, rel_path).await?;
+        serde_json::to_string(&dto).map_err(|e| crate::AppError::Serialization(e))
+    }
+
+    async fn peer_pull_files(
+        &self,
+        app: &tauri::AppHandle,
+        node_id: String,
+        dir_id: String,
+        files_json: String,
+    ) -> bedcode_wasm_core::Result<u32> {
+        let files: Vec<crate::peer::remote::RemotePullFileDto> =
+            serde_json::from_str(&files_json).map_err(|e| crate::AppError::Serialization(e))?;
+        crate::peer::remote::pull_peer_files(app.clone(), node_id, dir_id, files)
+            .await
+            .map(|n| n as u32)
+    }
+
+    async fn peer_active_transfers(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
+        // 三表聚合投影（send 句柄表 + receive pending 询问表 + pull 会话表）——
+        // 真源在共享能力域 crate（Engine 集中化 2026-10-10）
+        crate::peer::transfer::active_transfers_json(app).await
+    }
+
+    async fn peer_collect_outgoing(&self, paths: Vec<String>) -> bedcode_wasm_core::Result<String> {
+        crate::peer::transfer::collect_outgoing_for_plugin(paths).await
+    }
+
+    // ==================== platform / fs / config / db / notify ====================
+
+    async fn platform_pick_files(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<Vec<String>> {
+        crate::peer::transfer::peer_pick_files(app.clone()).await
+    }
+
+    async fn platform_pick_shared_directory(&self) -> bedcode_wasm_core::Result<Option<(String, String, String)>> {
+        crate::plugin::android_plugins::pick_shared_directory_android().await
+    }
+
+    async fn resolve_downloads_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<String> {
+        crate::plugin::android_plugins::resolve_app_downloads_dir(app)
+            .await
+            .ok_or_else(|| crate::AppError::Internal("downloads dir not available".to_string()))
+    }
+
+    /// `host-config.app.downloads_dir` 的移动端事实投影（装配期由
+    /// [`HostPorts::new`] 固化的快照）。
+    ///
+    /// 缺失（未预热 / 解析失败）返回 `None`：内核 `host_api::config` 会转成显性错误
+    /// （fail-visible），不是静默空值——该 impl 曾整体缺失，导致 ai-chatbox 在
+    /// `activate()` 读配置即失败（2026-10-15 真机）。
+    fn app_downloads_dir(&self) -> Option<String> {
+        self.downloads_dir.clone()
+    }
+
+    async fn delete_file_android(&self, path: String) -> bedcode_wasm_core::Result<()> {
+        crate::plugin::android_plugins::delete_file(&path).await
+    }
+
+    async fn is_within_app_downloads_dir(&self, app: &tauri::AppHandle, path: &str) -> bedcode_wasm_core::Result<bool> {
+        Ok(crate::plugin::android_plugins::is_within_app_downloads_dir(app, path).await)
+    }
+
+    fn saf_io(&self, app: &tauri::AppHandle) -> Option<Arc<dyn SafIoPort>> {
+        let state = app.state::<crate::plugin::saf_io::SafIoState>();
+        Some(Arc::new(SafIoBridge(state.inner().0.clone())))
+    }
+
+    async fn app_data_dir(&self, app: &tauri::AppHandle) -> bedcode_wasm_core::Result<PathBuf> {
+        crate::peer::net::app_data_dir(app)
+    }
+
+    // ==================== notify（系统通知与提醒反馈，ABI v18） ====================
+    //
+    // 全部经 Kotlin TaskNotificationPlugin（`run_mobile_plugin_async` 直接
+    // await 驱动——端口方法是 async fn，被 host_impl 的
+    // `block_in_place + block_on` 驱动，内部不再嵌套 block_on）。
+
+    async fn notify_show(
+        &self,
+        // Android 分支的 Kotlin 载荷只含 title/body/vibrate/sound（不带调用方
+        // 插件标识），故该参数仅在非 Android 兜底分支被消费
+        _plugin_id: &str,
+        title: &str,
+        body: &str,
+        vibrate: bool,
+        sound: bool,
+    ) -> std::result::Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let payload = serde_json::json!({
+                "title": title,
+                "body": body,
+                "vibrate": vibrate,
+                "sound": sound,
+            });
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("showPluginNotification", payload)
+                .await
+                .map_err(|e| format!("notification failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (_plugin_id, title, body, vibrate, sound);
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_check_permission(&self) -> std::result::Result<bool, String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let response: serde_json::Value = h
+                .run_mobile_plugin_async("checkNotificationPermission", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("notification permission check failed: {e}"))?;
+            Ok(response
+                .get("granted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_request_permission(&self) -> std::result::Result<bool, String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let response: serde_json::Value = h
+                .run_mobile_plugin_async("requestNotificationPermission", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("notification permission request failed: {e}"))?;
+            Ok(response
+                .get("granted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_vibrate(&self, duration_ms: u32) -> std::result::Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let payload = serde_json::json!({ "durationMs": duration_ms });
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("pluginVibrate", payload)
+                .await
+                .map_err(|e| format!("vibrate failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = duration_ms;
+            Err("only supported on Android".to_string())
+        }
+    }
+
+    async fn notify_play_sound(&self) -> std::result::Result<(), String> {
+        #[cfg(target_os = "android")]
+        {
+            use crate::plugin::android_plugins::notification_plugin_handle;
+
+            let Some(h) = notification_plugin_handle() else {
+                return Err("TaskNotificationPlugin not registered".to_string());
+            };
+            let _response: serde_json::Value = h
+                .run_mobile_plugin_async("pluginPlaySound", serde_json::json!({}))
+                .await
+                .map_err(|e| format!("play sound failed: {e}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err("only supported on Android".to_string())
+        }
+    }
+}
+
+/// `peer_set_shared_roots` 的 JSON 契约（camelCase；域内不做形状解析——
+/// 解析责任在端口实现方，与迁移前域内 SharedRootSeed 同形状）
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SharedRootSeed {
+    id: String,
+    name: String,
+    saf_tree_uri: String,
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::HostPorts;
+    use bedcode_wasm_core::host_api::ports::HostEnginePorts;
+
+    /// 回归锁（2026-10-15 真机）：生产装配 [`HostPorts::new`] 必须回读运行时
+    /// 预热缓存——此前 `impl HostEnginePorts for HostPorts` 漏了
+    /// `app_downloads_dir`，落到 trait 缺省 `None`，内核 `host_api::config`
+    /// fail-visible 报「host injected no downloads dir」⇒ ai-chatbox
+    /// `activate()` 读数据目录基址即失败。
+    #[test]
+    fn host_ports_new_projects_prewarmed_downloads_dir() {
+        crate::peer::ports::set_downloads_dir_for_test(Some("/test/Download".to_string()));
+        assert_eq!(
+            HostPorts::new().app_downloads_dir().as_deref(),
+            Some("/test/Download"),
+            "生产端口必须回读预热的下载目录（缺省 None = 插件激活读配置失败）"
+        );
+    }
+
+    /// 未预热 / 解析失败时投影 `None`（内核转显性错误，不是静默空串）
+    #[test]
+    fn host_ports_app_downloads_dir_defaults_to_none() {
+        assert_eq!(HostPorts::with_downloads_dir(None).app_downloads_dir(), None);
+    }
+}

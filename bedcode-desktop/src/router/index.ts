@@ -1,14 +1,22 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { pluginLoader } from '@/plugin/loader'
+import { logger } from '@/utils/frontendLogger'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/sessions' },
+    // 默认落地插件页：会话 / 设备配对入口已下沉插件（票 13/14），宿主不再有
+    // 业务页；服务器页（/server）按产品决策「常驻不可开关」已从导航移除入口
+    // （仍可经 URL 直达做诊断），故落地页取插件管理
+    { path: '/', redirect: '/plugins' },
     {
-      path: '/sessions',
-      name: 'session',
-      component: () => import('@/views/SessionsConfigView.vue'),
+      // 设备壳（方案 C：主屏 + 卡片切换，.scratch/2026-10-08-desktop-shell-redesign/spec-c.md）：
+      // 新宿主前端根路由。与旧布局（TitleBar + Sidebar 工作台）并存，切换壳/旧面经此路由。
+      // bareWindow：壳自带工具栏，不套旧桌面外壳（侧边栏 / 标题栏）
+      path: '/shell',
+      name: 'shell',
+      component: () => import('@/shell/ShellView.vue'),
+      meta: { bareWindow: true },
     },
     {
       path: '/server',
@@ -16,19 +24,16 @@ const router = createRouter({
       component: () => import('@/views/ServerView.vue'),
     },
     {
-      path: '/devices',
-      name: 'devices',
-      component: () => import('@/views/DevicesView.vue'),
-    },
-    {
-      path: '/devices/:id/history',
-      name: 'device-history',
-      component: () => import('@/views/ConnectionHistoryView.vue'),
-    },
-    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
+    },
+    {
+      // 设置页二级入口：应用授权（策略 + 记录 + 内置免询问项的查看与管理）
+      // 不占一级菜单——权限不是业务门面（spec §9.1）
+      path: '/settings/authorization',
+      name: 'settings-authorization',
+      component: () => import('@/views/AuthorizationView.vue'),
     },
     {
       path: '/plugins',
@@ -58,9 +63,20 @@ const router = createRouter({
       props: true,
     },
     {
+      // 通用插件窗口：任何插件注册的 `kind: 'page'` 视图都能独占一个独立窗口。
+      // `bareWindow` = 宿主不套桌面外壳（侧边栏 / 标题栏），内容全部由插件视图给
+      path: '/plugin/window/:pluginId/:viewId',
+      name: 'plugin-window-view',
+      component: () => import('@/views/PluginWindowHostView.vue'),
+      meta: { bareWindow: true },
+    },
+    {
       path: '/terminal-window/:id',
       name: 'terminal-window',
-      component: () => import('@/views/TerminalWindowView.vue'),
+      // 票 03a / 票 05：终端窗口内容整体下沉会话插件——本路由走通用插件窗口宿主，
+      // 缺省目标即会话插件的 `session.terminal-window` 视图；宿主不留终端兜底实现
+      component: () => import('@/views/PluginWindowHostView.vue'),
+      meta: { bareWindow: true },
     },
   ],
 })
@@ -70,8 +86,15 @@ router.beforeEach(async (to) => {
   if (to.name === 'plugin-sidebar-view' || to.name === 'plugin-toolbox-view') {
     const pluginId = to.params.pluginId as string
     if (pluginId && !pluginLoader.getActivePlugin(pluginId)) {
-      await pluginLoader.activate(pluginId)
+      try {
+        await pluginLoader.activate(pluginId)
+      } catch (e) {
+        // 票 05：激活失败已由 loader 诊断/登记后上抛——导航守卫不得带着未处理
+        // rejection 中断路由切换（进不到插件视图由窗口宿主兜底提示），只记日志
+        logger.error(`[Router] Plugin activation failed: ${pluginId}`, e)
+      }
     }
+    return
   }
 })
 

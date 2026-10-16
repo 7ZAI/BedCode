@@ -1,0 +1,50 @@
+{
+    // 本文件随 BedCode.code-workspace 多根工作区使用（也可单独打开本文件夹时生效）。
+    // ${workspaceFolder} = 本文件夹（bedcode-desktop），无需再带 bedcode-desktop/ 前缀。
+    // 与仓库根 .vscode/tasks.json 同构（对应配置的等价物），配合本文件夹 launch.json 的
+    // preLaunchTask 使用；调试说明见 launch.json 头部注释。
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // 桌面端前端 dev server（等价 tauri.conf.json 的 beforeDevCommand: pnpm run dev）
+            "label": "ui:dev",
+            "type": "shell",
+            // dev server 常驻后台不退出，靠下方 background problemMatcher 判断「已就绪」：
+            // 匹配到 vite 输出的 Local: 行后才继续执行 preLaunchTask 后续流程
+            "isBackground": true,
+            "command": "pnpm",
+            "args": ["run", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                {
+                    "owner": "vite-dev",
+                    "pattern": {
+                        "regexp": "."
+                    },
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": ".",
+                        "endsPattern": "Local:"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        },
+        {
+            // 桌面端前端产物构建（等价 tauri.conf.json 的 beforeBuildCommand: pnpm run build）
+            "label": "ui:build",
+            "type": "shell",
+            "command": "pnpm",
+            "args": ["run", "build"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build"
+        }
+    ]
+}

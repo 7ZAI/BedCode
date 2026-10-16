@@ -37,10 +37,39 @@ class TaskNotificationManager(private val context: Context) {
 
         const val NOTIFICATION_ID_BASE = 2000
         const val NOTIFICATION_ID_RANGE = 1000
+        /** 批量传输请求通知 ID 基数（v2；action 应答后/批解决后取消） */
+        const val NOTIFICATION_ID_BATCH_BASE = 4000
+        const val NOTIFICATION_ID_BATCH_RANGE = 500
+        /** intent 审批通知 ID 基数（v2.1；应答后/IntentAck 后取消） */
+        const val NOTIFICATION_ID_INTENT_BASE = 5000
+        const val NOTIFICATION_ID_INTENT_RANGE = 500
         /** 连接状态通知固定 ID */
         const val CONNECTION_NOTIFICATION_ID = 3001
         /** 插件自主通知固定 ID（host_notify，不与会话绑定） */
         const val PLUGIN_NOTIFICATION_ID = 3002
+
+        /** 通知 action 类型：v2 批应答 */
+        const val ACTION_TRANSFER_BATCH = "com.bedcode.mobile.action.TRANSFER_BATCH"
+        /** 通知 action 类型：v2.1 intent 应答（push 审批） */
+        const val ACTION_TRANSFER_INTENT = "com.bedcode.mobile.action.TRANSFER_INTENT"
+        /** Intent extra：应答动作（approve / reject / accept / reject） */
+        const val EXTRA_BATCH_ACTION = "batch_action"
+        /** Intent extra：批 ID */
+        const val EXTRA_BATCH_ID = "batch_id"
+        /** Intent extra：请求方插件 ID（路由回插件命令用） */
+        const val EXTRA_BATCH_PLUGIN_ID = "batch_plugin_id"
+        /** 应答动作取值：接受全部 */
+        const val BATCH_ACTION_APPROVE = "approve"
+        /** 应答动作取值：拒绝全部 */
+        const val BATCH_ACTION_REJECT = "reject"
+        /** Intent extra：intent ID（v2.1 push 审批） */
+        const val EXTRA_INTENT_ID = "intent_id"
+        /** Intent extra：intent 应答动作（accept / reject） */
+        const val EXTRA_INTENT_ACTION = "intent_action"
+        /** intent 应答动作取值：接受 */
+        const val INTENT_ACTION_ACCEPT = "accept"
+        /** intent 应答动作取值：拒绝 */
+        const val INTENT_ACTION_REJECT = "reject"
 
         @Volatile
         private var instance: TaskNotificationManager? = null
@@ -152,13 +181,227 @@ class TaskNotificationManager(private val context: Context) {
     }
 
     /**
-     * 显示插件自主通知（host_notify）
+     * 显示插件自主通知（WIT host-notify.notify，ABI v18）
      *
      * 插件系统发起的通用通知，不与会话绑定，固定 ID [PLUGIN_NOTIFICATION_ID]，
-     * 使用默认渠道（声音+震动），不参与设置页开关控制
+     * 震动/声音由插件经 options-json 分控（缺省 true/true），不参与设置页开关控制
      */
-    fun showPluginNotification(title: String, body: String) {
-        notify(PLUGIN_NOTIFICATION_ID, title, body, vibrate = true, sound = true)
+    fun showPluginNotification(title: String, body: String, vibrate: Boolean, sound: Boolean) {
+        notify(PLUGIN_NOTIFICATION_ID, title, body, vibrate, sound)
+    }
+
+    /**
+     * 显示批量传输请求通知（v2 后台/锁屏应答）
+     *
+     * 带「接受全部 / 拒绝全部」两个 action 按钮；点击经 PendingIntent 路由到
+     * MainActivity，由 WebView evaluateJavascript 调宿主命令
+     * plugin_filesrv_approve_transfer / plugin_filesrv_reject_transfer。
+     * 通知 ID 按 batchId 稳定映射，批解决后按同 ID 取消。
+     *
+     * @param batchId 批 ID（通知 ID 映射 + Intent extra）
+     * @param pluginId 请求方插件 ID（命令路由用）
+     * @param title 通知标题（宿主按语言偏好构建）
+     * @param body 通知正文（宿主构建）
+     * @param acceptLabel 「接受全部」按钮文案
+     * @param rejectLabel 「拒绝全部」按钮文案
+     */
+    fun showTransferRequestNotification(
+        batchId: String,
+        pluginId: String,
+        title: String,
+        body: String,
+        acceptLabel: String,
+        rejectLabel: String
+    ) {
+        val id = getBatchNotificationId(batchId)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setOngoing(false)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+        // 默认点击 = 打开应用（保留）；action 点击 = 应答路由
+        val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        openIntent?.let {
+            it.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            builder.setContentIntent(
+                PendingIntent.getActivity(
+                    context,
+                    id,
+                    it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        }
+
+        // 接受全部：点击 → MainActivity → approve 命令（requestCode 区分 action，
+        // kind=batch 与 v2.1 kind=intent 并存，PendingIntent 互不串线）
+        builder.addAction(
+            0,
+            acceptLabel,
+            batchActionPendingIntent(batchId, pluginId, BATCH_ACTION_APPROVE, id)
+        )
+        // 拒绝全部
+        builder.addAction(
+            0,
+            rejectLabel,
+            batchActionPendingIntent(batchId, pluginId, BATCH_ACTION_REJECT, id)
+        )
+
+        notificationManager.notify(id, builder.build())
+    }
+
+    /** 构造批 action 点击 PendingIntent（kind=batch；requestCode 掺 action 区分） */
+    private fun batchActionPendingIntent(
+        batchId: String,
+        pluginId: String,
+        action: String,
+        baseCode: Int
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            // this.action 显式限定：参数名 action 遮蔽了 Intent.action 属性
+            this.action = ACTION_TRANSFER_BATCH
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_BATCH_ACTION, action)
+            putExtra(EXTRA_BATCH_ID, batchId)
+            putExtra(EXTRA_BATCH_PLUGIN_ID, pluginId)
+        }
+        // requestCode 掺入 action 与批 ID 哈希：同批 approve/reject 两个 PendingIntent 互不覆盖
+        val requestCode = baseCode * 2 + if (action == BATCH_ACTION_APPROVE) 0 else 1
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    /** 取消批量传输请求通知（批已解决 / action 已应答后） */
+    fun cancelTransferRequestNotification(batchId: String) {
+        notificationManager.cancel(getBatchNotificationId(batchId))
+    }
+
+    /** 批量请求通知 ID（基数 4000，与任务/连接通知隔离）
+     *
+     * 用 `and 0x7fffffff` 代替 Math.abs：hashCode() == Int.MIN_VALUE 时 abs 仍为负，
+     * 会产出负数通知 ID（NotificationManager 行为未定义）。仍存在哈希碰撞覆盖的
+     * 低概率（同批并发两通知），接受（批量请求通知生命周期短，cancel 幂等兜底）。 */
+    fun getBatchNotificationId(batchId: String): Int {
+        return NOTIFICATION_ID_BATCH_BASE +
+            (batchId.hashCode() and 0x7fffffff) % NOTIFICATION_ID_BATCH_RANGE
+    }
+
+    /**
+     * 显示 push 审批通知（v2.1 后台/锁屏应答，带「接受 / 拒绝」action）
+     *
+     * Intent 到达（push 方向，手机为落盘方）且 App 在后台时，宿主发通知；
+     * action 点击经 PendingIntent（kind=intent）路由到 MainActivity →
+     * `plugin_filesrv_respond_intent`（accepted → 手机执行下载）。
+     * 通知 ID 按 intentId 稳定映射，应答后取消。
+     */
+    fun showIntentAskNotification(
+        intentId: String,
+        title: String,
+        body: String,
+        acceptLabel: String,
+        rejectLabel: String
+    ) {
+        val id = getIntentNotificationId(intentId)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setOngoing(false)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+        val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        openIntent?.let {
+            it.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            builder.setContentIntent(
+                PendingIntent.getActivity(
+                    context, id, it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        }
+
+        // 接受 / 拒绝（kind=intent，与 v2 批应答 kind=batch 并存，PendingIntent 互不串线）
+        builder.addAction(0, acceptLabel, intentActionPendingIntent(intentId, INTENT_ACTION_ACCEPT, id))
+        builder.addAction(0, rejectLabel, intentActionPendingIntent(intentId, INTENT_ACTION_REJECT, id))
+
+        notificationManager.notify(id, builder.build())
+    }
+
+    /**
+     * 显示 pull 信息性通知（v2.1：桌面拉取本机文件）
+     *
+     * 纯信息：无 action 按钮、不阻塞传输、不作为审批门（下载方向免审批）。
+     */
+    fun showPullNotice(intentId: String, title: String, body: String) {
+        val id = getIntentNotificationId(intentId)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_SILENT)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+
+        val openIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        openIntent?.let {
+            it.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            builder.setContentIntent(
+                PendingIntent.getActivity(
+                    context, id, it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        }
+        notificationManager.notify(id, builder.build())
+    }
+
+    /** push 审批 action PendingIntent（kind=intent） */
+    private fun intentActionPendingIntent(
+        intentId: String,
+        action: String,
+        baseCode: Int
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            this.action = ACTION_TRANSFER_INTENT
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_INTENT_ID, intentId)
+            putExtra(EXTRA_INTENT_ACTION, action)
+        }
+        val requestCode = baseCode * 2 + if (action == INTENT_ACTION_ACCEPT) 0 else 1
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    /** 取消 intent 审批通知（应答后 / IntentAck 已发后调用） */
+    fun cancelIntentNotification(intentId: String) {
+        notificationManager.cancel(getIntentNotificationId(intentId))
+    }
+
+    /** intent 通知 ID（基数 5000，与批 / 任务 / 连接通知隔离；hash 碰撞可接受） */
+    fun getIntentNotificationId(intentId: String): Int {
+        return NOTIFICATION_ID_INTENT_BASE +
+            (intentId.hashCode() and 0x7fffffff) % NOTIFICATION_ID_INTENT_RANGE
     }
 
     /**

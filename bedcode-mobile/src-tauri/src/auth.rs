@@ -1,16 +1,15 @@
 //! Authentication Module
 //!
-//! 认证和配对 - 包含认证管理器、配对数据结构和认证状态
+//! 认证和配对 - 认证管理器与认证状态（本地配对码的生成 / 持有 / 校验面已于票 14
+//! 退役：移动端不是配对码颁发方，配对码由桌面端生成，本端只做提交与凭据落地）
 
 pub mod http;
 pub mod manager;
-pub mod pairing;
 
 use serde::{Deserialize, Serialize};
 
 // Re-export public types
 pub use manager::AuthManager;
-pub use pairing::{PairingCode, PendingDevice};
 
 /// 认证凭据
 #[derive(Debug, Clone, Serialize, Deserialize)]

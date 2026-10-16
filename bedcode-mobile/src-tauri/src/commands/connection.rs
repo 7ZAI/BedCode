@@ -8,8 +8,7 @@ use tauri::{AppHandle, Manager};
 use crate::connection::event_ws;
 use crate::router::event;
 use crate::state::{
-    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, get_session_manager,
-    set_global_token,
+    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, set_global_token,
 };
 use crate::Result;
 
@@ -90,12 +89,9 @@ pub async fn ws_disconnect(app_handle: AppHandle) -> Result<()> {
     // 发射断开连接事件
     event::emit_disconnected(&app_handle, "User initiated disconnect");
 
-    // 清除会话状态
-    let session_mgr = get_session_manager();
-    // 停止活跃会话
-    if let Some(session) = session_mgr.get_active_session().await {
-        let _ = session_mgr.stop_session(&session.id).await;
-    }
+    // 会话状态清理已随票 13 退役：SessionManager 簿记零实际消费者（活跃会话
+    // 只在已删的 ws_start_session 死命令路径写入 ⇒ 原分支恒 None）；会话真源在
+    // 桌面端 HTTP + 同步事件，设备断开时的会话处置归插件编排
 
     Ok(())
 }
@@ -113,6 +109,21 @@ pub async fn ws_get_status() -> Result<String> {
 pub async fn ws_is_connected() -> Result<bool> {
     let conn = get_connection_manager();
     Ok(conn.is_connected().await)
+}
+
+/// 同步「自动重连」设置项到连接层
+///
+/// 自动重连的执行者是 Rust 侧的 `EventWsSupervisor`（唯一自愈入口），退避
+/// 节奏由 `ConnectionManager` 的 `ReconnectManager` 策略决定。前端不持有重连
+/// 循环，只把用户的开关意图同步过来。
+///
+/// 关闭后：断开仍会照常上报 `ws_unexpected_disconnect`（断开是事实），但监督
+/// 任务不自愈，需用户手动连接或重新认证。
+#[tauri::command]
+pub async fn set_auto_reconnect(enabled: bool) -> Result<()> {
+    let manager = get_connection_manager();
+    manager.set_auto_reconnect(enabled);
+    Ok(())
 }
 
 /// 重新连接（断线重连）
@@ -144,9 +155,9 @@ pub async fn get_ws_token() -> Result<String> {
     Ok(get_global_token())
 }
 
-/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/event`）
+/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/plugin/com.bedcode.terminal-session/session-control`）
 ///
-/// 04 事件 WS 建连地址：目标设备未保存（未 connect）时报错。
+/// 事件通道建连地址（票 03 自 `/ws/event` 迁往桌面插件端点）：目标设备未保存（未 connect）时报错。
 #[tauri::command]
 pub async fn get_ws_url() -> Result<String> {
     let conn = get_connection_manager();
@@ -158,7 +169,7 @@ pub async fn get_ws_url() -> Result<String> {
         "ws://{}:{}{}",
         target.address,
         target.port,
-        crate::system::constants::connection::WS_EVENT_PATH
+        crate::system::constants::connection::WS_PLUGIN_SESSION_CONTROL_PATH
     ))
 }
 
@@ -175,22 +186,21 @@ pub fn ws_set_token(token: String) -> Result<()> {
 
 /// 推送链路加密运行期状态到 Rust 侧（前端设置变更/配对刷新/启动时调用）
 ///
-/// 常驻事件 WS 建连在 Rust 侧，而开关与 pin 存于 WebView localStorage——
-/// 本命令是两侧的桥。缺省全关：未推送前事件 WS 保持明文。
+/// HTTP 信封加密裁决在 Rust 侧（http_proxy），而开关与 pin 存于 WebView
+/// localStorage——本命令是两侧的桥。缺省全关：未推送前 HTTP 载荷保持明文。
 /// `encrypt_http` 为可选参数：旧前端（HTTP 代理收束前）不推送，默认 true
-/// （与事件通道一致，主开关关着时无效）；新前端显式推送。
+/// （主开关关着时无效）；新前端显式推送。WS 通道加密已随桌面端插件端点
+/// 帧加密退役，命令不再接收 ws 开关。
 #[tauri::command]
 pub fn set_link_crypto_context(
     enabled: bool,
     strict_mode: bool,
-    encrypt_ws_event: bool,
     encrypt_http: Option<bool>,
     kd_public_b64: Option<String>,
 ) -> Result<()> {
     crate::state::set_link_crypto_context(crate::state::LinkCryptoContext {
         enabled,
         strict_mode,
-        encrypt_ws_event,
         encrypt_http: encrypt_http.unwrap_or(true),
         kd_public_b64,
     });

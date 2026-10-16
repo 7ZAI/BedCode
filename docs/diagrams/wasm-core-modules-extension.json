@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "bedcode-wasm-core 模块架构与扩展点",
+    "locale": "zh-CN",
+    "subtitle": "引擎内核 (无业务) + 4 闸门 4 通道 + 5 个扩展点 · ADR 0022",
+    "output": ".archify/architecture-wasm-core-modules-extension-20261008-110249/wasm-core-modules-extension.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/7ZAI/BedCode",
+      "provider": "github",
+      "revision": "fdf7f73e5503581dbd35c156cca2aa51d7ed115d"
+    }
+  },
+  "components": [
+    {
+      "id": "frontend_shell",
+      "type": "frontend",
+      "label": "Vue 3 前端",
+      "sublabel": "UI 显示 · i18n · 零资源访问",
+      "pos": [40, 40],
+      "size": [240, 80],
+      "sources": [
+        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 前端" }
+      ]
+    },
+    {
+      "id": "wasm_plugin",
+      "type": "external",
+      "label": "WASM Plugin",
+      "sublabel": "业务事实真源 · wasm32-wasip3",
+      "pos": [360, 40],
+      "size": [240, 80],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/ai-chatbox/rust/src/commands.rs", "label": "wasm-apps" }
+      ]
+    },
+    {
+      "id": "host_lib",
+      "type": "backend",
+      "label": "Tauri lib.rs",
+      "sublabel": "组合根 · 加载编排 · DB 真源",
+      "pos": [680, 40],
+      "size": [240, 80],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/lib.rs", "label": "组合根" }
+      ]
+    },
+
+    {
+      "id": "plugin_host",
+      "type": "backend",
+      "label": "PluginHost",
+      "sublabel": "管理器 · 依赖仲裁 · 生命周期",
+      "pos": [40, 160],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager.rs", "label": "PluginManager" },
+        { "path": "packages/bedcode-wasm-core/src/manager/loader.rs", "label": "加载器" }
+      ]
+    },
+    {
+      "id": "wasm_runtime",
+      "type": "backend",
+      "label": "WasmRuntime",
+      "sublabel": "wasmtime 48 · 组件模型",
+      "pos": [360, 160],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager/runtime.rs", "label": "WasmRuntime" },
+        { "path": "packages/bedcode-wasm-core/src/manager/host.rs", "label": "Host 装配" }
+      ]
+    },
+    {
+      "id": "api_bridge",
+      "type": "backend",
+      "label": "API 桥接",
+      "sublabel": "WIT host-* ↔ 后端命令路由",
+      "pos": [680, 160],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/host_api.rs", "label": "host_api 面" },
+        { "path": "packages/bedcode-wasm-core/src/host_api/api.rs", "label": "命令路由" }
+      ]
+    },
+
+    {
+      "id": "loader_registry",
+      "type": "backend",
+      "label": "LoaderRegistry",
+      "sublabel": "加载注册表 · 元数据 · 权限仲裁",
+      "pos": [40, 300],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager/registry.rs", "label": "注册表" },
+        { "path": "packages/bedcode-wasm-core/src/manager/validation.rs", "label": "校验" }
+      ]
+    },
+    {
+      "id": "host_api_impl",
+      "type": "backend",
+      "label": "host_api 实现",
+      "sublabel": "host-* 原语后端实现 · 49 个",
+      "pos": [360, 300],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/host_api/http.rs", "label": "host-http" },
+        { "path": "packages/bedcode-wasm-core/src/host_api/pty.rs", "label": "host-pty" },
+        { "path": "packages/bedcode-wasm-core/src/host_api/storage.rs", "label": "host-storage" }
+      ]
+    },
+    {
+      "id": "capability_registry",
+      "type": "backend",
+      "label": "CapabilityRegistry",
+      "sublabel": "能力路由 · 归属判定 · 门禁",
+      "pos": [680, 300],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager/capability.rs", "label": "能力注册" },
+        { "path": "packages/bedcode-wasm-core/src/permission.rs", "label": "权限门禁" }
+      ]
+    },
+
+    {
+      "id": "engine_truth",
+      "type": "database",
+      "label": "引擎真源",
+      "sublabel": "SQLite 主库 · 任务 · 调度",
+      "pos": [40, 440],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/db.rs", "label": "主库" },
+        { "path": "packages/bedcode-wasm-core/src/storage.rs", "label": "存储" }
+      ]
+    },
+    {
+      "id": "security_framework",
+      "type": "security",
+      "label": "安全框架",
+      "sublabel": "资源授权 · 网络授权 · 护栏",
+      "pos": [360, 440],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/security.rs", "label": "安全框架" },
+        { "path": "packages/bedcode-wasm-core/src/host_api/auth.rs", "label": "授权" }
+      ]
+    },
+    {
+      "id": "capability_install",
+      "type": "backend",
+      "label": "能力安装",
+      "sublabel": "能力声明 · 权限位 · 装配",
+      "pos": [680, 440],
+      "size": [240, 100],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager/capability.rs", "label": "能力安装" },
+        { "path": "packages/bedcode-wasm-core/src/system.rs", "label": "SystemComponent" }
+      ]
+    },
+
+    {
+      "id": "dep_runtimes",
+      "type": "external",
+      "label": "runtime SDK",
+      "sublabel": "wasmtime 48 · tokio 1",
+      "pos": [978, 160],
+      "size": [200, 100]
+    },
+    {
+      "id": "dep_plugin_api",
+      "type": "external",
+      "label": "plugin-api-wasm",
+      "sublabel": "SDK · 插件开发工具箱",
+      "pos": [978, 300],
+      "size": [200, 100]
+    },
+    {
+      "id": "dep_host_kit",
+      "type": "external",
+      "label": "bedcode-host-kit",
+      "sublabel": "引擎内核 · PTY · 网络",
+      "pos": [978, 440],
+      "size": [200, 100]
+    },
+    {
+      "id": "dep_server_base",
+      "type": "external",
+      "label": "server-base",
+      "sublabel": "WS/HTTP 协议底座",
+      "pos": [978, 580],
+      "size": [200, 100]
+    },
+
+    {
+      "id": "ext_engine_hooks",
+      "type": "backend",
+      "label": "引擎钩子",
+      "sublabel": "on_load · on_unload · on_error",
+      "tag": "hook",
+      "pos": [40, 760],
+      "size": [200, 170],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/manager.rs", "label": "生命周期" }
+      ]
+    },
+    {
+      "id": "ext_capability_crate",
+      "type": "backend",
+      "label": "能力 crate",
+      "sublabel": "host-* 原语 · 权限词汇",
+      "tag": "L1",
+      "pos": [270, 760],
+      "size": [200, 170],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/host_api/api.rs", "label": "host-* 原语" }
+      ]
+    },
+    {
+      "id": "ext_permission_vocabulary",
+      "type": "security",
+      "label": "权限词汇",
+      "sublabel": "manifest 声明 · 加载期仲裁",
+      "tag": "permission",
+      "pos": [500, 760],
+      "size": [200, 170],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/permission.rs", "label": "权限" }
+      ]
+    },
+    {
+      "id": "ext_plugin_contributes",
+      "type": "frontend",
+      "label": "插件贡献",
+      "sublabel": "registerSurface · registerSlot",
+      "tag": "contributes",
+      "pos": [730, 760],
+      "size": [200, 170],
+      "sources": [
+        { "path": "bedcode-desktop/wasm-apps/terminal-session/rust/src/ws_terminal.rs", "label": "插件贡献面" }
+      ]
+    },
+    {
+      "id": "ext_system_component",
+      "type": "backend",
+      "label": "SystemComponent",
+      "sublabel": "register_source · L1 装配",
+      "tag": "system",
+      "pos": [960, 760],
+      "size": [200, 170],
+      "sources": [
+        { "path": "packages/bedcode-wasm-core/src/system.rs", "label": "SystemComponent" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "bedcode-wasm-core crate (引擎内核 · 无业务)",
+      "wraps": [
+        "plugin_host",
+        "wasm_runtime",
+        "api_bridge",
+        "loader_registry",
+        "host_api_impl",
+        "capability_registry",
+        "engine_truth",
+        "security_framework",
+        "capability_install"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "依赖底座",
+      "wraps": [
+        "dep_runtimes",
+        "dep_plugin_api",
+        "dep_host_kit",
+        "dep_server_base"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "扩展点 ⭐",
+      "wraps": [
+        "ext_engine_hooks",
+        "ext_capability_crate",
+        "ext_permission_vocabulary",
+        "ext_plugin_contributes",
+        "ext_system_component"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "frontend-to-host",
+      "from": "frontend_shell",
+      "to": "host_lib",
+      "label": "Tauri invoke",
+      "variant": "emphasis"
+    },
+    {
+      "id": "wasm-to-runtime",
+      "from": "wasm_plugin",
+      "to": "wasm_runtime",
+      "label": "WIT import",
+      "variant": "emphasis"
+    },
+    {
+      "id": "host-to-plugin-host",
+      "from": "host_lib",
+      "to": "plugin_host",
+      "label": "装配"
+    },
+    {
+      "id": "plugin-host-to-runtime",
+      "from": "plugin_host",
+      "to": "wasm_runtime",
+      "label": "实例化"
+    },
+    {
+      "id": "plugin-host-to-loader",
+      "from": "plugin_host",
+      "to": "loader_registry",
+      "label": "加载"
+    },
+    {
+      "id": "loader-to-host-api",
+      "from": "loader_registry",
+      "to": "host_api_impl",
+      "label": "impl Host"
+    },
+    {
+      "id": "host-api-to-security",
+      "from": "host_api_impl",
+      "to": "security_framework",
+      "label": "check_permission",
+      "variant": "security"
+    },
+    {
+      "id": "engine-to-security",
+      "from": "engine_truth",
+      "to": "security_framework",
+      "label": "授权",
+      "variant": "security"
+    },
+    {
+      "id": "runtime-to-runtimes",
+      "from": "wasm_runtime",
+      "to": "dep_runtimes",
+      "label": "wasmtime 48",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "capability-to-host-kit",
+      "from": "capability_registry",
+      "to": "dep_host_kit",
+      "label": "Ports 下发",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "plugin-host-to-hooks",
+      "from": "plugin_host",
+      "to": "ext_engine_hooks",
+      "label": "on_load",
+      "variant": "dashed",
+      "via": [[10, 260], [10, 760]]
+    },
+    {
+      "id": "security-to-ext-perm",
+      "from": "security_framework",
+      "to": "ext_permission_vocabulary",
+      "label": "check_permission",
+      "variant": "dashed",
+      "via": [[500, 540], [500, 760]]
+    },
+    {
+      "id": "install-to-ext-sys",
+      "from": "capability_install",
+      "to": "ext_system_component",
+      "label": "submit_module!",
+      "variant": "dashed",
+      "via": [[950, 540], [950, 760]]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "引擎内核 (无业务)",
+      "items": [
+        "wasm_core 只含应用无关的通用引擎：进程 / 网络 / 存储 / 安全 / 通信 + wasmtime 48",
+        "宿主只剩 PTY 引擎、在册连接清单、窄转发层三样无业务语义的东西",
+        "会话真源已下沉插件终态 (ADR 0037)——wasm_core 整核抽出至 packages/"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "4 闸门 · 4 通道",
+      "items": [
+        "下行 4 闸门：能力 (CapabilityRegistry) · 身份 (auth_center) · 隔离 (沙箱) · 生命周期 (PluginHost)",
+        "上行 4 通道：WIT host-* · bus (host-bus) · events · 互调 (host-intercall)",
+        "权限位有门禁落点，停用可回收 (AGENTS.md §5.1)"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "5 个扩展点",
+      "items": [
+        "引擎钩子：生命周期回调 (on_load / on_unload / on_error) + guest 日志钩子",
+        "能力 crate (L1)：host-* 原语 WIT 接口 + 权限词汇定义",
+        "权限词汇：manifest 权限声明 + 加载期仲裁 (permission.rs)",
+        "插件贡献：registerSurface / registerSlot 运行面注册 (wasm_plugin → ext_plugin_contributes)",
+        "SystemComponent：真源注册 + L1 装配 (system.rs)"
+      ]
+    }
+  ]
+}

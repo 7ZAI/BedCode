@@ -1,0 +1,3194 @@
+/**
+ * Agent Hub 插件样式
+ *
+ * 宿主 Vite 的 tailwind content 已显式纳入 `./wasm-apps/agent-hub/src/**`
+ * （tailwind.config.js 末两行，并有 `src/__tests__/plugin/tailwindContentCoverage.test.ts`
+ * 护栏），因此本插件 SFC 里的 Tailwind 工具类**会**被生成。
+ * 但插件 lib 构建产出的独立 CSS 文件不被宿主加载（build.js 仅拷贝 index.js），
+ * 所以本文件仍经 `?inline` 内联并在插件 activate 时注入 style 标签；
+ * 类名统一 `ah-` 前缀避免与宿主/其他插件冲突。
+ *
+ * 颜色：全部引用宿主 CSS 变量（bg / text / color / radius / shadow token），
+ * 跟随宿主明暗主题，不写死主题色；插件内确需派生时用下方「插件派生 token」
+ * 段的 `color-mix()`，不得引入第三方 hex 色板。
+ *
+ * 设计真源：用户评审定稿原型 `.scratch/agent-hub/prototype/index.html`
+ * （#variant=b 顶部分段导航）。
+ */
+
+/* 系统减弱动态效果时降级为瞬时（优先级最低，后续显式过渡类可覆盖） */
+@media (prefers-reduced-motion: reduce) {
+  .ah-view *,
+  .ah-view *::before,
+  .ah-view *::after {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+  }
+}
+
+/* ==================== 插件派生 token ====================
+ *
+ * 宿主 `--text-secondary` / `--text-tertiary` 在浅色主题实测分别只有
+ * 4.19:1 / 2.42:1（对 --bg-hover/card），把「时间、时长、token 数、表头」
+ * 这类**数据**挂在 tertiary 上等于让人猜。下面四个派生量全部由宿主 token
+ * 现场混合而来，逐主题随调色板自动跟随，**不改宿主任何 token 值**：
+ *
+ * - `--ah-text-data`    数据级（表头 / 时间 / 计数 / 路径 / 事件 meta）
+ *                       12 套主题 × 9 种承载面最差 5.84:1
+ * - `--ah-text-danger`  错误文字（--color-danger 直接当文字只有 2.19:1）最差 5.58:1
+ * - `--ah-text-warning` 警告文字（--color-warning 直接当文字只有 2.07:1）最差 4.51:1
+ * - `--ah-text-success` 成功/新增文字（--color-success 直接当文字只有 2.19:1）最差 4.83:1
+ * - `--ah-on-primary`   primary 底上的次级文字（气泡底先加深，前景用满强度对比色）
+ *
+ * 验算与豁免清单见 .scratch/2026-09-27-agent-hub-audit-fixes/issues/09-badge-contrast.md
+ */
+:root {
+  --ah-text-data: color-mix(in srgb, var(--text-secondary) 55%, var(--text-primary));
+  --ah-text-danger: color-mix(in srgb, var(--color-danger) 45%, var(--text-primary));
+  --ah-text-warning: color-mix(in srgb, var(--color-warning) 50%, var(--text-primary));
+  --ah-text-success: color-mix(in srgb, var(--color-success) 45%, var(--text-primary));
+  /* 徽章圆点：无文本图形适用 WCAG 1.4.11（3:1）。纯语义色在浅色主题的浅底上
+     只有 1.84:1（success 1.95 / warning 1.84 / danger 3.11），色相不变地朝
+     --text-primary 压深 32% 后全部回到 3.14:1 以上 */
+  --ah-dot-success: color-mix(in srgb, var(--color-success) 68%, var(--text-primary));
+  --ah-dot-warning: color-mix(in srgb, var(--color-warning) 68%, var(--text-primary));
+  --ah-dot-danger: color-mix(in srgb, var(--color-danger) 68%, var(--text-primary));
+  /* 纯 --color-primary 上放 --color-primary-contrast 在 sunset/light 只有 3.87:1，
+     先把气泡底朝 --text-primary 拉深 18%，前景对比回到 4.86:1。
+     气泡内次级行不能再压暗：实测 94% 混合只剩 4.48:1（未达 AA），
+     故用满强度前景、靠字号/等宽字形区分主次。 */
+  --ah-bubble: color-mix(in srgb, var(--color-primary) 82%, var(--text-primary));
+  --ah-on-primary: var(--color-primary-contrast);
+
+  /* 图表分类色（4 槽：输入 / 输出 / 缓存读 / 缓存写）。
+     c1/c2 沿用票 13 实测选出的 --chart-in/--chart-out 同值（改名以统一槽位
+     命名，色值一字未动）；c3/c4 是本次补的两槽，选取由一次性搜索脚本在
+     12 套主题下穷举得出（判据与 styleGuards 同数学）：
+       ① 对 --bg-card ≥ 3:1（无文本图形 WCAG 1.4.11）
+       ② 槽位两两 ΔE(CIE76) ≥ 25（相邻段不靠色相区分）
+       ③ 与语义三色 ΔE ≥ 25（不得读成「警告/成功色」）
+       ④ 与色板 primary ΔE ≥ 20（不得读成品牌色）
+       ⑤ 相邻槽位色相间隔 ≥ 50°（不能「两个都像蓝」）
+       ⑥ 同一槽位浅/深取色相一致 ≤ 6°（切主题时身份色不变）
+     最差实测：card 3.51 / pair 43.7 / sem 34.5 / pri 22.5（浅），
+                card 3.89 / pair 36.8 / sem 27.4 / pri 26.5（深） */
+  --chart-c1: #6f5b3d;
+  --chart-c2: #3b3b60;
+  --chart-c3: #509b69;
+  --chart-c4: #bf69a2;
+
+  /* 节奏热力图色阶（单色**顺序标度**，4 档 + 空格）：
+     空格用 --bg-hover（轨道底），四档是 c1 向卡片底色混出的 55/70/85/100%，
+     亮度单调递减、顶档 = c1 本身。低端两档对 --bg-card 低于 3:1 属**预期**
+     （顺序标度的低档本就该「若有若无」；WCAG 1.4.11 不适用于「数值另有文字
+     通道」的标度格），已在 styleGuards 里以豁免登记，判据换成「亮度单调 +
+     顶档 ≥ 3:1 + 每格有 title/aria 文字替代」。 */
+  --chart-heat-1: #afa392;
+  --chart-heat-2: #9a8b76;
+  --chart-heat-3: #847359;
+  --chart-heat-4: #6f5b3d;
+
+  /* 自定义日志来源的字母徽标底色：6 档中性混色（--bg-hover 往 --text-primary
+     方向按 6% 步进加深），既能按名字稳定取一档做视觉区分，又不引入
+     第三方 hex 色板；文字用 --text-primary，最差对比度仍 ≥ 12:1。
+     取档在 AgentIcon.vue（与 LetterAvatar 同款 FNV-1a hash 逻辑）。 */
+  --ah-avatar-0: color-mix(in srgb, var(--bg-hover) 94%, var(--text-primary));
+  --ah-avatar-1: color-mix(in srgb, var(--bg-hover) 88%, var(--text-primary));
+  --ah-avatar-2: color-mix(in srgb, var(--bg-hover) 82%, var(--text-primary));
+  --ah-avatar-3: color-mix(in srgb, var(--bg-hover) 76%, var(--text-primary));
+  --ah-avatar-4: color-mix(in srgb, var(--bg-hover) 70%, var(--text-primary));
+  --ah-avatar-5: color-mix(in srgb, var(--bg-hover) 64%, var(--text-primary));
+}
+
+:root.dark {
+  /* 深色下的 c1/c2 同色相提亮（沿用票 13 实测值），c3/c4 同规则 */
+  --chart-c1: #83835a;
+  --chart-c2: #7c7ca2;
+  --chart-c3: #359756;
+  --chart-c4: #d770b4;
+
+  /* 热力色阶深色版（向深色卡底混出，顶档 = 深色下的 c1） */
+  --chart-heat-1: #55543b;
+  --chart-heat-2: #646345;
+  --chart-heat-3: #747350;
+  --chart-heat-4: #83835a;
+}
+
+/* ==================== 面板骨架 ==================== */
+
+.ah-view {
+  /* flex 列：编辑态由 .ah-sk → .ah-sk-editor → .ah-sk-editor-body 链式撑满到底边；
+     列表态各 tab 根为普通块级 div，flex 布局下高度仍为内容高，滚动行为不变 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  /* 滚动条槽位常驻：分区切换时内容是否溢出会变化，纵向经典滚动条随之出现/消失，
+     内容区宽度按滚动条宽（本机 WebKitGTK 实测 17px）跳变，顶部分段栏与整列内容
+     一起横向横移，叠加淡入淡出过渡即表现为画面抖动。常驻槽位让宽度恒定为
+     内容宽 − 滚动条宽，任意分区/任一溢出状态都不再横移。
+     （scrollbar-gutter 支持：WebKitGTK ≥ 2.48、Chromium ≥ 94 / WebView2，
+       overlay 滚动条平台无布局占用天然无此问题。） */
+  scrollbar-gutter: stable;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* 顶部 pill 分段导航（变体 B）
+ *
+ * 宽度只由内容决定（原型里就是 inline-flex 收窄形态）：.ah-view 是 flex 列容器，
+ * 本块作为 flex item 会被 align-items: stretch 拉成整行宽 —— 而整行宽等于
+ * 「内容区宽 − 纵向滚动条宽」，于是分区内容一溢出、滚动条一出现/消失，整条
+ * 分段栏（含底色块与描边）就跟着变宽/横移。align-self: flex-start 把它改回
+ * 内容宽，滚动条状态与之完全无关。
+ * max-width + flex-wrap 是窄面板兜底（最小窗口宽 800px + UI 放大档可能放不下
+ * 6 项）：让分段栏换行，而不是压缩标签或把整列撑出横向滚动条。 */
+.ah-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  margin-bottom: 18px;
+}
+
+.ah-tab {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  /* 导航项文字是控件名而非装饰：--text-secondary 对 --bg-sidebar 最差 3.74:1 */
+  color: var(--ah-text-data);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  /* **字重恒定**（2026-09-28）：选中态若改成 font-weight: 600，粗体字更宽 →
+     .ah-tabs 是 inline-flex 收缩容器，整条分段栏会随选中项宽度变化（实测切到
+     「技能」时整条变宽）。选中与未选中同字重，选中只由底色 + 对比色表达。 */
+  font-weight: 600;
+  /* 换行兜底时保持单项完整，宁可整块换行也不把中文标签挤成两行 */
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+
+.ah-tab:hover {
+  background: var(--bg-hover);
+}
+
+/* 选中态只改底色与前景色，**不改字重**（见 .ah-tab 的字重恒定注释） */
+.ah-tab.active {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.ah-tab.active:hover {
+  background: var(--color-primary-hover);
+}
+
+/* 键盘焦点环：控件本身无边框，UA 默认环与设计语言不一致，改走 token。
+   选中项底色就是 primary，描边须换成 primary 前景对比色，否则同色不可见。 */
+.ah-tab:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.ah-tab.active:focus-visible {
+  outline-color: var(--color-primary-contrast);
+}
+
+/* ==================== 页面切换过渡动画 ==================== */
+
+/* 各分区（tab）切换过渡已收归宿主页面过渡体系（src/style.css 的 .page-* /
+   .page-swap）：名字恒为 `page`，时长、缓动、位移幅度走 --motion-page-* token，
+   效果变体由 <html data-page-fx> 选（全端唯一切换点 = 宿主
+   src/utils/pageTransition.ts 的 PAGE_TRANSITION_EFFECT）。
+   本文件不再自带 .ah-page-* —— 同一份页面过渡散落多处必然漂移。 */
+
+/* ==================== 通用元件 ==================== */
+
+.ah-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px;
+}
+
+.ah-section-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-mono {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: var(--font-size-tag);
+}
+
+.ah-btn {
+  height: 32px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-button);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    opacity 0.2s;
+}
+
+.ah-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ah-btn-ghost {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.ah-btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ah-btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--font-size-tag);
+}
+
+/* 警告横幅（目录授权降级提示） */
+.ah-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.ah-banner-ic {
+  color: var(--ah-text-warning);
+  flex-shrink: 0;
+}
+
+/* 信息性横幅（常驻说明，如「API key 存于中心库」）：不占用 warning 底色，
+   否则同页真警告（桥接冲突/授权降级）的效力被稀释 */
+.ah-banner-info {
+  background: var(--color-primary-light);
+}
+
+.ah-banner-info .ah-banner-ic {
+  color: var(--ah-text-data);
+}
+
+.ah-banner-text {
+  min-width: 0;
+  flex: 1;
+}
+
+/* ==================== 概览 · 环境条 ==================== */
+
+.ah-env-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* 自适应列宽：定宽两列在 1600px 面板下会把两列内容拉开近 800px，
+   auto-fill + minmax 让列随宽度增减，320px 窄面板自然退化为单列 */
+.ah-env-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 6px 24px;
+}
+
+.ah-env-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-env-label {
+  color: var(--ah-text-data);
+  flex-shrink: 0;
+}
+
+.ah-env-value {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==================== 概览 · CLI 卡片网格 ==================== */
+
+/* align-items: start：默认行拉伸会让同排的短卡（无警告的 CLI 卡）
+   被双装警告卡撑出大片死白 */
+.ah-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ah-cli-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ah-cli-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-cli-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 徽章：色彩只承载在 .ah-cli-dot 上，文字一律回可读 token。
+   原实现把语义色同时上文字 + 浅底（success 1.98:1 / warning 1.86:1 / 中性 3.60:1），
+   WCAG AA 对 11px 文本要求 4.5:1，半透明浅底上放纯语义色在任何浅色主题都做不到。
+   状态在「圆点颜色 + 文字本身」双通道上，不依赖色觉。 */
+.ah-cli-tag {
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-tag.ok {
+  background: var(--color-success-light);
+  color: var(--text-primary);
+}
+
+.ah-cli-tag.warn {
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+}
+
+.ah-cli-tag.err {
+  background: var(--color-danger-light);
+  color: var(--text-primary);
+}
+
+.ah-cli-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.ah-cli-tag.ok .ah-cli-dot {
+  background: var(--ah-dot-success);
+}
+
+.ah-cli-tag.warn .ah-cli-dot {
+  background: var(--ah-dot-warning);
+}
+
+.ah-cli-tag.err .ah-cli-dot {
+  background: var(--ah-dot-danger);
+}
+
+.ah-cli-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+  color: var(--ah-text-data);
+}
+
+.ah-cli-method {
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-error {
+  margin-top: 8px;
+  color: var(--ah-text-danger);
+  font-size: var(--font-size-tag);
+  word-break: break-all;
+}
+
+.ah-cli-dual {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-path {
+  margin-top: 3px;
+  color: var(--ah-text-data);
+  word-break: break-all;
+}
+
+/* 卸载动作行：顶部分隔线 + 右对齐（破坏性动作与信息区视觉分离） */
+.ah-cli-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* 品牌图标 chip：claude / pi 用品牌色低透明度派生底色，其余走中性 token。
+   品牌底色是**标识**而非语义/数据色，宿主 token 目录里没有对应项，
+   故在此以 rgba 写死并在下方集中一处维护；它们只出现在 34px 图标底上，
+   不承载任何文字（对比度门禁不适用）。 */
+.ah-cli-ic {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: var(--bg-hover);
+}
+
+.ah-cli-ic svg {
+  width: 58%;
+  height: 58%;
+}
+
+.ah-cli-ic.brand-claude {
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.ah-cli-ic.brand-pi {
+  background: rgba(245, 158, 11, 0.16);
+}
+
+/* ==================== 安装与更新（票据 03） ==================== */
+
+.ah-inst {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ah-inst-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* 测速行（概览环境条内）：左计时右动作，窄面板允许换行 */
+.ah-speed-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-speed-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-body);
+}
+
+.ah-speed-tag {
+  margin-left: 4px;
+}
+
+.ah-speed-line-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 测速卡片（安装与更新页）：行式布局 + 推荐/还原动作区 */
+.ah-speed-rows {
+  display: grid;
+  gap: 6px 24px;
+}
+
+.ah-speed-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-speed-actions-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 两击确认态：警示描边 + 可读文字（--color-warning 直接当文字只有 2.07:1） */
+.ah-btn-warn {
+  border-color: var(--color-warning);
+  color: var(--ah-text-warning);
+}
+
+/* ==================== 测速候选源表格 + 自定义源（多源选择，票 03 扩展） ==================== */
+
+/* 测速结果：无框四列表格（源名称/地址/测速/操作，左对齐，不加表头） */
+.ah-speed-table {
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.ah-speed-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+/* 当前生效源行高亮 */
+.ah-speed-row.active {
+  background: var(--bg-hover);
+}
+
+/* 源名称列：名 + 紧凑标记 */
+.ah-speed-name {
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* 地址列：弹性截断，左对齐 */
+.ah-speed-url {
+  color: var(--ah-text-data);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 测速列：与操作列同列对齐 */
+.ah-speed-ms {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 列表内紧凑标记（推荐 / 当前） */
+.ah-speed-mini {
+  height: 18px;
+  padding: 0 6px;
+  font-size: var(--font-size-tag);
+}
+
+/* 自定义源输入 + 添加 */
+.ah-speed-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+/* ==================== 表单控件统一规格（2026-09-28） ====================
+   真源：宿主 `bedcode-desktop/src/components/Input.vue` 与
+   `packages/plugin-sdk-desktop/src/ui/Select.vue`（size=md）的 Tailwind 类组合
+   ——`h-[var(--input-height)] px-4 rounded-input border-[var(--border-input)]
+   bg-[var(--bg-input)] text-[var(--text-primary)] text-sm
+   placeholder:text-[var(--text-tertiary)] shadow-xs dark:shadow-none
+   focus:border-brand focus:shadow-input-focus`。
+
+   本组 token 是那串类的**逐属性镜像**，供两类控件共用：`.ah-input`（原生 input）
+   与 `src/index.ts` 里 @vuepic 的 `.dp__input` 覆盖（日期框）。**两侧必须引用
+   同一批 token**：各写各的数值必然漂移成「同排控件看起来不是一套」。
+
+   两个易错换算（2026-09-28 实测纠正）：
+   - `text-sm` ≡ `--font-size-lg`：宿主 `tailwind.config.js` 把 fontSize 覆写成
+     `calc(14px * var(--ui-scale))`，与 `--font-size-lg` 表达式**完全相同**
+     （不是 Tailwind 默认的 0.875rem）。
+   - `shadow-xs` ≡ `0 1px 2px 0 rgb(0 0 0 / 0.04)`：值在 `tailwind.config.js`
+     的 `boxShadow.xs`，没有对应的 CSS 变量，故在此定为插件派生 token。 */
+:root {
+  --ah-ctl-height: var(--input-height);
+  --ah-ctl-padding-x: 16px; /* px-4 */
+  --ah-ctl-radius: var(--radius-input); /* rounded-input */
+  /* 边框拆成「长写 + 宽度」两枚：`border-color` 是长写属性，把 `1px solid …`
+     整条塞给它会让整条声明失效并回退到 vendor 默认色（实测日期框边框变成
+     --border 的浅色，与同排控件不是一个颜色）。 shorthands 不能当长写用。 */
+  --ah-ctl-border-color: var(--border-input);
+  --ah-ctl-bg: var(--bg-input);
+  --ah-ctl-fg: var(--text-primary);
+  --ah-ctl-font-size: var(--font-size-lg); /* = text-sm */
+  --ah-ctl-placeholder: var(--text-tertiary);
+  --ah-ctl-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.04); /* = shadow-xs */
+  --ah-ctl-focus-border: var(--color-primary); /* focus:border-brand */
+  --ah-ctl-focus-shadow: var(--shadow-input-focus); /* focus:shadow-input-focus */
+}
+
+/* 插件内唯一输入框规格（票 12 定死：走宿主表单 token，不再自定一套）
+   历史上有两处 .ah-input 定义（32px/transparent/border 与
+   30px/bg-page/border-strong 互相覆盖），另有 .ah-sk-url 第三套
+   （30px/--radius-button/bg-page），票 12 已全部合并为 .ah-input。 */
+.ah-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  /* height 必须与 min-height 成对（2026-09-28 实机坑）：`.ah-input` 要在
+     横向 flex 行里占满宽度，故带 `flex: 1`；而**列向** flex 容器里 flex 的
+     flex-basis 作用于高度，容器高度又是 auto —— 高度就被压成内容高
+     （实测查询条件条的关键词框 20.8px，同排 Select / 日期框都是 36px）。
+     min-height 把下限钉回 --input-height，flex: 1 在列向容器里最多只多长高。 */
+  height: var(--ah-ctl-height);
+  min-height: var(--ah-ctl-height);
+  padding: 0 var(--ah-ctl-padding-x);
+  border: 1px solid var(--ah-ctl-border-color);
+  border-radius: var(--ah-ctl-radius);
+  background: var(--ah-ctl-bg);
+  color: var(--ah-ctl-fg);
+  font-family: inherit;
+  font-size: var(--ah-ctl-font-size);
+  box-shadow: var(--ah-ctl-shadow);
+  transition:
+    border-color 0.2s,
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+
+/* 深色主题去掉常态阴影（宿主 shadow-xs dark:shadow-none） */
+:root.dark .ah-input {
+  box-shadow: none;
+}
+
+.ah-input:focus {
+  outline: none;
+  border-color: var(--ah-ctl-focus-border);
+  box-shadow: var(--ah-ctl-focus-shadow);
+}
+
+.ah-input::placeholder {
+  color: var(--ah-ctl-placeholder);
+}
+
+/* 临时镜像开关行 */
+.ah-mirror-tmp {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ah-mirror-tmp input {
+  accent-color: var(--color-primary);
+}
+
+/* CLI 安装/更新行：图标名 | 版本 → 最新 | 动作 */
+.ah-inst-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ah-inst-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-inst-row + .ah-inst-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-inst-versions {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+}
+
+.ah-inst-outdated {
+  color: var(--ah-text-warning);
+  font-weight: 700;
+}
+
+.ah-inst-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ah-inst-hint {
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+/* node 缺失降级行：白名单解析命令 + 复制按钮（占满第二行） */
+.ah-inst-degraded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-button);
+  background: var(--bg-hover);
+}
+
+.ah-inst-degraded-cmd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* 主按钮（安装/更新主动作） */
+.ah-btn-primary {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.ah-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+/* 执行输出控制台：命令行 + 尾部回显，内部滚动贴底 */
+.ah-console-cmd {
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.ah-console {
+  height: 180px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ==================== Skills 管理（票据 04） ==================== */
+
+.ah-sk {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 编辑态撑满：仅编辑 SKILL.md 时压缩到视口剩余高度（列表态不拉伸，内容流高度回归原行为） */
+.ah-sk--editing {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 状态 tag 行：规范库计数 + 各目标同步汇总 */
+.ah-sk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* GitHub 安装表单 */
+.ah-sk-github-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-sk-github-hint {
+  margin-top: 8px;
+}
+
+/* 覆盖确认条（GitHub / 导入同名 skill） */
+.ah-sk-confirm {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+/* 导入 / GitHub 安装结果行（guest 状态回流） */
+.ah-sk-result {
+  padding: 8px 12px;
+  border-radius: var(--radius-button);
+  background: var(--color-success-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.ah-sk-result.err {
+  background: var(--color-danger-light);
+}
+
+.ah-sk-raw-error {
+  margin-top: 4px;
+  color: var(--ah-text-danger);
+  font-size: var(--font-size-tag);
+  word-break: break-all;
+}
+
+/* 空态 */
+.ah-sk-empty {
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.ah-sk-empty-hint {
+  margin-top: 6px;
+}
+
+/* 技能行（列语义：技能+描述 | 分发状态 | 动作，窄面板自动换行） */
+.ah-sk-table-card {
+  padding: 4px 16px;
+}
+
+.ah-sk-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-sk-row + .ah-sk-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-sk-row-main {
+  flex: 1 1 260px;
+  /* 宽面板下给「名称+描述」封顶，否则状态与动作被 flex:1 推到离内容
+     近千像素的位置，行内断裂 */
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ah-sk-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-sk-row-name-text {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-sk-row-dir {
+  color: var(--ah-text-data);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-sk-row-desc {
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ah-sk-row-dist {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  /* 状态组与动作组一起贴右，不再与左侧内容断开 */
+  margin-left: auto;
+}
+
+.ah-sk-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ==================== Skill 编辑器（票据 04） ==================== */
+
+.ah-sk-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* 编辑态：占满面板剩余高度（列表态无此元素，不受影响） */
+  flex: 1;
+  min-height: 0;
+}
+
+/* 编辑区外层：把剩余高度交给 MarkdownEditor（其根 .mde 为 height:100% 的 flex 列）。
+   高度完全走 flex 链（.ah-view flex:1 → .ah-sk--editing → .ah-sk-editor → 本层），
+   不再有 calc(100vh - 260px) 兜底：后者与宿主 chrome 高度（TitleBar + 状态条）
+   静默耦合，宿主改一次标题栏高度三处编辑区就会塌陷或溢出。 */
+.ah-sk-editor-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ah-sk-loading {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--ah-text-data);
+}
+
+.ah-sk-meta {
+  display: flex;
+  gap: 6px 24px;
+  flex-wrap: wrap;
+}
+
+.ah-sk-textarea {
+  width: 100%;
+  height: 320px;
+  padding: 10px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
+.ah-sk-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.ah-sk-preview-title {
+  margin-top: 4px;
+}
+
+/* diff 呈现：增删行用 success/danger 语义底色，上下文行中性 */
+.ah-sk-diff {
+  max-height: 260px;
+  padding: 8px 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  font-size: var(--font-size-tag);
+  line-height: 1.5;
+}
+
+.ah-sk-diff-line {
+  padding: 0 10px;
+  color: var(--ah-text-data);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ah-sk-diff-line.add {
+  background: var(--color-success-light);
+  color: var(--ah-text-success);
+}
+
+.ah-sk-diff-line.del {
+  background: var(--color-danger-light);
+  color: var(--ah-text-danger);
+}
+
+.ah-sk-diff-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ==================== 供应商管理（票据 05） ==================== */
+
+.ah-pv {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 导入结果卡：掩码 key 行 */
+.ah-pv-import {
+  padding: 10px 16px;
+}
+
+.ah-pv-import-line {
+  margin-top: 4px;
+}
+
+.ah-pv-import-names {
+  font-weight: 600;
+}
+
+/* 表单字段行：标签在上、控件在下（弹窗内控件占满字段宽；旧形态是 96px 定宽
+   标签列 + 控件，长标签「模型列表（每行一个）」「API Key（中心凭据）」会溢出
+   定宽列并在窄弹窗里互相挤压） */
+.ah-pv-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ah-pv-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-label);
+}
+
+/* 必填标记：星号对读屏无意义，另给可读的「必填」名（aria-label / title） */
+.ah-pv-req {
+  color: var(--ah-text-danger);
+  font-weight: 700;
+}
+
+/* 控件在纵向字段里占满宽度。必须解除 .ah-input 的 flex: 1 —— 纵向 flex 中
+   flex-basis 作用于高度，会把 --input-height(36px) 的输入框压成 0 高 */
+.ah-pv-input {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* chip 选择组（模板快选 / API 方言）：作为表单选项，高度抬到 28px 且给
+   常态描边，读得出「这是个可点选项」而不是静态标签 */
+.ah-pv-targets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ah-pv-target {
+  height: 28px;
+  padding: 0 10px;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  font-family: inherit;
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.ah-pv-target:hover {
+  background: var(--bg-hover);
+}
+
+.ah-pv-target.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-weight: 600;
+}
+
+.ah-pv-target:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
+}
+
+.ah-pv-target.active:focus-visible {
+  outline-color: var(--color-primary-contrast);
+}
+
+/* key 四选一（radio 行，v2 起含中心库 stored） */
+.ah-pv-keymodes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+}
+
+.ah-pv-keymode {
+  margin-bottom: 0;
+}
+
+/* 单选项行（key 模式三选一）：与镜像开关同布局的语义中立版 */
+.ah-pv-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ah-pv-radio input {
+  accent-color: var(--color-primary);
+}
+
+/* 模型列表 textarea（编辑器内，矮于 SKILL 编辑器） */
+.ah-pv-models {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 110px;
+}
+
+/* 编辑器 key 行：输入框 + 清空切换（v2 中心凭据）。行内控件恢复弹性，
+   左侧输入框吃掉剩余宽度，按钮固定在行尾 */
+.ah-pv-keyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.ah-pv-keyrow .ah-pv-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+/* ==================== 「应用到」二级页（ProviderApply） ====================
+   本页整个替换供应商列表视图，是「列表 → 二级页」而非弹窗，故页头自带返回入口与
+   预设速览；表单体与动作条分行，字段提示紧贴各自控件。 */
+
+/* 页卡本身：纵向排布，头 / 提示 / 表单体 / 动作条四段。
+   --ah-pv-apply-measure 是本页的内容列宽（可读行长）：表单体与动作条共用，
+   分隔线不会比表单宽出一截。 */
+.ah-pv-apply {
+  display: flex;
+  flex-direction: column;
+  --ah-pv-apply-measure: 760px;
+}
+
+/* 页头：返回入口 + 标题 + 预设速览；下边线把「页头」与「表单」物理分开 */
+.ah-pv-apply-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 返回入口：文字按钮（不是角上的 ✕——本页是二级页，出口叫“返回”不叫“关闭”） */
+.ah-pv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  transition: color 0.2s;
+}
+
+.ah-pv-back:hover {
+  color: var(--text-primary);
+}
+
+.ah-pv-back:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.ah-pv-back-ic {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 预设速览：列表行里的决策依据（方言 / Base URL / 模型数 / key 掩码）在二级页补回 */
+.ah-pv-apply-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.ah-pv-apply-meta-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+/* 表单体：字段之间给足呼吸，控件不撑满整卡（可读行长 + 输入框不过宽） */
+.ah-pv-apply-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ah-pv-apply-body,
+.ah-pv-apply-actions {
+  max-width: var(--ah-pv-apply-measure);
+}
+
+/* 应用面板动作行：与表单体分离的收口行（上边线 + 右侧主按钮 + 左侧写入回显） */
+.ah-pv-apply-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* 动作行左侧「将要写入什么」：可换行也不把主按钮挤出视野 */
+.ah-pv-apply-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 应用面板逐目标结局：多目标应用时每行一个目标徽章 + 结果文案 */
+.ah-pv-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ah-pv-result-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-pv-result-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 模型查询候选 chip 区：网关可能返回上百个模型，限高内滚（不是横向滚动条）
+   ——横向滚动会让“这一屏有哪些模型”变成看不见的事实 */
+.ah-pv-modelchips {
+  display: flex;
+  max-height: 132px;
+  overflow-y: auto;
+  align-content: flex-start;
+  padding: 2px;
+}
+
+/* ==================== 弹窗（Teleport 到 body，遮罩 + 居中面板） ==================== */
+
+/* 全屏遮罩：宿主 Modal 同款背板（黑 50% + 轻微模糊），z-index 高于宿主内容 */
+.ah-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+/* 面板：复用 .ah-card 材质；内部为「头 / 体 / 脚」三段——
+   体部独立滚动，头（标题 + 关闭）与脚（保存 / 取消）常驻，
+   表单再长滚动时也不会把标题和主操作滚出视野。
+   padding: 0 覆盖 .ah-card 的 14/16 内边距，改由三段各自负责。 */
+.ah-modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.ah-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 14px 14px 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ah-modal-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 关闭：图标按钮（28px 方形、无常态描边），比通用 .ah-btn 轻一级，
+   避免与页头主操作抢注意力 */
+.ah-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+
+.ah-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ah-modal-close:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.ah-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  /* min-height: 0：作为 flex 子项允许真正收缩，否则超高时会把脚部挤出 max-height */
+  min-height: 0;
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+
+.ah-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+/* 进出场：整体淡入 + 面板轻微上浮/缩放（无动画偏好时被全局 reduce 规则降级） */
+.ah-modal-enter-active,
+.ah-modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.ah-modal-enter-from,
+.ah-modal-leave-to {
+  opacity: 0;
+}
+
+.ah-modal-enter-active .ah-modal-panel,
+.ah-modal-leave-active .ah-modal-panel {
+  transition: transform 0.2s ease;
+}
+
+.ah-modal-enter-from .ah-modal-panel,
+.ah-modal-leave-to .ah-modal-panel {
+  transform: translateY(8px) scale(0.97);
+}
+
+/* claude 只读视图行距 */
+.ah-pv-claude-rows {
+  margin-top: 10px;
+}
+
+/* ==================== 使用统计看板（票据 06 + 改版） ====================
+ *
+ * 结构：页头（水位 / 时间窗 / 扫描）→ KPI 六卡 → 指标选择 → 趋势主图
+ * → 节奏热力图 + CLI 占比环 → 项目 / 模型排行 → 数据清空。
+ * 会话级明细**不在本分区**（只在日志分区），故无列表 / 分页 / 表格样式。
+ */
+
+/* ---------- 页头 ---------- */
+.ah-st-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* 把「立即扫描」推到行尾；无内容时仍占位，避免窄面板下按钮换行 */
+.ah-st-head-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.ah-st-ranges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* ---------- KPI 六卡 ---------- */
+/* grid 而非 flex：六张卡等宽等高，卡内副行长短不影响同行基线 */
+.ah-st-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ah-st-kpi {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.ah-st-kpi-val {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+  /* 长数字换行而不是撑破卡片（覆盖度 / 成本等位数不定） */
+  overflow-wrap: anywhere;
+}
+
+.ah-st-kpi-label {
+  margin-top: 2px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+/* 副行：均值 / 明细拆分，可换行（窄面板下不截断成「…」以外的信息） */
+.ah-st-kpi-sub {
+  margin-top: 1px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  overflow-wrap: anywhere;
+}
+
+/* 第三行（数据区间）刻意再弱一档：它是参考信息不是读数 */
+.ah-st-kpi-sub-dim {
+  color: var(--text-tertiary);
+}
+
+/* ---------- 指标选择（趋势 / 排行 / 占比共用一个选择） ---------- */
+.ah-st-metrics {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* ---------- 窗内空态：给出「看全部」出口 ---------- */
+.ah-st-nowindow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.ah-card-sub {
+  margin-top: -2px;
+  margin-bottom: 6px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+/* ---------- 图例色块（环 / 排行 / 堆叠共用） ---------- */
+.ah-st-k {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+  flex-shrink: 0;
+}
+
+/* ---------- 趋势图 ---------- */
+.ah-trend {
+  margin-top: 6px;
+}
+
+.ah-trend-modes {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* 图区：左侧固定宽刻度列 + 右侧图形（图形内部再叠 HTML 交互层） */
+.ah-trend-plot {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.ah-trend-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* 与 SVG 顶部内边距对齐：首刻度贴顶线、末刻度贴基线 */
+  padding: 3px 0 2px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.ah-trend-ytick {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+.ah-trend-graphic {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* preserveAspectRatio=none + 固定高：y 方向 1:1 不变形，x 方向随容器拉伸；
+   描边一律 non-scaling-stroke，横向拉伸不会把线宽拉粗 */
+.ah-trend-svg {
+  display: block;
+  width: 100%;
+  height: 180px;
+  overflow: visible;
+}
+
+.ah-trend-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.ah-trend-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 堆叠带描 1px 卡片底色：段与段之间露出底色，使「哪段是哪段」不只靠色相 */
+.ah-trend-band {
+  stroke: var(--bg-card);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 交互层：每列一个透明可聚焦按钮（hover 与 focus 走同一条取值路径） */
+.ah-trend-hits {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.ah-trend-hit {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ah-trend-hit:hover,
+.ah-trend-hit.on {
+  background: var(--bg-hover);
+}
+
+.ah-trend-tip {
+  position: absolute;
+  top: 4px;
+  /* 贴列中心；靠边界时由 max-width + translate 收拢，不越出图区 */
+  transform: translateX(-50%);
+  max-width: 220px;
+  padding: 6px 8px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+  z-index: 20;
+}
+
+.ah-trend-tip-day {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-tip-main {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 1px 0 3px;
+  color: var(--text-primary);
+}
+
+.ah-trend-tip-unit {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-tip-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-trend-xaxis {
+  position: relative;
+  height: 16px;
+  /* 标签用绝对定位按 SVG 的同一套 x() 对齐（flex 均分会与数据点错位） */
+  margin: 2px 0 0 46px;
+}
+
+.ah-trend-xtick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+.ah-trend-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  margin-top: 6px;
+}
+
+.ah-trend-table-wrap {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* ---------- 节奏热力图（7×24） ---------- */
+.ah-heat {
+  margin-top: 4px;
+}
+
+/* 容器是「行堆叠」，不是「格子容器」：它的直接子元素是 8 个**整行**（表头 +
+   周一→周日），而不是 25 个格子。列模板只能落在 .ah-heat-row 上。
+   回归成因（实机，Chromium 150 实测）：容器也曾声明同一份列模板，CSS Grid
+   自动布局把 8 个整行按行填充 —— 25 轨装得下 8 项，于是全部塞进第 1 行横排，
+   每行被压进 1fr 窄轨（首行 30px / 其余 20px），168 个格子实测塌成 0×0 px，
+   整图只剩 16px 高一条线。故这里用纵向 flex 堆叠，横向交给默认 stretch。 */
+.ah-heat-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 列模板在每一行重复声明：每行独立成 grid 才能跨行按列对齐 */
+.ah-heat-row {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.ah-heat-corner {
+  display: block;
+}
+
+.ah-heat-hour {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  text-align: center;
+}
+
+.ah-heat-dow {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  white-space: nowrap;
+}
+
+/* 格子：aspect-ratio 保方格，宽度自适应（窄面板下不压成扁条） */
+.ah-heat-cell {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  min-width: 0;
+}
+
+/* lv0 = 空格（用轨道底）；lv1..lv4 = 色阶，亮度单调递减 */
+.ah-heat-cell.lv1 {
+  background: var(--chart-heat-1);
+}
+
+.ah-heat-cell.lv2 {
+  background: var(--chart-heat-2);
+}
+
+.ah-heat-cell.lv3 {
+  background: var(--chart-heat-3);
+}
+
+.ah-heat-cell.lv4 {
+  background: var(--chart-heat-4);
+}
+
+.ah-heat-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.ah-heat-peak {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.ah-heat-peak-when {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.ah-heat-legend-cap {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-heat-legend-cap:first-child {
+  margin-right: 4px;
+}
+
+.ah-heat-legend-cap:last-child {
+  margin-left: 4px;
+}
+
+.ah-heat-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+}
+
+.ah-heat-swatch.lv1 {
+  background: var(--chart-heat-1);
+}
+
+.ah-heat-swatch.lv2 {
+  background: var(--chart-heat-2);
+}
+
+.ah-heat-swatch.lv3 {
+  background: var(--chart-heat-3);
+}
+
+.ah-heat-swatch.lv4 {
+  background: var(--chart-heat-4);
+}
+
+/* ---------- CLI 占比环 ---------- */
+/* 根容器：窄面板下环与图例改为上下堆叠（ah-donut-body 负责换行） */
+.ah-donut {
+  margin-top: 4px;
+}
+
+.ah-donut-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.ah-donut-graphic {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  flex-shrink: 0;
+}
+
+.ah-donut-svg {
+  display: block;
+  width: 160px;
+  height: 160px;
+}
+
+/* 轨道底：环的空位底色（纯装饰，不承载信息） */
+.ah-donut-track {
+  fill: none;
+  stroke: var(--bg-hover);
+}
+
+/* 面积填充：纯 token 半透明（不用 linearGradient——渐变需要全局唯一的
+   SVG id，在插件注入的 HTML 里会与宿主/其他插件的 id 撞名） */
+.ah-trend-area {
+  fill: var(--chart-c1);
+  fill-opacity: 0.2;
+}
+
+.ah-donut-arc {
+  fill: none;
+  stroke-linecap: butt;
+  transition: stroke-width 0.2s;
+}
+
+.ah-donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.ah-donut-center-val {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-donut-center-label {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-donut-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: var(--font-size-tag);
+}
+
+.ah-donut-legend-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-donut-legend-pct {
+  color: var(--ah-text-data);
+  flex-shrink: 0;
+}
+
+/* 零值扇位的图例色块：空心描边，与「有值」实心块区分 */
+.ah-donut-legend-k0 {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+/* ---------- 排行（项目 / 模型） ---------- */
+.ah-bars {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ah-bars-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 62px;
+  align-items: center;
+  gap: 8px;
+}
+
+.ah-bars-head {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ah-bars-name {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-bars-sub {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  flex-shrink: 0;
+}
+
+.ah-bars-track {
+  height: 8px;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.ah-bars-fill {
+  height: 100%;
+  border-radius: var(--radius-tag);
+  /* 填充用 transform: scaleX 由 0 起（见组件内 width 绑定）：内容扩张
+     动画必须走 grid-template-rows/max-height，装饰条走 scaleX 不会拉变形 */
+  background: var(--chart-c1);
+}
+
+.ah-bars-val {
+  text-align: right;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-bars-rest {
+  margin-top: 8px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+/* ---------- 数据表（趋势图兜底呈现，仍沿用票 06 的表格样式） ---------- */
+.ah-st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-body);
+  margin-top: 8px;
+}
+
+.ah-st-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+}
+
+.ah-st-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.ah-st-table tr:last-child td {
+  border-bottom: none;
+}
+
+.ah-st-table .num {
+  text-align: right;
+}
+
+/* ---------- 空态 ----------
+   整句是「没有数据」的唯一线索，不承载任何数值/时间/路径（豁免见票 09）。 */
+.ah-st-empty {
+  padding: 14px 4px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-body);
+}
+
+/* ---------- 适配器降级行（票 07）：每行 = 数据源名徽章 + 原因文案 ----------
+   横幅底已是 primary-light（信息性，非警告），故行间距靠 margin 区分，
+   不再给每行叠底色——否则与徽章的 primary-light 底色撞成一块 */
+.ah-st-degraded-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+/* 降级原因文案：数据级（承载「为什么没数据」这一事实，不是装饰） */
+.ah-st-degraded-text {
+  color: var(--ah-text-data);
+  min-width: 0;
+}
+
+/* ---------- 数据清空区（票 07）：常驻一行，两击确认时在同一行展开确认条
+   （不弹窗——动作不可逆但影响面仅限本插件的统计库，就地确认比弹窗更轻） ---------- */
+.ah-st-clear {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.ah-st-clear-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.ah-st-clear-text {
+  color: var(--ah-text-data);
+  min-width: 0;
+}
+
+.ah-st-clear-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ah-st-clear-note {
+  color: var(--ah-text-success);
+  font-size: var(--font-size-tag);
+}
+/* ==================== 会话日志（改版：来源 / 查询 / 分页 / 二级详情） ==================== */
+
+/*
+ * 高度链接通（一级列表与二级详情共用一条链）
+ *
+ * `.ah-view` 是 `display:flex; flex-direction:column; height:100%` 的 flex 容器，
+ * 但分区切换的过渡容器 `.page-swap`（宿主 `src/style.css` 的全局类，**普通块盒**）
+ * 夹在中间——`.ah-lg` 的父级因此不是 flex 容器，`flex:1` 空转，
+ * 二级详情的 `.ah-lg-events { flex: 1 1 0 }` 便失去可分配的高度，
+ * 被压成一条（实机：任务记录只剩约 28px 一行高）。
+ *
+ * 两步补链，**不动 `.page-swap` 本身的 display**（那是宿主全局类，6 个分区
+ * 共用；把它改成 flex 容器会让各分区根节点变成 flex item 而被压缩、影响面不可控）：
+ * ① `.page-swap` 取 `.ah-view` 的剩余高度（`min-height: 0` 必须有：否则 flex item
+ *    的自动最小尺寸是内容高，`flex:1` 压不下去，二级页照样塌）；
+ * ② `.ah-lg` 用 `height: 100%` 而不是 `flex: 1`——父级是块盒时 `flex` 无意义，
+ *    `height: 100%` 才对得上那个已确定高度的父级。
+ *
+ * 一级列表**滚动行为不变**：`.ah-lg` 是内容高的块，内容超出时仍由
+ * `.ah-view`（`overflow-y: auto`）滚（子级 overflow: visible，滚动溢出逐级上传），
+ * 常驻的 `scrollbar-gutter: stable` 槽位也照旧把宽度钉死，不引入横移抖动。
+ */
+.ah-view > .page-swap {
+  flex: 1;
+  min-height: 0;
+}
+
+.ah-lg {
+  /* 占满面板剩余高度（链：.ah-view(flex col) → .page-swap(flex:1) → .ah-lg(height:100%)），
+     一级页由 .ah-view 滚动，二级页事件/原始视图内部各自滚动 */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+
+/* ---------- 日志来源区（默认折叠） ---------- */
+.ah-lg-sources-toggle {
+  align-self: flex-start;
+  gap: 6px;
+}
+
+.ah-lg-sources-chev {
+  display: inline-block;
+  transition: transform 0.2s;
+  color: var(--ah-text-data);
+}
+
+.ah-lg-sources-chev.open {
+  transform: rotate(90deg);
+}
+
+.ah-lg-sources-count {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-sources-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+/* 单个来源：头部行 + 目录清单（每来源多目录） */
+.ah-lg-source {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 4px 2px;
+}
+
+.ah-lg-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 头部行右侧弹性空白：把操作按钮推到行尾 */
+.ah-lg-source-flex {
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-lg-source-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: none;
+}
+
+.ah-lg-source-type {
+  flex: none;
+  padding: 0 8px;
+  border-radius: var(--radius-tag);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-source-type.builtin {
+  background: var(--color-primary-light);
+  color: var(--text-primary);
+}
+
+.ah-lg-source-type.custom {
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+}
+
+/* 来源形态标记（票 07）：区分「目录」与「SQLite 库」——后者是只读单文件，
+   不接受自定义增删。无底色（与旁边的 builtin/custom tag 语义不同），
+   仅作辅助说明，故用数据级文字色 */
+.ah-lg-source-kind {
+  flex: none;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-source-scan {
+  flex: none;
+  color: var(--ah-text-data);
+}
+
+/* 目录清单：每行一个目录；缩进到来源名之下 */
+.ah-lg-source-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px 0 2px 28px;
+}
+
+.ah-lg-source-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 目录行首的小圆点（层级标记，无语义） */
+.ah-lg-source-path-dot {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+
+.ah-lg-source-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+}
+
+/* 不可移除的内置默认路径标记 */
+.ah-lg-source-lock {
+  flex: none;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-source-path-remove {
+  flex: none;
+  min-width: 24px;
+  padding: 0 6px;
+}
+
+.ah-lg-source-remove {
+  flex: none;
+  min-width: 24px;
+  padding: 0 6px;
+}
+
+/* 给来源追加目录的按钮（与「添加日志来源」区分：只选目录、名已定） */
+.ah-lg-source-adddir {
+  flex: none;
+}
+
+.ah-lg-sources-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.ah-lg-sources-add,
+.ah-lg-source-path-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* 添加来源：系统选择器（fs:pick）按钮 + 只读路径回显（省略号截断） */
+.ah-lg-sources-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.ah-lg-sources-pickpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+/* 添加来源：来源名下拉（已有来源）+ 名称手输（新建），一行两控件 */
+.ah-lg-sources-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.ah-lg-sources-name .ah-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ah-lg-sources-nameselect {
+  flex: 0 0 168px;
+  min-width: 0;
+}
+
+/* 未选中时的占位提示（复用 addPath 文案）降为数据色 */
+.ah-lg-sources-pickpath.empty {
+  color: var(--ah-text-data);
+}
+
+/* 目录重复（已登记在任一来源下）→ 路径转危险色，与就地错误提示（aria-describedby 关联）成对出现 */
+.ah-lg-sources-pickpath.dup {
+  color: var(--ah-text-danger);
+}
+
+/* 就地重复错误占满一行（.ah-lg-sources-add 是 flex-wrap 容器，不占满会挤在控件旁） */
+.ah-lg-sources-add > .ah-cli-error {
+  flex: 1 0 100%;
+  margin-top: 0;
+}
+
+/* ---------- 查询条件条（Agent / 关键词 / 时间范围） ---------- */
+.ah-lg-filter {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+}
+
+.ah-lg-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ah-lg-filter-q {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* 日期选择器字段（@vuepic/vue-datepicker）：与关键词输入同宽，宿主控件规格
+   由 index.ts 注入的 dp 主题覆盖接管 */
+.ah-lg-filter-date {
+  min-width: 200px;
+}
+
+.ah-lg-filter-label {
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-lg-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 同排控件高度对齐：查询条的输入框 / Select / 日期框都是 --input-height(36px)，
+   旁边的动作按钮也拉到同一高度，避免一行里出现 36/32/26 三种高度 */
+.ah-lg-filter-actions .ah-btn {
+  height: var(--input-height);
+}
+
+/* 同理：任何与输入框同行的按钮组跟随输入框高度（:has() 让规则只在
+   确实含输入框的行生效，不影响纯按钮行） */
+:is(.ah-speed-custom, .ah-sk-github-row, .ah-lg-sources-add, .ah-pv-keyrow):has(.ah-input) .ah-btn {
+  height: var(--input-height);
+}
+
+/* ---------- 分页表格（Agent | 会话 | 项目 | 开始时间 | 时长 | Tokens） ---------- */
+.ah-lg-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.ah-lg-table-head,
+.ah-lg-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1.6fr) minmax(0, 1fr) 130px 70px 90px 24px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 16px;
+}
+
+.ah-lg-table-head {
+  flex: none;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+  border-bottom: 1px solid var(--border);
+}
+
+.ah-lg-table-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ah-lg-row {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.ah-lg-row:hover {
+  background: var(--bg-hover);
+}
+
+.ah-lg-row + .ah-lg-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-lg-cell-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ah-lg-cell-agent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+}
+
+/* 正在使用的项目会话（扫描时按配置/最新会话标记）：左缘主色描边 + 当前徽标 */
+.ah-lg-row-active {
+  box-shadow: inset 2px 0 0 var(--color-primary);
+}
+
+.ah-lg-badge-current {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--color-primary-light);
+  /* --color-primary 直接当文字在 sunset/light 的 primary-light 底上只有 3.42:1 */
+  color: var(--ah-text-data);
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  font-weight: 600;
+}
+
+.ah-lg-cell-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-cell-sub {
+  color: var(--ah-text-data);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-col-time,
+.ah-lg-col-dur,
+.ah-lg-col-tokens {
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+/* 「›」进入箭头：纯装饰字形，旁列已有行标题与 title 说明，豁免装饰级 */
+.ah-lg-col-go {
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.ah-lg-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-lg-pager-info {
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+}
+
+/* ---------- 二级详情（页签：聊天记录 / 原始 JSONL） ---------- */
+.ah-lg-detail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 详情头卡固定不参与高度伸缩，剩余高度全交给事件/原始视图 */
+.ah-lg-detail-head {
+  flex: none;
+}
+
+.ah-lg-detail-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-lg-detail-back {
+  flex: none;
+}
+
+.ah-lg-detail-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-lg-detail-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+  padding: 2px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+}
+
+.ah-lg-tab {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.ah-lg-tab:hover {
+  background: var(--bg-hover);
+}
+
+.ah-lg-tab.active {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-weight: 600;
+}
+
+/* ---------- Agent 官方图标（claude / pi + 字母徽标回退） ---------- */
+.ah-agent-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--ah-text-data);
+}
+
+.ah-agent-ic svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 自定义来源字母徽标：中性派生（不引入第三方 hex 色板）。
+   同一适配器名恒得同一底色（靠 --ah-avatar-N 的 6 档轮转），
+   前景取 --ah-text-primary 在该底色上始终 ≥ 4.5:1。 */
+.ah-agent-ic-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.ah-lg-head-src {
+  margin-top: 6px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-head-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--ah-text-data);
+}
+
+.ah-lg-warn {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+/* 事件卡：与 .ah-sk-editor-body 同款，剩余高度全由 flex 链给出 */
+.ah-lg-events {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+}
+
+/* 聊天式只读会话记录（类 zcode/trae 桌面 agent 对话，无输入框） */
+.ah-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.ah-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 4px 8px;
+}
+
+/* 单条消息：头行（角色/模型/时间）+ 内容气泡 */
+.ah-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 88%;
+  min-width: 0;
+}
+
+.ah-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+.ah-msg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.ah-msg-role {
+  font-weight: 600;
+}
+
+.ah-msg-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ah-text-data);
+}
+
+.ah-msg-time {
+  color: var(--ah-text-data);
+}
+
+.ah-msg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ah-msg-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+}
+
+/* 模型输出折叠态：clamp 截断到 3 行 + 省略号（webkit 系 webview 全支持），
+   展开态移除该类即全文。切换为瞬时（无高度动画）：日志查看不追求过渡，
+   避免为任意长文本量高/动 grid-rows 的额外复杂度；max 3 行预览足够表意。
+   折叠内容是剥标记的**纯文本**（见 utils/markdown.ts）：line-clamp 只对纯文本
+   行数可靠，块级子元素（p/pre）上会数不准。 */
+.ah-msg-text.is-collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 展开/收起控件：幽灵小按钮，行内放消息头与正文之间 */
+.ah-msg-expand {
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: var(--font-size-tag);
+  color: var(--color-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.ah-msg-expand:hover {
+  background: var(--bg-hover);
+}
+
+.ah-msg-meta {
+  display: flex;
+  gap: 10px;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-data);
+}
+
+/* 用户：右侧气泡（primary 强调色 + 对比文字，明暗主题均成立）
+   气泡底走 --ah-bubble：纯 --color-primary 上放 --color-primary-contrast 在
+   sunset/light 只有 3.87:1，朝 --text-primary 拉深后回到 4.9:1 */
+.ah-msg.role-user {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 78%;
+}
+
+.ah-msg.role-user .ah-msg-body {
+  background: var(--ah-bubble);
+  color: var(--color-primary-contrast);
+  border-radius: var(--radius-card);
+  border-bottom-right-radius: 4px;
+  padding: 8px 12px;
+}
+
+.ah-msg.role-user .ah-msg-text {
+  color: inherit;
+}
+
+.ah-msg.role-user .ah-msg-meta {
+  color: var(--ah-on-primary);
+}
+
+/* 助手：左侧气泡（弱化底 + 边框） */
+.ah-msg.role-assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.ah-msg.role-assistant .ah-msg-body {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  border-bottom-left-radius: 4px;
+  padding: 10px 14px;
+}
+
+/* 工具：全宽紧凑卡片（左侧竖条区分），正文等宽小字 */
+.ah-msg.role-tool {
+  align-self: stretch;
+  max-width: none;
+}
+
+.ah-msg.role-tool .ah-msg-head {
+  color: var(--ah-text-data);
+}
+
+.ah-msg.role-tool .ah-msg-body {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  padding: 6px 10px;
+}
+
+.ah-msg.role-tool .ah-msg-text {
+  font-size: var(--font-size-tag);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  line-height: 1.6;
+  /* 工具正文是命令/路径原文（--bg-sidebar 上 --text-secondary 只有 4.19:1） */
+  color: var(--ah-text-data);
+}
+
+/* 工具卡头（类型 · 名称）：等宽、可截断，失败时转语义危险色 */
+.ah-msg-tool-head {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ah-msg.role-tool .ah-msg-body.is-error {
+  border-left-color: var(--ah-dot-danger);
+}
+
+.ah-msg.role-tool .ah-msg-body.is-error .ah-msg-tool-head {
+  color: var(--ah-text-danger);
+}
+
+/* guest 上限截断提示：给「完整原文」一个看得见的入口（原始 JSONL 页签） */
+.ah-msg-trunc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--font-size-tag);
+  color: var(--ah-text-warning);
+}
+
+.ah-msg-trunc-jump {
+  padding: 0;
+  font: inherit;
+  color: var(--color-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.ah-msg-trunc-jump:hover {
+  color: var(--color-primary-hover, var(--color-primary));
+}
+
+/* ==================== Markdown 正文（仅助手消息）
+ *
+ * 作用域挂在 .ah-md 下、样式走元素选择器：一是 v-html 内容没有模板引用，
+ * 二是省掉逐元素的类名也让输出 HTML 保持可读（源码即所见）。
+ * 排版尺度全部相对 em（跟随宿主 --ui-scale 缩放，不写死 px）。 */
+
+.ah-msg-text.ah-md {
+  /* 块级结构自带段落间距，行内换行走 <br>，不再按纯文本 pre-wrap 保留空白 */
+  white-space: normal;
+  /* 长 URL / 长标识不得横向撑破气泡（ui-ux-pro-max: Long Token Wrapping） */
+  overflow-wrap: anywhere;
+}
+
+.ah-md > *:first-child {
+  margin-top: 0;
+}
+
+.ah-md > *:last-child {
+  margin-bottom: 0;
+}
+
+.ah-md p {
+  margin: 0 0 0.5em;
+}
+
+.ah-md h1,
+.ah-md h2,
+.ah-md h3,
+.ah-md h4,
+.ah-md h5,
+.ah-md h6 {
+  margin: 0.8em 0 0.35em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ah-md h1 {
+  font-size: 1.3em;
+}
+
+.ah-md h2 {
+  font-size: 1.18em;
+}
+
+.ah-md h3 {
+  font-size: 1.08em;
+}
+
+.ah-md h4,
+.ah-md h5,
+.ah-md h6 {
+  font-size: 1em;
+}
+
+.ah-md ul,
+.ah-md ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+
+.ah-md li {
+  margin: 0.15em 0;
+}
+
+.ah-md li > ul,
+.ah-md li > ol {
+  margin: 0.15em 0;
+}
+
+.ah-md blockquote {
+  margin: 0.4em 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--ah-text-data);
+}
+
+/* 代码块：横向滚动而不是折行（折行会毁掉缩进与对齐的代码语义） */
+.ah-md pre {
+  margin: 0.5em 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 0.92em;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.ah-md pre code {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre;
+}
+
+.ah-md code {
+  padding: 1px 5px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 0.9em;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ah-md table {
+  display: block;
+  max-width: 100%;
+  margin: 0.5em 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.ah-md th,
+.ah-md td {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ah-md th {
+  background: var(--bg-sidebar);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-md td {
+  color: var(--text-primary);
+}
+
+.ah-md hr {
+  margin: 0.7em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+/* 链接降级为不可点文本（无 href → 无死链）：URL 挂 title 悬停可见 */
+.ah-md span[data-md-link] {
+  color: var(--ah-text-data);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.ah-md del {
+  color: var(--ah-text-data);
+}
+
+/* 系统：居中提示，无气泡 */
+.ah-msg.role-system {
+  align-self: center;
+  align-items: center;
+  max-width: 70%;
+}
+
+.ah-msg.role-system .ah-msg-head {
+  display: none;
+}
+
+.ah-msg.role-system .ah-msg-body {
+  align-items: center;
+  text-align: center;
+  color: var(--ah-text-data);
+  font-size: var(--font-size-tag);
+  padding: 2px 10px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+}
+
+/* 角色标识色：颜色只辅助，角色本身由「标签文字 + 气泡对齐/形状」承载。
+   原实现助手借 --color-warning（琥珀 = 警告色）、工具借 --color-success
+   （工具执行不等于成功），两者都是语义色误用；现统一回中性可读色，
+   仅保留“我”与品牌强调色同色这一不歧义的映射。 */
+.ah-msg.role-user .ah-msg-dot,
+.ah-msg.role-user .ah-msg-role {
+  color: var(--color-primary);
+}
+
+.ah-msg.role-assistant .ah-msg-dot,
+.ah-msg.role-assistant .ah-msg-role,
+.ah-msg.role-tool .ah-msg-dot,
+.ah-msg.role-tool .ah-msg-role {
+  color: var(--ah-text-data);
+}
+
+.ah-msg.role-system .ah-msg-dot,
+.ah-msg.role-system .ah-msg-role {
+  color: var(--text-tertiary);
+}
+
+/* 原始 JSONL 行视图：卡片占满剩余高度（flex 链），行区内部滚动 */
+.ah-lg-raw-card {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+}
+
+.ah-lg-raw {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: var(--font-size-tag);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ah-text-data);
+}
+
+.ah-lg-raw-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  border-bottom: 1px dashed var(--border);
+  padding: 2px 0;
+}
+
+.ah-lg-raw-line:last-child {
+  border-bottom: none;
+}
+
+/**
+ * 原始行文本（`--ah-text-data` 由 `.ah-lg-raw` 继承）
+ *
+ * 折叠态走**单行 + 省略号**而非 `pre-wrap` 逐字折行：JSONL 一行就是一条完整
+ * 记录，折成几十个视觉行会把「一行一条」的扫读节奏彻底毁掉（实测 codex 首行
+ * `session_meta` 带 `base_instructions`，~21KB/行）。展开态才逐字铺开。
+ */
+.ah-lg-raw-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ah-lg-raw-line.is-collapsed .ah-lg-raw-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/** 行内展开控件（与聊天行的 `.ah-msg-expand` 同款，只是不占整行） */
+.ah-lg-raw-expand {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0 6px;
+  font-size: var(--font-size-tag);
+  color: var(--color-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.ah-lg-raw-expand:hover {
+  background: var(--bg-hover);
+}

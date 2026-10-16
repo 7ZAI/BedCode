@@ -1,9 +1,15 @@
 /**
  * 链路加密配置与 pin 状态（issue 05/06）
  *
- * 配置域镜像桌面端 trafficEncryption 的移动端子集（spec §6）：
+ * 配置域镜像桌面端 trafficEncryption 的移动端 HTTP 子集（spec §6）：
  * - enabled：主开关（默认 false，opt-in；无 pin 时开启会被 UI 引导先配对）
  * - strictMode：预期加密而遭降级时断连报错（默认 false → 明文续跑 + 提示）
+ * - encryptHttp：HTTP REST 载荷加密（默认开）
+ *
+ * WS 通道（ws-terminal / ws-event）子开关已随桌面端插件端点帧加密退役
+ * （`TrafficChannel::WsPlugin => false`，插件端点帧永不加解密）一并删除——
+ * 仅剩 HTTP 信封加密。
+ *
  * pin（桌面端身份公钥+指纹）随认证凭据持久化，仅随重新配对/重认证刷新；
  * 协商失败不清除 pin —— 防主动降级攻击抹除信任锚。
  *
@@ -21,21 +27,15 @@ const PIN_FINGERPRINT = 'link_kd_fingerprint'
 export interface LinkEncryptionSettings {
   enabled: boolean
   strictMode: boolean
-  /** HTTP REST 载荷加密（issue 08：粒度收窄，默认开） */
+  /** HTTP REST 载荷加密（默认开） */
   encryptHttp: boolean
-  /** WS 终端通道帧加密（默认开） */
-  encryptWsTerminal: boolean
-  /** WS 事件通道帧加密（默认开） */
-  encryptWsEvent: boolean
 }
 
-/** 默认值：功能整体关（opt-in），子开关全开——用户只需打开主开关即获全通道覆盖 */
+/** 默认值：功能整体关（opt-in），HTTP 载荷加密默认开——用户只需打开主开关即生效 */
 const DEFAULTS: LinkEncryptionSettings = {
   enabled: false,
   strictMode: false,
   encryptHttp: true,
-  encryptWsTerminal: true,
-  encryptWsEvent: true,
 }
 
 function loadSettings(): LinkEncryptionSettings {
@@ -47,8 +47,6 @@ function loadSettings(): LinkEncryptionSettings {
       enabled: parsed.enabled === true,
       strictMode: parsed.strictMode === true,
       encryptHttp: parsed.encryptHttp !== false,
-      encryptWsTerminal: parsed.encryptWsTerminal !== false,
-      encryptWsEvent: parsed.encryptWsEvent !== false,
     }
   } catch {
     return { ...DEFAULTS }
@@ -72,12 +70,12 @@ export function useLinkEncryptionSettings() {
     settings.value.strictMode = value
     persist()
   }
-  /** 通道子开关统一入口（issue 08：设置页粒度收窄；通道名与判定函数一致用 kebab-case） */
+  /**
+   * HTTP 载荷加密子开关（WS 通道子开关已随桌面端插件端点加密退役，
+   * 插件端点帧永不加解密；通道维度仅剩 http）
+   */
   function setChannel(channel: LinkCryptoChannel, value: boolean) {
-    const key = (
-      { http: 'encryptHttp', 'ws-terminal': 'encryptWsTerminal', 'ws-event': 'encryptWsEvent' } as const
-    )[channel]
-    settings.value[key] = value
+    if (channel === 'http') settings.value.encryptHttp = value
     persist()
   }
   return { settings, setEnabled, setStrictMode, setChannel }
@@ -86,10 +84,10 @@ export function useLinkEncryptionSettings() {
 /**
  * 把当前开关与 pin 推送到 Rust 侧（issue 09）
  *
- * 常驻事件 WS 建连在 Rust 侧（connection/event_ws.rs），而本模块状态存于
- * WebView localStorage——经 set_link_crypto_context 命令桥接。调用时机：
- * 设置变更 / pin 刷新 / 应用启动。失败静默（老宿主无此命令时事件 WS
- * 保持明文，与默认关行为一致，不阻断 UI）。
+ * HTTP 信封加密由 Rust 侧 http_proxy 裁决，而本模块状态存于 WebView
+ * localStorage——经 set_link_crypto_context 命令桥接。调用时机：
+ * 设置变更 / pin 刷新 / 应用启动。失败静默（老宿主无此命令时 HTTP 载荷
+ * 保持明文，与默认关行为一致，不阻断 UI）。WS 通道加密已退役，不再推送。
  */
 export async function syncLinkCryptoContextToNative(): Promise<void> {
   try {
@@ -97,7 +95,6 @@ export async function syncLinkCryptoContextToNative(): Promise<void> {
     await invoke('set_link_crypto_context', {
       enabled: settings.value.enabled,
       strictMode: settings.value.strictMode,
-      encryptWsEvent: settings.value.encryptWsEvent,
       encryptHttp: settings.value.encryptHttp,
       kdPublicB64: getPinnedKey(),
     })
@@ -106,15 +103,16 @@ export async function syncLinkCryptoContextToNative(): Promise<void> {
   }
 }
 
-/** 链路加密参与判定的通道（issue 08：与桌面端三子开关一一对应） */
-export type LinkCryptoChannel = 'http' | 'ws-terminal' | 'ws-event'
+/**
+ * 链路加密参与判定的通道（WS 通道已随桌面端插件端点帧加密退役，仅剩 HTTP
+ * 信封加密；类型保留通道维度以兼容断言与既有调用面）
+ */
+export type LinkCryptoChannel = 'http'
 
-/** 主开关 + 对应通道子开关均开、且已持有 pin → 该通道参与加密 */
+/** 主开关 + HTTP 子开关均开、且已持有 pin → HTTP 载荷参与加密 */
 export function isChannelEncryptionActive(channel: LinkCryptoChannel): boolean {
   if (!settings.value.enabled) return false
   if (channel === 'http' && !settings.value.encryptHttp) return false
-  if (channel === 'ws-terminal' && !settings.value.encryptWsTerminal) return false
-  if (channel === 'ws-event' && !settings.value.encryptWsEvent) return false
   return !!getPinnedKey()
 }
 
@@ -134,8 +132,8 @@ export function getPinnedFingerprint(): string | null {
 function applyPin(kdPublicB64: unknown, kdFingerprint: unknown): void {
   if (typeof kdPublicB64 !== 'string' || kdPublicB64.length === 0) return
   // 公钥必须可解为 32 字节：畸形值写入会让 HTTP 侧每次 deriveHttpKeys 抛错
-  // 返回 LINK_ENCRYPTION_SEAL_FAILED、事件 WS 侧解码失败断连，pin 只能靠
-  // 重新配对恢复——信任锚不应被污染，写入前校验
+  // 返回 LINK_ENCRYPTION_SEAL_FAILED，pin 只能靠重新配对恢复——信任锚不应被
+  // 污染，写入前校验
   let decoded: Uint8Array | null = null
   try {
     decoded = base64ToBytes(kdPublicB64)

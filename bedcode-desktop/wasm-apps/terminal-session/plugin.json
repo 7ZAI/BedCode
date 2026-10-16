@@ -1,0 +1,246 @@
+{
+  "id": "com.bedcode.terminal-session",
+  "name": "Terminal Session Center",
+  "version": "1.0.0-beta",
+  "platform": "desktop",
+  "description": "终端会话中心：配对与信任、会话配置与生命周期编排、任务队列与 Agent 集成的单一权威。\n使用：侧边栏「设备配对 / 连接历史 / 终端会话 / Agent任务」四目录；会话创建时自动安装项目 hooks 同步任务状态；终端工具栏按钮打开任务队列弹窗；设置页贡献分组管理配对码 TTL、QR 有效期与 hooks。",
+  "author": "BedCode",
+  "main": "index.js",
+  "type": "internal-business",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_terminal_session",
+  "permissions": [
+    "auth",
+    "broadcast",
+    "connection:read",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "peer",
+    "process:run",
+    "pty:io",
+    "pty:spawn",
+    "session:read",
+    "storage",
+    "task:run",
+    "terminal:input",
+    "timer:schedule",
+    "ui:input",
+    "ui:settings",
+    "ui:sidebar",
+    "ws:server"
+  ],
+  "dependencies": [
+    "host-pty"
+  ],
+  "ptyQuota": 8,
+  "api": [
+    "com.bedcode.terminal-session.pairing-code-generate",
+    "com.bedcode.terminal-session.pairing-code-status",
+    "com.bedcode.terminal-session.pairing-code-verify",
+    "com.bedcode.terminal-session.pairing-code-clear",
+    "com.bedcode.terminal-session.qr-code-generate",
+    "com.bedcode.terminal-session.qr-code-status",
+    "com.bedcode.terminal-session.qr-code-verify",
+    "com.bedcode.terminal-session.qr-code-clear",
+    "com.bedcode.terminal-session.trust-list",
+    "com.bedcode.terminal-session.trust-revoke",
+    "com.bedcode.terminal-session.consent-decide",
+    "com.bedcode.terminal-session.config-list",
+    "com.bedcode.terminal-session.config-upsert",
+    "com.bedcode.terminal-session.config-delete",
+    "com.bedcode.terminal-session.quick-actions-import",
+    "com.bedcode.terminal-session.auth-records-import",
+    "com.bedcode.terminal-session.devices-list",
+    "com.bedcode.terminal-session.history-list",
+    "com.bedcode.terminal-session.connection-touch",
+    "com.bedcode.terminal-session.connection-close",
+    "com.bedcode.terminal-session.auth-grant",
+    "com.bedcode.terminal-session.session-create",
+    "com.bedcode.terminal-session.session-restart",
+    "com.bedcode.terminal-session.session-remove",
+    "com.bedcode.terminal-session.session-rename",
+    "com.bedcode.terminal-session.session-resize",
+    "com.bedcode.terminal-session.annotate",
+    "com.bedcode.terminal-session.devices-connect-list",
+    "com.bedcode.terminal-session.session-list",
+    "com.bedcode.terminal-session.session-get",
+    "com.bedcode.terminal-session.session-close",
+    "com.bedcode.terminal-session.session-input",
+    "com.bedcode.terminal-session.session-history",
+    "com.bedcode.terminal-session.session-ws-control"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "session.status",
+        "title": "Session Center Status"
+      },
+      {
+        "id": "session.task.scheduler-tick",
+        "title": "Task scheduler tick (host timer)"
+      },
+      {
+        "id": "session.task.cleanup-project-hooks",
+        "title": "Cleanup project hooks"
+      },
+      {
+        "id": "session.task.get-status",
+        "title": "Get task status"
+      },
+      {
+        "id": "session.task.history-list",
+        "title": "List task history"
+      },
+      {
+        "id": "session.task.history-stats",
+        "title": "Task history statistics"
+      },
+      {
+        "id": "session.task.running-sessions",
+        "title": "List running sessions"
+      },
+      {
+        "id": "session.task.set-platform",
+        "title": "Set host platform"
+      },
+      {
+        "id": "session.task.set-auto-mode",
+        "title": "Set auto mode"
+      },
+      {
+        "id": "session.task.session-settings",
+        "title": "Get session settings"
+      },
+      {
+        "id": "session.task.supported-agents",
+        "title": "List supported agents"
+      },
+      {
+        "id": "session.task.session-configs",
+        "title": "List session configs with agent support"
+      },
+      {
+        "id": "session.task.preset-list",
+        "title": "List preset tasks"
+      },
+      {
+        "id": "session.task.preset-create",
+        "title": "Create preset task"
+      },
+      {
+        "id": "session.task.preset-delete",
+        "title": "Delete preset task"
+      },
+      {
+        "id": "session.task.preset-update",
+        "title": "Update preset task"
+      },
+      {
+        "id": "session.task.preset-enqueue",
+        "title": "Enqueue preset task"
+      },
+      {
+        "id": "session.task.queue-list",
+        "title": "List task queue"
+      },
+      {
+        "id": "session.task.queue-add",
+        "title": "Add task to queue"
+      },
+      {
+        "id": "session.task.queue-cancel",
+        "title": "Cancel queue task"
+      },
+      {
+        "id": "session.task.queue-remove",
+        "title": "Remove queue task"
+      },
+      {
+        "id": "session.task.queue-clear",
+        "title": "Clear task queue"
+      },
+      {
+        "id": "session.task.queue-update",
+        "title": "Update queue task prompt"
+      },
+      {
+        "id": "session.task.queue-reorder",
+        "title": "Reorder task queue"
+      },
+      {
+        "id": "session.task.scheduled-list",
+        "title": "List scheduled jobs"
+      },
+      {
+        "id": "session.task.scheduled-create",
+        "title": "Create scheduled job"
+      },
+      {
+        "id": "session.task.scheduled-delete",
+        "title": "Delete scheduled job"
+      },
+      {
+        "id": "session.task.scheduled-reset",
+        "title": "Reset scheduled job"
+      }
+    ],
+    "wsEndpoints": [
+      {
+        "path": "session-control",
+        "auth": "jwt"
+      },
+      {
+        "path": "terminal",
+        "auth": "jwt"
+      }
+    ],
+    "views": [
+      {
+        "id": "session.pairing",
+        "type": "sidebar",
+        "title": "设备配对",
+        "component": "DeviceCenterView",
+        "icon": "M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+      },
+      {
+        "id": "session.history",
+        "type": "page",
+        "title": "连接历史",
+        "component": "ConnectionHistoryView",
+        "icon": "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+      },
+      {
+        "id": "session.sidebar",
+        "type": "sidebar",
+        "title": "终端会话",
+        "component": "SessionCenterView",
+        "icon": "M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+      },
+      {
+        "id": "session.task-history",
+        "type": "sidebar",
+        "title": "Agent任务",
+        "component": "TaskHistoryView",
+        "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
+      },
+      {
+        "id": "session.terminal-window",
+        "type": "page",
+        "title": "终端窗口",
+        "component": "TerminalWindowView"
+      }
+    ],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": [
+      "task:status-changed",
+      "session:mode-changed",
+      "task:queue-changed",
+      "task:scheduled-changed",
+      "task:preset-changed"
+    ]
+  }
+}

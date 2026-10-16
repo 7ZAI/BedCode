@@ -8,7 +8,8 @@
 //!   文件层 + 控制台层），不依赖 Tauri AppHandle，供应用启动与单元测试共用。文件层全部
 //!   走非阻塞异步写盘（worker 线程 + 有界缓冲），高频输出不再阻塞调用线程。
 //!
-//! 文件层保持默认格式（UTC 时间戳）以便按时间排序排错；控制台格式仅用于控制台输出层。
+//! 文件层保持默认格式（UTC 时间戳 + `ThreadId(N)` 线程 id）以便按时间排序排错、
+//! 并发问题按线程维度定位；控制台格式仅用于控制台输出层。
 
 use std::fmt;
 use std::io::Write;
@@ -525,7 +526,7 @@ pub fn build_logging(
                         .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
                         .event_format(json_event_format.clone())
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(runtime_filter),
                 )
@@ -536,7 +537,7 @@ pub fn build_logging(
                         .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
                         .event_format(json_event_format.clone())
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(error_filter.clone()),
                 )
@@ -546,7 +547,7 @@ pub fn build_logging(
                         .with_writer(frontend_writer)
                         .with_ansi(false)
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(Targets::new().with_target("frontend", Level::DEBUG)),
                 )
@@ -572,7 +573,7 @@ pub fn build_logging(
                         .with_writer(runtime_writer.clone())
                         .with_ansi(false)
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(runtime_filter),
                 )
@@ -582,7 +583,7 @@ pub fn build_logging(
                         .with_writer(error_writer.clone())
                         .with_ansi(false)
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(error_filter.clone()),
                 )
@@ -592,7 +593,7 @@ pub fn build_logging(
                         .with_writer(frontend_writer)
                         .with_ansi(false)
                         .with_target(true)
-                        .with_thread_ids(false)
+                        .with_thread_ids(true)
                         .with_line_number(true)
                         .with_filter(Targets::new().with_target("frontend", Level::DEBUG)),
                 )
@@ -1108,9 +1109,9 @@ mod tests {
 
     #[test]
     fn split_plugin_tag_recognizes_plugin_prefix() {
-        let msg = "[plugin:com.bedcode.auto-task] task-status body: {\"status\":\"idle\"}";
+        let msg = "[plugin:com.bedcode.terminal-session] task-status body: {\"status\":\"idle\"}";
         let (tag, rest) = split_plugin_tag(msg).expect("should split plugin tag");
-        assert_eq!(tag, "[plugin:com.bedcode.auto-task]");
+        assert_eq!(tag, "[plugin:com.bedcode.terminal-session]");
         assert_eq!(rest, " task-status body: {\"status\":\"idle\"}");
     }
 
@@ -1156,7 +1157,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::debug!(
                 target: "test::log",
-                "[plugin:com.bedcode.auto-task] task-status body: {}",
+                "[plugin:com.bedcode.terminal-session] task-status body: {}",
                 "{\"status\":\"idle\"}",
             );
             tracing::info!("Session created: test");
@@ -1181,7 +1182,7 @@ mod tests {
 
         // 插件标签出现且被品红着色
         assert!(
-            out.contains("[plugin:com.bedcode.auto-task]"),
+            out.contains("[plugin:com.bedcode.terminal-session]"),
             "plugin tag should be present, got:\n{out}"
         );
         // 品红（35m）仅出现一次：只用于插件标签，宿主日志不被染成品红

@@ -9,8 +9,11 @@
  *      构建委托给两端既有构建机制（desktop: manifest-gen + pnpm run build；
  *      mobile: scripts/plugin-build.js），行为与 CI 宿主构建一致。
  *   2. 收集产物（src-tauri/resources/plugins/{desktop,mobile}/<id>/）为每个插件各打一个 zip：
- *      - <out>/<target>/<id>.zip（zip 根 = 插件文件，与移动端 SDK package 分发格式一致），
+ *      - <out>/<target>/<id>-<target>.zip（zip 根 = 插件文件，与移动端 SDK package 分发格式一致），
  *        一个插件一个包，发布后按需单独安装/更新。
+ *        文件名必须带 target：两端各有一份**同名插件**（ai-chatbox / file-transfer /
+ *        terminal-session），而 release 附件是**扁平命名空间**——同名 zip 第二份上传即
+ *        `Not Found - releases/assets#update-a-release-asset`（2026-10-17 CI 实测）。
  *
  * 产物即 release 的独立附件（见 .github/workflows/release.yml 的 package-plugins job）。
  *
@@ -34,8 +37,8 @@
  *
  * 本地示例：
  *   node scripts/package-plugins.mjs --list
- *   node scripts/package-plugins.mjs --target desktop --only file-transfer
- *   node scripts/package-plugins.mjs --target all --exclude auto-task --version 2.1.0
+ *   node scripts/package-plugins.mjs --target desktop --plugin agent-hub
+ *   node scripts/package-plugins.mjs --target all --exclude file-transfer --version 2.1.0
  */
 
 import { execSync } from 'node:child_process'
@@ -55,13 +58,15 @@ import { dirname } from 'node:path'
 import { platform } from 'node:os'
 // 桌面端 manifest 自动填充（与 bedcode-desktop/scripts/plugin-build.js 同源）
 import { generateManifest } from '../bedcode-desktop/packages/plugin-sdk-desktop/bin/manifest-gen.js'
+// 桌面端产物 WASM 摘要复核（注入在各插件 scripts/build.js，本处只裁决）
+import { verifyWasmHash } from '../bedcode-desktop/packages/plugin-sdk-desktop/bin/wasm-hash.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const DESKTOP_ROOT = resolve(ROOT, 'bedcode-desktop')
 const MOBILE_ROOT = resolve(ROOT, 'bedcode-mobile')
-const DESKTOP_PLUGINS = resolve(DESKTOP_ROOT, 'plugins')
-const MOBILE_PLUGINS = resolve(MOBILE_ROOT, 'plugins')
+const DESKTOP_PLUGINS = resolve(DESKTOP_ROOT, 'wasm-apps')  // 桌面端语义（2026-09-25）：wasm 应用源码目录
+const MOBILE_PLUGINS = resolve(MOBILE_ROOT, 'wasm-apps') // 移动端语义（2026-10-17）：wasm 应用源码目录（原 plugins/，与桌面端同步改名；写成 'plugins' 时打包 job 在 resolvePlugin 处 ENOENT 秒挂）
 const DEFAULT_CONFIG = resolve(__dirname, 'plugin-package-list.json')
 const IS_WIN = platform() === 'win32'
 
@@ -286,7 +291,7 @@ if (plugins.length === 0) {
 if (args.list) {
   console.log('[package-plugins] 打包插件清单：')
   for (const p of plugins) {
-    console.log(`  ${p.target.padEnd(8)} ${p.id}  (dir: plugins/${p.dir})`)
+    console.log(`  ${p.target.padEnd(8)} ${p.id}  (dir: ${p.dir})`)
   }
   process.exit(0)
 }
@@ -295,7 +300,8 @@ if (args.list) {
 
 function buildDesktopPlugin({ dir, id }) {
   const pluginDir = resolve(DESKTOP_PLUGINS, dir)
-  // manifest 自动填充（与 bedcode-desktop/scripts/plugin-build.js 同源，保证产物与源码一致）
+  // manifest 自动填充（与 bedcode-desktop/scripts/plugin-build.js 同源，保证产物与源码一致；
+  // wasmHash 是产物侧注入字段，不参与该一致性口径）
   try {
     const { changed, report } = generateManifest(pluginDir)
     if (changed) for (const line of report) console.log(`  [manifest] ${line}`)
@@ -341,6 +347,28 @@ function collectArtifacts() {
     rmSync(dst, { recursive: true, force: true })
     mkdirSync(dst, { recursive: true })
     cpSync(src, dst, { recursive: true })
+  }
+}
+
+// ==================== 产物摘要复核（审计票 14）====================
+
+/**
+ * 桌面产物逐条复核 wasmHash：缺失 / 陈旧 / 形态非法一律拒发。
+ *
+ * 注入发生在构建链（各插件 scripts/build.js 复制产物后），本处只裁决：绕过构建直接改产物目录、
+ * 或拿一份旧 resources 来打包，最终都会被宿主安装端用同一批字节拒装（`manager/downloader.rs`）——
+ * 与其发出装不上的包，不如在发布链上失败。移动端本轮不检查（该端字段仍无生产者，见票 14 裁决项 3）。
+ */
+function verifyDesktopArtifacts() {
+  for (const p of plugins) {
+    if (p.target !== 'desktop') continue
+    const dir = join(stageDir, p.target, p.id)
+    const res = verifyWasmHash(dir)
+    if (!res.ok) {
+      console.error(`[package-plugins] 桌面产物 ${p.id} 摘要复核失败: ${res.error}`)
+      process.exit(1)
+    }
+    if (res.hash) console.log(`  [desktop/${p.id}] wasmHash ${res.hash}`)
   }
 }
 
@@ -487,11 +515,13 @@ function makeZip(entries, outFile, label) {
 }
 
 function zipPlugins() {
-  // 一个插件一个 zip：<out>/<target>/<id>.zip，zip 根 = 插件文件（与移动端 SDK package 分发格式一致）
+  // 一个插件一个 zip：<out>/<target>/<id>-<target>.zip，zip 根 = 插件文件
+  // （与移动端 SDK package 分发格式一致）。文件名带 target：release 附件是扁平命名空间，
+  // 两端同名插件 zip 不加后缀会互相覆盖（第二份上传报 Not Found - releases/assets）。
   for (const p of plugins) {
     makeZip(
       pluginEntries(p.target, p.id),
-      join(outDir, p.target, `${p.id}.zip`),
+      join(outDir, p.target, `${p.id}-${p.target}.zip`),
       `[${p.target}/${p.id}]`,
     )
   }
@@ -503,6 +533,7 @@ console.log(`\n[package-plugins] 打包版本: ${version}，共 ${plugins.length
 for (const p of plugins) console.log(`  - [${p.target}] ${p.id} (${p.dir})`)
 
 collectArtifacts()
+verifyDesktopArtifacts()
 if (!args.noZip) zipPlugins()
 else console.log('\n[package-plugins] --no-zip：跳过 zip 打包，仅收集产物')
 
@@ -512,4 +543,4 @@ if (!args.keepStage) {
 }
 
 console.log(`\n[package-plugins] 完成。产物目录: ${outDir}`)
-console.log('  - 插件包: <target>/<plugin-id>.zip（一个插件一个 zip）')
+console.log('  - 插件包: <target>/<plugin-id>-<target>.zip（一个插件一个 zip）')

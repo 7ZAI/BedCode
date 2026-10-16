@@ -6,10 +6,10 @@
 
 **Control your desktop Agent CLI from your phone — from bed**
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-48-%232F6FED.svg)](https://wasmtime.dev/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 English | [简体中文](README.md)
@@ -18,9 +18,11 @@ English | [简体中文](README.md)
 
 BedCode is a LAN remote terminal application: the desktop app acts as the host running terminal sessions (Agent CLI such as Pi, Opencode, etc.), while your phone becomes a remote terminal with an optimized touch interface — take over your terminal from anywhere on the same WiFi. Any command-line program (including TUI apps) can be started on the desktop and operated remotely from your phone.
 
-The plugin system is another core capability: plugins run as WASM components inside the wasmtime sandbox (Component Model + wit ABI bridging), resource-limited and memory-isolated — a crash doesn't affect the host; both ends are hot-pluggable and ready out of the box. A full plugin development toolchain comes with it — TypeScript / Rust dual-side SDKs, a scaffolding CLI, and a browser dev-shell development environment; three built-in plugins (AI Chatbox for multi-vendor LLM chat, Auto Task for agent task queues, File Transfer for LAN file exchange).
+The plugin system is another core capability: plugins run as WASM components inside the wasmtime sandbox (Component Model + wit ABI bridging), resource-limited and memory-isolated — a crash doesn't affect the host; both ends are hot-pluggable and ready out of the box. A full plugin development toolchain comes with it — TypeScript / Rust dual-side SDKs, a scaffolding CLI, and a browser dev-shell development environment; built-in plugins including AI Chatbox (multi-vendor LLM chat), Terminal Session (desktop session center / mobile remote terminal BedCode), File Transfer (LAN file exchange) and Agent Hub (desktop Agent CLI manager).
 
 > Use cases: as the name suggests — coding from bed; or handling programming tasks in parallel with chores, childcare, or sleep at home.
+
+> **⚠️ Important change**: after the low-level rework, the project has moved toward a bigger goal — building the **WasmNest** platform, with BedCode serving merely as one application running on top of it. Therefore **3.0.0 will be the last updated version**, after which the project will migrate and be split into the WasmNest series of projects.
 
 ## Features
 
@@ -40,31 +42,47 @@ The mobile app connects to the desktop host:
 - **Terminal output** — both ends use xterm.js for a native terminal output experience, with font and display theme configuration
 - **Terminal input** — the desktop matches native terminal input; the mobile app adds shortcut configuration (Tab, Ctrl+C, Esc, arrows), common-command configuration, agent-CLI quick commands and preconfigured shortcuts to optimize mobile terminal input
 - **Code explorer** — a project file browser sidebar inside the mobile terminal with syntax highlighting, Git diff rendering and branch switching
+- **Task automation (plugin)** — the session-center plugin ships an agent task queue: add multiple tasks to a terminal for automatic execution with persisted status, plus preset &amp; scheduled tasks and history statistics; auto-approves agent permission requests. Currently targets pi / Claude Code / Codex / opencode
+
+### Mobile Host Shell (Android-style platform)
+
+The mobile app has evolved from "a single terminal page + settings" into an **Android-style host shell** (route `/mobile/shell`): a home screen with an icon grid and wallpaper, recents, a pull-down notification shade, a permission manager with an approval entry, an app detail page, and a bottom capsule with a screen stack.
+
+The shell itself provides only three things: **run-surface mounting & lifecycle** (render slots / capsule / screen stack), **platform mechanics & security gates** (appearance / language / font scaling / home wallpaper / notification shade / permission overview & approval / egress authorization / link encryption / biometric credentials), and **cross-app shared components** (file browser, etc.). All **business pages** — terminal, files, sessions, devices, AI — are mounted as **WASM apps** through `registerSurface` / `registerSlot`; the shell implements no business logic. The old four-page host UI is retired, and new features land in the shell by default.
 
 ### Plugin System
 
 - **Plugin management** — plugins on both ends are hot-pluggable: enable on demand, stop on demand; configure per-plugin settings
-- **Built-in plugins** — both ends ship with the same plugin set; AI Chatbox is independent per end, the other two are companion plugins
+- **Built-in plugins** — both ends share the same plugin contract and runtime, with the bundled set tailored per platform
 
 <table>
 <thead>
-<tr><th align="left">Plugin</th><th align="left">Version</th><th align="left">Description</th></tr>
+<tr><th align="left">Plugin</th><th align="left">Version</th><th align="left">End</th><th align="left">Description</th></tr>
 </thead>
 <tbody>
 <tr>
 <td><strong>AI&nbsp;Chatbox</strong></td>
 <td>1.0.0-beta</td>
-<td>LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk</td>
+<td>Both</td>
+<td>LLM chat: connect to any OpenAI-compatible / Anthropic / Gemini provider, streaming chat, adjustable thinking mode &amp; reasoning effort, multi-conversation management, JSONL chat logs persisted to disk</td>
 </tr>
 <tr>
-<td><strong>Auto&nbsp;Task</strong></td>
+<td><strong>Terminal&nbsp;Session<br>/&nbsp;BedCode</strong></td>
 <td>1.0.0-beta</td>
-<td>Agent task queue &amp; auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset &amp; scheduled tasks, history statistics; auto-approves agent permission requests</td>
+<td>Both</td>
+<td>On desktop, the session center: the single authority for pairing &amp; trust, session configuration and lifecycle orchestration, and the agent task queue with hooks integration (session source of truth). On mobile, the remote terminal client BedCode: subscribe to desktop session output, mobile input, task panel</td>
 </tr>
 <tr>
 <td><strong>File&nbsp;Transfer</strong></td>
 <td>1.0.0-beta</td>
-<td>LAN file transfer: online peer discovery &amp; switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers</td>
+<td>Both</td>
+<td>LAN file transfer (peer-to-peer direct): online peer discovery &amp; switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers</td>
+</tr>
+<tr>
+<td><strong>Agent&nbsp;Hub</strong></td>
+<td>0.1.0</td>
+<td>Desktop</td>
+<td>Agent CLI management console: environment detection &amp; one-click install / uninstall, Skills management, unified provider configuration, usage statistics and session-log parsing (in development)</td>
 </tr>
 </tbody>
 </table>
@@ -78,7 +96,7 @@ Full vue-i18n support (zh-CN / en) with persistent language switcher in settings
 Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
 <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">
-  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode architecture — desktop host · mobile client · WASM plugin sandbox">
+  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode architecture — desktop host · mobile client · wasm-core microkernel and WASM plugin sandbox">
 </a>
 
 <sub>📈 Interactive version: dark / light themes, node focus, route tracing, share-card export —— <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">Open</a> · Source: <a href="docs/diagrams/bedcode-overall-architecture.json">archify JSON IR</a> (rendered by <a href="https://github.com/tt-a1i/archify">Archify</a>)</sub>
@@ -91,17 +109,19 @@ Monorepo with two independent projects, each containing `src/` (frontend) + `src
 <tr>
 <td><strong>Desktop</strong></td>
 <td>Session manager, terminal preview, server view, plugin config</td>
-<td>PTY, Actix Web (HTTP + WS), session management, WASM plugin system, mDNS advertisement</td>
+<td>PTY engine, Actix Web (HTTP + WS), wasm-core microkernel and WASM plugin system, mDNS advertisement (session source of truth lives in the terminal-session plugin)</td>
 </tr>
 <tr>
 <td><strong>Mobile</strong></td>
-<td>Terminal view, code explorer, preset tasks, toolbox, device discovery</td>
-<td>WS/HTTP client, remote connection &amp; routing, file service, mDNS discovery</td>
+<td>Host shell (home / recents / notification shade / permissions / app detail), WASM app run surfaces</td>
+<td>WS client, remote connection &amp; routing, peer-to-peer network, SAF file service, mDNS discovery</td>
 </tr>
 </tbody>
 </table>
 
 Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API** (plugin hooks, file service).
+
+The base converges toward a **businessless microkernel**: the kernel holds only application-agnostic engine primitives (process / network / storage / security / communication) + the wasmtime runtime, while every product concept (session, terminal, device connection, file transfer, AI) is a WASM plugin that interacts with the kernel via `host-*` primitives, the message bus, events and plugin-to-plugin calls (boundary rulings in ADR 0022). Both ends share **one plugin-mechanics kernel** (`packages/bedcode-wasm-core`, one crate, one form, with WIT bindings living in each host); capability domains and transport surfaces are split into shared engine crates under the repo-root `packages/bedcode-*`, leaving the hosts as thin shells.
 
 ## Tech Stack
 
@@ -119,7 +139,7 @@ Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API**
 <tr><td>Auth</td><td>JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint</td></tr>
 <tr><td>Crypto</td><td>X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS</td></tr>
 <tr><td>Discovery</td><td>mDNS (mdns-sd)</td></tr>
-<tr><td>Plugin System</td><td>wasmtime (WASM component runtime)</td></tr>
+<tr><td>Plugin System</td><td>wasmtime 48 (WASM component runtime)</td></tr>
 <tr><td>Other</td><td>shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging</td></tr>
 </tbody>
 </table>
@@ -128,7 +148,8 @@ Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API**
 
 ### Install
 
-Get the latest installer from the GitHub release page, then install it.
+1. Configure your Agent CLI (pi, Claude Code, opencode, Codex, etc.) on the desktop host
+2. Get the latest installer from the [GitHub Releases](https://github.com/7ZAI/BedCode/releases) page and install it
 
 #### Supported Platforms
 
@@ -151,7 +172,7 @@ Currently focused on **Windows / Linux (Desktop) + Android (Mobile)**, with both
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.94 (wasmtime 47 MSRV)
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.95 (wasmtime 48 MSRV)
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform dependencies
 - An Agent CLI installed and configured (e.g. [Claude Code](https://claude.ai/code))
 
@@ -175,19 +196,29 @@ cd bedcode-desktop && pnpm run test:run          # Frontend (vitest run)
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
-## Plugin System
+## WASM App Development
 
-Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: plugins are compiled to WASM components (from Rust / TypeScript) and loaded sandboxed inside the host. Plugins can observe and extend host session behavior:
+> Terminology: this repository calls "plugins" **WASM apps** (sources live in `wasm-apps/`); the
+> mechanism kernel and runtime keep the `plugin` identifiers (`plugin.json` / `PluginManager` /
+> `host-*` primitives / WIT package `bedcode:plugin`) to stay aligned with wasmtime and
+> industry terminology.
 
-- **WASM Sandbox Runtime** — resource-constrained, memory-isolated; a plugin crash never affects the host
-- **Dynamic Loading** — scanned from `plugins/desktop/{plugin-id}/plugin.json` at runtime, no host recompilation needed
-- **Host API Bridge** — wit + wit-bindgen auto-generates the glue ABI bridge from the trait
+WASM apps are built on the **wasmtime runtime (WASM Component Model)**: the Rust backend compiles to a WASM component, the TypeScript frontend builds separately, and both ship alongside a `plugin.json` manifest into the host's resources directory to be loaded sandboxed. Apps can observe and extend host session and system capabilities:
 
-### Plugin Development SDK
+- **WASM Sandbox Runtime** — resource-constrained, memory-isolated; an app crash never affects the host
+- **Dynamic Loading** — scanned from `{id}/plugin.json` at runtime; install and use without recompiling the host
+- **Host API Bridge** — WIT defines the contract (package semver `bedcode:plugin@0.2.0`) and wit-bindgen generates the glue ABI from the trait; the frontend and the WASM backend call host capabilities (terminal, session, storage, event bus, filesystem, etc.) through the same interface
+- **Permission Model** — the manifest declares the permissions required; the host validates and grants them one by one at load time, and out-of-scope calls are rejected outright
+
+The mobile end shares the same architecture as desktop (both are a WASM component + a frontend bundle), with only the host capability surface tailored per platform (e.g. mobile SAF file access, desktop PTY). **Both ends use `wasm-apps/` for WASM app sources.**
+
+> 📖 Development guides: [desktop WASM app development](bedcode-desktop/wasm-app-dev-desktop.md) ｜ [mobile WASM app development](bedcode-mobile/wasm-app-dev-mobile.md) — the full walkthrough for creating an app from scratch (project layout, manifest declarations, frontend/backend development, build & packaging, on-device verification);
+> API & extension-point reference [docs/knowledge/wasm-app-dev-guide.md](bedcode-desktop/docs/knowledge/wasm-app-dev-guide.md), development red-line checklist [docs/knowledge/wasm-app-development-checklist.md](docs/knowledge/wasm-app-development-checklist.md)
+
+### WASM App Development SDK
 
 - **`@binblink/bedcode-plugin-sdk-desktop`** / **`@binblink/bedcode-plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
 - **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check
-- **Docs** — `bedcode-desktop/plugin-dev-desktop.md` (desktop) and `bedcode-mobile/plugin-dev-mobile.md` (mobile)
 - **Browser dev environment (dev-shell)** — both SDKs ship a `dev-shell`: an empty-shell host + page skeleton that runs the plugin's frontend source directly in the browser (HMR), so UI and frontend logic can be iterated without building, packaging, or installing on a real device.
   - Start it with `bedcode-plugin-desktop dev` (mobile: `pnpm run dev` / `pnpm exec bedcode-plugin dev`); `--host` listens on the LAN so the page can be previewed in a phone browser (real touch, real viewport)
   - Skeleton features: title bar / sidebar / toolbox / mock terminal (send input + simulate output + session management) / plugin page (registered items overview + activate/deactivate) / status bar / log panel / dark-light theme switching
@@ -197,17 +228,16 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 
 **In development (unreleased)**
 
-- **wasm-core rework** — plugin subsystem reframed into a five-module WASM kernel skeleton (`core-config` / `core-monitor` / `core-security` / `core-bus` / `core-plugin-manager`); base capabilities (mDNS first) sink to `host-*` primitives; WIT contracts evolve in lockstep on both ends (ABI desktop 10→11 / mobile 8→9) while existing plugins stay compatible. In progress on the `wasm核心改造` branch.
-- **Agent Hub plugin** — unified visual management for Agent CLIs (claude / codex / opencode / pi): environment detection & one-click install, Skills management, unified provider configuration, usage statistics; auto-task capabilities to be merged later. Takes over the paused disk-cleaner plugin's slot.
+- **Agent Hub plugin** — unified visual management for Agent CLIs (claude / codex / opencode / pi): environment detection & one-click install / uninstall, Skills management, unified provider configuration, usage statistics and session-log parsing. Already bundled with the desktop app at 0.1.0, under active development.
 
 **Planned**
 
-- **NAT traversal / internet access** — realized as a desktop-side plugin (requirements confirmed, pending scheduling; see `.scratch/remote-tunnel/` and `docs/adr/0026`): route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption (shelved until a server budget exists 😭)
+- **NAT traversal / internet access** — realized as a desktop-side plugin: route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption (shelved until a server budget exists 😭)
 
 **Architecture evolution**
 
-- **Post-wasm-core architecture adjustment** — progressive convergence toward a businessless base kernel: the kernel shrinks to five generic engine primitives (process / network / storage / security / communication) + the wasmtime runtime; capabilities sink to plugins via `host-*` primitives, with all business orchestration living in plugins (ADR 0022 trim line). Roadmap in `.scratch/plugin-kernel-roadmap`, end-state vision in `.scratch/platform-kernel`.
-- **Wasmtime microkernel · plugin-driven evolution** — the host continues to converge toward a microkernel: the wasmtime sandbox + component loader + auth/communication form the irreducible core, and everything else (terminal, file service, AI Chatbox, Auto Task, File Transfer, Disk Cleaner) is a hot-pluggable WASM plugin. Plugins run on the WASM Component Model + wasmtime sandbox and now include WASI preview2 (filesystem / preopened directories). As WASI standardizes further (networking, clocks, processes, and other system interfaces), plugins gain near-native system capabilities inside a secure sandbox while staying portable across hosts, languages, and platforms — no host recompilation required to introduce a new capability.
+- **Businessless base kernel** — progressive convergence toward a businessless kernel: the kernel shrinks to five generic engine primitives (process / network / storage / security / communication) + the wasmtime runtime; capabilities sink to plugins via `host-*` primitives, with all business orchestration living in plugins (ADR 0022 trim line). The mechanics kernel is now a **single crate, single form** (`packages/bedcode-wasm-core`, ADR 0045 / 0049), and capability domains and transport surfaces are split into shared engine crates under the repo-root `packages/bedcode-*` (ADR 0035 / 0040–0052); contracts moved to WIT package semver (`bedcode:plugin@0.2.0`) and the integer ABI is retired (ADR 0051). Roadmap in [`docs/knowledge/plugin-kernel-roadmap.md`](docs/knowledge/plugin-kernel-roadmap.md), end-state vision in [`docs/knowledge/businessless-kernel-vision.md`](docs/knowledge/businessless-kernel-vision.md).
+- **WasmNest platformization** — the base continues to converge toward a general-purpose WASM app host: the wasmtime sandbox + component loader + auth/communication form the irreducible core, and everything else (terminal, file service, AI Chatbox, Agent Hub, File Transfer) is a hot-pluggable WASM plugin. Plugins run on the WASM Component Model + wasmtime sandbox and now include WASI preview2 (filesystem / preopened directories). As WASI standardizes further (networking, clocks, processes, and other system interfaces), plugins gain near-native system capabilities inside a secure sandbox while staying portable across hosts, languages, and platforms — no host recompilation required to introduce a new capability.
 
 ## Does Plugin-Based + AI Deliver?
 

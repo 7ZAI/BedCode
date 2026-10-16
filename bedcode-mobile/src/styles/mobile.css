@@ -155,10 +155,15 @@
   --scrollbar-thumb-hover-bg: #9C9482;
 }
 
-/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效
-   （与桌面端 warm 色板浅色同源：bg-page #F5F4F0 / bg-sidebar #EFEDE7 / bg-card #FDFCFA / bg-hover #E7E4DC） */
-html:not(.dark) .mobile-ui,
-html:not(.dark) .mobile-app {
+/* 浅色模式 - html 没有 .dark 类时**全树**生效
+   （与桌面端 warm 色板浅色同源：bg-page #F5F4F0 / bg-sidebar #EFEDE7 / bg-card #FDFCFA / bg-hover #E7E4DC）
+
+   作用域口径（2026-10-14 修正）：浅色 token 必须挂在 html 上，不能挂在 .mobile-ui / .mobile-app 上。
+   旧写法把浅色值限定在带类元素内，于是所有**不带类的渲染面**都掉回 :root 的深色默认值：
+   设置二级页（SettingsSubPage 自带根节点）、Teleport 到 body 的抽屉（ShellSheet 只带 .shell-ui）
+   在浅色主题下整片变深色（实测：设置子页 5 页 + 应用菜单抽屉）。深色默认值留在 :root，
+   浅色在 html:not(.dark) 上整体覆盖——这样「主题」不再依赖某个祖先类是否写对。 */
+html:not(.dark) {
   /* 背景色 - 与桌面端同名 token 对齐（tertiary 取 border-strong 色调，作强内嵌面） */
   --mobile-bg-primary: #F5F4F0;
   --mobile-bg-secondary: #EFEDE7;
@@ -318,10 +323,10 @@ html:not(.dark) .mobile-app {
    更窄窗口继续缩小，平板自动放大。style.css 中 .mobile-ui 下的
    h1/p/button/text-* 等规则均引用这些变量，因此全端文字一次生效。 */
 
-.mobile-ui,
-.mobile-app {
-  /* --mobile-font-scale：外观设置字体大小档位驱动（normal=1 / large=1.125 / xlarge=1.25），
-     useMobileSettings 在 html 上写入 inline 值，未设置时回退 1 */
+/* 挂 :root 而非 .mobile-ui/.mobile-app：流式字号只是视口宽度的函数（与主题无关），
+   而 Teleport 到 body 的抽屉（ShellSheet）与旧设置子页并不带那两个类——挂类上会让
+   它们的 text-[var(--font-size-*)] 取不到值（字体尺寸回退为继承值）。 */
+:root {
   --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
   --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
   --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
@@ -447,26 +452,49 @@ button.group-row:active,
   background: var(--mobile-group-row-active);
 }
 
+/* 分组卡内文字统一取根级流式字号档位，不再各自写裸 clamp()。
+   这么做的两个原因：① 裸 clamp() 不带 --mobile-font-scale，设置里的
+   「字体大小」对分组卡完全无效（用户调了档位看着没反应）；② 裸 clamp()
+   与 --font-size-* 是两条并行字阶，档位一旦调整就对不齐。
+   档位取值：标题/标签 = lg，副行 = base，右侧取值 = base。 */
+
 .group-row-title {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-size: var(--font-size-lg);
   font-weight: 500;
   color: var(--mobile-row-title);
 }
 
 .group-row-label {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-size: var(--font-size-lg);
   color: var(--mobile-row-title);
 }
 
 .group-row-sub {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-size: var(--font-size-base);
   color: var(--mobile-row-sub);
 }
 
 .group-row-value {
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  font-size: var(--font-size-base);
   color: var(--mobile-row-value);
 }
+
+/* ==================== 列表行内联状态文字 ==================== */
+
+/* 任务状态行内文字：语义色弱标记。宽度不可预测的内容一律 nowrap，
+   宁可与相邻的运行时长争空间也不折行（折行会让整行行高突变）。 */
+.task-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.task-state--idle { color: var(--mobile-chip-zinc); }
+.task-state--in-progress { color: var(--mobile-chip-amber); }
+.task-state--asking { color: var(--mobile-chip-violet); }
+.task-state--retrying { color: var(--mobile-chip-amber); }
+.task-state--completed { color: var(--mobile-chip-emerald); }
+.task-state--interrupted { color: var(--mobile-chip-red); }
 
 /* ==================== 图标 chip ==================== */
 
@@ -487,6 +515,29 @@ button.group-row:active,
 .chip-red { color: var(--mobile-chip-red); background: var(--mobile-chip-red-bg); }
 .chip-zinc { color: var(--mobile-chip-zinc); background: var(--mobile-chip-zinc-bg); }
 
+/* 卡片内的图标 chip：会话配置卡在用（.config-icon / .config-icon-sm）。
+   这两个类此前只被引用、从未定义，卡片图标实际是以裸 SVG 尺寸贴在色块上，
+   与 .icon-chip 的 36px 圆角 chip 视觉不齐。 */
+.config-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(2.25rem, 2.5rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  height: clamp(2.25rem, 2.5rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
+.config-icon-sm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+  flex-shrink: 0;
+}
+
 /* ==================== 状态 badge ==================== */
 
 .status-badge {
@@ -494,7 +545,7 @@ button.group-row:active,
   align-items: center;
   gap: 0.375rem;
   flex-shrink: 0;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
@@ -737,60 +788,77 @@ button.settings-row:active {
    仅覆盖主色相关 token（--mobile-accent 系 + text-on-accent），色值取自
    bedcode-desktop/src/style.css 同名 palette（改色需双端同改）。
    背景/文字/边框等基础 token 的默认值（warm 色板）已与桌面端对齐；
-   其余 palette 仅切换主色，不覆盖背景（与桌面端「色板只换主色调」策略一致）。 */
+   其余 palette 仅切换主色，不覆盖背景（与桌面端「色板只换主色调」策略一致）。
 
-:root[data-palette='forest'] {
+   归属（2026-10-16）：主色是**各 wasm-app 自持的产品外观**，宿主壳不再提供色板
+   选择器（外壳固定用下方 :root 默认主色），故选择器从 `:root[data-palette=…]`
+   放宽为 `[data-palette=…]` —— 属性挂在哪个元素的哪一层子树，那一层子树就用哪套主色。
+   bedcode 应用在运行面根节点挂 `data-palette`（见 app/AppRoot.vue），于是应用内主色
+   自成一派，壳的导航 / 卡片 / 对话框保持默认象牙白，互不串色。
+
+   生效原理是自定义属性的「直接声明压过继承」，不是选择器权重：主色 token 挂在
+   承载 data-palette 的元素上，本级声明必然压过从 html 继承来的同名 token。 */
+
+[data-palette='forest'] {
   --mobile-accent: #86c49b;
   --mobile-accent-muted: rgba(134, 196, 155, 0.12);
   --mobile-accent-secondary: rgba(134, 196, 155, 0.2);
   --mobile-text-on-accent: #101713;
 }
-:root[data-palette='ocean'] {
+[data-palette='ocean'] {
   --mobile-accent: #5fd0e8;
   --mobile-accent-muted: rgba(95, 208, 232, 0.12);
   --mobile-accent-secondary: rgba(95, 208, 232, 0.2);
   --mobile-text-on-accent: #0b1620;
 }
-:root[data-palette='sunset'] {
+[data-palette='sunset'] {
   --mobile-accent: #f5a383;
   --mobile-accent-muted: rgba(245, 163, 131, 0.12);
   --mobile-accent-secondary: rgba(245, 163, 131, 0.2);
   --mobile-text-on-accent: #1b1210;
 }
-:root[data-palette='violet'] {
+[data-palette='violet'] {
   --mobile-accent: #b9a6f7;
   --mobile-accent-muted: rgba(185, 166, 247, 0.12);
   --mobile-accent-secondary: rgba(185, 166, 247, 0.2);
   --mobile-text-on-accent: #141020;
 }
 
-/* 浅色模式：同名 palette 的浅色主色（与桌面端 light 变体同源） */
-html:not(.dark)[data-palette='forest'] .mobile-ui {
+/* 浅色模式：同名 palette 的浅色主色（与桌面端 light 变体同源）。
+   选择器带 `html:not(.dark)` 祖先限定，权重高于上面的深色值；`html:not(.dark)[…]`
+   一路保留是为了承载元素正好是 html 时也不失配（宿主壳已不挂该属性）。 */
+html:not(.dark) [data-palette='forest'],
+html:not(.dark)[data-palette='forest'] {
   --mobile-accent: #3e6b4f;
   --mobile-accent-muted: rgba(62, 107, 79, 0.12);
   --mobile-accent-secondary: rgba(62, 107, 79, 0.2);
   --mobile-text-on-accent: #fdfcf7;
 }
-html:not(.dark)[data-palette='ocean'] .mobile-ui {
+html:not(.dark) [data-palette='ocean'],
+html:not(.dark)[data-palette='ocean'] {
   --mobile-accent: #0e7490;
   --mobile-accent-muted: rgba(14, 116, 144, 0.12);
   --mobile-accent-secondary: rgba(14, 116, 144, 0.2);
   --mobile-text-on-accent: #ffffff;
 }
-html:not(.dark)[data-palette='sunset'] .mobile-ui {
+html:not(.dark) [data-palette='sunset'],
+html:not(.dark)[data-palette='sunset'] {
   --mobile-accent: #d9532a;
   --mobile-accent-muted: rgba(217, 83, 42, 0.12);
   --mobile-accent-secondary: rgba(217, 83, 42, 0.2);
   --mobile-text-on-accent: #fefaf5;
 }
-html:not(.dark)[data-palette='violet'] .mobile-ui {
+html:not(.dark) [data-palette='violet'],
+html:not(.dark)[data-palette='violet'] {
   --mobile-accent: #6d4fc6;
   --mobile-accent-muted: rgba(109, 79, 198, 0.12);
   --mobile-accent-secondary: rgba(109, 79, 198, 0.2);
   --mobile-text-on-accent: #fcfbfe;
 }
 
-/* ==================== 色板选择器色块（设置页「主色色板」展示用） ====================
+/* ==================== 色板选择器色块（wasm-app 设置页「主色色板」展示用） ====================
+   2026-10-16 起选择器 UI 迁到各 wasm-app 自己的设置页（宿主外观页不再提供）；
+   色值 token 仍是全局的，应用运行面渲染在壳文档内，取值照旧继承 :root。
    default 跟随当前主题默认主色（深色 = 象牙白 / 浅色 = 近黑），
    其余与上方同名 palette 主色同源（改色需双端同改）。 */
 :root {
@@ -801,10 +869,44 @@ html:not(.dark)[data-palette='violet'] .mobile-ui {
   --mobile-palette-swatch-violet: #b9a6f7;
 }
 /* 浅色模式下色块使用浅色 palette 主色（与上方 light 变体同源） */
-html:not(.dark) .mobile-ui {
+html:not(.dark) {
   --mobile-palette-swatch-default: #1D1A14;
   --mobile-palette-swatch-forest: #3e6b4f;
   --mobile-palette-swatch-ocean: #0e7490;
   --mobile-palette-swatch-sunset: #d9532a;
   --mobile-palette-swatch-violet: #6d4fc6;
+}
+
+/* ==================== 移动端隐藏原生滚动条 ==================== */
+/* 移动端以触摸滚动为主（惯性滚动已由 WebView 提供），原生占位式滚动条
+ * （8px 参与布局）既挤窄内容区又无视觉价值：整个移动端统一隐藏。
+ *
+ * 覆盖规则（与隐藏同源冲突时，显式样式的更高特异性优先）：
+ *  - 代码查看器（FileViewerModal .viewer-body）保留 4px 细条滚动条——
+ *    其规则只覆盖 width/height，故本规则不用 display:none（display 无竞争对手
+ *    会被继承生效、连带把细条也藏掉），只用 width:0/height:0 归零，细条规则
+ *    靠更高特异性覆盖回 4px；
+ *  - 终端（terminal.css）xterm 滚动条已各自显式隐藏；
+ *  - 终端输入栏（TerminalInputBar）各面板已各自 scrollbar-width: none。
+ *
+ * 隐藏后原 scrollbar-gutter: stable 预留的 8px 槽位失去载体，会在
+ * Chromium 变体间产生不可预测的空白（部分实现仍按占位滚动条厚度预留），
+ * 一并复位为 auto——各视图的 scrollbar-gutter-stable 类保留不删，仅作
+ * 「该容器曾需要防宽度抖动」的历史标注。
+ */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.scrollbar-gutter-stable {
+  scrollbar-gutter: auto;
 }

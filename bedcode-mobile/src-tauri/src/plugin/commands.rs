@@ -61,11 +61,25 @@ pub async fn plugin_is_enabled(app_handle: tauri::AppHandle, plugin_id: String) 
     Ok(manager.is_enabled(&plugin_id).await)
 }
 
-/// 设置插件启用状态
+/// 设置插件启用状态（应用「已启用 / 可用」偏好，不触发激活）
 #[tauri::command]
 pub async fn plugin_set_enabled(app_handle: tauri::AppHandle, plugin_id: String, enabled: bool) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.set_enabled(&plugin_id, enabled).await
+}
+
+/// 查询插件「启动时自动激活」偏好（缺省 false = 不自动启动）
+#[tauri::command]
+pub async fn plugin_is_autostart(app_handle: tauri::AppHandle, plugin_id: String) -> Result<bool> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    Ok(manager.is_autostart(&plugin_id).await)
+}
+
+/// 设置插件「启动时自动激活」偏好（只改偏好，下次启动生效）
+#[tauri::command]
+pub async fn plugin_set_autostart(app_handle: tauri::AppHandle, plugin_id: String, autostart: bool) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.set_autostart(&plugin_id, autostart).await
 }
 
 /// 标记插件错误
@@ -129,7 +143,8 @@ pub async fn plugin_download(app_handle: tauri::AppHandle, zip_url: String) -> R
     let manager = app_handle.state::<Arc<PluginManager>>();
     let plugins_dir = manager.plugins_dir().clone();
 
-    let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(&zip_url, &plugins_dir).await?;
+    let plugin_id =
+        crate::plugin::downloader::PluginDownloader::download_and_install(&app_handle, &zip_url, &plugins_dir).await?;
 
     // 重新扫描并加载
     manager.scan_and_load().await;
@@ -176,6 +191,11 @@ pub async fn reload_wasm_plugin(app_handle: tauri::AppHandle, plugin_id: String)
 // ==================== File System Auth Commands ====================
 
 /// 回复文件访问授权请求
+///
+/// 前端契约（`FsAuthDialog.vue`）保持 `(requestId, allowed, remember)` 三参不变——
+/// 判定链收敛到 wasm-core `security::fs_auth` 后，宿主在此把「允许 + 是否记住」
+/// 映射成该实现的四种决策（`allow_once` / `allow_remember` / `deny`）。「拒绝并
+/// 永久记住」（`deny_always`）无前端入口，不在此伪造。
 #[tauri::command]
 pub async fn plugin_fs_auth_respond(
     app_handle: tauri::AppHandle,
@@ -183,76 +203,23 @@ pub async fn plugin_fs_auth_respond(
     allowed: bool,
     remember: bool,
 ) -> Result<()> {
+    use bedcode_wasm_core::security::fs_auth::FsDecision;
+
+    let decision = match (allowed, remember) {
+        (true, true) => FsDecision::AllowRemember,
+        (true, false) => FsDecision::AllowOnce,
+        // allowed=false 时 remember 无意义（前端恒传 false）——一律按一次拒绝
+        (false, _) => FsDecision::Deny,
+    };
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().respond(&request_id, allowed, remember).await;
+    manager.fs_auth().respond(&request_id, decision).await;
     Ok(())
 }
 
-/// 添加路径白名单
-#[tauri::command]
-pub async fn plugin_fs_add_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .add_path_whitelist(&path)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 移除路径白名单
-#[tauri::command]
-pub async fn plugin_fs_remove_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .remove_path_whitelist(&path)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 获取路径白名单
-#[tauri::command]
-pub async fn plugin_fs_get_path_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .get_path_whitelist()
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 添加插件白名单
-#[tauri::command]
-pub async fn plugin_fs_add_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .add_plugin_whitelist(&plugin_id)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 移除插件白名单
-#[tauri::command]
-pub async fn plugin_fs_remove_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .remove_plugin_whitelist(&plugin_id)
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
-
-/// 获取插件白名单
-#[tauri::command]
-pub async fn plugin_fs_get_plugin_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
-    let manager = app_handle.state::<Arc<PluginManager>>();
-    manager
-        .fs_auth()
-        .get_plugin_whitelist()
-        .await
-        .map_err(|e| crate::AppError::Plugin(e.to_string()))
-}
+// 路径 / 插件白名单管理命令（`plugin_fs_{add,remove,get}_{path,plugin}_whitelist`）
+// 随移动自实现退役（用户裁决 2026-10-11「fs 授权统一到桌面判定链，移动自实现
+// 已退役」）：统一判定链的授权真源 = 授权记录表 + 弹窗记忆，没有「全局路径 /
+// 插件白名单」这一层；前端无调用点（grep 实证），删除即零回归。
 
 // ==================== Plugin Logging Commands ====================
 
@@ -308,18 +275,14 @@ pub async fn plugin_invoke(
 /// app 私有下载目录按名查找，顶层优先 + 子目录递归兑底）。需 system:open 权限，
 /// 前端 requireSystemOpenPermission 已校验（与 plugin_open_file* 回调链同模式）。
 #[tauri::command]
-pub async fn plugin_reveal_received_file(
-    plugin_id: String,
-    file_name: String,
-) -> Result<()> {
+pub async fn plugin_reveal_received_file(plugin_id: String, file_name: String) -> Result<()> {
     if file_name.trim().is_empty() {
         return Err(crate::AppError::Plugin(
             "plugin_reveal_received_file: file_name is required".to_string(),
         ));
     }
     tracing::debug!(plugin_id = %plugin_id, file_name = %file_name, "reveal received file location");
-    crate::plugin::android_plugins::open_download_file_location_by_name(&file_name)
-        .await
+    crate::plugin::android_plugins::open_download_file_location_by_name(&file_name).await
 }
 
 /// 引导开启「所有文件访问」权限（打开系统公共 Download 目录所需）
@@ -345,4 +308,33 @@ pub async fn plugin_open_all_files_access(plugin_id: String) -> Result<bool> {
 pub async fn plugin_open_download_dir(plugin_id: String) -> Result<()> {
     tracing::debug!(plugin_id = %plugin_id, "open system download dir");
     crate::plugin::android_plugins::open_download_dir().await
+}
+
+// ==================== 终端输出流窄转发登记（票 12 · 批次 2b 命令薄壳） ====================
+//
+// 表本体就在同仓 `plugin/terminal_stream.rs`（[`TerminalStreamGateway`]，纯机制）；
+// Channel 是 Tauri IPC 机制，WASM 插件无法持有——命令薄壳留宿主，转调 crate
+// 全局单例（与 WIT `host-terminal-stream.forward-output` 共用同一张表）。
+
+/// 段2 订阅（进入终端页）：登记页面通道并开启输出推送。幂等
+#[tauri::command]
+pub async fn terminal_page_subscribe(
+    session_id: String,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> std::result::Result<(), String> {
+    if session_id.is_empty() {
+        return Err("session_id is empty".to_string());
+    }
+    crate::plugin::terminal_stream::terminal_stream_gateway().page_subscribe(&session_id, channel);
+    Ok(())
+}
+
+/// 段2 取消订阅（退出终端页）：清空页面通道并停止推送
+#[tauri::command]
+pub async fn terminal_page_unsubscribe(session_id: String) -> std::result::Result<(), String> {
+    if session_id.is_empty() {
+        return Err("session_id is empty".to_string());
+    }
+    crate::plugin::terminal_stream::terminal_stream_gateway().page_unsubscribe(&session_id);
+    Ok(())
 }

@@ -1,11 +1,11 @@
 export default {
   settings: {
     title: '设置',
-    general: '通用',
-    dangerZone: '重置',
+    // 票 2026-10-10：`general` / `dangerZone` 随 `actions` 组一并退役（零 UI 调用）。
+    // 2026-10-14：设备级擦除的文案迁入本文件 `about` 组的 dangerZone 系列
+    // （入口从平台设置一级页迁到「关于 BedCode」）。
     groups: {
       connection: '连接',
-      notification: '通知',
       security: '安全',
       system: '系统',
     },
@@ -29,17 +29,11 @@ export default {
     },
     appearance: {
       title: '外观',
-      subtitle: '主题、语言、字体与终端数量',
+      subtitle: '主题、语言、字体与主屏背景',
       theme: '主题',
       lightMode: '浅色模式',
       darkMode: '深色模式',
       followSystem: '跟随系统',
-      palette: '主色色板',
-      paletteDefault: '默认',
-      paletteForest: '森野绿',
-      paletteOcean: '海洋青',
-      paletteSunset: '落日晚霞',
-      paletteViolet: '星空紫',
       language: '语言',
       languageChinese: '中文',
       languageEnglish: 'English',
@@ -47,26 +41,33 @@ export default {
       fontNormal: '正常',
       fontLarge: '大',
       fontXLarge: '超大',
-      maxOpenTerminals: '最大可打开终端数量',
-      maxOpenTerminalsDesc: '同时运行的终端会话上限；桌面端同步时超出部分丢弃',
       generalSection: '通用',
       displaySection: '显示',
-      terminalSection: '终端',
+      // 主屏壁纸（2026-10-15 由壳设置页迁入：背景属外观配置，与主题深浅同屏；
+      // 档位渐变/遮罩预览逻辑在 styles/wallpaper.css，与主屏同源）
+      backgroundSection: '主屏背景',
+      backgroundNote: '仅主屏',
+      wallNone: '无',
+      wallAurora: '极光',
+      wallDune: '沙丘',
+      wallReef: '礁湖',
+      wallCustom: '自定义',
+      wallPick: '从相册选择',
+      wallReplace: '更换图片',
+      wallRemove: '移除图片',
+      wallDim: '遮罩强度',
+      // 票 2026-10-10 C4：terminalSection / maxOpenTerminals 随「终端上限」这一业务项
+      // 下沉 bedcode 应用，外观页只留平台项。
     },
     connection: {
       title: '连接设置',
-      subtitle: '自动重连、端口等连接参数',
-      autoReconnect: '自动重连',
-      keepAlive: '保持连接',
-      reconnectInterval: '重连间隔 (秒)',
-      defaultPort: '默认端口',
-      reconnectSection: '重连',
-      networkSection: '网络',
+      subtitle: '链路加密与传输安全',
+      // 票 2026-10-10 C4：自动重连 / 保持连接 / 默认端口是业务项，已下沉
+      // bedcode 应用的设置页；此处只留平台项（链路加密）。
+      businessElsewhere: '自动重连、保持连接与默认端口等连接设置已移至「BedCode」应用的设置页。',
       linkCryptoSection: '链路加密',
       linkCryptoMaster: '启用链路加密',
       linkEncryptHttp: '加密 HTTP 载荷',
-      linkEncryptWsTerminal: '加密终端通道',
-      linkEncryptWsEvent: '加密事件通道',
       linkStrictMode: '严格模式（拒绝明文降级）',
       linkPeerFingerprint: '对端指纹',
       linkNotPaired: '未配对',
@@ -75,10 +76,8 @@ export default {
     },
     authentication: {
       title: '认证设置',
-      subtitle: '配对方式与生物凭证',
-      preferredMethod: '优先认证方式',
-      pairingCode: '配对码',
-      biometric: '生物认证',
+      subtitle: '生物凭证绑定',
+      // 票 2026-10-10 C4：首选认证方式是业务项，已下沉 bedcode 应用。
       biometricSection: '生物认证密钥',
       biometricDesc: '密钥存储于系统安全硬件，仅通过指纹/人脸认证后可签名，私钥永不出设备。',
       bind: '绑定生物认证',
@@ -99,19 +98,9 @@ export default {
       unbindSuccess: '生物认证已解绑',
       unbindFailed: '解绑失败，请重试',
       notConnected: '未连接，无法绑定',
-      degradeHint: '未绑定时将自动使用配对码认证',
     },
-    notification: {
-      title: '通知设置',
-      subtitle: '通知时机、振动与提示音',
-      notifyOnWaiting: '等待输入时通知',
-      notifyOnConnection: '连接状态变化通知',
-      vibrate: '振动反馈',
-      notifyInBackground: '后台运行时通知',
-      soundOnTaskComplete: '任务完成提示音',
-      pushSection: '通知',
-      feedbackSection: '反馈',
-    },
+    // 票 2026-10-10 C4：notification 整组退役——通知三开关 / 振动 / 提示音皆业务项，
+    // 已下沉 bedcode 应用的设置页，`mobile-settings-notifications` 路由同批退役。
     egress: {
       title: '网络访问授权',
       subtitle: '查看与撤销外网访问授权',
@@ -123,6 +112,24 @@ export default {
       revokeHint: '撤销后，之前放行的外部地址需要重新授权。',
       revokeConfirmTitle: '撤销全部授权？',
       revokeConfirmMessage: '此操作将清除所有已记忆的外部地址授权（含「不再询问」记录）。',
+      strategySection: '访问策略',
+      strategyHint: '决定插件请求访问未经授权的地址时，是否询问你。',
+      // 策略区的空态与「授权记录」空态语义不同（前者是“没有插件需要配置”，
+      // 后者是“还没发生过授权”），共用一句会让策略区看起来像加载失败
+      strategyEmpty: '暂无可配置的插件',
+      alwaysAsk: '总是询问',
+      alwaysAskDesc: '每次访问都询问（跳过已记忆的授权）',
+      defaultStrategy: '默认',
+      defaultStrategyDesc: '已记忆的地址直接放行，其余询问',
+      alwaysAllow: '始终允许',
+      alwaysAllowDesc: '不询问直接放行（授权记录标记为「未经确认」）',
+      recordsSection: '授权记录',
+      sourceUser: '已确认',
+      sourceAlwaysAllow: '未经确认',
+      sourceUserDeny: '已拒绝',
+      revokeOne: '撤销',
+      revokeOneConfirmTitle: '撤销此条授权？',
+      revokeOneConfirmMessage: '撤销后，此地址需要重新授权才能访问。',
     },
     about: {
       title: '关于',
@@ -140,13 +147,17 @@ export default {
       installingUpdate: '正在安装更新...',
       downloadUpdate: '立即更新',
       currentVersion: '当前版本',
-    },
-    actions: {
-      resetSettings: '重置设置',
-      resetSettingsConfirm: '确定要重置所有设置为默认值吗？',
+      // 危险操作（2026-10-14 修订）：从平台设置一级页迁入「关于 BedCode」。
+      // 擦除对象含设备入场凭据与宿主连接态，按 §8 凭据零过境只能由宿主执行，
+      // 实现见 src/composables/useClearAllData.ts。
+      dangerZone: '危险操作',
       clearAllData: '清除所有数据',
-      clearDataConfirm: '确定要清除所有数据吗？包括预设任务、连接历史、配对设备等，此操作无法撤销。',
+      clearAllDataHint: '断开连接并清空预设任务、连接历史、配对设备、会话配置与本机缓存，无法撤销。',
+      clearAllDataFailed: '清除未完成，部分数据可能仍在，请重试或重启应用。',
     },
+    // 票 2026-10-10：`actions` 组整组退役。两个 action 已按归属分流：
+    // 「重置设置」→ wasm-apps/bedcode/src/settings/i18n.ts（重置业务设置项）；
+    // 「清除所有数据」→ 本文件 about 组的 dangerZone 系列（设备级擦除，留宿主）。
     browser: {
       confirmOpen: '确定要在浏览器中打开此链接吗？',
     },

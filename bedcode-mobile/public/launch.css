@@ -1,0 +1,38 @@
+/**
+ * 启动期预渲染底色（2026-10-07 从 index.html 内联 <style> 搬出，CSS 与注释逐字保留）
+ *
+ * 为什么不能搬回 index.html 内联：
+ *
+ *   Tauri v2 在 codegen 期给 index.html 里每个 <style> 打上 nonce 占位符
+ *   （tauri-codegen/src/context.rs → tauri-utils/src/html2.rs `inject_nonce(document,
+ *   "style", STYLE_NONCE_TOKEN)`），运行期再换成随机 nonce 并往 CSP 的 `style-src`
+ *   追加 `'nonce-…'`（tauri/src/manager/mod.rs `replace_csp_nonce`）。而 CSP3 规定：
+ *   directive 里一旦出现 nonce-source / hash-source，同一 directive 的 `'unsafe-inline'`
+ *   **被忽略** —— 于是所有「运行时用 JS 插入的内联 <style>」全被 `style-src-elem` 拒掉
+ *   （`style.sheet === null`）。本项目 mobile 的 auto-task / file-transfer 插件前端样式
+ *   正是靠 `document.head.appendChild(style)` 注入的，release 产物会集体失效。
+ *
+ *   结构锁：bedcode-desktop/src-tauri/tests/capabilities_lock.rs
+ *           ::index_html_has_no_inline_style_or_script（双端 index.html 同源一把锁）
+ *
+ * 放 public/ 而非并入 src/style.css：src 下的样式由 main.ts 以 JS import 引入，要等 JS
+ *   执行才生效；本文件要的是「WebView 首帧就有底色」，走 <link> 在 dev / prod 一致，
+ *   且不被 PostCSS/Tailwind 二次加工（与 Android 原生开屏资源是手工对齐的字面值）。
+ */
+
+/* 启动期预渲染底色：与 Android 原生开屏（windowBackground /
+   windowSplashScreenBackground = bedcode_launch_bg）同色，并跟随系统深浅色
+   （prefers-color-scheme 与 values/values-night 资源限定符同语义）。
+   消除「原生开屏（#F5F4F0 / #15130F）→ WebView 首帧」之间的白/错色闪变；
+   Vue 挂载后由应用主题接管（.mobile-app 背景与滚动条覆盖）。 */
+html,
+body {
+  background-color: #f5f4f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background-color: #15130f;
+  }
+}

@@ -1,0 +1,1865 @@
+//! 任务队列管理与调度状态机
+//!
+//! 每个会话维护独立的待执行任务队列，支持添加、删除、查询、清空操作。
+//!
+//! 调度状态机（ADR-0004）：
+//!
+//! ```text
+//! pending ──(全新会话，直接下发)───────────────────────────────────▶ executing ──▶ done
+//! pending ──(会话已有上下文：关闭旧会话 + 同配置新建，等新会话就绪)──▶ waiting ──(新会话 idle 到达 / 宽限耗尽)──▶ executing ──▶ done
+//! ```
+//!
+//! - waiting：轮换会话（[`rotate_session_for_next_task`]）后等待新会话就绪——
+//!   有 idle 信号的 agent（claude / pi / codex 的 SessionStart）由 state.rs idle
+//!   分支触发 on_session_idle 下发；**无 idle 信号或 hook 静默**时由
+//!   check_waiting_timeouts 宽限超时后直接下发（不取消任务）。主动取消仍走
+//!   cancel_task（用户操作）。
+//! - **任务间上下文隔离不再经终端清理命令**（/clear、/new 等）：上一任务终态后
+//!   关闭旧会话、以同一配置创建新会话，每个任务在全新上下文中执行（效果与旧
+//!   「clear 重建上下文」等价，但不再向终端发送任何命令字）；**opencode 同样
+//!   轮换**（其无 /clear 语义，首个 prompt 提交才创建 agent 会话——新会话就绪
+//!   改由宽限下发兑底，见 [`check_waiting_timeouts`]）
+//! - 出队时由插件直接写任务行（description = prompt，source='queue'），
+//!   不再依赖输入行重建，避免 prompt 与提交时序竞争
+//!
+//! SQL 一律使用参数绑定（`*_params` + `?N` 占位符），无手写转义。
+
+use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
+use bedcode_plugin_api::host::{HostBus, HostEvents, HostLog, HostPluginDatabase};
+use bedcode_plugin_api::http_response;
+use bedcode_plugin_api::sql_params;
+use bedcode_plugin_api::wasm_host::WasmHost;
+use serde_json::Value;
+
+use crate::task::agent;
+use crate::task::yield_guard;
+
+/// waiting 态最大尝试次数（进入 waiting + 2 次重试，共 3 次机会）
+///
+/// 轮换会话后等待新会话的 SessionStart idle 推送：agent CLI 完整启动
+/// （spawn shell → 加载 hooks → SessionStart）通常需要 2~5s，单次等待窗口无法
+/// 覆盖慢速启动；按次递增重试（3s/5s/8s，见 [`rotation_wait_window_seconds`]）。
+/// 三次尝试合计约 16s——**仍无 idle 就按宽限直接下发**（不取消，见
+/// [`check_waiting_timeouts`]），覆盖 opencode 等无 idle 信号的 agent。
+const MAX_DISPATCH_ATTEMPTS: i64 = 3;
+
+/// executing 态静默看门狗阈值（秒）
+///
+/// executing 队列项的收敛完全依赖 agent 终态推送（completed/interrupted），
+/// 推送链路断裂（插件未加载 / HTTP 持续失败 / agent 未发 idle）时会永久悬挂，
+/// 只能靠关闭会话兜底或手动取消（2026-08-22「移动端操作体验优化」卡 1 小时
+/// 后被会话关闭兜底成 interrupted）。真实运行中的 agent 每分钟级都有 busy
+/// 推送（实测 opencode 持续输出 Response running），因此以"会话最新任务行
+/// 事件时间静默时长"为判据而非总执行时长，长任务不受影响。
+/// 阈值需覆盖机器休眠（休眠期间 tick 与 agent 同时暂停，唤醒后一起恢复，
+/// 但 elapsed 含休眠时长），取 12h 折中。
+pub const EXECUTING_SILENCE_TIMEOUT_SECS: i64 = 12 * 3600;
+
+/// retrying 过渡态静默看门狗阈值（秒）
+///
+/// `retrying` 是 agent「可重试错误后正在自动退避重试」的**过渡态**：按约定它必然
+/// 收敛到 in_progress / completed（重试成功）或 interrupted（重试耗尽 /
+/// agent_settled）。因此「长时间无任何事件」= 收敛信号已丢失，而不是任务还在跑。
+///
+/// 阈值依据（pi 内核 auto-retry 上界，`settings.retry` 默认值）：
+/// `maxRetries = 3` 次，每次退避 `min(baseDelay 2s × 2^(n-1), maxAgentDelay 60s)`
+/// → 退避总时长上界 ≈ 2 + 4 + 8 = 14s，加上三次请求自身的耗时，最坏也在数分钟内
+/// 收敛。取 20 min 留足余量（含用户自定义更激进的退避配置）。
+///
+/// 为什么不用 [`EXECUTING_SILENCE_TIMEOUT_SECS`] 的 12h：那把「推送链断裂」当罕见
+/// 事故，而 retrying 的断裂是**常态**（宿主重启 / 终态推送 HTTP 丢失 / 限额类错误
+/// 被 hook 误判为可重试）。12h 内 `has_active_task` 恒真 → 队列全链停摆：后续任务
+/// 不再下发、定时任务的会话回收不触发、历史页长期显示「重试中」（2026-10-03 实测
+/// 现场：一条 `insufficient_quota` 的 429 任务卡在 retrying 逾 8 小时，队列第二项
+/// 永不下发）。
+///
+/// 取舍（休眠）：阈值短于 12h，机器休眠跨过阈值时可能在唤醒后误判一次。误判代价
+/// 有界且可接受——该任务记为 interrupted、队列轮换出新会话继续跑，仍在退避的 agent
+/// 被隔离在已关闭的旧会话里，不会把输入打进新任务；反之（阈值拉长）就是上面那条
+/// 「整链停摆一整天」的现场。
+pub const RETRYING_SILENCE_TIMEOUT_SECS: i64 = 20 * 60;
+
+/// retrying 停滞收敛原因（写入 `exit_reason`，历史页与移动端据此解释）
+pub const RETRY_STALL_INTERRUPT_REASON: &str =
+    "Retry stalled: agent stopped reporting status without a terminal result";
+
+/// retrying 行的看门狗裁决（纯判定，native 可测）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryingVerdict {
+    /// 静默时长未超阈值：agent 仍在退避重试，继续等待（**不得**收敛——
+    /// 误杀正在正常重试的长任务比多等一会儿坏得多）
+    Wait,
+    /// 静默时长已超阈值：重试链已断（agent 崩溃 / 终态推送丢失），
+    /// 收敛为 interrupted 并续跑队列
+    Interrupt,
+}
+
+/// retrying 行裁决：静默时长是否已越过阈值（纯判定，native 可测）
+///
+/// 严格大于（`>`）而非 `>=`：阈值本身是「仍可信」的上界，恰好等于阈值的那一秒
+/// 仍属可接受范围；越界需要**跨过**阈值才算断链。
+pub fn judge_retrying_stall(silent_secs: i64, timeout_secs: i64) -> RetryingVerdict {
+    if silent_secs > timeout_secs {
+        RetryingVerdict::Interrupt
+    } else {
+        RetryingVerdict::Wait
+    }
+}
+
+/// 第 N 次尝试的等待窗口（秒）：轮换会话后等待新会话 idle 推送的时限
+///
+/// 节奏 3s → 5s → 8s 递增（每次重试重置计时，累计约 16s）：
+/// - 有 idle 信号的 agent（claude / pi / codex，SessionStart）1~3s 到达，走快路径；
+/// - 无 idle 信号的 agent（opencode TUI：首个 prompt 提交才创建 agent 会话，
+///   实测从 PTY 启动到输入框就绪约 9s）在宽限耗尽后由
+///   [`check_waiting_timeouts`] 直接下发兑底（输入即创建会话执行），不再取消。
+fn rotation_wait_window_seconds(attempts: i64) -> i64 {
+    match attempts.clamp(1, MAX_DISPATCH_ATTEMPTS) {
+        1 => 3,
+        2 => 5,
+        _ => 8,
+    }
+}
+
+/// 自动任务投递输入的提交符（统一为 Enter 键字节 `\r`，所有平台一致）
+///
+/// 投递输入必须以提交符结尾，agent 才会把它当作指令执行。Enter 键在终端中的
+/// 实际字节是 `\r`（CR, 0x0D），各消费端均以 CR 识别提交：
+/// - 原始模式 TUI（pi / Claude Code / opencode / codex）：按键字节就是 `\r`。
+///   pi 的编辑器对单独的 `\n`（LF）一律按"插入换行"处理（多行输入），
+///   `\n` 永远不会触发提交 —— 发 `\n` 会出现"prompt 显示在输入栏但任务
+///   永不开始执行"（2026-09 移动端 + pi agent 实测）
+/// - 规范模式 shell（bash 等）：PTY 行规程 ICRNL 把 `\r` 转换为 `\n` 提交，等价安全
+/// - Windows（ConPTY）：Claude Code 只把 `\r` 识别为提交，`\n` 仅是换行内容
+///
+/// 结论：统一 `\r` 是唯一在原始模式（TUI）与规范模式（shell）下都正确的提交符。
+/// 旧实现曾按平台选 `\n`（Linux/macOS），仅对规范模式 shell 成立，对原始模式
+/// TUI 失败。`platform` 存储仍被 hooks.rs python_interpreter 使用（选择 Python
+/// 解释器命令），不因本函数简化而移除。
+fn input_submit_char() -> &'static str {
+    "\r"
+}
+
+/// 任务队列表建表 SQL（按语句拆分）
+///
+/// 宿主 `plugin_db_execute` 为 rusqlite 单语句版本（后续语句被静默忽略），
+/// 多语句 schema 必须拆分，否则 CREATE INDEX 永远不会执行
+pub const TASK_QUEUE_SCHEMA: &[&str] = &[
+    r#"
+CREATE TABLE IF NOT EXISTS task_queue (
+    id                TEXT PRIMARY KEY,
+    session_id        TEXT NOT NULL,
+    prompt            TEXT NOT NULL,
+    position          INTEGER NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+    source            TEXT NOT NULL DEFAULT 'queue',
+    clear_due_at      TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+)"#,
+    "CREATE INDEX IF NOT EXISTS idx_task_queue_session ON task_queue(session_id, status, position)",
+];
+
+// ==================== Queue Operations ====================
+
+/// 添加任务到队列末尾（来源 queue：用户在 UI 手动添加）
+///
+/// 返回 `(task_id, position)`；写表失败 → `Err`（不再静默吞掉——
+/// 入队失败却照常广播会让队列视图与 DB 分叉）
+pub fn add_task(host: &WasmHost, session_id: &str, prompt: &str) -> Result<(String, i64), String> {
+    add_task_with_source(host, session_id, prompt, "queue")
+}
+
+/// 添加任务到队列末尾（带来源标记：queue / scheduled）
+///
+/// source 随调度写入 task_history.source，区分手动队列任务与定时任务。
+/// 返回 `(task_id, position)`；写表失败 → `Err`
+pub fn add_task_with_source(
+    host: &WasmHost,
+    session_id: &str,
+    prompt: &str,
+    source: &str,
+) -> Result<(String, i64), String> {
+    // 终态行清理（queue-closure issue 02）：入队时顺带删除该会话的终态行
+    // （done/cancelled/interrupted），防 task_queue 随使用时长无限膨胀。
+    // 终态行只写不读——list_queue 仅查 pending、list_active_task 仅查
+    // waiting/executing，移动端对账依赖队列中**存在** executing 项而非终态行，删除安全。
+    let _ = host.plugin_db_execute_params(
+        "DELETE FROM task_queue WHERE session_id = ?1 AND status IN ('done', 'cancelled', 'interrupted')",
+        &sql_params![session_id],
+    );
+
+    // 查询当前最大 position
+    let max_pos = get_max_position(host, session_id);
+    let position = max_pos + 1;
+
+    // 生成 ID 并插入
+    // 宿主 plugin_db_query 返回的是对象行数组（[{"col": value}]），按列名取值；
+    // 不要写成行内数组（row.as_array()），否则解析失败会落入下方回退分支
+    let id_sql = "SELECT lower(hex(randomblob(16))) AS id";
+    let id = host
+        .plugin_db_query(id_sql)
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+        .and_then(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| {
+            // wasm32-unknown-unknown 无系统时钟，SystemTime::now() 会 panic（unreachable trap）；
+            // 回退用会话+位置组合，天然唯一且无时间依赖
+            format!("fallback-{}-{}", session_id, position)
+        });
+
+    match host.plugin_db_execute_params(
+        "INSERT INTO task_queue (id, session_id, prompt, position, status, source, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, 'pending', ?5, datetime('now'), datetime('now'))",
+        &sql_params![id, session_id, prompt, position, source],
+    ) {
+        Ok(affected) if affected > 0 => {
+            host.log_info(&format!(
+                "Task queued: id={} session_id={} position={}",
+                id, session_id, position
+            ));
+            Ok((id, position))
+        }
+        Ok(affected) => {
+            host.log_error(&format!(
+                "Task queue insert affected 0 rows: id={} session_id={} position={}",
+                id, session_id, position
+            ));
+            Err(format!("task queue insert affected {affected} rows"))
+        }
+        Err(e) => {
+            host.log_error(&format!(
+                "Task queue insert failed: id={} session_id={} position={} err={}",
+                id, session_id, position, e
+            ));
+            Err(format!("task queue insert failed: {e}"))
+        }
+    }
+}
+
+/// 取消队列中的活动任务（waiting / executing），供用户主动取消长任务
+///
+/// - `waiting`：clear 尚未送达/重试中 → 置 cancelled，广播 cancel（带 task_id，
+///   移动端预设据此落 interrupted），随后继续调度队列中其余 pending 项
+/// - `executing`：已下发未完成 → 置 cancelled + 将对应任务行（task_history 最新行）
+///   标 interrupted（原因 "Cancelled by user"），避免终端内后续输出产生假
+///   in_progress 悬挂；广播 cancel 后继续调度下一项
+/// - 其余状态（pending / done / cancelled / interrupted / 不存在）不可取消，返回 false
+///
+/// 广播语义与 check_waiting_timeouts 的取消路径共用（action="cancel" + status="cancelled"）
+pub fn cancel_task(host: &WasmHost, session_id: &str, task_id: &str) -> bool {
+    let current_status: Option<String> = host
+        .plugin_db_query_params(
+            "SELECT status FROM task_queue WHERE id = ?1 AND session_id = ?2",
+            &sql_params![task_id, session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+        .and_then(|row| {
+            row.get("status")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
+
+    match current_status.as_deref() {
+        Some("waiting") => {
+            // 状态 UPDATE 失败（锁/磁盘）时不得继续广播/调度，否则取消状态
+            // 与实际不符（移动端显示已取消而任务仍在队列）
+            if host
+                .plugin_db_execute_params(
+                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
+                    &sql_params![task_id],
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+            {
+                host.log_info(&format!(
+                    "Task cancelled by user (waiting): id={} session_id={}",
+                    task_id, session_id
+                ));
+            } else {
+                host.log_warn(&format!(
+                    "Cancel task failed (waiting, db update no-op): id={} session_id={}",
+                    task_id, session_id
+                ));
+                return false;
+            }
+        }
+        Some("executing") => {
+            if host
+                .plugin_db_execute_params(
+                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
+                    &sql_params![task_id],
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+            {
+                // 任务行标中断：终端内正在执行的输出不再产生假 in_progress 悬挂
+                mark_latest_task_interrupted(host, session_id, "Cancelled by user");
+                host.log_info(&format!(
+                    "Task cancelled by user (executing): id={} session_id={}",
+                    task_id, session_id
+                ));
+            } else {
+                host.log_warn(&format!(
+                    "Cancel task failed (executing, db update no-op): id={} session_id={}",
+                    task_id, session_id
+                ));
+                return false;
+            }
+        }
+        _ => return false,
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(
+        host,
+        session_id,
+        remaining,
+        "cancel",
+        Some(task_id),
+        Some("cancelled"),
+    );
+
+    // 取消后继续调度：仅当无其他 executing 行时才下发下一项——executing 分支已把
+    // 目标行置 cancelled（try_dispatch_next 的 done 归档 WHERE status='executing'
+    // 不会命中它），但执行期间用户手动输入会创建独立任务行（on_input_submitted
+    // 跳过插件自身投递），该行仍是 executing，若此刻归档会被误标 done 并广播
+    // done，移动端预设误标 completed
+    let has_other_executing = match host.plugin_db_query_params(
+        "SELECT 1 FROM task_queue WHERE session_id = ?1 AND status = 'executing' LIMIT 1",
+        &sql_params![session_id],
+    ) {
+        Ok(Some(v)) => v.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        _ => false,
+    };
+    if !has_other_executing {
+        try_dispatch_next(host, session_id);
+    }
+    true
+}
+
+/// 从队列删除指定任务，并重排剩余任务的 position
+pub fn remove_task(host: &WasmHost, session_id: &str, task_id: &str) -> bool {
+    // 先删除
+    let affected = host
+        .plugin_db_execute_params(
+            "DELETE FROM task_queue WHERE id = ?1 AND session_id = ?2",
+            &sql_params![task_id, session_id],
+        )
+        .unwrap_or(-1);
+    if affected == 0 {
+        return false;
+    }
+
+    // 重排 position：按创建时间重新编号
+    reorder_positions(host, session_id);
+
+    host.log_info(&format!(
+        "Task removed: id={} session_id={}",
+        task_id, session_id
+    ));
+    true
+}
+
+/// 查询指定会话的待执行队列
+pub fn list_queue(host: &WasmHost, session_id: &str) -> Vec<Value> {
+    host.plugin_db_query_params(
+        "SELECT id, prompt, position, status, source, created_at FROM task_queue \
+         WHERE session_id = ?1 AND status = 'pending' \
+         ORDER BY position ASC",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().cloned())
+    .unwrap_or_default()
+}
+
+/// 会话当前处理中的队列项（waiting=等待 clear 后下发 / executing=已下发未完成）
+///
+/// 仅返回排在最前的一项；供移动端面板对账与状态展示，桌面端 modal 仍以
+/// list_queue（pending）为排队视图。
+pub fn list_active_task(host: &WasmHost, session_id: &str) -> Option<Value> {
+    host.plugin_db_query_params(
+        "SELECT id, prompt, position, status, source, created_at FROM task_queue \
+         WHERE session_id = ?1 AND status IN ('waiting', 'executing') \
+         ORDER BY position ASC LIMIT 1",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+}
+
+/// 会话是否有在途队列项（waiting / executing）
+///
+/// 与 [`crate::task::state::has_active_task`]（按任务历史最新行判定）互补：本函数
+/// 看队列自身的状态机。两者分别覆盖对方的数据源失真场景——任务历史行被
+/// 中途 idle 推送污染、或终态推送丢失导致队列项残留 executing。调度入口
+/// 需同时满足两者为否才可出队，否则归档逻辑会把仍在执行的任务误标 done。
+pub fn has_inflight_task(host: &WasmHost, session_id: &str) -> bool {
+    host.plugin_db_query_params(
+        "SELECT 1 FROM task_queue WHERE session_id = ?1 AND status IN ('waiting', 'executing') LIMIT 1",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().map(|a| !a.is_empty()))
+    .unwrap_or(false)
+}
+
+/// 清空指定会话的所有 pending 任务
+pub fn clear_queue(host: &WasmHost, session_id: &str) -> i32 {
+    host.plugin_db_execute_params(
+        "DELETE FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
+        &sql_params![session_id],
+    )
+    .unwrap_or(-1)
+}
+
+/// 编辑待执行任务的 prompt 内容（仅 pending 状态可改）
+///
+/// 返回是否找到并更新成功。已出队/已执行的任务不可编辑。
+pub fn update_task(host: &WasmHost, session_id: &str, task_id: &str, prompt: &str) -> bool {
+    let affected = host
+        .plugin_db_execute_params(
+            "UPDATE task_queue SET prompt = ?1, updated_at = datetime('now') \
+             WHERE id = ?2 AND session_id = ?3 AND status = 'pending'",
+            &sql_params![prompt, task_id, session_id],
+        )
+        .unwrap_or(-1);
+    if affected > 0 {
+        host.log_info(&format!(
+            "Task updated: id={} session_id={}",
+            task_id, session_id
+        ));
+        true
+    } else {
+        false
+    }
+}
+
+/// 按给定顺序重排待执行任务的 position
+///
+/// ordered_ids 必须是该会话全部 pending 任务的 id 集合（顺序可任意），
+/// 数量与 id 集合不一致时拒绝执行，避免与并发修改产生数据不一致。
+pub fn reorder_queue(host: &WasmHost, session_id: &str, ordered_ids: &[String]) -> bool {
+    // 取当前全部 pending 任务
+    let tasks = list_queue(host, session_id);
+    if tasks.len() != ordered_ids.len() {
+        host.log_warn(&format!(
+            "reorder_queue: id count mismatch session_id={} current={} given={}",
+            session_id,
+            tasks.len(),
+            ordered_ids.len()
+        ));
+        return false;
+    }
+
+    // 校验 id 集合一致（顺序不限，逐一出列检查）
+    let mut remaining_ids: Vec<&str> = tasks
+        .iter()
+        .filter_map(|t| t.get("id").and_then(|v| v.as_str()))
+        .collect();
+    for id in ordered_ids {
+        match remaining_ids.iter().position(|c| c == id) {
+            Some(idx) => {
+                remaining_ids.remove(idx);
+            }
+            None => {
+                host.log_warn(&format!("reorder_queue: unknown task id={}", id));
+                return false;
+            }
+        }
+    }
+    if !remaining_ids.is_empty() {
+        host.log_warn("reorder_queue: ordered_ids missing some pending tasks");
+        return false;
+    }
+
+    // 按新顺序重写 position（每行独立更新，失败即中止并记录日志，不做静默忽略）
+    for (idx, id) in ordered_ids.iter().enumerate() {
+        let affected = host
+            .plugin_db_execute_params(
+                "UPDATE task_queue SET position = ?1, updated_at = datetime('now') \
+                 WHERE id = ?2 AND session_id = ?3",
+                &sql_params![idx as i64, id, session_id],
+            )
+            .unwrap_or(-1);
+        if affected <= 0 {
+            host.log_warn(&format!(
+                "reorder_queue: failed to set position for id={}",
+                id
+            ));
+            return false;
+        }
+    }
+
+    host.log_info(&format!(
+        "reorder_queue: session_id={} reordered {} tasks",
+        session_id,
+        ordered_ids.len()
+    ));
+    true
+}
+
+/// 统计指定会话的 pending 任务数量
+pub fn pending_count(host: &WasmHost, session_id: &str) -> i64 {
+    host.plugin_db_query_params(
+        "SELECT COUNT(*) as cnt FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+    .and_then(|row| row.get("cnt").cloned())
+    .and_then(|v| v.as_i64())
+    .unwrap_or(0)
+}
+
+// ==================== Dispatch Logic ====================
+
+/// 尝试调度下一个任务
+///
+/// 触发时机：任务终态推送（completed/interrupted）、队列从空变非空。
+/// 调度策略（ADR-0004 上下文清理语义）：
+/// - 会话无终态任务记录（全新会话）或 agent 无清理命令 → 跳过 clear 直接下发
+/// - 会话已有上下文 → 置 waiting + 登记延迟 clear（CLEAR_DELAY_SECONDS 后由
+///   send_due_clears 实际发送），等新会话 idle 推送后再下发（见 on_session_idle）
+pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
+    host.log_debug(&format!("try_dispatch_next: session_id={}", session_id));
+
+    // 自动执行关闭时不调度：仅入队等待，用户开启 auto_execute 后统一执行
+    // （手动模式用于先添加多个任务再一起执行；开启瞬间由 set_auto_mode 触发本入口）
+    if !crate::task::state::auto_execute_on(host, session_id) {
+        host.log_debug(&format!(
+            "try_dispatch_next: auto_execute off, hold dispatch for session_id={}",
+            session_id
+        ));
+        return;
+    }
+
+    // 会话有进行中任务（in_progress/asking）时不下发：防止把 prompt 打进忙碌终端。
+    // 常规调度链由终态推送驱动，进入本函数前最新任务行必为终态；该守卫兜底
+    // 状态跟踪失真（中途 idle 推送、输入行未识别建行等）时的所有调用方，
+    // 避免任务被误下发或在途队列项被归档逻辑误标 done（移动端预设显示已完成）
+    if crate::task::state::has_active_task(host, session_id) {
+        host.log_warn(&format!(
+            "try_dispatch_next: session_id={} has active task, hold dispatch",
+            session_id
+        ));
+        return;
+    }
+
+    // 终态到达：上一轮下发的 executing 项归档为 done
+    // （状态机把 done 延后到任务真正完成时，使队列视图能反映执行中的任务）
+    // 归档前先取 executing 项 id 列表，逐项广播 done（带 task_id，供移动端
+    // 预设任务完成匹配；批量 UPDATE 无法获知具体行，故先 SELECT）
+    let done_ids: Vec<String> = host
+        .plugin_db_query_params(
+            "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'executing'",
+            &sql_params![session_id],
+        )
+        .map_err(|e| {
+            // 查询失败时无法广播 done，移动端预设将卡在执行中直至对账——
+            // 不静默：记录日志，归档仍继续（广播是尽力而为）
+            host.log_warn(&format!(
+                "try_dispatch_next: failed to read executing ids for done broadcast: {}",
+                e
+            ));
+        })
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            row.get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET status = 'done', updated_at = datetime('now') \
+         WHERE session_id = ?1 AND status = 'executing'",
+        &sql_params![session_id],
+    );
+    let remaining = pending_count(host, session_id);
+    for task_id in &done_ids {
+        broadcast_queue_changed(
+            host,
+            session_id,
+            remaining,
+            "done",
+            Some(task_id),
+            Some("done"),
+        );
+    }
+
+    // 先处理超时的 waiting 项（重试或宽限兑底下发），避免卡住后续调度
+    check_waiting_timeouts(host, session_id);
+
+    // waiting 项处理完成后再次判空，两类情形都不得继续出队：
+    // ① 仍有 waiting（未超时 / idle 未到）→ 等新会话就绪后再调度；
+    // ② 宽限兑底刚把 waiting 置为 executing（任务行已建 in_progress）→
+    //    会话已有活动任务，此刻再出队会两个任务同时执行
+    if find_waiting_task(host, session_id).is_some()
+        || crate::task::state::has_active_task(host, session_id)
+    {
+        host.log_debug(&format!(
+            "try_dispatch_next: session_id={} has active or waiting task, hold dispatch",
+            session_id
+        ));
+        return;
+    }
+
+    let queue = list_queue(host, session_id);
+    if queue.is_empty() && !has_inflight_task(host, session_id) {
+        host.log_debug(&format!(
+            "try_dispatch_next: no pending tasks for session_id={}",
+            session_id
+        ));
+        // 队列清空（最后一个任务终态到达）且无在途项（waiting/executing）：若该
+        // 会话由定时任务创建，自动关闭会话释放 PTY（无人值守语义，见 scheduled.rs）。
+        // has_inflight_task 守卫：宽限兑底刚把 waiting 变 executing 但任务行
+        // 尚未可见的窗口内，不得因队列为空关闭正在执行任务的会话
+        maybe_close_scheduled_session(host, session_id);
+        return;
+    }
+
+    let first = match queue.first() {
+        Some(t) => t,
+        None => return,
+    };
+    let task_id = first
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let prompt = first
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let source = first
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("queue")
+        .to_string();
+
+    if prompt.is_empty() {
+        host.log_warn(&format!(
+            "try_dispatch_next: empty prompt for task_id={}",
+            task_id
+        ));
+        return;
+    }
+
+    // 确认会话仍在运行（P1-b 真源在本域登记视图；不存在/已停止时跳过）
+    if crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        host.log_warn(&format!(
+            "try_dispatch_next: session {} not found or not running",
+            session_id
+        ));
+        return;
+    }
+
+    let agent_name = crate::task::state::session_agent(host, session_id);
+
+    // 会话已有终态任务上下文（非全新会话）且 agent 支持完整自动任务
+    // （claude / pi / opencode / codex）→ 轮换会话：不再向终端发送 clear/new，
+    // 关闭已完成的旧会话、以同一配置创建新会话，剩余队列迁移到新会话后置
+    // waiting，等新会话就绪（idle 或宽限兑底，见 check_waiting_timeouts）再下发。
+    // 全新会话 / 不支持自动任务的 agent（unknown）→ 直接下发。
+    if should_rotate_session(
+        agent_name,
+        crate::task::state::has_terminal_task(host, session_id),
+    ) {
+        rotate_session_for_next_task(host, session_id, &task_id);
+        return;
+    }
+
+    dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
+}
+
+/// 是否需要轮换会话（纯判定，native 可测）
+///
+/// 判据：会话已有终态任务上下文（非全新会话）且 agent 支持完整自动任务
+/// （claude / pi / opencode / codex：建任务行 + 状态回传，见 agent::is_supported）。
+/// 轮换 = 关闭旧会话 + 同配置新建，替代旧的 clear/new 命令；opencode 同样
+/// 轮换（其无 /clear 语义，新会话就绪改由「等待宽限超时直接下发」兑底，见
+/// [`check_waiting_timeouts`]）。
+fn should_rotate_session(agent_name: &str, has_terminal_task: bool) -> bool {
+    agent::is_supported(agent_name) && has_terminal_task
+}
+
+/// 轮换会话执行下一个任务（替代旧「clear / new 命令重建上下文」）
+///
+/// 上一任务终态后：关闭已完成的旧会话，以**同一配置**（configId）创建新会话，
+/// 把剩余队列（waiting + pending）整体迁移到新会话，置 waiting 等待新会话就绪
+/// （agent SessionStart 的 idle 推送，见 state.rs idle 分支 → on_session_idle）
+/// 后下发。每个任务在全新上下文中执行，总体效果与旧 clear 语义等价，但不再
+/// 向终端发送任何清理命令字。
+///
+/// **session_id 传递逻辑（本函数是唯一迁移点）**：
+/// - `task_queue`：waiting + pending 行改键到新会话（executing 不存在——调用前
+///   已归档 done；新会话据此继续出队）；
+/// - `task_session_settings`：auto_execute / auto_answer 随会话复制（新会话
+///   保持自动执行语义）；
+/// - `task_scheduled`：executed 档案的 session_id 迁移（队列清空时最终会话仍能
+///   被 [`maybe_close_scheduled_session`] 关闭，无人值守语义不丢）；
+/// - `task_history` / `task_session_mapping`：留在旧会话下（历史与记账，不迁移）。
+///
+/// 失败路径 fail-visible：新会话创建失败 → 任务回退 pending 并广播 revert，
+/// 旧会话保持不动（下次调度重试）；绝不把任务静默留在 waiting。
+fn rotate_session_for_next_task(host: &WasmHost, session_id: &str, task_id: &str) {
+    // 1. 置 waiting（等待新会话就绪；clear_due_at 恒为 NULL——本流程不再有延迟
+    //    clear，on_session_idle 据此直接放行），先占住在途标记防并发调度
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET status = 'waiting', dispatch_attempts = 1, clear_due_at = NULL, \
+         updated_at = datetime('now') WHERE id = ?1",
+        &sql_params![task_id],
+    );
+
+    // 2. 读旧会话配置（会话登记域视图 configId）
+    let config_id = crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .and_then(|info| {
+            info.get("configId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    let Some(config_id) = config_id else {
+        host.log_error(&format!(
+            "rotate_session: 读旧会话 configId 失败，回退 pending: session_id={} task_id={}",
+            session_id, task_id
+        ));
+        revert_rotated_task(host, session_id, task_id);
+        return;
+    };
+
+    // 3. 以同一配置创建新会话（插件编排入口：命名唯一化 + config→launch spec
+    //    + host-pty.spawn，同步返回新 session_id）
+    let new_session_id = match crate::launch::create_via_host(&serde_json::json!({
+        "configId": config_id,
+        "start": true,
+    })) {
+        Ok(reply) => match reply
+            .get("sessionId")
+            .and_then(|s| s.as_str())
+            .map(str::to_string)
+        {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                host.log_error(&format!(
+                    "rotate_session: 新会话回执缺 sessionId，回退 pending: session_id={} task_id={}",
+                    session_id, task_id
+                ));
+                revert_rotated_task(host, session_id, task_id);
+                return;
+            }
+        },
+        Err(e) => {
+            host.log_error(&format!(
+                "rotate_session: 新会话创建失败，回退 pending: session_id={} task_id={} err={}",
+                session_id, task_id, e
+            ));
+            revert_rotated_task(host, session_id, task_id);
+            return;
+        }
+    };
+
+    // 4. 迁移队列到新会话（waiting + pending；此时无 executing——调用前已归档 done）
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET session_id = ?1, updated_at = datetime('now') \
+         WHERE session_id = ?2 AND status IN ('waiting', 'pending')",
+        &sql_params![new_session_id, session_id],
+    );
+
+    // 5. 会话开关随会话复制（新会话保持 auto_execute / auto_answer）
+    let (auto_execute, auto_answer) = crate::task::state::session_flags(host, session_id);
+    crate::task::state::set_session_flags(
+        host,
+        &new_session_id,
+        Some(auto_execute),
+        Some(auto_answer),
+    );
+
+    // 6. 定时任务档案关联迁移：最终会话在队列清空时仍能被关闭（无人值守语义）
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_scheduled SET session_id = ?1 WHERE session_id = ?2 AND status = 'executed'",
+        &sql_params![new_session_id, session_id],
+    );
+
+    // 7. 关闭已完成的旧会话（尽力而为：失败只留痕，不阻断新会话执行）
+    if let Err(e) = crate::session::close_via_pty(session_id, None) {
+        host.log_warn(&format!(
+            "rotate_session: 旧会话关闭失败（不阻断新会话）: session_id={} err={}",
+            session_id, e
+        ));
+    }
+
+    host.log_info(&format!(
+        "rotate_session: 旧会话 {} 已关闭，新会话 {} 创建（config_id={}），队列已迁移，等待新会话就绪后下发 task_id={}",
+        session_id, new_session_id, config_id, task_id
+    ));
+
+    // 8. 广播队列变更（新会话 id 键控：前端/移动端据此刷新队列归属与 waiting 态）
+    let remaining = pending_count(host, &new_session_id);
+    broadcast_queue_changed(
+        host,
+        &new_session_id,
+        remaining,
+        "rotate",
+        Some(task_id),
+        Some("waiting"),
+    );
+}
+
+/// 轮换失败回退：waiting → pending（下次调度重试），广播 revert
+fn revert_rotated_task(host: &WasmHost, session_id: &str, task_id: &str) {
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET status = 'pending', clear_due_at = NULL, \
+         updated_at = datetime('now') WHERE id = ?1",
+        &sql_params![task_id],
+    );
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(
+        host,
+        session_id,
+        remaining,
+        "revert",
+        Some(task_id),
+        Some("pending"),
+    );
+}
+
+/// 新会话就绪回调（SessionStart → idle 推送时由 state.rs 调用）
+///
+/// 有 waiting 项且 clear_due_at 为空（轮换流恒为空——新会话创建后等待本回调）
+/// → 立即下发；clear_due_at 仍在（升级前遗留的旧 clear 流在途）→ 等
+/// send_due_clears 到点发送后、Claude 重建会话的下一次 idle 再下发。
+/// 无 waiting 项但有 pending 项 → 走常规调度（定时任务新建会话入队后首次
+/// 就绪走此路径）。队列无任务时不做任何事（避免普通用户会话每次 SessionStart
+/// 都广播自动模式变更）。
+pub fn on_session_idle(host: &WasmHost, session_id: &str) {
+    // 超时检查：若 waiting 已超时，先重试/取消再决定是否下发
+    check_waiting_timeouts(host, session_id);
+
+    let has_work =
+        !list_queue(host, session_id).is_empty() || find_waiting_task(host, session_id).is_some();
+    if !has_work {
+        return;
+    }
+
+    if let Some(waiting) = find_waiting_task(host, session_id) {
+        let task_id = waiting
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt = waiting
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source = waiting
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queue")
+            .to_string();
+        if task_id.is_empty() || prompt.is_empty() {
+            host.log_warn(&format!(
+                "on_session_idle: malformed waiting task for session_id={}",
+                session_id
+            ));
+            return;
+        }
+
+        // clear 仍在延迟窗口内（尚未实际发送）时不下发：
+        // 等 send_due_clears 到点发送 clear、Claude 重建会话后的 idle 再调度，
+        // 否则会在上一任务上下文未清理的情况下直接投递 prompt
+        let clear_pending = waiting
+            .get("clear_due_at")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if clear_pending {
+            host.log_debug(&format!(
+                "on_session_idle: task_id={} clear still pending, hold dispatch",
+                task_id
+            ));
+            return;
+        }
+
+        let agent_name = crate::task::state::session_agent(host, session_id);
+        dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
+    } else {
+        // 有 pending 但无 waiting：首次调度（如定时任务新建会话后的首轮出队）
+        try_dispatch_next(host, session_id);
+    }
+}
+
+/// 下发任务：置 executing → 写任务行（source 随队列项）→ 发送 prompt
+///
+/// 顺序约束：先写任务行再投递输入 —— 提交行观察（`handle_submitted_input`）
+/// 依赖 has_active_task 跳过插件自身投递的输入行，任务行必须先落库
+///
+/// P1-b：输入走本插件登记域写入管线（`session::input_via_pty`），不再绕
+/// `host-terminal.terminal_send`——该原语的属主判定查内核会话表，对插件会话恒拒
+/// （真源已不在宿主），是死端。
+fn dispatch_task(
+    host: &WasmHost,
+    session_id: &str,
+    task_id: &str,
+    prompt: &str,
+    agent_name: &str,
+    source: &str,
+) {
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_queue SET status = 'executing', updated_at = datetime('now') WHERE id = ?1",
+        &sql_params![task_id],
+    );
+
+    // 出队直接写任务行（description=prompt、source 随队列项），不再依赖输入行重建
+    crate::task::state::create_task_from_dispatch(host, session_id, prompt, agent_name, source);
+
+    // 投递输入必须以提交符结尾（统一 Enter 字节 \r，见 input_submit_char）：
+    // PTY 写入原样透传（宿主不会自动补提交符，见 SessionManager::write_input）。
+    // \r 是 Enter 键字节：原始模式 TUI（pi 等）与规范模式 shell（ICRNL 转 \n）
+    // 都识别为提交；\n 在 pi 编辑器中是"插入换行"，会导致任务卡在输入栏。
+    // prompt 统一去尾部空白后拼提交符，避免重复换行。
+    // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
+    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char());
+    if let Err(e) = crate::session::input_via_pty(session_id, &input_line, None) {
+        host.log_error(&format!(
+            "dispatch_task: session input failed: task_id={} err={}",
+            task_id, e
+        ));
+        // 发送失败：任务行已写入，标为中断避免假 in_progress 悬挂
+        mark_latest_task_interrupted(host, session_id, "session input failed on dispatch");
+        let _ = host.plugin_db_execute_params(
+            "UPDATE task_queue SET status = 'done', updated_at = datetime('now') WHERE id = ?1",
+            &sql_params![task_id],
+        );
+        // 发送失败同样广播 done（携带 task_id），移动端预设任务据此完成匹配
+        let remaining = pending_count(host, session_id);
+        broadcast_queue_changed(
+            host,
+            session_id,
+            remaining,
+            "done",
+            Some(task_id),
+            Some("done"),
+        );
+        return;
+    }
+
+    host.log_info(&format!(
+        "dispatch_task: dispatched task_id={} prompt_len={} session_id={}",
+        task_id,
+        prompt.len(),
+        session_id
+    ));
+
+    // 队列项执行中：任务终态推送到达后由 try_dispatch_next 置 done 并继续出队。
+    // executing 状态用于区分"已下发未完成"与"已完成"，避免重复下发。
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "dequeue", None, None);
+}
+
+/// 将指定会话最新任务行标为 interrupted（调度失败兑底）
+fn mark_latest_task_interrupted(host: &WasmHost, session_id: &str, reason: &str) {
+    let _ = host.plugin_db_execute_params(
+        "UPDATE task_history SET status = 'interrupted', exit_reason = ?1, completed_at = datetime('now'), updated_at = datetime('now') \
+         WHERE id = (SELECT id FROM task_history WHERE session_id = ?2 ORDER BY created_at DESC LIMIT 1)",
+        &sql_params![reason, session_id],
+    );
+}
+
+/// 关闭定时任务创建的会话（任务全部执行完毕后调用）
+///
+/// 判定依据：task_scheduled 中仍存在关联该 session_id 的 executed 档案
+/// （定时任务触发时创建并记录，见 scheduled::handle_scheduler_tick）。
+/// 普通用户会话/手动添加任务的会话无此记录，不受影响。
+/// 调用前需确保队列已完全空闲（无 pending / waiting / executing）。
+fn maybe_close_scheduled_session(host: &WasmHost, session_id: &str) {
+    let job = host
+        .plugin_db_query_params(
+            "SELECT id FROM task_scheduled WHERE session_id = ?1 AND status = 'executed'",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()));
+
+    let Some(job) = job else {
+        return;
+    };
+    let job_id = job
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // 确认会话仍在运行（已关闭/不存在时跳过，避免无效调用）；P1-b 真源在本域
+    if crate::session::view_via_host(session_id)
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return;
+    }
+
+    host.log_info(&format!(
+        "maybe_close_scheduled_session: closing session_id={} (scheduled job_id={} finished)",
+        session_id, job_id
+    ));
+    // P1-b 起停止走本域编排（登记 Stopping + host-pty.kill；终态由 pty:exit 收尾）
+    if let Err(e) = crate::session::close_via_pty(session_id, None) {
+        host.log_error(&format!(
+            "maybe_close_scheduled_session: session_close failed: session_id={} err={}",
+            session_id, e
+        ));
+    }
+}
+
+/// 查询会话的 waiting 态队列项（最多一项）
+fn find_waiting_task(host: &WasmHost, session_id: &str) -> Option<Value> {
+    let result = host
+        .plugin_db_query_params(
+            "SELECT id, prompt, source, dispatch_attempts, clear_due_at FROM task_queue \
+             WHERE session_id = ?1 AND status = 'waiting' \
+             ORDER BY position ASC LIMIT 1",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()?;
+    result.as_array()?.first().cloned()
+}
+
+/// 到点发送等待中的延迟 clear 命令（scheduler-tick 周期调用）
+///
+/// **仅服务升级前遗留的 waiting 行**（旧「clear 重建上下文」流程在途）：
+/// 轮换流程（[`rotate_session_for_next_task`]）进入 waiting 时 clear_due_at 恒为
+/// NULL，本函数对新行是无操作。遗留行由本函数补发 clear 后放行下发（等
+/// on_session_idle），避免升级瞬间在途任务静默卡死；发送成功把 clear_due_at
+/// 置空并重置 updated_at（超时计时从 clear 实际发送时刻起算）；失败回退 pending。
+/// 发送失败回退 pending（下一次终态触发时重试调度）。
+/// 票 15：moved from auto-task 后把私有库查询失败**冒泡为本域 Result**（旧实现把
+/// `.ok()` 静默吞掉）。定时器回调据此按域计数失败——行级失败仍在循环内自愈
+/// （回滚 pending + 广播 revert），只有「这一轮连在途项都查不到」才算本域降级。
+pub fn send_due_clears(host: &WasmHost, now_utc: &str) -> Result<(), String> {
+    let due = host
+        .plugin_db_query_params(
+            "SELECT id, session_id FROM task_queue \
+             WHERE status = 'waiting' AND clear_due_at IS NOT NULL AND clear_due_at <= ?1",
+            &sql_params![now_utc],
+        )
+        .map_err(|e| format!("query due clears: {}", e))?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    // 让出护栏：`continue` 分支（缺 session_id / 缺 id）不产生宿主调用，
+    // 大队列下会成为同一 async store 内的无让出循环（D7：不得拖垮配对回调）
+    let mut yield_counter = 0u64;
+    for row in due {
+        yield_guard(host, &mut yield_counter);
+        let task_id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if task_id.is_empty() || session_id.is_empty() {
+            continue;
+        }
+
+        let clear_command =
+            agent::clear_command_for(crate::task::state::session_agent(host, &session_id))
+                .unwrap_or("/clear");
+        if let Err(e) = crate::session::input_via_pty(
+            &session_id,
+            &format!("{}{}", clear_command, input_submit_char()),
+            None,
+        ) {
+            host.log_error(&format!(
+                "send_due_clears: session input clear failed: task_id={} err={}",
+                task_id, e
+            ));
+            // clear 发送失败：回退 pending，下次终态触发时重试调度。
+            // 回退同样广播 revert（带 task_id），移动端据此刷新队列重新显示该任务
+            let _ = host.plugin_db_execute_params(
+                "UPDATE task_queue SET status = 'pending', clear_due_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+                &sql_params![task_id],
+            );
+            let remaining = pending_count(host, &session_id);
+            broadcast_queue_changed(
+                host,
+                &session_id,
+                remaining,
+                "revert",
+                Some(task_id.as_str()),
+                Some("pending"),
+            );
+            continue;
+        }
+        // 发送成功：清空 clear_due_at 标记已发送，重置 updated_at 使超时计时
+        // 从 clear 实际发送时刻起算
+        let _ = host.plugin_db_execute_params(
+            "UPDATE task_queue SET clear_due_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+            &sql_params![task_id],
+        );
+        host.log_info(&format!(
+            "send_due_clears: clear sent for task_id={} session_id={}",
+            task_id, session_id
+        ));
+    }
+    Ok(())
+}
+
+/// 检查 waiting 态超时项（调度入口幂等调用）
+///
+/// WASM 无系统时钟，超时判断全部由 SQLite 宿侧时间计算：
+/// updated_at 距当前超过当前尝试的等待窗口（3s/5s/8s，见
+/// [`rotation_wait_window_seconds`]）视为超时。未达最大重试次数 → 仅放宽
+/// 下一轮窗口（重设 updated_at 重新计时）；**宽限耗尽直接下发**（不再取消，
+/// 覆盖 opencode 等无 idle 信号 agent；空 prompt 脏数据行除外）。
+fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
+    // 超时判定按行内 attempts 选择窗口（3s/5s/8s 递增），elapsed 由 SQLite
+    // 计算（WASM 无系统时钟）；重试会把 updated_at 重置为 now，窗口即从本轮
+    // 起算（轮换流没有可重发的动作——会话已在创建，重试 = 放宽等待窗口）
+    let overdue = host
+        .plugin_db_query_params(
+            "SELECT id, prompt, source, dispatch_attempts, \
+                (strftime('%s', 'now') - strftime('%s', updated_at)) AS elapsed \
+             FROM task_queue \
+             WHERE session_id = ?1 AND status = 'waiting'",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for row in overdue {
+        let task_id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt = row
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let source = row
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queue")
+            .to_string();
+        let attempts = row
+            .get("dispatch_attempts")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+        let elapsed = row.get("elapsed").and_then(|v| v.as_i64()).unwrap_or(0);
+        if task_id.is_empty() {
+            continue;
+        }
+
+        // 未到当前尝试的等待窗口：继续等 idle（idle 到达由 on_session_idle 下发）
+        if elapsed <= rotation_wait_window_seconds(attempts) {
+            continue;
+        }
+
+        if attempts < MAX_DISPATCH_ATTEMPTS {
+            // 重试：仅递增尝试并重置计时（下一轮窗口更宽 3s→5s→8s）。
+            // clear_due_at 保持原值：轮换流恒为 NULL；升级前遗留的 clear 行
+            // 若尚未发送仍会被 send_due_clears 补发（见其文档）
+            let next_attempts = attempts + 1;
+            let _ = host.plugin_db_execute_params(
+                "UPDATE task_queue SET dispatch_attempts = ?1, updated_at = datetime('now') WHERE id = ?2",
+                &sql_params![next_attempts, task_id],
+            );
+            host.log_warn(&format!(
+                "check_waiting_timeouts: waiting timeout, retry {}/{} scheduled for task_id={} session_id={}",
+                next_attempts, MAX_DISPATCH_ATTEMPTS, task_id, session_id
+            ));
+        } else if prompt.is_empty() {
+            // 脏数据兑底：waiting 行无 prompt 无法下发——取消并广播（带 task_id），
+            // 移动端据此把对应预设落 interrupted，避免"任务静默消失"
+            host.log_warn(&format!(
+                "check_waiting_timeouts: waiting row without prompt, cancelled task_id={} session_id={}",
+                task_id, session_id
+            ));
+            let _ = host.plugin_db_execute_params(
+                "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
+                &sql_params![task_id],
+            );
+            let remaining = pending_count(host, session_id);
+            broadcast_queue_changed(
+                host,
+                session_id,
+                remaining,
+                "cancel",
+                Some(task_id.as_str()),
+                Some("cancelled"),
+            );
+        } else {
+            // 宽限耗尽（累计约 16s）仍未等到新会话 idle：**直接下发，不取消**。
+            // 覆盖两类场景：
+            // ① opencode 等无 idle 信号的 agent——宽限已覆盖其 TUI 启动时间
+            //   （实测约 9s），下发即创建 agent 会话并执行（会话在轮换时已同步
+            //   创建成功，此路径保证「创建成功后才输入任务内容」的顺序）；
+            // ② hook 静默（idle 推送丢失）——直接下发比取消更能让任务跑起来。
+            // 输入失败由 dispatch_task 兜底标 interrupted；会话已创建且运行，
+            // 宽限足以让 agent CLI 就绪。
+            let agent_name = crate::task::state::session_agent(host, session_id);
+            host.log_info(&format!(
+                "check_waiting_timeouts: waiting grace exhausted, dispatching task_id={} session_id={} prompt_len={}",
+                task_id, session_id, prompt.len()
+            ));
+            dispatch_task(host, session_id, &task_id, &prompt, agent_name, &source);
+        }
+    }
+}
+
+/// executing 态静默看门狗（scheduler-tick 周期调用）
+///
+/// 对每个 executing 队列项，取其会话任务行的最新事件时间（event_time 缺失时
+/// 回退 started_at / created_at），距 now 超过 [`EXECUTING_SILENCE_TIMEOUT_SECS`]
+/// 即判定终态推送链断裂，复用 [`crate::task::state::interrupt_running_tasks_on_session_end`]
+/// 把运行中任务行与在途队列项一并收敛到 interrupted 并广播（语义同会话结束兜底，
+/// 但原因不同：不是会话退出，而是信号丢失）。真实执行中的 agent 每分钟级都有
+/// busy 推送推进事件时间，长任务不会被误杀。
+/// 票 15：与 [`send_due_clears`] 同口径——私有库查询失败冒泡为本域 Result，
+/// 供定时器回调按域计数降级（行级自愈逻辑不变）。
+pub fn check_executing_silence(host: &WasmHost, now_utc: &str) -> Result<(), String> {
+    let overdue = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT DISTINCT q.session_id AS session_id, \
+                    (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) AS silent_secs \
+                 FROM task_queue q \
+                 WHERE q.status = 'executing' \
+                   AND (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) > {}",
+                EXECUTING_SILENCE_TIMEOUT_SECS
+            ),
+            &sql_params![now_utc],
+        )
+        .map_err(|e| format!("query silent executing tasks: {}", e))?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut yield_counter = 0u64;
+    for row in overdue {
+        yield_guard(host, &mut yield_counter);
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let silent_secs = row.get("silent_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+        if session_id.is_empty() || silent_secs <= EXECUTING_SILENCE_TIMEOUT_SECS {
+            continue;
+        }
+
+        host.log_warn(&format!(
+            "check_executing_silence: session_id={} executing task silent for {}s, terminal signal lost, interrupting",
+            session_id, silent_secs
+        ));
+        crate::task::state::interrupt_running_tasks_on_session_end(host, &session_id);
+    }
+    Ok(())
+}
+
+/// retrying 过渡态静默看门狗（scheduler-tick 周期调用）
+///
+/// 逐条检查 `retrying` 任务行：以行内最后事件时间（`event_time`，缺失时回退
+/// `updated_at` / `created_at`）为准算静默时长，越过
+/// [`RETRYING_SILENCE_TIMEOUT_SECS`] 即判定 agent 的收敛信号丢失，复用
+/// [`crate::task::state::interrupt_running_tasks`] 把该会话的运行中任务行与
+/// 在途队列项一并收敛为 interrupted。
+///
+/// 与 [`check_executing_silence`] 的分工：后者守的是「合法长任务不许被误杀」
+/// （12h），本者守的是「过渡态必须有界」——retrying 按 agent 的重试上界必然在
+/// 数分钟内收敛，长时间静默只能是推送链断了，故用短阈值。
+///
+/// **收敛后必须续跑**（[`Self::check_executing_silence`] 不续跑：那是会话已死
+/// 的场景）：会话仍在册时立即 [`try_dispatch_next`]，把队列里下一项下发——
+/// 闭环的最后一环，否则这一条卡住会让整条队列跟着停摆。会话已不在册时跳过
+/// （收敛本身已完成，调度入口也会自己判「会话不存在」返回）。
+///
+/// 票 15：私有库查询失败冒泡为本域 Result，供定时器回调按域计数降级。
+pub fn check_retrying_silence(host: &WasmHost, now_utc: &str) -> Result<(), String> {
+    // **按会话聚合**（GROUP BY session_id）而不是逐行：收敛面是会话级的
+    //（interrupt_running_tasks 会把该会话全部非终态行一并收敛），逐行走会在同一会话
+    // 有多条停滞行时对同一会话调两次——第一次收敛后已续跑下一项（新建 in_progress 行），
+    // 第二次会把刚下发的任务一并误杀。按会话聚合后一轮 tick 每会话至多收敛一次。
+    let rows = host
+        .plugin_db_query_params(
+            "SELECT session_id, MAX(strftime('%s', ?1) - strftime('%s', \
+                 COALESCE(NULLIF(event_time, ''), NULLIF(updated_at, ''), created_at))) AS silent_secs \
+             FROM task_history WHERE status = 'retrying' GROUP BY session_id",
+            &sql_params![now_utc],
+        )
+        .map_err(|e| format!("query stalled retrying tasks: {}", e.message))?
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut yield_counter = 0u64;
+    for row in rows {
+        yield_guard(host, &mut yield_counter);
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if session_id.is_empty() {
+            continue;
+        }
+        let silent_secs = row.get("silent_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+        if judge_retrying_stall(silent_secs, RETRYING_SILENCE_TIMEOUT_SECS)
+            != RetryingVerdict::Interrupt
+        {
+            continue;
+        }
+
+        host.log_warn(&format!(
+            "check_retrying_silence: session_id={} retrying silent for {}s (> {}s), \
+             terminal signal lost, converging to interrupted",
+            session_id, silent_secs, RETRYING_SILENCE_TIMEOUT_SECS
+        ));
+        crate::task::state::interrupt_running_tasks(
+            host,
+            &session_id,
+            RETRY_STALL_INTERRUPT_REASON,
+        );
+        // 会话仍在册才续跑下一项（已消失时调度入口只会自己判不存在返回）
+        if crate::session::view_via_host(&session_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            try_dispatch_next(host, &session_id);
+        }
+    }
+    Ok(())
+}
+
+// ==================== HTTP Endpoint Handler ====================
+
+/// 处理队列相关的 HTTP 端点请求
+///
+/// 路由：
+/// - POST task-queue/add → 添加任务
+/// - DELETE task-queue/remove → 删除任务
+/// - GET task-queue/list → 查询队列
+/// - POST task-queue/clear → 清空队列
+/// - POST task-queue/update → 更新任务内容
+/// - POST task-queue/reorder → 重排序队列
+pub fn handle_queue_http(
+    host: &WasmHost,
+    method: &str,
+    path: &str,
+    body: &Value,
+    query: &Value,
+) -> Value {
+    host.log_debug(&format!("handle_queue_http: {} {}", method, path));
+
+    match (method, path) {
+        ("POST", "add") => handle_add(host, body, query),
+        ("DELETE", "remove") => handle_remove(host, body, query),
+        ("GET", "list") => handle_list(host, query),
+        ("POST", "clear") => handle_clear(host, body, query),
+        ("POST", "update") => handle_update(host, body, query),
+        ("POST", "reorder") => handle_reorder(host, body, query),
+        ("POST", "cancel") => handle_cancel(host, body, query),
+        _ => {
+            host.log_warn(&format!("Unknown queue endpoint: {} {}", method, path));
+            http_response::error(404, &format!("Not found: {} {}", method, path))
+        }
+    }
+}
+
+// ==================== HTTP Handler Implementations ====================
+
+/// POST task-queue/add
+fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if prompt.is_empty() {
+        return http_response::error(400, "Missing prompt");
+    }
+
+    // 与 session-mode/task-status 一致：先解析 claude_sid → bedcode sid，
+    // 防止调用方传 claude_sid 时开关行/任务行/队列行键控不一致，
+    // 导致 auto_execute_on 查不到开关而"入队后永不调度"
+    let resolved_id = crate::task::state::resolve_session_id(host, session_id);
+
+    // 入队（count_before 用于判断是否触发首次调度，此处仅保留日志语义）；
+    // 写表失败显性报错——不广播、不调度（DB 无行却发事件 = 幻影）
+    let (task_id, position) = match add_task(host, &resolved_id, prompt) {
+        Ok(v) => v,
+        Err(e) => {
+            host.log_error(&format!(
+                "task queue add-task failed (session_id={}): {}",
+                resolved_id, e
+            ));
+            return http_response::error(500, &format!("Failed to enqueue task: {e}"));
+        }
+    };
+
+    // 广播队列变更
+    let count_after = pending_count(host, &resolved_id);
+    broadcast_queue_changed(host, &resolved_id, count_after, "add", None, None);
+
+    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）。
+    // has_inflight_task 拦截队列仍有在途项的场景：此刻调度会把在途
+    // executing 项误归档为 done 并广播，移动端预设被误标已完成
+    if crate::task::state::auto_execute_on(host, &resolved_id)
+        && !crate::task::state::has_active_task(host, &resolved_id)
+        && !has_inflight_task(host, &resolved_id)
+    {
+        try_dispatch_next(host, &resolved_id);
+    }
+
+    http_response::ok_with_data(serde_json::json!({
+        "task_id": task_id,
+        "position": position,
+    }))
+}
+
+/// DELETE task-queue/remove
+fn handle_remove(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_id.is_empty() {
+        return http_response::error(400, "Missing task_id");
+    }
+
+    let removed = remove_task(host, session_id, task_id);
+    if !removed {
+        return http_response::error(404, "Task not found");
+    }
+
+    // 删除后广播队列变更
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "remove", None, None);
+
+    http_response::ok()
+}
+
+/// GET task-queue/list
+fn handle_list(host: &WasmHost, query: &Value) -> Value {
+    let session_id = query
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+
+    let tasks = list_queue(host, session_id);
+    let queue_count = tasks.len() as i64;
+    // 当前处理中的队列项（waiting/executing）：供移动端打开面板时对账，
+    // 避免把正在执行/等待 clear 的任务误判为丢失
+    let active_task = list_active_task(host, session_id);
+
+    http_response::ok_with_data(serde_json::json!({
+        "session_id": session_id,
+        "tasks": tasks,
+        "queue_count": queue_count,
+        "active_task": active_task,
+    }))
+}
+
+/// POST task-queue/clear
+fn handle_clear(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+
+    clear_queue(host, session_id);
+    broadcast_queue_changed(host, session_id, 0, "clear", None, None);
+
+    http_response::ok()
+}
+
+/// POST task-queue/update — 更新任务内容
+fn handle_update(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+    let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_id.is_empty() {
+        return http_response::error(400, "Missing task_id");
+    }
+    if prompt.is_empty() {
+        return http_response::error(400, "Missing prompt");
+    }
+
+    let updated = update_task(host, session_id, task_id, prompt);
+    if !updated {
+        return http_response::error(404, "Task not found or not pending");
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "update", None, None);
+
+    http_response::ok()
+}
+
+/// POST task-queue/reorder — 重排序队列
+fn handle_reorder(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task_ids: Vec<String> = body
+        .get("task_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_ids.is_empty() {
+        return http_response::error(400, "Missing task_ids");
+    }
+
+    let reordered = reorder_queue(host, session_id, &task_ids);
+    if !reordered {
+        return http_response::error(400, "Task ID set mismatch");
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(host, session_id, remaining, "reorder", None, None);
+
+    http_response::ok()
+}
+
+/// POST task-queue/cancel — 取消活动队列项（waiting / executing）
+///
+/// body: session_id + task_id；仅 waiting / executing 可取消（见 [`cancel_task`]）
+fn handle_cancel(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_id.is_empty() {
+        return http_response::error(400, "Missing task_id");
+    }
+
+    if cancel_task(host, session_id, task_id) {
+        http_response::ok()
+    } else {
+        http_response::error(
+            404,
+            "Task not found or not cancellable (only waiting/executing tasks can be cancelled)",
+        )
+    }
+}
+
+// ==================== Internal Helpers ====================
+
+/// 查询指定会话的最大 position
+fn get_max_position(host: &WasmHost, session_id: &str) -> i64 {
+    host.plugin_db_query_params(
+        "SELECT MAX(position) as max_pos FROM task_queue WHERE session_id = ?1 AND status = 'pending'",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+    .and_then(|row| row.get("max_pos").cloned())
+    .and_then(|v| v.as_i64())
+    .unwrap_or(-1)
+}
+
+/// 重排指定会话的 pending 任务 position（填补删除后的空缺）
+fn reorder_positions(host: &WasmHost, session_id: &str) {
+    let tasks = host
+        .plugin_db_query_params(
+            "SELECT id FROM task_queue WHERE session_id = ?1 AND status = 'pending' ORDER BY position ASC, created_at ASC",
+            &sql_params![session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for (idx, task) in tasks.iter().enumerate() {
+        let id = task.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let _ = host.plugin_db_execute_params(
+            "UPDATE task_queue SET position = ?1, updated_at = datetime('now') WHERE id = ?2",
+            &sql_params![idx as i64, id],
+        );
+    }
+}
+
+/// 广播队列变更事件
+///
+/// task_id/status 为可选关联信息：done 广播携带（移动端预设任务完成匹配），
+/// 其余动作传 None 保持既有线协议。
+///
+/// 三通道（bus + emit + WS 广播）**共用同一载荷**（形状真源在
+/// [`crate::ws_events::queue_changed_payload`]），避免三处键名漂移。
+pub fn broadcast_queue_changed(
+    host: &WasmHost,
+    session_id: &str,
+    queue_count: i64,
+    action: &str,
+    task_id: Option<&str>,
+    status: Option<&str>,
+) {
+    let payload =
+        crate::ws_events::queue_changed_payload(session_id, queue_count, action, task_id, status);
+    // 队列变更经 bus + emit 发布（票 06 起不经宿主 broadcast_sync）
+    let _ = host.bus_publish(EVENT_TASK_QUEUE_CHANGED, &payload);
+    // 通知前端 UI 实时刷新（事件名与前端 context.events.on 监听一致）
+    host.emit_event(EVENT_TASK_QUEUE_CHANGED, &payload);
+    // 移动端事件源（票 02）：`session-control` 端点全体客户端；失败只留痕
+    crate::ws_events::broadcast_event(host, EVENT_TASK_QUEUE_CHANGED, &payload);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- rotation_wait_window_seconds ----------
+
+    #[test]
+    fn rotation_wait_window_scales_with_attempts() {
+        assert_eq!(rotation_wait_window_seconds(1), 3);
+        assert_eq!(rotation_wait_window_seconds(2), 5);
+        assert_eq!(rotation_wait_window_seconds(3), 8);
+        // clamp：attempts 越界回落到 [1, MAX_DISPATCH_ATTEMPTS]
+        assert_eq!(rotation_wait_window_seconds(0), 3);
+        assert_eq!(rotation_wait_window_seconds(99), 8);
+    }
+
+    // ---------- should_rotate_session ----------
+
+    /// 正例：有终态任务上下文 + 支持完整自动任务的 agent（claude/pi/opencode/codex）→ 轮换
+    #[test]
+    fn rotate_decision_for_supported_agents() {
+        for agent in ["claude", "pi", "codex", "opencode"] {
+            assert!(
+                should_rotate_session(agent, true),
+                "{agent} 有上下文时必须轮换会话（opencode 同样轮换）"
+            );
+        }
+    }
+
+    /// 反例：无上下文（全新会话）→ 直接下发
+    #[test]
+    fn rotate_decision_fresh_session_dispatches_directly() {
+        assert!(!should_rotate_session("claude", false));
+        assert!(!should_rotate_session("opencode", false));
+    }
+
+    /// 反例：不支持自动任务的 agent（unknown）→ 直接下发
+    #[test]
+    fn rotate_decision_unsupported_agent_dispatches_directly() {
+        assert!(!should_rotate_session("unknown", true));
+    }
+
+    /// 轮换决策与 agent 支持注册联动（新增 agent 自动获得语义）
+    #[test]
+    fn rotate_decision_matches_supported_registry() {
+        for profile in crate::task::agent::AGENT_PROFILES {
+            assert_eq!(
+                should_rotate_session(profile.name, true),
+                crate::task::agent::is_supported(profile.name),
+                "{} 的轮换判定必须与 is_supported 一致（任何支持完整自动任务的 agent 都轮换）",
+                profile.name
+            );
+        }
+    }
+
+    // ---------- judge_retrying_stall ----------
+
+    /// 正例：静默时长跨过阈值 → 收敛（重试链已断，不收敛就会永久卡在重试中）
+    #[test]
+    fn retrying_stall_verdict_interrupts_after_threshold() {
+        assert_eq!(
+            judge_retrying_stall(
+                RETRYING_SILENCE_TIMEOUT_SECS + 1,
+                RETRYING_SILENCE_TIMEOUT_SECS
+            ),
+            RetryingVerdict::Interrupt
+        );
+    }
+
+    /// 反例：未到阈值 → 继续等待（误杀正在正常退避重试的长任务比多等一会儿坏得多）
+    #[test]
+    fn retrying_stall_verdict_waits_before_threshold() {
+        assert_eq!(
+            judge_retrying_stall(0, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+        assert_eq!(
+            judge_retrying_stall(599, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+    }
+
+    /// 边界：恰好等于阈值仍算「可信」（判据是严格大于 `>`，不是 `>=`）
+    ///
+    /// 锁的是比较符本身：改成 `>=` 会让「刚好卡在阈值」的那一秒提前收敛，而实测
+    /// pi 的退避总时长上界就在数分钟量级，阈值边界的归属直接影响误杀面。
+    #[test]
+    fn retrying_stall_verdict_boundary_is_strictly_greater() {
+        assert_eq!(
+            judge_retrying_stall(RETRYING_SILENCE_TIMEOUT_SECS, RETRYING_SILENCE_TIMEOUT_SECS),
+            RetryingVerdict::Wait
+        );
+        assert_eq!(
+            judge_retrying_stall(
+                RETRYING_SILENCE_TIMEOUT_SECS + 1,
+                RETRYING_SILENCE_TIMEOUT_SECS
+            ),
+            RetryingVerdict::Interrupt
+        );
+    }
+
+    /// 阈值档位契约：必须**远小于** executing 静默阈值（12h）且**远大于** agent
+    /// 自身的重试上界（pi `maxRetries=3` × `min(2s×2^(n-1), 60s)` ≈ 14s 退避）
+    ///
+    /// 两端都是产品判断而非任意取值：
+    /// - 下界（≥ 5min）：小于 agent 自身重试上界太多 → 正常退避中被误杀；
+    /// - 上界（< 12h = EXECUTING_SILENCE_TIMEOUT_SECS）：等于 12h 就是本次修复前
+    ///   的现场（队列停摆一整天），等于则本看门狗形同虚设。
+    #[test]
+    fn retrying_silence_threshold_is_bounded_by_both_sides() {
+        assert!(
+            RETRYING_SILENCE_TIMEOUT_SECS >= 5 * 60,
+            "阈值 {}s 小于 agent 重试上界余量（≥5min），会把正常退避重试误判为断链",
+            RETRYING_SILENCE_TIMEOUT_SECS
+        );
+        assert!(
+            RETRYING_SILENCE_TIMEOUT_SECS < EXECUTING_SILENCE_TIMEOUT_SECS,
+            "阈值 {}s 不小于 executing 静默阈值 {}s：retrying 停滞与合法长任务同等待，遇断链仍会整链停摆",
+            RETRYING_SILENCE_TIMEOUT_SECS,
+            EXECUTING_SILENCE_TIMEOUT_SECS
+        );
+    }
+
+    /// 闭环两半都在：停滞收敛**且**继续调度下一项
+    ///
+    /// 收敛面（`state::interrupt_running_tasks`）与续跑（`try_dispatch_next`）
+    /// 任缺其一都会让「任务不卡住」但「队列不推进」变成新的半闭环。两者都是宿主
+    /// 编排（native 无 DB 连接），故以结构锁钉住调用形状。
+    #[test]
+    fn retrying_watchdog_converges_and_continues_the_queue() {
+        let src = include_str!("queue.rs");
+        let body = src
+            .split("pub fn check_retrying_silence")
+            .nth(1)
+            .expect("check_retrying_silence must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("watchdog body must precede the test module");
+        assert!(
+            body.contains("state::interrupt_running_tasks("),
+            "停滞收敛必须走唯一收敛面 state::interrupt_running_tasks（另起一套 SQL 会与它漂移）"
+        );
+        assert!(
+            body.contains("RETRY_STALL_INTERRUPT_REASON"),
+            "收敛必须带上可读的停滞原因（历史页与移动端据此解释为什么中断）"
+        );
+        assert!(
+            body.contains("try_dispatch_next(host, &session_id)"),
+            "收敛后必须续跑队列：缺失会让队列在第一个停滞任务后整体停摆（闭环缺失的最后一环）"
+        );
+        assert!(
+            body.contains("view_via_host(&session_id)"),
+            "续跑前必须判会话是否仍在册（会话已消失时调度入口只会自己判不存在返回）"
+        );
+    }
+
+    /// 看门狗只看 retrying 行：合法长任务（in_progress）与等待人工应答（asking）
+    /// 不得被本阈值收敛
+    #[test]
+    fn retrying_watchdog_query_is_scoped_to_retrying_rows() {
+        let src = include_str!("queue.rs");
+        let body = src
+            .split("pub fn check_retrying_silence")
+            .nth(1)
+            .expect("check_retrying_silence must exist")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            body.contains("WHERE status = 'retrying'"),
+            "看门狗 SQL 必须只取 retrying 行：带上 in_progress/asking 就会误杀长任务与等人工应答的任务"
+        );
+        assert!(
+            body.contains("GROUP BY session_id"),
+            "看门狗必须按会话聚合：逐行走会在同一会话有多条停滞行时重复收敛，\
+             第二次会把刚续跑下发的任务一并误杀"
+        );
+        assert!(
+            body.contains("NULLIF(event_time, '')"),
+            "静默时长必须以行内最后事件时间为准（用 updated_at 会把本域自身的写算成心跳，永远不触发）"
+        );
+    }
+}

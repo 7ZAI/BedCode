@@ -146,6 +146,7 @@ Rust 插件通过 `inventory` crate 实现静态注册（编译期链接），TS
   "id": "com.bedcode.example",
   "name": "Example Plugin",
   "version": "1.0.0",
+  "platform": "desktop",
   "description": "An example plugin",
   "author": "BedCode Team",
   "main": "index.ts",
@@ -200,6 +201,7 @@ Rust 插件通过 `inventory` crate 实现静态注册（编译期链接），TS
 | `id` | 唯一标识 | 反向域名格式，如 `com.bedcode.quick-snippets` |
 | `name` | 显示名称 | 任意字符串 |
 | `version` | 语义化版本号 | 如 `1.0.0` |
+| `platform` | 适配平台 | `desktop` \| `mobile` \| `both`；宿主加载 / 安装期按本端校验，不匹配即拒绝 |
 | `main` | 入口文件路径 | 相对于插件根目录，如 `index.ts` |
 
 ### 可选字段
@@ -252,9 +254,9 @@ Rust permission.check() ──── 最终仲裁，拒绝越权调用
 
 ### 5.3 权限生命周期
 
-- **授予**：`PluginLoader::load_all()` 时调用 `grant_permissions()`，过滤非法权限
+- **授予**：`PluginLoader::load_builtin_and_user()` 时向 `PermissionManager` 授权（静态插件在 `PluginHost::new` 里同样授权），过滤非法权限
+- **激活重授**：`activate_plugin()` 按**生效权限**重新授予（受信来源 = manifest 全量；用户安装 = 批准 ∩ 请求）——`deactivate_plugin()` 会 `revoke_all()`，不复授则重激活后全拒（`manager/host/activation.rs`）
 - **撤销**：`deactivate_plugin()` 时调用 `revoke_all()`，清除所有已授予权限
-- **重新激活**：`activate_plugin()` 不重新授权（权限在 load 时已授予，deactivate 后被撤销，再次 activate 无权限）
 
 ## 6. PluginContext API
 

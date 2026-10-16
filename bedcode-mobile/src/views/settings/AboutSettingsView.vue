@@ -54,6 +54,34 @@
           {{ $t('settings.about.downloadUpdate') }} ({{ updateInfo.version }})
         </button>
       </section>
+
+      <!-- 危险操作：设备级擦除
+           2026-10-14 从平台设置一级页迁到这里——「关于本机」才是这类动作的语境。
+           擦除对象含设备入场凭据与宿主连接态（§8 凭据零过境 / ADR 0033），
+           实现见 useClearAllData.ts，不得下沉到应用设置页。 -->
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.about.dangerZone') }}</h2>
+        <button
+          type="button"
+          class="w-full flex items-center gap-3 px-3 py-3 text-left rounded-xl border transition-colors duration-200 active:opacity-80"
+          :style="{
+            background: 'var(--mobile-error-muted)',
+            borderColor: 'var(--mobile-error)',
+            color: 'var(--mobile-error)',
+          }"
+          @click="onClearAllData"
+        >
+          <svg class="flex-shrink-0" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+          <span class="flex-1 min-w-0 text-sm">
+            {{ $t('settings.about.clearAllData') }}
+          </span>
+        </button>
+        <p class="px-1 text-xs text-[var(--mobile-text-muted)]">
+          {{ $t('settings.about.clearAllDataHint') }}
+        </p>
+      </section>
     </div>
 
     <!-- Browser Confirm Modal -->
@@ -76,15 +104,25 @@
 
 <script setup lang="ts">
 /**
- * 关于设置二级页面 - 版本信息、GitHub 仓库、检查更新
+ * 关于设置二级页面 - 版本信息、GitHub 仓库、检查更新、危险操作
  * 更新检查基于 GitHub Releases API，发现新版本后引导浏览器下载 APK
+ *
+ * 危险操作（清除所有数据）于 2026-10-14 从平台设置一级页迁入：
+ * 它擦除设备入场凭据与宿主连接态，属设备生命周期动作而非应用业务设置，
+ * 归宿主（useClearAllData.ts 头注有完整裁决）。
  */
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
+import { clearAllData } from '@/composables/useClearAllData'
+import { useToast } from '@/composables/useToast'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 
+const { t } = useI18n()
+const toast = useToast()
 const { status: updateStatus, errorMessage, updateInfo, checkForUpdate, getUpdateStatusText } = useUpdateChecker()
 
 /** 应用版本号，由 Vite 编译时从 tauri.conf.json 注入 */
@@ -125,6 +163,28 @@ function handleDownloadUpdate() {
   if (updateInfo.value) {
     pendingUrl.value = updateInfo.value.downloadUrl
     showBrowserConfirm.value = true
+  }
+}
+
+/**
+ * 擦除本机数据
+ *
+ * 二次确认用宿主 confirm 对话框：这是不可撤销的动作，误触代价是重新配对 + 重建全部配置。
+ * 断连失败不阻断清理（用户的目标是清数据，不是断连），但清理失败必须如实告知——
+ * 不能 reload 完就说成功。
+ */
+async function onClearAllData(): Promise<void> {
+  const confirmed = await confirm(t('settings.about.clearAllData'), {
+    title: t('settings.about.clearAllData'),
+    kind: 'warning',
+  })
+  if (!confirmed) return
+
+  const result = await clearAllData()
+  if (!result.completed) {
+    // 清理失败时不能 reload——那会让用户以为已经清干净
+    logger.error(`[AboutSettings] clear all data incomplete: ${result.error ?? 'unknown'}`)
+    toast.error(t('settings.about.clearAllDataFailed'))
   }
 }
 </script>

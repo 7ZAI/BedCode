@@ -225,6 +225,32 @@ body {
   transition: margin-bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Scrollbar gutter —— **按需开启**的滚动条槽位常驻（防滚动条显隐引起的宽度抖动 / CLS）
+ *
+ * 用途：内容不满（无滚动条）与内容溢出（有滚动条）两种状态下内容区宽度一致，
+ * 滚动条出现/消失不再引起整页横向跳动。
+ *
+ * 为什么是类而不是全局规则（2026-10-02 修正）：本 WebView 的
+ * ::-webkit-scrollbar 是**占位式**（8px 参与布局，非 overlay），所以
+ * `scrollbar-gutter: stable` 会给**每一个 overflow:hidden 元素**都预留 8px。
+ * 全局 `*` 的代价是真机实测出来的：终端页从 .terminal-view 到 .xterm 的
+ * 9 层包装链各被收窄 8px = 69px 视口宽度凭空消失，露出的
+ * .terminal-view 底色（#faf9f5）在终端右侧形成一条 32px 浅色空带
+ * （同一类事故此前已在设置页表现为「左裁右空 48px 错位」）。
+ *
+ * 因此：**只在真正承担页面内容滚动、且宽度抖动会被用户看见的容器上写这个类**
+ * （各视图的 flex-1 内容滚动容器、SettingsSubPage）。不要给以下形态加：
+ *   - overflow:hidden 的布局包装层（含终端页整条链）——永不显示滚动条，纯死区；
+ *   - 定宽的弹层/下拉（modal、输入栏补全、文件侧栏）——常驻 8px 会把面板内容挤窄。
+ * 旧 WebView 不支持 scrollbar-gutter 时静默忽略（不产生布局错位，只是无防抖）。
+ *
+ * 2026-10-07：移动端已整体隐藏原生滚动条（styles/mobile.css 末尾规则，width:0），
+ * 滚动条不再占位，gutter 槽位失去载体——mobile.css 对该类统一复位为 auto，
+ * 此类保留仅作「曾需要防宽度抖动」的历史标注，不再产生实际布局效果。 */
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
 /* Scrollbar styles - 浅色模式 (Modern Clean) */
 ::-webkit-scrollbar {
   width: 8px;

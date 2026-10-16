@@ -13,8 +13,9 @@ import {
   wsConnect,
   wsDisconnect,
   wsIsConnected,
-  wsReconnect,
+  setAutoReconnect,
   wsAuthenticate,
+  wsGetAuthCredentials,
   wsAuthenticateWithBiometric,
   wsRequestPairing,
   wsVerifyPairingCode,
@@ -27,10 +28,10 @@ import {
   type RemoteDevice,
   type AuthCredentials,
 } from './useMobileCommands'
-import { useHttpApi, httpSendSessionInput, httpProbe } from './useHttpApi'
+import { useHttpApi, httpProbe } from './useHttpApi'
+import * as sessionCommands from '@/plugin/sessionCommands'
 import { useForegroundService } from './useForegroundService'
 import { useNotification } from './useNotification'
-import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
 // Re-export types
 export type { ConnectionStatus, RemoteDevice, AuthCredentials } from './useMobileCommands'
@@ -47,9 +48,18 @@ let connectionTimeout: ReturnType<typeof setTimeout> | null = null
 const CONNECTION_TIMEOUT_MS = 12000 // 12秒超时（比 Rust 端 10 秒稍长作为兜底）
 
 // 重连控制
-const MAX_AUTO_RECONNECT_ATTEMPTS = 3
-let autoReconnectAttemptCount = 0
-// 用户主动连接/断开时设为 true，取消正在进行的自动重连
+//
+// **前端不持有重连循环**（2026-10-04 收敛）。自动重连的唯一执行者是 Rust 侧
+// `connection/event_ws.rs` 的 `EventWsSupervisor`，退避节奏由
+// `ConnectionManager` 的 `ReconnectManager` 策略决定（指数退避 + 抖动 + 同因
+// 熔断 + 1s 下限钳制）。
+//
+// 收敛前本文件另有一套「MAX 3 次 + 用户固定间隔」的递归重试，与 Rust 侧在同一次
+// 断开里**并发触发**：Rust 先赢，前端后到的 `wsReconnect` 撞上 `is_reconnecting`
+// 直接 skip —— 但前端计数已经 +1，3 次预算被空转烧掉（审计 P0-2）。
+//
+// 本变量现在只做一件事：**丢弃过期事件**。用户主动 connect/disconnect 后，
+// 上一代连接遗留的 ws_reconnecting / ws_reconnected 不应驱动本代 UI。
 let autoReconnectAborted = false
 
 // 意外断开监听器（模块级注册，随连接生命周期存在）
@@ -119,6 +129,26 @@ export const isPaired = computed(() =>
 let initialized = false
 
 /**
+ * 把宿主换新后的凭据回读进本地镜像
+ *
+ * 认证成功时 JWT 只在宿主侧换新（apply_auth_success），本地 localStorage 镜像
+ * 不会自动更新；不回落则下次启动 `init()` 会把已换下的旧 token 推回宿主
+ * （wsSetToken），换新白做（若桌面端作废旧 token，下次静默认证必失败）。
+ * 镜像同步失败不影响本次认证结果（宿主真源已换新），但必须可观测。
+ */
+async function refreshCredentialMirror(): Promise<void> {
+  try {
+    const creds = await wsGetAuthCredentials()
+    if (creds) {
+      saveCredentials(creds)
+      authCredentials.value = creds
+    }
+  } catch (e) {
+    logger.warn('[MobileConnection] credential mirror refresh failed:', e)
+  }
+}
+
+/**
  * 初始化事件监听和凭据（全局单例，仅执行一次）
  * 模块加载时立即执行，确保事件监听在用户操作前注册完毕
  * Tauri 事件不会缓冲，监听器必须在事件触发前注册
@@ -176,13 +206,15 @@ async function init() {
       clearConnectionTimeout()
       connectionStatus.value = 'connected'
       connectionError.value = null
-      // 连接成功建立：复位重连取消标记与计数。connect()/disconnect() 置位的
-      // aborted 只用于取消「进行中」的重连等待（等待间隔内用户手动操作）；
-      // 不复位则连接稳定后再次意外断开会被 handleUnexpectedDisconnect 的
-      // aborted 检查永久拦截，前端重连路径（ws_reconnect）不可达，
-      // 自动重连退化为仅依赖 Rust 端自身循环（2026-08-16 集成测试发现）
+      // 建连动作到此结束：isConnecting 必须复位。认证是后续独立阶段（connected →
+      // paired），不复位则「已连上但未认证」（无凭据 / 需配对）的设备会让
+      // isConnecting 永久为 true——连接页永远显示「正在连接…」且按钮全被禁用。
+      // 重连路径不经本回调（ws_reconnected 自己置 true，直到认证完成）。
+      isConnecting.value = false
+      // 连接成功建立：复位过期事件标记。connect()/disconnect() 置位的 aborted
+      // 只用于丢弃上一代连接的 ws_reconnecting / ws_reconnected；不复位则连接
+      // 稳定后再次意外断开时，本代真实重连事件会被当成过期的丢掉。
       autoReconnectAborted = false
-      autoReconnectAttemptCount = 0
       logger.log('[MobileConnection] Connected')
       autoStartForegroundService()
 
@@ -195,44 +227,46 @@ async function init() {
       isConnecting.value = false
       logger.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
-
-      // 标记所有 buffer 未订阅（重连后按字节游标重新订阅）
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.markAllUnsubscribed()
+      // 终端订阅信念清理已迁终端插件（票 15：onSessionEvent 的 disconnected +
+      // isConnected 翻转双路径，语义与迁移前 markAllUnsubscribed 一致）
     },
     onPaired: () => {
       clearConnectionTimeout()
       connectionStatus.value = 'paired'
       isConnecting.value = false
-      // 配对/认证成功，重置自动重连计数
-      autoReconnectAttemptCount = 0
       logger.log('[MobileConnection] Paired')
 
-      // 认证成功时更新已配对设备信息
-      logger.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
-      logger.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
-
-      if (currentDevice.value && authCredentials.value) {
-        addPairedDevice({
-          address: currentDevice.value.address,
-          port: currentDevice.value.port,
-          name: currentDevice.value.name,
-          fingerprint: authCredentials.value.fingerprint,
-        })
-      } else {
-        logger.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
-      }
+      // 先回读宿主凭据再落已配对设备：认证成功路径已整体迁插件命令面
+      // （terminal-session.verify-pairing-code / authenticate-with-*，不走本 composable
+      // 的 verifyPairingCode / authenticateWithBiometric），宿主不会经过
+      // saveCredentials；localStorage 镜像与内存 authCredentials 因此必须在**本回调**
+      // 补齐——否则镜像永空，连接历史走「存量凭据静默换新」时 authenticate() 拿不到
+      // token 必失败（表现为每次连接都重新要求配对码），重启后 wsSetToken 也无源。
+      void (async () => {
+        try {
+          await refreshCredentialMirror()
+          // 认证成功时更新已配对设备信息（指纹取自回读后的镜像）
+          if (currentDevice.value && authCredentials.value) {
+            addPairedDevice({
+              address: currentDevice.value.address,
+              port: currentDevice.value.port,
+              name: currentDevice.value.name,
+              fingerprint: authCredentials.value.fingerprint,
+            })
+          } else {
+            logger.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
+          }
+        } catch (e) {
+          // 镜像回读/已配对设备写入失败不改变认证结果（宿主真源已就绪），但必须可观测
+          logger.error('[MobileConnection] onPaired post-auth bookkeeping failed:', e)
+        }
+      })()
       autoStartForegroundService()
 
-      // 认证成功后恢复所有后台会话的终端订阅（订阅由 Rust 管理；断开期间
-      // Rust 链路已随 markAllUnsubscribed 关闭，此处全部重建）
-      const bufferStore = useTerminalBufferStore()
-      for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (buffer.sessionStopped) continue
-        bufferStore.subscribeSession(sid).catch((e) => {
-          logger.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-        })
-      }
+      // 终端订阅由页面驱动（进入终端页 / 会话恢复运行时 fresh subscribe）：
+      // 后台会话不建连、不常拉（票 05 生命周期策略）；断开期间的输出由桌面
+      // 环窗口保留，重进终端页时重订阅回放补齐（投递由 TerminalView 的
+      // isConnected watch 承担）
     },
     onAuthSuccess: () => {
       logger.log('[MobileConnection] Auth success')
@@ -318,7 +352,7 @@ async function init() {
       logger.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
       // 数量限制：运行中会话已达上限时，增量同步的新运行会话直接丢弃（占位槽位不增加）
       const session = data.session
-      const isRunning = session.status === 'running' || session.status === 'waiting_input'
+      const isRunning = session.status === 'running' || session.status === 'waitingInput'
       if (isRunning && runningSessionCount() >= maxOpenTerminalsLimit()) {
         logger.warn(`[MobileConnection] Session limit (${maxOpenTerminalsLimit()}) reached, drop synced session ${session.id}`)
         return
@@ -335,18 +369,8 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
       }
-      // 会话重新运行：复位 buffer 的 sessionStopped（停止→重启同 id 场景，
-      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）。
-      // 只处理「未跟踪 / 已停止」的会话：running 广播可能重复且无状态迁移，
-      // 对存活 buffer 执行复位会清零订阅信念与游标 → 输入被门控永久拒绝、
-      // 历史以 from=0 叠加重播（P0-1 现场：运行中输入无反应 + 格式错乱）
-      if (data.new_status === 'running') {
-        const bufferStore = useTerminalBufferStore()
-        const buffer = bufferStore.getBuffer(data.session_id)
-        if (!buffer || buffer.sessionStopped) {
-          bufferStore.markSessionRunning(data.session_id)
-        }
-      }
+      // 会话 running 时复位终端订阅信念的联动已迁终端插件（票 15：插件侧
+      // onSessionEvent 保留同款「仅未跟踪/已停止才复位」条件，防 P0-1 复现）
     },
     onSyncSessionStopped: (data) => {
       logger.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
@@ -357,9 +381,7 @@ async function init() {
       }
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
-      // 标记 buffer 会话停止
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.markSessionStopped(data.session_id)
+      // 终端 buffer 的会话停止标记已迁终端插件（票 15：onSessionEvent session_stopped）
     },
     onSyncSessionRemoved: (data) => {
       logger.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
@@ -367,9 +389,7 @@ async function init() {
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
       // 取消该会话的任务通知
       cancelTaskNotification(data.session_id)
-      // 清理 buffer
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.clearBuffer(data.session_id)
+      // 终端 buffer 清理已迁终端插件（票 15：onSessionEvent session_removed）
     },
     onSyncTaskStatusChanged: (data) => {
       logger.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
@@ -391,22 +411,32 @@ async function init() {
   })
 
   // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）
-  await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
+  //
+  // 三种停止自愈的原因已在 Rust 侧判定并带在 payload 里：
+  //   `fatal`         —— 认证类致命 close（4001/4003），需重新配对
+  //   `non_retryable` —— 协议/策略层不可重试（1002/1003/1007/1008/1009/1010），
+  //                      重连必然同样失败，需升级一端
+  //   `auto_reconnect_disabled` —— 用户关掉了自动重连，监督任务不自愈（需手动重连）
+  // 其余情况由 `EventWsSupervisor` 自愈，本回调**只负责 UI 与通知**，不发起重连
+  // （重连循环已收敛到 Rust 侧，见文件头「重连控制」注释）。
+  await listen<{
+    reason: string
+    fatal?: boolean
+    non_retryable?: boolean
+    auto_reconnect_disabled?: boolean
+  }>('ws_unexpected_disconnect', (event) => {
     logger.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
     clearConnectionTimeout()
 
-    // 与 ws_disconnected 路径（onDisconnected）对齐：断连即清理订阅信念——
-    // 服务端订阅已随连接关闭清理，若这里不清，重连后的 onPaired 重订阅会
-    // 被 subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.markAllUnsubscribed()
+    // 断连清理订阅信念的联动已迁终端插件（票 15：onSessionEvent disconnected）
 
-    // 弹出 Toast 通知（手动断开不会触发此事件）
+    // 弹出 Toast 通知（手动断开不会触发此事件）。此刻不弹「连接已断开」作为
+    // 最终态：非致命断开且自动重连开启时，后续会自愈，文案必须指向正在恢复，
+    // 否则用户会看到「断开」直到重连成功后才回过神。
     const toast = useToast()
-    toast.error(i18n.global.t('common.notification.connectionDisconnected', { reason: event.payload.reason }), 5000)
 
     // 发送连接断开系统通知
     showConnectionNotification({
@@ -418,11 +448,39 @@ async function init() {
     const { updateNotification } = useForegroundService()
     updateNotification()
 
+    // M1/ADR 0031：认证类致命关闭（4001/4003）——自愈重连前需重新配对/认证，
+    // 重连无意义。只弹一次「需重新配对」提示（Rust 监督任务已跳过自愈）。
+    if (event.payload.fatal) {
+      logger.warn('[MobileConnection] Auth-fatal disconnect, need re-pair (no auto-reconnect)')
+      toast.error(i18n.global.t('common.notification.authFailedRePair', { reason: event.payload.reason }), 5000)
+      return
+    }
+
+    // 协议/策略层不可重试：重连必然同样失败，正确动作是升级一端而非重新配对。
+    // 文案必须与上面那条分开，否则用户按「重新配对」折腾一圈也解决不了。
+    if (event.payload.non_retryable) {
+      logger.warn('[MobileConnection] Non-retryable disconnect (protocol/policy), no auto-reconnect')
+      toast.error(
+        i18n.global.t('common.notification.protocolIncompatible', { reason: event.payload.reason }),
+        5000,
+      )
+      return
+    }
+
+    // 用户关闭了自动重连：监督任务已跳过自愈。不告知的话前端只能显示通用的
+    // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，只能干等退避耗尽。
+    if (event.payload.auto_reconnect_disabled) {
+      logger.warn('[MobileConnection] Auto-reconnect disabled by user, no self-heal will happen')
+      toast.error(i18n.global.t('common.notification.autoReconnectDisabled'), 5000)
+      return
+    }
+
+    // 非致命且可自动重连：断开是事实，但应明确「正在自愈」，避免与后续
+    // ws_reconnected/ws_paired 出现语义矛盾。
+    toast.warning(i18n.global.t('common.notification.connectionInterrupted', { reason: event.payload.reason }), 5000)
+
     // 取消所有任务通知
     cancelAllTaskNotifications()
-
-    // 异步触发重连（不在监听回调中直接 await，避免阻塞事件循环）
-    handleUnexpectedDisconnect(event.payload.reason)
   })
 
   // 监听重连开始事件
@@ -434,6 +492,7 @@ async function init() {
       return
     }
     connectionStatus.value = 'connecting'
+    connectionError.value = null
 
     // 更新前台服务通知为重连状态
     const { updateNotification } = useForegroundService()
@@ -456,9 +515,7 @@ async function init() {
     connectionError.value = null
     // 重连成功后需要重新认证，isConnecting 保持 true 直到认证完成
     isConnecting.value = true
-
-    // 重连成功，重置自动重连计数（认证成功时 onPaired 也会重置）
-    autoReconnectAttemptCount = 0
+    const toast = useToast()
 
     // 重连成功后重新认证
     const creds = loadAuthCredentials()
@@ -468,6 +525,9 @@ async function init() {
         const authSuccess = await wsAuthenticate(creds.sessionToken)
         if (authSuccess) {
           logger.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
+          // 换新后的 JWT 回读进本地镜像（重启后 wsSetToken 的源）
+          await refreshCredentialMirror()
+          toast.success(i18n.global.t('common.notification.reconnected'), 3000)
         } else {
           logger.warn('[MobileConnection] Re-auth failed, need to pair again')
           // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
@@ -496,13 +556,46 @@ async function init() {
     }
   })
 
+  // 监听事件通道就绪（票 03）：session-control 极简认证首帧发出后 Rust 发射
+  // 事件不重放：重连/自愈重建期间的变化只能靠这一次 HTTP 全量拉取补齐；
+  // 消费端按 id 去重 / 状态收敛（如 onSyncSessionCreated 的 `!find` 守卫），无需额外去重
+  await listen('ws_event_channel_ready', () => {
+    logger.log('[MobileConnection] Event channel ready, reconciling active sessions')
+    loadActiveSessions().catch((e) => {
+      logger.error('[MobileConnection] Reconcile on event channel ready failed:', e)
+    })
+  })
+
+  // 凭证被桌面端**永久**拒绝（ADR 0033 §F3 / 票 08）
+  //
+  // 与 `ws_reconnect_failed` 刻意**分开**：后者是「退避重试耗尽」（网络类），
+  // 本者是一次就判定的「凭据不认」（入场密钥换手 / 设备被撤销 / 从未配对）——
+  // 两者排障路径完全不同，重试无用且正确动作是**重新配对**。
+  // 混成一个终态正是本事件存在的理由：迁移前两者都落到「重连失败」。
+  await listen<{ reason: string }>('ws_reauth_rejected', (event) => {
+    logger.error('[MobileConnection] Credential permanently rejected (needs re-pair):', event.payload.reason)
+    clearConnectionTimeout()
+    connectionStatus.value = 'error'
+    isConnecting.value = false
+    autoStopForegroundService()
+
+    const toast = useToast()
+    // 复用已有文案 key（与 WS 致命关闭 4001/4003 同一条）：明确指向「重新配对」
+    toast.error(i18n.global.t('common.notification.authFailedRePair', { reason: event.payload.reason }), 5000)
+
+    // 后台运行时的系统通知也用「需重新配对」而非「重连失败」
+    showConnectionNotification({
+      type: 'auth_failed',
+      deviceName: currentDevice.value?.name,
+    })
+  })
+
   // 监听重连失败事件
   await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
     logger.error('[MobileConnection] Reconnect failed:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
-    autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS // 标记重连已耗尽
 
     // 重连失败时停止前台服务
     autoStopForegroundService()
@@ -520,6 +613,11 @@ async function init() {
 
   // 开屏启动任务打点:监听器与凭据恢复完成即视为连接子系统就绪
   // (不等 WS 实际建连——建连由用户操作驱动,不属于启动期)
+  //
+  // 自动重连开关同步到 Rust 连接层（与设置页 onMounted 共用同一函数，双入口
+  // 幂等）。Rust 侧的 flag 不会随 localStorage 自动恢复，不同步则重启后
+  // 用户关掉的开关会悄悄变回开启。
+  await syncAutoReconnectSetting()
   completeStartupTask('connection')
 }
 
@@ -534,9 +632,8 @@ init()
 export async function connect(device: RemoteDevice): Promise<void> {
   logger.log('[MobileConnection] Starting connection to:', device.address, device.port)
 
-  // 取消正在进行的自动重连
+  // 丢弃上一代连接遗留的重连事件
   autoReconnectAborted = true
-  autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
 
   // 无论前端 connectionStatus 状态如何，始终先断开 Rust 端可能残留的旧连接
   // 被动断开后前端状态可能是 'disconnected'，但 Rust 端 WsClient 可能仍为 Connected
@@ -555,9 +652,6 @@ export async function connect(device: RemoteDevice): Promise<void> {
   // 确保前端状态也重置干净，无论之前是什么状态
   connectionStatus.value = 'disconnected'
   isConnecting.value = false
-  const bufferStore = useTerminalBufferStore()
-  bufferStore.markAllUnsubscribed()
-
   currentDevice.value = device
   connectionError.value = null
   isConnecting.value = true
@@ -656,91 +750,23 @@ async function autoStopForegroundService() {
 }
 
 /**
- * 处理意外断开，尝试重连
- * 最多自动重连 MAX_AUTO_RECONNECT_ATTEMPTS 次，超出后放弃并保持 disconnected 状态
+ * 把「自动重连」设置项同步到 Rust 连接层
+ *
+ * 自动重连的执行者是 `EventWsSupervisor`（唯一自愈入口），退避节奏由
+ * `ConnectionManager` 的 `ReconnectManager` 策略决定。前端不持有重连循环，
+ * 只把用户的开关意图递过去——策略归连接层，UI 只管意图。
  */
-async function handleUnexpectedDisconnect(reason: string) {
-  logger.log('[MobileConnection] Handling unexpected disconnect, reason:', reason, 'attempt:', autoReconnectAttemptCount + 1, '/', MAX_AUTO_RECONNECT_ATTEMPTS)
-
-  // 用户已主动发起新连接或断开，取消自动重连
-  if (autoReconnectAborted) {
-    logger.log('[MobileConnection] Auto-reconnect aborted by user action')
-    return
-  }
-
-  // 读取用户设置
-  const savedSettings = localStorage.getItem('mobile-settings')
-  let settings: Record<string, unknown> = { autoReconnect: true, reconnectInterval: 5 }
-  if (savedSettings) {
-    try {
-      settings = JSON.parse(savedSettings)
-    } catch {
-      settings = { autoReconnect: true, reconnectInterval: 5 } // 损坏按默认
-    }
-  }
-
-  // 检查是否启用自动重连
-  if (!settings.autoReconnect) {
-    logger.log('[MobileConnection] Auto-reconnect disabled by user setting')
-    return
-  }
-
-  // 检查重连次数限制
-  if (autoReconnectAttemptCount >= MAX_AUTO_RECONNECT_ATTEMPTS) {
-    logger.warn('[MobileConnection] Max auto-reconnect attempts reached, giving up')
-    connectionStatus.value = 'disconnected'
-    connectionError.value = 'common.notification.reconnectAbandoned'
-    const toast = useToast()
-    toast.error(i18n.global.t('common.notification.reconnectAbandoned'), 5000)
-    return
-  }
-
-  // 从 localStorage 读取凭据
-  const creds = loadAuthCredentials()
-  if (!creds) {
-    logger.log('[MobileConnection] No credentials found, cannot reconnect')
-    return
-  }
-
-  // 检查是否有目标设备
-  if (!currentDevice.value) {
-    logger.log('[MobileConnection] No target device, cannot reconnect')
-    return
-  }
-
-  autoReconnectAttemptCount++
-  logger.log('[MobileConnection] Starting reconnect attempt', autoReconnectAttemptCount, 'token length:', creds.sessionToken.length)
-  // 开始自动重连前重置取消标记
-  autoReconnectAborted = false
-  isConnecting.value = true
-  connectionStatus.value = 'connecting'
-  connectionError.value = null
-
+export async function syncAutoReconnectSetting(): Promise<void> {
   try {
-    // 使用用户设置的重连间隔（秒）：localStorage 存量 JSON 类型收窄——
-    // 缺失/非数字按默认 5，显式 0 表示不等待立即重连
-    const stored = settings.reconnectInterval
-    const reconnectIntervalSec = typeof stored === 'number' ? stored : 5
-    if (reconnectIntervalSec > 0) {
-      await new Promise(resolve => setTimeout(resolve, reconnectIntervalSec * 1000))
-      // 等待期间用户可能已发起新连接，检查取消标记
-      if (autoReconnectAborted) {
-        logger.log('[MobileConnection] Auto-reconnect aborted during delay wait')
-        return
-      }
-    }
-    await wsReconnect(creds.sessionToken)
-    logger.log('[MobileConnection] Reconnect initiated successfully')
+    const { settings, loadSettings } = useMobileSettings()
+    // 必须先 loadSettings：未加载时 settings 还是默认值（开启），直接读会把
+    // 用户已经关掉的开关又推回 Rust。loadSettings 幂等，已加载时直接返回。
+    await loadSettings()
+    await setAutoReconnect(settings.value.autoReconnect)
+    logger.log('[MobileConnection] Auto-reconnect setting synced:', settings.value.autoReconnect)
   } catch (error) {
-    logger.error('[MobileConnection] Reconnect failed:', error)
-    connectionStatus.value = 'disconnected'
-    connectionError.value = 'mobile.connection.reconnectFailedMsg'
-    isConnecting.value = false
-
-    // 重连失败后，如果还有重试次数且未被用户取消，继续尝试
-    if (autoReconnectAttemptCount < MAX_AUTO_RECONNECT_ATTEMPTS && !autoReconnectAborted) {
-      handleUnexpectedDisconnect(reason)
-    }
+    // 同步失败不阻断连接流程：Rust 侧默认开启，重启后仍能自愈
+    logger.error('[MobileConnection] Failed to sync auto-reconnect setting:', error)
   }
 }
 
@@ -748,9 +774,8 @@ async function handleUnexpectedDisconnect(reason: string) {
  * 断开连接
  */
 export async function disconnect(): Promise<void> {
-  // 取消正在进行的自动重连
+  // 丢弃上一代连接遗留的重连事件
   autoReconnectAborted = true
-  autoReconnectAttemptCount = MAX_AUTO_RECONNECT_ATTEMPTS
   clearConnectionTimeout()
   try {
     await wsDisconnect()
@@ -766,9 +791,7 @@ export async function disconnect(): Promise<void> {
     isConnecting.value = false
     currentDevice.value = null
 
-    // 手动断开不触发 Rust 端 ws_disconnected 事件，需显式重置 buffer 订阅状态
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.markAllUnsubscribed()
+    // 手动断开的订阅信念重置已迁终端插件（票 15：isConnected 翻转路径覆盖）
   }
 }
 
@@ -796,8 +819,12 @@ export async function authenticate(): Promise<boolean> {
       // 服务端明确拒绝（JWT 过期或无效），清除凭据需要重新配对
       clearAuthCredentials()
       authCredentials.value = null
+      return false
     }
-    return result
+    // 换新后的 JWT 只落宿主机（apply_auth_success）：重读窄读口同步本地镜像，
+    // 否则下次重启会把已换下的旧 token 推回宿主（wsSetToken），换新白做
+    await refreshCredentialMirror()
+    return true
   } catch (error) {
     // 网络错误/超时，不删除 token — Rust 端有 30 秒超时兜底
     // 下次重连仍可复用，避免因临时网络问题导致必须重新配对
@@ -881,9 +908,9 @@ export async function loadSessionConfigs(): Promise<any[]> {
 
 // ==================== 终端数量限制（外观设置 maxOpenTerminals） ====================
 
-/** 当前占用槽位的运行中会话数（running / waiting_input 计入，stopped 为历史记录不占槽位） */
+/** 当前占用槽位的运行中会话数（running / waitingInput 计入，stopped 为历史记录不占槽位） */
 function runningSessionCount(): number {
-  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waiting_input').length
+  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waitingInput').length
 }
 
 /** 读取「最大可打开终端数量」设置（1-20，非法值回退默认） */
@@ -901,8 +928,7 @@ function maxOpenTerminalsLimit(): number {
  * 有丢弃时 toast 通知用户
  */
 export async function loadActiveSessions(): Promise<any[]> {
-  const { httpListSessions } = useHttpApi()
-  const result = await httpListSessions()
+  const result = await sessionCommands.listSessions()
   if (result.code === 0 && result.data) {
     const sessions = result.data.sessions || []
     const limit = maxOpenTerminalsLimit()
@@ -911,7 +937,7 @@ export async function loadActiveSessions(): Promise<any[]> {
     const kept: any[] = []
     let runningKept = 0
     for (const s of sessions) {
-      const isRunning = s.status === 'running' || s.status === 'waiting_input'
+      const isRunning = s.status === 'running' || s.status === 'waitingInput'
       if (isRunning && runningKept >= limit) continue
       if (isRunning) runningKept++
       kept.push(s)
@@ -946,15 +972,11 @@ export async function startSession(
     throw new Error(i18n.global.t('mobile.session.maxReached', { max: limit }))
   }
 
-  const { httpStartSession } = useHttpApi()
-  const result = await httpStartSession(configId, size)
+  const result = await sessionCommands.startSession(configId, size)
   if (result.code === 0 && result.data) {
     const sessionId = result.data.sessionId
-    // 会话启动即订阅（用户需求 1：不再等进入终端页才订阅；订阅由 Rust 管理）
-    const bufferStore = useTerminalBufferStore()
-    bufferStore.subscribeSession(sessionId).catch((e) => {
-      logger.warn(`[MobileConnection] Subscribe on start ${sessionId} failed:`, e)
-    })
+    // 终端订阅由页面驱动（进入终端页时 fresh subscribe 回放环窗口）：
+    // 不在会话启动时建连（后台常拉违例；输出由桌面环窗口保留，重播覆盖历史）
     return { sessionId, session: undefined }
   }
   throw new Error(result.message || 'Failed to start session')
@@ -964,8 +986,7 @@ export async function startSession(
  * 停止会话：通过 HTTP API 发送停止请求，成功后更新本地状态
  */
 export async function stopSession(sessionId: string): Promise<void> {
-  const { httpStopSession } = useHttpApi()
-  const result = await httpStopSession(sessionId)
+  const result = await sessionCommands.stopSession(sessionId)
   if (result.code === 0) {
     const index = activeSessions.value.findIndex(s => s.id === sessionId)
     if (index !== -1) {
@@ -980,8 +1001,7 @@ export async function stopSession(sessionId: string): Promise<void> {
  * 删除会话：通过 HTTP API 发送删除请求，成功后更新本地状态
  */
 export async function removeSession(sessionId: string): Promise<void> {
-  const { httpRemoveSession } = useHttpApi()
-  const result = await httpRemoveSession(sessionId)
+  const result = await sessionCommands.removeSession(sessionId)
   if (result.code === 0) {
     activeSessions.value = activeSessions.value.filter(s => s.id !== sessionId)
   } else {
@@ -1158,7 +1178,7 @@ export function clearActiveSessions(): void {
  * 发送输入到会话（通过 HTTP API，绕过 WebSocket 阻塞）
  */
 export async function sendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
-  const result = await httpSendSessionInput(sessionId, data, specialKey)
+  const result = await sessionCommands.sendHttpInput(sessionId, data, specialKey)
   if (result.code !== 0) {
     throw new Error(result.message || 'Send input failed')
   }

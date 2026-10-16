@@ -1,0 +1,377 @@
+/**
+ * manifest-validate — 桌面端 plugin.json 清单校验（可导入）
+ *
+ * 由两处共用，保证「CI/构建链里跑的就是 CLI 里那套规则」：
+ * - `bedcode-plugin-desktop validate`（本包 CLI）
+ * - `bedcode-desktop/scripts/plugin-build.js`（插件生产构建链，构建前拦截）
+ *
+ * 权限词汇不在此手抄：读 SDK 生成物 `bin/permission-vocabulary.json`
+ * （真源 `rust/src/permission.rs`，重跑 SDK 的 `pnpm run gen:permissions`）。
+ * `wasmHash` 的形态正则亦不手抄：取自 `bin/wasm-hash.js`（与产物注入、分发校验同一真源）。
+ */
+
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { WASM_HASH_PATTERN } from './wasm-hash.js'
+
+const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const VOCABULARY_PATH = join(SDK_ROOT, 'bin', 'permission-vocabulary.json')
+
+const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])
+
+/**
+ * 适配平台取值域（manifest `platform`，必填，与 id/name/version 同档）
+ *
+ * 真源是 SDK `rust/src/types.rs::PluginPlatform`，此处只抄拼写（与 Rust 侧
+ * serde `rename_all = "lowercase"` 一致）。宿主在加载 / 安装期按本端校验：
+ * 桌面拒 `mobile`、移动拒 `desktop`，`both` 两端均可；构建期先拦拼写错误，
+ * 避免产出「装到目标端必被拒」的包。
+ */
+const VALID_PLATFORMS = new Set(['desktop', 'mobile', 'both'])
+
+/**
+ * 装配角色取值域（manifest `type`，ADR 0032）
+ *
+ * 真源是 SDK `rust/src/types.rs::PluginKind`，此处不手抄第二套语义，只抄拼写
+ * （与 Rust 侧 serde `rename_all = "kebab-case"` 一致；改枚举必须同改这里，
+ * 否则新角色在本机过不了、装了却不被宿主识别）。
+ */
+const VALID_PLUGIN_KINDS = new Set(['basic-service', 'internal-business', 'business-app'])
+
+/** 历史拼写（反序列化仍被宿主按别名接受，ADR 0032 之前）→ 现行角色 + 告警文案 */
+const LEGACY_PLUGIN_KINDS = new Map([
+  ['system', 'basic-service'],
+  ['application', 'business-app'],
+])
+
+/** 实例生命周期取值域（manifest `lifecycle`，ADR 0032；真源同 PluginKind 所在文件） */
+const VALID_LIFECYCLES = new Set(['persistent', 'ephemeral'])
+
+/** 权限词汇生成物（惰性读：缺文件时给出可操作的错误，而非 CLI 启动即崩） */
+let vocabulary = null
+export function permissionVocabulary() {
+  if (vocabulary) return vocabulary
+  let parsed
+  try {
+    parsed = JSON.parse(readFileSync(VOCABULARY_PATH, 'utf-8'))
+  } catch (e) {
+    throw new Error(
+      `权限词汇生成物不可读: ${VOCABULARY_PATH} — 在 SDK 包目录跑 pnpm run gen:permissions 重出（${e.message}）`,
+    )
+  }
+  if (!Array.isArray(parsed?.permissions)) {
+    throw new Error(`权限词汇生成物形状不符（缺 permissions 数组）: ${VOCABULARY_PATH}`)
+  }
+  vocabulary = { permissions: new Set(parsed.permissions), apiMap: parsed.apiMap || {} }
+  return vocabulary
+}
+
+/**
+ * 校验插件目录的 plugin.json
+ * @param {string} dir 插件工程目录
+ * @returns {{manifest: object, errors: string[], warnings: string[]}} errors 非空即不合法
+ */
+export function validateManifest(dir) {
+  const manifestPath = join(dir, 'plugin.json')
+  const errors = []
+  const warnings = []
+
+  if (!existsSync(manifestPath)) {
+    return { manifest: null, errors: [`缺少 plugin.json: ${dir}`], warnings }
+  }
+
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  } catch (e) {
+    return { manifest: null, errors: [`plugin.json 不是合法 JSON: ${e.message}`], warnings }
+  }
+
+  // id：反域名风格
+  if (
+    typeof manifest.id !== 'string' ||
+    !/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(manifest.id) ||
+    !manifest.id.includes('.')
+  ) {
+    errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
+  }
+
+  // 必填字段（platform 与 id/name/version 同档：宿主反序列化无缺省，缺失即拒装）
+  for (const field of ['name', 'version', 'platform', 'main', 'pluginType', 'permissions', 'contributes']) {
+    if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
+      errors.push(`缺少必填字段: ${field}`)
+    }
+  }
+
+  // platform 取值域（拼写与宿主端门禁词汇同源；未知取值在宿主反序列化即拒）
+  if (manifest.platform && !VALID_PLATFORMS.has(manifest.platform)) {
+    errors.push(
+      `platform 非法: "${manifest.platform}"（允许: ${[...VALID_PLATFORMS].join(' / ')}）`,
+    )
+  }
+
+  // pluginType / sandbox / rustLibrary
+  if (manifest.pluginType && !VALID_PLUGIN_TYPES.has(manifest.pluginType)) {
+    errors.push(
+      `pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`,
+    )
+  }
+  if (manifest.sandbox && !['inline', 'isolated'].includes(manifest.sandbox)) {
+    errors.push(`sandbox 非法: "${manifest.sandbox}"（允许: inline / isolated）`)
+  }
+  if (manifest.pluginType === 'rust-ts' && !manifest.rustLibrary) {
+    errors.push('pluginType=rust-ts 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
+  }
+
+  // type（装配角色，ADR 0032）：L1 基础服务 / L2 内部统一业务 / L3 业务应用
+  // 非法取值**构建期拒**——宿主反序列化会拒（落 Error 态），但那时产物已发出去，
+  // 表现是「插件装了却不出现」；`system` / `application` 是历史拼写，宿主仍按别名
+  // 接受，故只告警不拦（拦会打断既有工程）。
+  if (manifest.type !== undefined && manifest.type !== null && manifest.type !== '') {
+    if (!VALID_PLUGIN_KINDS.has(manifest.type) && !LEGACY_PLUGIN_KINDS.has(manifest.type)) {
+      errors.push(
+        `type 非法: "${manifest.type}"（允许: ${[...VALID_PLUGIN_KINDS].join(' / ')}）`,
+      )
+    } else if (LEGACY_PLUGIN_KINDS.has(manifest.type)) {
+      warnings.push(
+        `type="${manifest.type}" 是历史拼写，改写为 "${LEGACY_PLUGIN_KINDS.get(manifest.type)}"（ADR 0032 角色维度重构）`,
+      )
+    }
+  }
+
+  // lifecycle（实例生命周期，ADR 0032）：缺省 persistent；`ephemeral`（业务 worker）
+  // **只预留类型**——宿主一次性实例机制与调度框架未落地（ADR 0032 §6 启用清单），
+  // 声明后在宿主加载期会被显性拒绝。构建期先拦，避免产出「装了必失败」的包。
+  if (manifest.lifecycle !== undefined && manifest.lifecycle !== null && manifest.lifecycle !== '') {
+    if (!VALID_LIFECYCLES.has(manifest.lifecycle)) {
+      errors.push(
+        `lifecycle 非法: "${manifest.lifecycle}"（允许: ${[...VALID_LIFECYCLES].join(' / ')}，缺省即 persistent）`,
+      )
+    } else if (manifest.lifecycle === 'ephemeral') {
+      if (manifest.pluginType !== 'rust') {
+        errors.push(
+          `lifecycle="ephemeral" 只能配 pluginType="rust"（即用即弃 worker 无页面产物）: ${JSON.stringify(manifest.pluginType)}`,
+        )
+      } else {
+        errors.push(
+          'lifecycle="ephemeral" 暂不可用：宿主一次性实例机制与调度框架尚未落地（业务 worker 形态已登记，见 ADR 0032 §6；启用前需补齐调度方、store 传参协议、权限模型与 per-app 配额）',
+        )
+      }
+    }
+  }
+
+  // wasmHash（票 14）：形态非法即拒；**值由构建注入产物**，源清单带它属于误用——
+  // manifest-gen 只回填 contributes/permissions，陈旧摘要会一路活到分发链（该链按字节复核后拒发）。
+  if (manifest.wasmHash !== undefined && manifest.wasmHash !== null && manifest.wasmHash !== '') {
+    if (typeof manifest.wasmHash !== 'string' || !WASM_HASH_PATTERN.test(manifest.wasmHash)) {
+      errors.push(
+        `wasmHash 形态非法（须为小写 64 位十六进制 SHA-256）: ${JSON.stringify(manifest.wasmHash)}`,
+      )
+    }
+    warnings.push(
+      'wasmHash 由构建链注入产物 plugin.json，源清单不必手写该键（写了也不会被刷新）',
+    )
+  }
+
+  // ptyQuota（会话引擎下沉 P1 / H1）：可选，声明该插件可同时在册的 host-pty 句柄数。
+  // 本处只校**形态**（正整数）——区间上限是内核常量
+  // `PLUGIN_PTY_SESSIONS_CEILING_PER_PLUGIN`，在此复刻一份数字就是把配额判据拆成两处
+  // （改内核常量不会同步到这里）；越界由宿主加载期拒绝（manager/validation.rs），
+  // 构建期误写 0 / 小数 / 字符串则在这里当场拒绝，不必等到装包才暴露。
+  if (manifest.ptyQuota !== undefined && manifest.ptyQuota !== null) {
+    if (!Number.isInteger(manifest.ptyQuota) || manifest.ptyQuota <= 0) {
+      errors.push(
+        `ptyQuota 形态非法（须为正整数；上限由宿主内核常量仲裁）: ${JSON.stringify(manifest.ptyQuota)}`,
+      )
+    }
+  }
+
+  // 权限：SDK 词汇真源之外的声明会在授权时被静默过滤，等于装饰词汇 → 直接拒绝
+  if (Array.isArray(manifest.permissions)) {
+    const { permissions } = permissionVocabulary()
+    const unknown = manifest.permissions.filter((p) => !permissions.has(p))
+    if (unknown.length) {
+      errors.push(
+        `未知权限: ${unknown.join(', ')}（真源 SDK rust/src/permission.rs，声明未列入的权限会被宿主静默过滤）`,
+      )
+    }
+  }
+
+  // main 产物存在性（未构建仅警告）
+  const distMain = join(dir, 'dist', manifest.main || 'index.js')
+  if (!existsSync(distMain)) {
+    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（pnpm run build）`)
+  }
+
+  // contributes 结构
+  if (manifest.contributes && typeof manifest.contributes !== 'object') {
+    errors.push('contributes 必须是对象')
+  }
+
+  // contributes.httpEndpoints（票 16 路径白名单、票 08 追加认证档位）
+  // 宿主**只认声明**：未声明路径 404，未声明清单等于没有 HTTP 面。条目两形态并存——
+  // 纯路径段（档位 = 宿主最严缺省 jwt）或 `{ path, auth }`。条目非法会让声明侧
+  // 「看起来有清单」而实际永远匹配不上，故构建期就判死；`auth` 取值真源是
+  // rust/src/types.rs 的 EndpointAuth（none|jwt），写错的条目在宿主侧不登记（端点不可达）。
+  const HTTP_ENDPOINT_AUTH_TIERS = ['none', 'jwt']
+  const httpEndpoints = manifest.contributes?.httpEndpoints
+  if (httpEndpoints !== undefined && httpEndpoints !== null) {
+    if (!Array.isArray(httpEndpoints)) {
+      errors.push('contributes.httpEndpoints 必须是「路径段字符串」或「{path, auth} 对象」的数组')
+    } else {
+      for (const entry of httpEndpoints) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `contributes.httpEndpoints 条目形态非法（须为字符串或 {path, auth} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (typeof path !== 'string' || path.trim() === '' || path.includes('..')) {
+          errors.push(
+            `contributes.httpEndpoints 条目 path 非法（须为非空相对路径段、不含 ..）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'auth')
+        if (extraKeys.length) {
+          errors.push(
+            `contributes.httpEndpoints 条目含未知字段（只允许 path / auth）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        if (entry.auth !== undefined && !HTTP_ENDPOINT_AUTH_TIERS.includes(entry.auth)) {
+          errors.push(
+            `contributes.httpEndpoints 条目 auth 取值非法（须为 ${HTTP_ENDPOINT_AUTH_TIERS.join(' | ')}，缺省即最严档 jwt）: ${JSON.stringify(entry)}`,
+          )
+        }
+      }
+      const normalized = httpEndpoints
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim().replace(/^\/+/, ''))
+      const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)
+      if (dup.length) {
+        errors.push(`contributes.httpEndpoints 重复声明: ${[...new Set(dup)].join(', ')}`)
+      }
+    }
+  }
+
+  // contributes.wsEndpoints（票 09a WS 动作词表声明式化 · expand）
+  // 与 httpEndpoints 同构：纯路径段（档位 = 宿主 WS 默认档 none）或 `{ path, auth }`。
+  // 支持声明式 WS 端点：宿主按声明静态登记进 WS 注册表并精确匹配，未声明路径不可达。
+  // 条目非法会让声明侧「看起来有清单」而实际永远匹配不上，故构建期就判死；`auth` 取值真源
+  // 同样是 rust/src/types.rs 的 EndpointAuth（none|jwt）。
+  const WS_ENDPOINT_AUTH_TIERS = ['none', 'jwt']
+  const WS_ENDPOINT_PATH_MAX_LEN = 64
+  const wsEndpoints = manifest.contributes?.wsEndpoints
+  if (wsEndpoints !== undefined && wsEndpoints !== null) {
+    if (!Array.isArray(wsEndpoints)) {
+      errors.push('contributes.wsEndpoints 必须是「路径段字符串」或「{path, auth} 对象」的数组')
+    } else {
+      for (const entry of wsEndpoints) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `contributes.wsEndpoints 条目形态非法（须为字符串或 {path, auth} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (
+          typeof path !== 'string' ||
+          path.trim() === '' ||
+          path.includes('/') ||
+          path.includes('.') ||
+          [...path].length > WS_ENDPOINT_PATH_MAX_LEN
+        ) {
+          errors.push(
+            `contributes.wsEndpoints 条目 path 非法（须为非空单段相对路径、不含 / 或 .、长度不超过 ${WS_ENDPOINT_PATH_MAX_LEN}）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'auth')
+        if (extraKeys.length) {
+          errors.push(
+            `contributes.wsEndpoints 条目含未知字段（只允许 path / auth）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        const auth = typeof entry.auth === 'string' ? entry.auth.trim() : entry.auth
+        if (
+          entry.auth !== undefined &&
+          entry.auth !== null &&
+          entry.auth !== '' &&
+          (typeof auth !== 'string' || !WS_ENDPOINT_AUTH_TIERS.includes(auth))
+        ) {
+          errors.push(
+            `contributes.wsEndpoints 条目 auth 取值非法（须为 ${WS_ENDPOINT_AUTH_TIERS.join(' | ')}，缺省即 WS 默认档 none）: ${JSON.stringify(entry)}`,
+          )
+        }
+      }
+      const normalized = wsEndpoints
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim())
+      const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)
+      if (dup.length) {
+        errors.push(`contributes.wsEndpoints 重复声明: ${[...new Set(dup)].join(', ')}`)
+      }
+    }
+  }
+
+  // wasiPreopenDirs（票 07 只读档；ADR 0034 归属类别闸门）：条目两形态——裸路径字符串
+  // （可写，既有形态）或 `{ path, readonly }` 对象。这里管形态，宿主 Rust 端（SDK
+  // rust/src/types.rs::WasiPreopenDir::from_json）管仲裁：未知键 / 非布尔 readonly
+  // 若被静默忽略，只读声明会退化成可写挂载，所以两侧都不放过。
+  //
+  // **类别闸门（ADR 0034）**：`wasiPreopenDirs` 仅 worker 类别（lifecycle="ephemeral"）
+  // 可用——主 wasm-app 文件访问一律走宿主 host-fs 授权机制。非 worker 声明即构建期
+  // 显性拒绝（不静默忽略：静默忽略会让「声明了却没人读它」的目录配置一路活到分发链）。
+  // worker 未实现期间（ADR 0032 §6 双侧拒绝）ephemeral 本身被下方 lifecycle 分支拦截，
+  // 故该字段当前对一切 manifest 不可达；此处闸门是取值域层面的落死。
+  const preopenDirs = manifest.wasiPreopenDirs
+  if (preopenDirs !== undefined && preopenDirs !== null) {
+    if (manifest.lifecycle !== 'ephemeral') {
+      errors.push(
+        'wasiPreopenDirs 仅 worker 类别（lifecycle="ephemeral"）可用：业务应用文件访问一律走宿主 host-fs 授权机制（permissions 声明 fs:read/fs:write，目录经 fs_request_auth 授权并持久化），见 ADR 0034',
+      )
+    }
+    if (!Array.isArray(preopenDirs)) {
+      errors.push('wasiPreopenDirs 必须是「路径字符串」或「{path, readonly} 对象」的数组')
+    } else {
+      for (const entry of preopenDirs) {
+        const isString = typeof entry === 'string'
+        const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        if (!isString && !isObject) {
+          errors.push(
+            `wasiPreopenDirs 条目形态非法（须为路径字符串或 {path, readonly} 对象）: ${JSON.stringify(entry)}`,
+          )
+          continue
+        }
+        const path = isString ? entry : entry.path
+        if (typeof path !== 'string' || path.trim() === '') {
+          errors.push(
+            `wasiPreopenDirs 条目 path 非法（须为非空字符串，支持 \${home} 前缀）: ${JSON.stringify(entry)}`,
+          )
+        }
+        if (isString) continue
+        const extraKeys = Object.keys(entry).filter((k) => k !== 'path' && k !== 'readonly')
+        if (extraKeys.length) {
+          errors.push(
+            `wasiPreopenDirs 条目含未知字段（只允许 path / readonly）: ${extraKeys.join(', ')} → ${JSON.stringify(entry)}`,
+          )
+        }
+        if (entry.readonly !== undefined && typeof entry.readonly !== 'boolean') {
+          errors.push(
+            `wasiPreopenDirs 条目 readonly 必须是布尔（缺省即可写；写错不会静默降级）: ${JSON.stringify(entry)}`,
+          )
+        }
+      }
+    }
+  }
+
+  return { manifest, errors, warnings }
+}

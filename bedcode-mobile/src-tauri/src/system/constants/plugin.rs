@@ -1,21 +1,25 @@
 //! Plugin 系统常量
 
-/// 插件启用状态持久化 key 前缀
+/// 插件启用状态持久化 key 前缀（应用「已启用 / 可用」偏好）
 ///
-/// 格式: `plugin.enabled.{plugin_id}`，值为 `"true"` / `"false"`
+/// 格式: `plugin.enabled.{plugin_id}`，值为 `"true"` / `"false"`。
+/// **不再驱动启动流程**：启用只是「这个应用可用」的持久化记录，启动时是否
+/// 自动激活只看 [`PLUGIN_AUTOSTART_KEY_PREFIX`]（默认关）。
 pub const PLUGIN_ENABLED_KEY_PREFIX: &str = "plugin.enabled.";
 
-/// 插件存储文件子目录名
-pub const PLUGIN_STORAGE_DIR: &str = "plugins";
+/// 插件「启动时自动激活」偏好 key 前缀
+///
+/// 格式: `plugin.autostart.{plugin_id}`，值为 `"true"` / `"false"`。
+/// **缺省即关**：移动端是应用模型——启动只扫描已安装 wasm-app，不启动任何应用；
+/// 只有显式把本开关置 `true` 的应用才会在 boot 自动激活，其余等用户在宿主壳里点击。
+pub const PLUGIN_AUTOSTART_KEY_PREFIX: &str = "plugin.autostart.";
 
 /// 插件存储文件扩展名
+///
+/// 已退役常量：插件存储已随 `plugin_storage_db_backed_lock.rs` 迁入主库
+/// `plugin_storage` 表，文件落盘面（`PLUGIN_STORAGE_DIR` / `storage_path` /
+/// `load_from_disk`）一并删除。本常量保留仅为让该锁能指名它（退役面记账）。
 pub const PLUGIN_STORAGE_EXT: &str = ".json";
-
-/// 插件激活超时（秒）
-pub const PLUGIN_ACTIVATE_TIMEOUT_SECS: u64 = 5;
-
-/// 插件前端模块导入超时（毫秒）
-pub const PLUGIN_IMPORT_TIMEOUT_MS: u64 = 5000;
 
 /// WASM 插件文件扩展名
 pub const WASM_FILE_EXT: &str = ".wasm";
@@ -34,9 +38,6 @@ pub const SOURCE_FILE_INSTALL: &str = "file-install";
 
 /// 来源标记：远程 URL 安装
 pub const SOURCE_REMOTE_DOWNLOAD: &str = "remote-download";
-
-/// APK assets 中内置插件目录
-pub const APK_PLUGINS_DIR: &str = "plugins";
 
 /// 插件数据目录（app_data_dir 下）
 pub const PLUGIN_DATA_DIR: &str = "plugins";

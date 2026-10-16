@@ -1,13 +1,8 @@
 //! 应用常量定义
 //!
-//! 按领域分组，统一管理所有魔法值，避免硬编码散布各处
+//! **server-lib-split 迁移**：真源已随 `bedcode-server-base` 拆出（拆分后为
+//! `bedcode-server-base` crate 的 `constants` 模块）；本文件保留模块路径与全部
+//! 公开名字（`pub use ...::*`），宿主其余代码经 `crate::system::constants::*`
+//! 引用不受影响。常量本身只含字面量，零依赖，纯搬迁。
 
-pub mod auth;
-pub mod event;
-pub mod file;
-pub mod lifecycle;
-pub mod mdns;
-pub mod network;
-pub mod plugin;
-pub mod server;
-pub mod terminal;
+pub use bedcode_server_base::constants::*;

@@ -14,7 +14,7 @@ import {
   consentDisplayName,
   CONSENT_TIMEOUT_MS,
   _resetConsentForTest,
-} from '../../../../plugins/file-transfer/src/composables/useConsent'
+} from '../../../../wasm-apps/file-transfer/src/composables/useConsent'
 
 type EventHandler = (payload: any) => void
 

@@ -15,7 +15,7 @@ import android.webkit.WebResourceResponse
 
 object Rust {
     init {
-        System.loadLibrary("bedcode_lib")
+        System.loadLibrary("bedcode_mobile_lib")
     }
 
     @JvmStatic external fun onActivityCreate(activity: WryActivity)

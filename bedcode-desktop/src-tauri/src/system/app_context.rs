@@ -3,18 +3,13 @@
 //! 全局单实例容器，集中管理桌面端所有全局服务的引用
 //! 在 lib.rs 的 run() 中一次性创建，后续通过 AppContext::global() 获取
 
+use bedcode_discovery_engine::advertiser::MdnsAdvertiser;
 use crate::db::Database;
-use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::plugin::PluginHost;
-use crate::server::services::pairing_service::PairingService;
-use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
-use crate::utils::auth::biometric::BiometricChallengeManager;
-use crate::utils::auth::QrTokenManager;
+use crate::wasm_core::PluginHost;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{broadcast, Mutex};
 
 /// 桌面端全局服务容器
 ///
@@ -22,19 +17,12 @@ use tokio::sync::{broadcast, Mutex};
 /// 通过 AppContext::global() 获取，各模块按需取用
 pub struct AppContext {
     /// 数据库实例
-    db: Arc<Mutex<Database>>,
-    /// 会话管理器
-    session_manager: Arc<SessionManager>,
-    /// 会话配置管理器
-    config_manager: Arc<SessionConfigManager>,
+    db: Arc<std::sync::Mutex<Database>>,
+    // 票 11：`session_manager` / `config_manager` 两个内核会话域字段已删除——
+    // 会话真源在 `com.bedcode.terminal-session` 登记域，宿主经 `session_gateway`
+    // 窄转发层互调，不再持有内核会话对象。
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
-    /// 配对服务
-    pairing_service: Arc<PairingService>,
-    /// QR Token 管理器
-    qr_manager: Arc<QrTokenManager>,
-    /// 生物认证挑战值管理器
-    biometric_challenges: Arc<BiometricChallengeManager>,
     /// mDNS 广播管理器
     mdns_advertiser: Arc<tokio::sync::RwLock<MdnsAdvertiser>>,
     /// Tauri AppHandle
@@ -43,8 +31,6 @@ pub struct AppContext {
     /// MockRuntime 句柄，与 Wry 类型不兼容）允许 None，依赖前端事件的
     /// 能力在调用处降级（emit 跳过），业务链路不受影响
     app_handle: Option<Arc<AppHandle>>,
-    /// 同步事件发送器
-    sync_tx: broadcast::Sender<crate::events::DesktopSyncEvent>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
     resource_dir: Arc<PathBuf>,
     /// 系统基本信息（OS / 设备名称 / IP，启动时采集）
@@ -79,32 +65,12 @@ impl AppContext {
 
     // ==================== Accessors ====================
 
-    pub fn db(&self) -> &Arc<Mutex<Database>> {
+    pub fn db(&self) -> &Arc<std::sync::Mutex<Database>> {
         &self.db
-    }
-
-    pub fn session_manager(&self) -> &Arc<SessionManager> {
-        &self.session_manager
-    }
-
-    pub fn config_manager(&self) -> &Arc<SessionConfigManager> {
-        &self.config_manager
     }
 
     pub fn plugin_host(&self) -> &Arc<PluginHost> {
         &self.plugin_host
-    }
-
-    pub fn pairing_service(&self) -> &Arc<PairingService> {
-        &self.pairing_service
-    }
-
-    pub fn qr_manager(&self) -> &Arc<QrTokenManager> {
-        &self.qr_manager
-    }
-
-    pub fn biometric_challenges(&self) -> &Arc<BiometricChallengeManager> {
-        &self.biometric_challenges
     }
 
     pub fn mdns_advertiser(&self) -> &Arc<tokio::sync::RwLock<MdnsAdvertiser>> {
@@ -113,10 +79,6 @@ impl AppContext {
 
     pub fn app_handle(&self) -> &Option<Arc<AppHandle>> {
         &self.app_handle
-    }
-
-    pub fn sync_tx(&self) -> &broadcast::Sender<crate::events::DesktopSyncEvent> {
-        &self.sync_tx
     }
 
     pub fn resource_dir(&self) -> &Arc<PathBuf> {
@@ -130,16 +92,10 @@ impl AppContext {
 
 /// 构建器，用于分步组装 AppContext
 pub struct AppContextBuilder {
-    db: Option<Arc<Mutex<Database>>>,
-    session_manager: Option<Arc<SessionManager>>,
-    config_manager: Option<Arc<SessionConfigManager>>,
+    db: Option<Arc<std::sync::Mutex<Database>>>,
     plugin_host: Option<Arc<PluginHost>>,
-    pairing_service: Option<Arc<PairingService>>,
-    qr_manager: Option<Arc<QrTokenManager>>,
-    biometric_challenges: Option<Arc<BiometricChallengeManager>>,
     mdns_advertiser: Option<Arc<tokio::sync::RwLock<MdnsAdvertiser>>>,
     app_handle: Option<Arc<AppHandle>>,
-    sync_tx: Option<broadcast::Sender<crate::events::DesktopSyncEvent>>,
     resource_dir: Option<Arc<PathBuf>>,
     system_info: Option<Arc<SystemInfo>>,
 }
@@ -148,47 +104,21 @@ impl AppContextBuilder {
     pub fn new() -> Self {
         Self {
             db: None,
-            session_manager: None,
-            config_manager: None,
             plugin_host: None,
-            pairing_service: None,
-            qr_manager: None,
-            biometric_challenges: None,
             mdns_advertiser: None,
             app_handle: None,
-            sync_tx: None,
             resource_dir: None,
             system_info: None,
         }
     }
 
-    pub fn db(mut self, db: Arc<Mutex<Database>>) -> Self {
+    pub fn db(mut self, db: Arc<std::sync::Mutex<Database>>) -> Self {
         self.db = Some(db);
-        self
-    }
-
-    pub fn session_manager(mut self, sm: Arc<SessionManager>) -> Self {
-        self.session_manager = Some(sm);
-        self
-    }
-
-    pub fn config_manager(mut self, cm: Arc<SessionConfigManager>) -> Self {
-        self.config_manager = Some(cm);
         self
     }
 
     pub fn plugin_host(mut self, ph: Arc<PluginHost>) -> Self {
         self.plugin_host = Some(ph);
-        self
-    }
-
-    pub fn pairing_service(mut self, ps: Arc<PairingService>) -> Self {
-        self.pairing_service = Some(ps);
-        self
-    }
-
-    pub fn qr_manager(mut self, qm: Arc<QrTokenManager>) -> Self {
-        self.qr_manager = Some(qm);
         self
     }
 
@@ -199,11 +129,6 @@ impl AppContextBuilder {
 
     pub fn app_handle(mut self, ah: Option<Arc<AppHandle>>) -> Self {
         self.app_handle = ah;
-        self
-    }
-
-    pub fn sync_tx(mut self, tx: broadcast::Sender<crate::events::DesktopSyncEvent>) -> Self {
-        self.sync_tx = Some(tx);
         self
     }
 
@@ -221,18 +146,10 @@ impl AppContextBuilder {
     pub fn build_and_init(self) -> &'static AppContext {
         let ctx = AppContext {
             db: self.db.expect("AppContext: db is required"),
-            session_manager: self.session_manager.expect("AppContext: session_manager is required"),
-            config_manager: self.config_manager.expect("AppContext: config_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
-            pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
-            qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
-            biometric_challenges: self
-                .biometric_challenges
-                .unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
             // app_handle 允许 None（无头/测试上下文），其余字段仍必填
             app_handle: self.app_handle,
-            sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
             system_info: self.system_info.expect("AppContext: system_info is required"),
         };

@@ -1,16 +1,17 @@
 /**
- * Plugin fixtures — 插件清单（DesktopPluginInfo 线协议）
+ * Plugin fixtures — 插件清单（宿主 plugin_list_loaded 线协议）
  *
- * Rust DTO 源：src-tauri/src/plugin/types.rs 的 DesktopPluginInfo
- * （#[serde(rename_all = "camelCase")]：id/name/version/.../pluginType/extensionPath；
- *  底层复用 packages/plugin-sdk-desktop/rust/src/types.rs 的 PluginType/PluginState/PluginContributes）。
+ * Rust DTO 源：共享内核 crate `packages/bedcode-wasm-core` 的
+ * `manager/types.rs` HostPluginInfo（`#[serde(rename_all = "camelCase")]`：
+ * id/name/version/.../pluginType/extensionPath）与 `manifest.rs` PluginState
+ * （`#[serde(tag = "state", rename_all = "camelCase")]`，结构体变体带 error）。
  *
  * 命名规则：整体 camelCase（Rust rename_all）；注意与 server/session fixture 的
  * snake_case 相反，以各 DTO 的 serde 属性为准。
  * 特殊点：
- * - state 为 adjacently tagged 枚举（serde tag="state", content="error"）：
- *   {state:"Activated"} / {state:"Degraded", error:"..."} / {state:"Error", error:"..."}；
- *   全变体清单见 makePluginInfo 头注释
+ * - state 为 internally tagged 枚举（serde tag="state"），线上值为 camelCase：
+ *   {state:'activated'} / {state:'degraded', error:'...'} / {state:'error', error:'...'}；
+ *   全变体清单见 PLUGIN_INFO_DTO_FIELDS 头注释
  * - rust_library 为 String 恒序列化（无 rust 库的插件为空字符串）
  * - icon / installed_at 带 skip_serializing_if，None 时不出现在 JSON（fixture 取「出现」形态）
  * - contributes 的 terminal/configuration/lifecycle 为 Option 无 skip，None 序列化为 null；
@@ -42,6 +43,9 @@ export interface FixturePluginContributes {
   terminal: TerminalContribution | null
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  httpEndpoints: string[]
+  /** 票 09a：WS 端点静态声明（wire 镜像 wsEndpoints） */
+  wsEndpoints: string[]
   configuration: PluginConfiguration | null
   lifecycle: LifecycleContribution | null
   provides: string[]
@@ -55,6 +59,8 @@ export const CONTRIBUTES_DTO_FIELDS = [
   'terminal',
   'toolProviders',
   'fileHandlers',
+  'httpEndpoints',
+  'wsEndpoints',
   'configuration',
   'lifecycle',
   'provides',
@@ -70,6 +76,8 @@ export function makePluginContributes(
     terminal: null,
     toolProviders: [],
     fileHandlers: [],
+    httpEndpoints: [],
+    wsEndpoints: [],
     configuration: null,
     lifecycle: null,
     provides: [],
@@ -89,7 +97,6 @@ export interface PluginInfoFixture {
   description: string
   author: string
   main: string
-  sandbox: string
   pluginType: PluginType
   /** WASM 库文件名（无 rust 库的插件为空字符串，Rust 恒序列化） */
   rustLibrary: string
@@ -106,9 +113,9 @@ export interface PluginInfoFixture {
 }
 
 /**
- * 与 plugin/types.rs DesktopPluginInfo（camelCase）字段一一对应。
- * state 变体全集（与 Rust PluginState serde 一一对应）：
- * Loaded / Activating / Activated / Degraded(error) / NeedsApproval / Error(error) / Deactivated
+ * 与 wasm-core HostPluginInfo（camelCase）字段一一对应。
+ * state 变体全集（与共享内核 PluginState serde 一一对应，线上 camelCase）：
+ * loaded / activating / activated / degraded(error) / needsApproval / error(error) / deactivated
  */
 export const PLUGIN_INFO_DTO_FIELDS = [
   'id',
@@ -117,7 +124,6 @@ export const PLUGIN_INFO_DTO_FIELDS = [
   'description',
   'author',
   'main',
-  'sandbox',
   'pluginType',
   'rustLibrary',
   'permissions',
@@ -138,11 +144,10 @@ export function makePluginInfo(overrides: Partial<PluginInfoFixture> = {}): Plug
     description: 'A demo plugin',
     author: 'BedCode Team',
     main: 'dist/main.js',
-    sandbox: 'inline',
     pluginType: 'ts-only',
     rustLibrary: '',
     permissions: [],
-    state: { state: 'Activated' },
+    state: { state: 'activated' },
     extensionPath: '/opt/bedcode/plugins/com.bedcode.demo',
     contributes: makePluginContributes(),
     icon: 'icon.svg',
@@ -162,7 +167,7 @@ export function makeDegradedPluginInfo(
   overrides: Partial<PluginInfoFixture> = {},
 ): PluginInfoFixture {
   return makePluginInfo({
-    state: { state: 'Degraded', error: 'startup init failed: db migration error' },
+    state: { state: 'degraded', error: 'startup init failed: db migration error' },
     ...overrides,
   })
 }
@@ -171,7 +176,7 @@ export function makeDegradedPluginInfo(
 export function makeActivatingPluginInfo(
   overrides: Partial<PluginInfoFixture> = {},
 ): PluginInfoFixture {
-  return makePluginInfo({ state: { state: 'Activating' }, ...overrides })
+  return makePluginInfo({ state: { state: 'activating' }, ...overrides })
 }
 
 // ==================== 类型级对齐断言（编译期，对标量字段） ====================
@@ -184,7 +189,6 @@ type PluginScalarKeys =
   | 'description'
   | 'author'
   | 'main'
-  | 'sandbox'
   | 'pluginType'
   | 'rustLibrary'
   | 'permissions'

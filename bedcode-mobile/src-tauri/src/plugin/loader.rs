@@ -5,7 +5,7 @@
 
 use crate::plugin::types::*;
 use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
-use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::system::constants::plugin::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -90,7 +90,7 @@ impl PluginLoader {
         plugins_dir: &Path,
         wasm_runtime: &WasmRuntime,
         wasm_host_ctx: &Arc<WasmHostContext>,
-    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedComponentPlugin>) {
+    ) -> (HashMap<String, LoadedPlugin>, HashMap<String, LoadedWasmPlugin>) {
         tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
 
         if !plugins_dir.exists() {
@@ -163,6 +163,21 @@ impl PluginLoader {
                         continue;
                     }
 
+                    // ==================== 退役权限位闸门 ====================
+                    // 票 2026-10-10 批次 C2：宿主壳改纯 surface 形态后，`ui:toolbox` /
+                    // `ui:navtab` / `ui:input` 三个权限位随对应扩展点整面退役。
+                    // 这里**显式拒绝装载**而不是让它落进 grant 的静默丢弃分支——
+                    // 否则旧插件会「加载成功但功能凭空消失」，排查方向被带偏
+                    // （§5.1.3 fail-visible 形态③）。
+                    if let Err(e) = bedcode_plugin_api_mobile::permission::check_retired_permissions(
+                        &plugin_id,
+                        &manifest.permissions,
+                    ) {
+                        tracing::error!("[PluginLoader] Rejecting plugin {:?}: {}", plugin_id, e);
+                        seen_ids.remove(&plugin_id);
+                        continue;
+                    }
+
                     let source = Self::detect_source(&path);
 
                     // WASM 插件：编译 + 实例化（组件路径；core module 在此编译失败，
@@ -172,16 +187,16 @@ impl PluginLoader {
                         if wasm_file.exists() {
                             match wasm_runtime.compile_component_from_file(&wasm_file) {
                                 Ok(component) => {
-                                    // 与 SDK PermissionManager::grant_permissions 语义一致：storage 默认授予
-                                    let mut granted: std::collections::HashSet<String> =
-                                        manifest.permissions.iter().cloned().collect();
-                                    granted
-                                        .insert(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string());
+                                    // 统一 instantiate（单形态）：宿主上下文按插件共享同一份（权限真源 =
+                                    // 内核 `PermissionManager`，激活时授予/停用时撤销）；
+                                    // preopen 声明与资源覆盖移动无桌面 worker 通道 / manifest 覆盖面 ⇒ 传空与 None
+                                    let plugin_ctx = wasm_host_ctx.clone();
                                     match wasm_runtime.instantiate_component(
                                         &component,
                                         &plugin_id,
-                                        wasm_host_ctx.clone(),
-                                        granted,
+                                        plugin_ctx,
+                                        &[],
+                                        None,
                                     ) {
                                         Ok(loaded_wasm) => {
                                             tracing::info!(
@@ -217,12 +232,9 @@ impl PluginLoader {
                         }
                     }
 
-                    let permissions: std::collections::HashSet<String> = manifest.permissions.iter().cloned().collect();
-
                     let loaded = LoadedPlugin {
                         manifest,
                         state: PluginState::Loaded,
-                        granted_permissions: permissions,
                         source,
                         extension_path,
                     };
@@ -283,6 +295,17 @@ impl PluginLoader {
             return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
         }
 
+        // 平台适配门禁（platform 必填）：移动端只放行 mobile / both——桌面专属
+        // 插件被复制进本端插件目录时显性拒绝，避免「加载成功却整页不出现」的
+        // 静默乱象（与桌面端 manager/validation.rs::validate_platform 对等）
+        if !manifest.platform.supports(PluginPlatform::Mobile) {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin.json platform=\"{}\" 与移动端不匹配：该插件声明仅适配另一端\
+                 （platform 需为 \"mobile\"；双端适配写 \"both\"），移动端拒绝装载",
+                manifest.platform.as_str()
+            )));
+        }
+
         // TS-only 插件必须有 main 字段
         if manifest.plugin_type == PluginType::TsOnly && manifest.main.is_empty() {
             return Err(crate::AppError::Plugin(
@@ -337,37 +360,43 @@ mod tests {
 
             // 插件目录布局：{plugins_dir}/{plugin_id}/plugin.json + {rustLibrary}.wasm
             // （与 APK assets / dev 资源目录解压后的布局一致）
-            let plugin_dir = tmp.path().join("com.bedcode.auto-task");
+            let plugin_dir = tmp.path().join("com.bedcode.terminal-session");
             std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");
             std::fs::write(
                 plugin_dir.join(PLUGIN_MANIFEST_FILE),
                 r#"{
-                    "id": "com.bedcode.auto-task",
-                    "name": "Auto Task",
+                    "id": "com.bedcode.terminal-session",
+                    "name": "BedCode",
                     "version": "1.0.0-beta",
+                    "platform": "mobile",
                     "pluginType": "wasm",
-                    "rustLibrary": "bedcode_plugin_auto_task"
+                    "rustLibrary": "bedcode_plugin_terminal_session",
+                    "permissions": ["auth", "bus", "network:http", "session:read", "storage", "terminal:output", "ui:route", "ws:client"]
                 }"#,
             )
             .expect("write plugin.json");
             // 真实 SDK 宏产物（wasm_entry! 8 组导出），组件形态字节已在 build 助手断言
             std::fs::write(
-                plugin_dir.join("bedcode_plugin_auto_task.wasm"),
-                &crate::plugin::wasm_runtime::component::tests::build_auto_task_component(),
+                plugin_dir.join("bedcode_plugin_terminal_session.wasm"),
+                &bedcode_wasm_core::test_support::build_terminal_session_component(),
             )
             .expect("write component wasm");
 
-            let runtime = WasmRuntime::new(Some(tmp.path().join("aot"))).expect("wasm runtime");
-            let host_ctx = crate::plugin::wasm_runtime::component::tests::build_host_ctx(&tmp);
+            // 统一运行时壳（单形态 2026-10-13）：无头测试无 storage/app_handle——
+            // 用 test_support 的无头装配（含 ABI 规格 UNCONSTRAINED：夹具是桌面 SDK
+            // 产物，版本/形态检查对无头装配不设上限）
+            let runtime = bedcode_wasm_core::test_support::setup_headless_runtime(Some(tmp.path().join("aot")))
+                .expect("wasm runtime");
+            let host_ctx = bedcode_wasm_core::test_support::build_host_ctx();
 
             let (plugins, wasm_plugins) = PluginLoader::load_all(tmp.path(), &runtime, &host_ctx);
 
             // manifest 注册 + 组件实例落表
-            assert!(plugins.contains_key("com.bedcode.auto-task"));
+            assert!(plugins.contains_key("com.bedcode.terminal-session"));
             let mut loaded = wasm_plugins
                 .into_iter()
-                .find(|(id, _)| id == "com.bedcode.auto-task")
-                .expect("auto-task 组件必须被 loader 实例化")
+                .find(|(id, _)| id == "com.bedcode.terminal-session")
+                .expect("terminal-session 组件必须被 loader 实例化")
                 .1;
 
             // 实例可用：activate 导出调用（宏内 HostLog 接线走真实 host 日志）
@@ -386,5 +415,62 @@ mod tests {
                 "组件 AOT 缓存应以 c 前缀命名"
             );
         });
+    }
+
+    /// 平台适配门禁（移动端）：desktop 专属清单必须 fail-visible 拒装载
+    ///
+    /// 行为契约（与桌面端 manager/validation.rs::validate_platform 对等）：
+    /// - `platform="desktop"` → 拒绝，错误点名字段、声明值与 `"both"` 出路；
+    /// - `platform` 缺失 / 未知取值 → 反序列化即拒（wire 无缺省，fail-visible）；
+    /// - `platform="mobile"` / `"both"` → 放行且取值原样保留。
+    #[test]
+    fn test_load_manifest_rejects_non_mobile_platform() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // 每次覆写同一份最小清单（ts-only 形态免 wasm 产物即可过必填校验）
+        let write_manifest = |platform_line: &str| -> std::path::PathBuf {
+            let path = tmp.path().join("plugin.json");
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{
+                        "id": "com.example.platform-probe",
+                        "name": "Platform Probe",
+                        "version": "1.0.0",
+                        {platform_line}
+                        "pluginType": "ts-only",
+                        "main": "index.js",
+                        "permissions": [],
+                        "contributes": {{}}
+                    }}"#
+                ),
+            )
+            .expect("write plugin.json");
+            path
+        };
+
+        // desktop 专属：拒绝，且错误信息点名 platform / desktop / both
+        let err = PluginLoader::load_manifest(&write_manifest(r#""platform": "desktop","#))
+            .expect_err("desktop 专属清单在移动端必须被拒");
+        let msg = err.to_string();
+        assert!(msg.contains("platform"), "错误须点名字段: {msg}");
+        assert!(msg.contains("desktop"), "错误须点名声明值: {msg}");
+        assert!(msg.contains("both"), "错误须给出双端出路: {msg}");
+
+        // platform 缺失：无 serde 缺省，解析即拒
+        let err = PluginLoader::load_manifest(&write_manifest("")).expect_err("缺失 platform 必须解析失败");
+        assert!(err.to_string().contains("platform"), "错误须点名缺失字段: {err}");
+
+        // 未知取值：解析即拒（rename_all = "lowercase" 只认三个 wire 值）
+        let err = PluginLoader::load_manifest(&write_manifest(r#""platform": "linux","#))
+            .expect_err("未知 platform 取值必须解析失败");
+        assert!(err.to_string().contains("linux"), "serde 错误须点名未知取值: {err}");
+
+        // mobile / both：放行（门禁不得误伤本端与双端插件）
+        for platform in ["mobile", "both"] {
+            let manifest = PluginLoader::load_manifest(&write_manifest(&format!(r#""platform": "{platform}","#)))
+                .unwrap_or_else(|e| panic!("platform={platform} 应放行: {e}"));
+            assert_eq!(manifest.platform.as_str(), platform);
+        }
     }
 }

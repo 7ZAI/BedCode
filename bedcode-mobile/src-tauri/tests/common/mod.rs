@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bedcode_lib::enums::auth::{AuthPayload, AuthStage};
-use bedcode_lib::model::message::Message;
+use bedcode_mobile_lib::enums::auth::{AuthPayload, AuthStage};
+use bedcode_mobile_lib::model::message::Message;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;

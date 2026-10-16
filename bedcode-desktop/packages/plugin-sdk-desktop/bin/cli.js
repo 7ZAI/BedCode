@@ -12,7 +12,8 @@
  *
  * create  从 SDK 内置模板生成插件工程（默认 ts-only；--rust 附带 WASM 后端脚手架）；
  *          --registry 时引用已发布的 SDK 版本，否则引用本地 SDK 相对路径
- * build   串联 vite build → cargo wasm32（rust-ts 插件）；--resources-dir 时复制产物到宿主资源目录
+ * build   串联 vite build → cargo wasm32（rust-ts 插件）；--resources-dir 时复制产物到宿主资源目录，
+ *          并把 wasm 字节的 SHA-256 注入**产物** plugin.json 的 wasmHash（源清单不带该键，见 bin/wasm-hash.js）
  * dev     启动浏览器开发环境（dev-shell）：vite dev server + HMR（Rust 后端不在浏览器运行）
  * manifest 按插件源码自动填充 plugin.json 的 contributes/permissions；--check 只检查（CI 用）
  * validate 校验 plugin.json 结构与字段合法性（CI 用，exit 1 表示不合法）
@@ -33,6 +34,8 @@ import {
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateManifest } from './manifest-gen.js'
+import { validateManifest } from './manifest-validate.js'
+import { injectWasmHash } from './wasm-hash.js'
 
 const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const TEMPLATE_DIR = join(SDK_ROOT, 'template')
@@ -177,7 +180,9 @@ function cmdCreate(positional, flags) {
     .filter(Boolean)
     .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
     .join('')}Plugin`
-  const pkgName = `@bedcode/plugin-${last}`
+  // 桌面端语义（2026-09-25）：wasm 插件对外称 wasm 应用，npm 包名用 wasm-app- 前缀；
+  // crate 名 / 结构体名是内部实现标识符，保持 bedcode_plugin_* / *Plugin 不变
+  const pkgName = `@bedcode/wasm-app-${last}`
 
   // 插件类型：默认 ts-only；--rust 附带 WASM 后端
   const withRust = flags.rust === true
@@ -240,7 +245,8 @@ function cmdBuild(flags) {
   const rustOnly = flags['rust-only'] === true
   const resourcesDir = flags['resources-dir']
 
-  // 0. 根据源码自动填充 contributes/permissions（构建前同步，保证产物与源码一致）
+  // 0. 根据源码自动填充 contributes/permissions（构建前同步，保证产物与源码一致；
+  //    一致口径不含 wasmHash——它由第 3 步注入产物，源清单不带）
   try {
     const { changed, report } = generateManifest(cwd)
     if (changed) {
@@ -305,6 +311,10 @@ function cmdBuild(flags) {
     copyFileSync(manifestPath, join(dest, 'plugin.json'))
     if (hasWasm && !frontendOnly) {
       copyFileSync(wasmPath, join(dest, `${rustLibrary}.wasm`))
+    }
+    if (hasWasm) {
+      // 摘要注入产物清单：源 plugin.json 保持不带 wasmHash（票 14）
+      injectWasmHash(dest, { log: (m) => console.log(`[bedcode-plugin-desktop] ${m}`) })
     }
     console.log(`\n[bedcode-plugin-desktop] 产物已复制到: ${dest}`)
   }
@@ -407,92 +417,14 @@ function cmdManifest(flags) {
 
 // ==================== 命令：validate（清单校验） ====================
 
-/** 合法权限列表（与宿主 src/plugin/permission.ts VALID_PERMISSIONS 同步） */
-const VALID_PERMISSIONS = new Set([
-  'terminal:input',
-  'terminal:output',
-  'terminal:observe',
-  'session:read',
-  'session:write',
-  'ui:sidebar',
-  'ui:toolbox',
-  'ui:statusbar',
-  'ui:pageToolbar',
-  'ui:input',
-  'ui:fileHandler',
-  'network:http',
-  'storage',
-  'broadcast',
-  'peer',
-])
-
-const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])
-
 function cmdValidate(flags) {
   const dir = resolve(process.cwd(), flags.dir || '.')
-  const manifestPath = join(dir, 'plugin.json')
-  const errors = []
-  const warnings = []
-
-  if (!existsSync(manifestPath)) {
-    console.error(`[bedcode-plugin-desktop] 缺少 plugin.json: ${dir}`)
-    process.exit(1)
-  }
-
-  let manifest
+  let errors, warnings
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+    ;({ errors, warnings } = validateManifest(dir))
   } catch (e) {
-    console.error(`[bedcode-plugin-desktop] plugin.json 不是合法 JSON: ${e.message}`)
+    console.error(`[bedcode-plugin-desktop] ${e.message}`)
     process.exit(1)
-  }
-
-  // id：反域名风格
-  if (
-    typeof manifest.id !== 'string' ||
-    !/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(manifest.id) ||
-    !manifest.id.includes('.')
-  ) {
-    errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
-  }
-
-  // 必填字段
-  for (const field of ['name', 'version', 'main', 'pluginType', 'permissions', 'contributes']) {
-    if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
-      errors.push(`缺少必填字段: ${field}`)
-    }
-  }
-
-  // pluginType / sandbox / rustLibrary
-  if (manifest.pluginType && !VALID_PLUGIN_TYPES.has(manifest.pluginType)) {
-    errors.push(
-      `pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`,
-    )
-  }
-  if (manifest.sandbox && !['inline', 'isolated'].includes(manifest.sandbox)) {
-    errors.push(`sandbox 非法: "${manifest.sandbox}"（允许: inline / isolated）`)
-  }
-  if (manifest.pluginType === 'rust-ts' && !manifest.rustLibrary) {
-    errors.push('pluginType=rust-ts 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
-  }
-
-  // 权限
-  if (Array.isArray(manifest.permissions)) {
-    const unknown = manifest.permissions.filter((p) => !VALID_PERMISSIONS.has(p))
-    if (unknown.length) {
-      errors.push(`未知权限: ${unknown.join(', ')}（合法列表见宿主 permission.ts）`)
-    }
-  }
-
-  // main 产物存在性（未构建仅警告）
-  const distMain = join(dir, 'dist', manifest.main || 'index.js')
-  if (!existsSync(distMain)) {
-    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（pnpm run build）`)
-  }
-
-  // contributes 结构
-  if (manifest.contributes && typeof manifest.contributes !== 'object') {
-    errors.push('contributes 必须是对象')
   }
 
   for (const w of warnings) console.log(`  ⚠ ${w}`)

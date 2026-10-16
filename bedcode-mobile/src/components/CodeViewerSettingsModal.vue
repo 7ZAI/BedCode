@@ -143,7 +143,7 @@ import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSwipeTabs } from '@/composables/useSwipeTabs'
 import { useCodeViewerStore, CODE_THEMES, type CodeViewerSettings } from '@/stores/codeViewer'
-import { resolveThemeLabel } from '@/config/terminalThemes'
+import { resolveThemeLabel } from '@/utils/themeLabel'
 
 const { t } = useI18n()
 

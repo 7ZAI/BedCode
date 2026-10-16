@@ -1,9 +1,10 @@
 /**
  * SDK Vite 插件单测：共享模块外部化 + import 改写
  *
- * 构建期把 vue/vue-i18n/pinia 的 import 语句改写为读取
+ * 构建期把 vue/vue-i18n/pinia/vue-sonner 的 import 语句改写为读取
  * window.__BEDCODE_SHARED__ 的 const 声明，保证插件与宿主共用
- * 同一 Vue 实例。直接调用 hook 函数，不启动 Vite 容器。
+ * 同一 Vue 实例（vue-sonner 为 toast 队列本体，票 13）。
+ * 直接调用 hook 函数，不启动 Vite 容器。
  */
 import { describe, it, expect } from 'vitest'
 import type { Plugin } from 'vite'
@@ -18,23 +19,35 @@ function invokeHook(name: string, ...args: any[]): any {
 }
 
 describe('config hook：rollup external 注入', () => {
-  it('无既有 external → 注入三个共享模块', () => {
+  it('无既有 external → 注入四个共享模块', () => {
     const result = invokeHook('config', {})
-    expect(result.build.rollupOptions.external).toEqual(['vue', 'vue-i18n', 'pinia'])
+    expect(result.build.rollupOptions.external).toEqual(['vue', 'vue-i18n', 'pinia', 'vue-sonner'])
   })
 
   it('既有数组 external → 追加共享模块（不覆盖）', () => {
     const result = invokeHook('config', {
       build: { rollupOptions: { external: ['foo'] } },
     })
-    expect(result.build.rollupOptions.external).toEqual(['foo', 'vue', 'vue-i18n', 'pinia'])
+    expect(result.build.rollupOptions.external).toEqual([
+      'foo',
+      'vue',
+      'vue-i18n',
+      'pinia',
+      'vue-sonner',
+    ])
   })
 
   it('既有字符串 external → 转数组后追加', () => {
     const result = invokeHook('config', {
       build: { rollupOptions: { external: 'foo' } },
     })
-    expect(result.build.rollupOptions.external).toEqual(['foo', 'vue', 'vue-i18n', 'pinia'])
+    expect(result.build.rollupOptions.external).toEqual([
+      'foo',
+      'vue',
+      'vue-i18n',
+      'pinia',
+      'vue-sonner',
+    ])
   })
 })
 
@@ -65,6 +78,15 @@ describe('renderChunk：共享模块 import 改写', () => {
     expect(result.code).toBe(
       'const Vue = window.__BEDCODE_SHARED__["vue"]\n' +
         'const {  createPinia  } = window.__BEDCODE_SHARED__["pinia"]',
+    )
+  })
+
+  it('vue-sonner named import → 读宿主 toast 实例（与宿主 <Toaster> 同队列）', () => {
+    const code = `import { toast } from 'vue-sonner'\ntoast.success('x')`
+    const result = invokeHook('renderChunk', code, {})
+    // 改写保留花括号内原始空白（与 vue/pinia 同款实现）
+    expect(result.code).toBe(
+      'const {  toast  } = window.__BEDCODE_SHARED__["vue-sonner"]\ntoast.success(\'x\')',
     )
   })
 

@@ -23,23 +23,52 @@ interface ActivePlugin {
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
 
+  /**
+   * 启动加载的幂等句柄（见 `ensureLoaded`）
+   *
+   * 为什么需要：`loadAll` 在 `main.ts` 里非阻塞发起，独立窗口的深链路由
+   * （`/terminal-window/:id`、`/plugin/window/:pluginId/:viewId`）随即挂载视图
+   * 宿主。宿主必须能「等到插件注册完」再渲染，而重跑一次 loadAll 会把插件模块
+   * 二次 import + 二次 activate（重复副作用），故只能共用同一个句柄。
+   */
+  private startupLoad: Promise<void> | null = null
+
+  /**
+   * 等待启动期插件加载完成（幂等）——首次调用即发起 loadAll，后续调用共用同一句柄。
+   *
+   * 供视图宿主在渲染插件视图前等待「插件已注册贡献面」。rejection 在此收口：
+   * 单个插件的加载失败已在 loadAll 内各自登记 error 态，整批 reject 只是凭证获取
+   * 之类的致命故障——调用方拿到的是「加载已结束」而非再次抛出。
+   */
+  async ensureLoaded(): Promise<void> {
+    if (!this.startupLoad) {
+      this.startupLoad = this.loadAll().catch((e) => {
+        logger.error('[PluginLoader] Startup load failed:', e)
+      })
+    }
+    await this.startupLoad
+  }
+
   /** 加载所有插件（应用启动时调用）
    *
-   * 根据 Rust 后端返回的插件状态决定前端加载策略：
-   * - Rust 端已 Activated 的插件：加载前端 TS 模块（UI 组件注册）
-   * - Degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
+   * 根据 Rust 后端返回的插件状态（线上 camelCase，见 `./types.ts` 头注）决定前端加载策略：
+   * - 已 activated 的插件：加载前端 TS 模块（UI 组件注册）
+   * - degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
    *   UI 入口应可见；仅 console.warn 标注降级原因（spec §3.6）
-   * - 其余状态（含 Activating 中间态）：跳过，等待用户手动激活
+   * - 其余状态（含 activating 中间态）：跳过，等待用户手动激活
    * - Rust-only 插件：完全由后端管理，前端无需处理
    */
   async loadAll(): Promise<void> {
     logger.log('[PluginLoader] loadAll() started')
+    // 审计票 06：宿主面凭证必须在本方法导入任何插件模块之前取得——插件代码只在模块被导入后
+    // 才运行，密钥「首个调用者生效」因此恒由宿主前端赢得（见 plugin/security/frontend_channel.rs）
+    await pluginCmds.ensureHostCredential()
     const manifests = await pluginCmds.pluginListLoaded()
     logger.log(`[PluginLoader] Found ${manifests.length} plugin(s) from backend`)
 
     for (const manifest of manifests) {
       logger.log(
-        `[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state}, sandbox=${manifest.sandbox})`,
+        `[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state})`,
       )
 
       // Rust-only 插件：Rust 端已通过静态注册激活，前端无需加载
@@ -48,25 +77,19 @@ class PluginLoaderClass {
         continue
       }
 
-      if (manifest.sandbox !== 'inline') {
-        logger.warn(
-          `[PluginLoader] Skipping ${manifest.id}: unsupported sandbox mode "${manifest.sandbox}"`,
-        )
-        continue
-      }
-
-      // 加载门禁：Activated 正常加载；Degraded 也放行（实例在运行，仅降级）；
+      // 加载门禁：线上值 activated 正常加载；degraded 也放行（实例在运行，仅降级）；
       // 其余状态跳过。功能门禁归类依据 spec §5.1 开放问题裁决：先放行 + UI 降级标识
+      // （状态判定必须用 camelCase 线上值，见 `./types.ts` 头注）
       const stateName = manifest.state.state
 
-      if (stateName !== 'Activated' && stateName !== 'Degraded') {
+      if (stateName !== 'activated' && stateName !== 'degraded') {
         logger.log(
           `[PluginLoader] Plugin ${manifest.id} not activated (state: ${stateName}), skipping frontend load`,
         )
         continue
       }
 
-      if (stateName === 'Degraded') {
+      if (stateName === 'degraded') {
         logger.warn(
           `[PluginLoader] Plugin ${manifest.id} is DEGRADED, loading frontend module anyway. Reason: ${manifest.state.error}`,
         )
@@ -105,17 +128,29 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(manifest)
+      const context = await createPluginContext(manifest)
+      // 二次激活时序：context 必须先于 module.activate 入注册表——activate 期间会重新
+      // 注册贡献面（注册表响应式投影变化 → 视图宿主重挂载），子树注入的 context 若仍是
+      // 停用前旧对象（通道令牌已回收）则插件面命令全员被拒（「会话数据加载失败」根因）；
+      // 先入表保证宿主在 activate 期间/之后重挂载时取到最新 context（同对象重设幂等）。
+      getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
-      getPluginRegistry().setContext(manifest.id, context)
+      // 运行态登记：贡献面（侧边栏/设置分组）是否生效由 registry 仲裁，见 isContributionActive
+      getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      // 加载失败即贡献面失效：先登记 error 态摘除贡献，再上报后端
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'error',
+        error: e.message || 'Frontend load failed',
+      })
+      // 已预登记的 context 随失败撤下：Provider 不再渲染，避免残留半激活插件子树
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -145,16 +180,23 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(manifest)
+      const context = await createPluginContext(manifest)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(manifest.id, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       logger.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      getPluginRegistry().setContext(manifest.id, context)
+      getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Plugin frontend loaded (already activated): ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'error',
+        error: e.message || 'Frontend load failed',
+      })
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -313,15 +355,22 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(pluginId, 'import', true)
 
       stage = 'activate'
-      const context = createPluginContext(info)
+      const context = await createPluginContext(info)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(pluginId, context)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       await this.reportLoadDiagnostic(pluginId, 'activate', true)
 
       this.plugins.set(pluginId, { manifest: info, module, context })
-      getPluginRegistry().setContext(pluginId, context)
+      getPluginRegistry().setPluginState(pluginId, info.state)
       logger.log(`[PluginLoader] Plugin hot-reloaded: ${pluginId}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
+      getPluginRegistry().setPluginState(pluginId, {
+        state: 'error',
+        error: e.message || 'Hot reload failed',
+      })
+      getPluginRegistry().clearContext(pluginId)
       await this.reportLoadDiagnostic(
         pluginId,
         stage,
@@ -335,6 +384,8 @@ class PluginLoaderClass {
   /** 加载 inline 模式插件 */
   private async loadInline(manifest: PluginInfo): Promise<void> {
     const ACTIVATE_TIMEOUT = 5000
+    // 宿主面凭证（幂等缓存）：热重载/按需激活路径可能不经过 loadAll
+    await pluginCmds.ensureHostCredential()
     // 失败上报需标注发生在哪一步（issue 04：导入/激活/失败三条路径各上报一次）
     let stage: 'import' | 'activate' = 'import'
 
@@ -352,8 +403,10 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
       stage = 'activate'
-      // 创建 PluginContext
-      const context = createPluginContext(manifest)
+      // 创建 PluginContext（异步：先换本插件的前端通道令牌，见 createPluginContext）
+      const context = await createPluginContext(manifest)
+      // context 先入注册表（二次激活换新对象时宿主重挂载立即取新值，见 loadFrontendOnly 注释）
+      getPluginRegistry().setContext(manifest.id, context)
 
       // 调用 activate
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
@@ -361,11 +414,18 @@ class PluginLoaderClass {
       await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      // 将 context 存入 registry，供 PluginViewHost provide 给组件树
-      getPluginRegistry().setContext(manifest.id, context)
+      // manifest 是 activate() 前取的快照，其 state 仍是激活前的形态（loaded / deactivated）；
+      // 贡献面生效判据读的是 registry 状态，此处必须记激活后的真实运行态
+      getPluginRegistry().setPluginState(manifest.id, { state: 'activated' })
       logger.log(`[PluginLoader] Plugin activated: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to activate ${manifest.id}:`, e)
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'error',
+        error: e.message || 'Activation failed',
+      })
+      // 已预登记的 context 随失败撤下（同 loadFrontendOnly 失败分支）
+      getPluginRegistry().clearContext(manifest.id)
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -373,6 +433,12 @@ class PluginLoaderClass {
         e.message || 'Activation failed',
       )
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Activation failed')
+      // 票 05（ADR 0030）：诊断/状态登记后**必须向调用方传播失败**——
+      // 否则 toggle 启停路径会把失败吞成「启用成功」假成功 toast（插件实际未启用）。
+      // 原始错误形状（信封对象 / Error）原样上抛，由调用方统一消费层（showUserError）
+      // 展示友好文案；记录为什么：loadInline 是唯一同时服务 toggle 与路由/窗口宿主的
+      // 激活入口，吞错会让本票集成测试（启用失败→友好提示）与用户观感双双失真。
+      throw e
     }
   }
 

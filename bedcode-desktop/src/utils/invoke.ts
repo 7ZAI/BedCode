@@ -1,24 +1,19 @@
 //! Tauri IPC 调用超时机制
 //!
-//! 防止因后端崩溃或死锁导致前端 Promise 永久挂起
+//! 防止因后端崩溃或死锁导致前端 Promise 永久挂起。
+//! 超时失败承载为 `UserError('host.invoke.timeout', { seconds })`（ADR 0030 错误信封），
+//! 不再携带命令名 / 技术详情——用户面由 showUserError 统一呈现「操作超时，请重试」。
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core'
+import { IPC_TIMEOUT_CODE, UserError } from '@/utils/userError'
 
 const DEFAULT_TIMEOUT_MS = 30_000
-
-/** 超时专用错误类，便于前端区分超时与其他错误 */
-export class InvokeTimeoutError extends Error {
-  constructor(cmd: string, timeoutMs: number) {
-    super(`common.errorCode.ipcTimeout`)
-    this.name = 'InvokeTimeoutError'
-  }
-}
 
 /**
  * 带超时的 Tauri IPC 调用
  *
- * 超时后 Promise 会 reject 并抛出 InvokeTimeoutError，
- * 调用方可据此展示明确的超时提示或触发重试。
+ * 超时后 Promise reject 为 `UserError('host.invoke.timeout', { seconds })`（params 仅用户
+ * 安全值：秒数），调用方可用 `showUserError(e, { retry })` 展示友好提示 + 重试。
  */
 export async function invokeWithTimeout<T>(
   cmd: string,
@@ -29,7 +24,7 @@ export async function invokeWithTimeout<T>(
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
-      reject(new InvokeTimeoutError(cmd, timeoutMs))
+      reject(new UserError(IPC_TIMEOUT_CODE, { seconds: Math.round(timeoutMs / 1000) }))
     }, timeoutMs)
   })
 

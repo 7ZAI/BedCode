@@ -4,7 +4,7 @@
 //! wasm_entry! 宏 — 生成组件世界（WIT `bedcode:plugin` world）的全部导出实现
 //!
 //! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)。
-//! 宏展开为 wit-bindgen 生成的 6 组 `Guest` trait 实现 + `export!` 导出，
+//! 宏展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现 + `export!` 导出，
 //! 产物为组件（component）而非旧 ABI 的 core module：
 //! - 内存搬运由绑定层处理，不再有 (ptr,len) 与 alloc/dealloc 配对
 //! - 契约定义在 `wit/bedcode.wit`（单一事实来源），接口漂移编译期即暴露
@@ -25,7 +25,9 @@
 use crate::types::PluginManifest;
 
 wit_bindgen::generate!({
-    path: "wit/bedcode.wit",
+    // 票 03：端 `wit/` 是生成物目录（core.wit + cap-mobile.wit + bedcode.wit 同
+    // package 拼装），path 指目录让 wit-bindgen 以 push_dir 加载合成 package。
+    path: "wit",
     world: "plugin",
     pub_export_macro: true,
     default_bindings_module: "$crate::wasm",
@@ -39,8 +41,6 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn deactivate() -> anyhow::Result<()>;
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 
-    fn on_terminal_input(_session_id: &str, _text: &str) -> Option<String> { None }
-    fn on_terminal_output(_session_id: &str, _data: &str) -> Option<String> { None }
     fn on_startup() -> anyhow::Result<()> { Ok(()) }
     fn on_shutdown() -> anyhow::Result<()> { Ok(()) }
     fn on_auth_success() -> anyhow::Result<()> { Ok(()) }
@@ -50,12 +50,19 @@ pub trait WasmPlugin: Send + Sync + 'static {
 
     /// 收到总线消息回调（可选，默认忽略）
     fn on_bus_message(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
+
+    /// 收到总线二进制消息回调（v9，可选，默认忽略）
+    ///
+    /// 订阅方须以 `host-bus.subscribe-binary` 声明二进制格式偏好，宿主才把
+    /// `publish-binary` 载荷投递到本回调；否则按格式不匹配拒绝。
+    /// `msg.payload` 为 Null、`msg.payload_binary` 携带原始字节
+    fn on_message_binary(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
 }
 
 #[cfg(all(test, feature = "wasm"))]
 mod tests {
     use super::*;
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginPlatform, PluginType};
     use crate::BusMessage;
 
     /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
@@ -69,6 +76,7 @@ mod tests {
                 id: Self::ID.to_string(),
                 name: "Test Wasm".to_string(),
                 version: "0.1.0".to_string(),
+                platform: PluginPlatform::Both,
                 description: String::new(),
                 author: String::new(),
                 main: String::new(),
@@ -79,6 +87,7 @@ mod tests {
                 wasm_hash: String::new(),
                 rust_library: String::new(),
                 preauth_dirs: vec![],
+                preauth_urls: vec![],
             }
         }
 
@@ -93,13 +102,6 @@ mod tests {
         fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
-    }
-
-    #[test]
-    fn test_default_terminal_hooks_are_pass_through() {
-        // 默认行为 = 不修改管道（None），宿主按原样放行
-        assert_eq!(TestWasmPlugin::on_terminal_input("s1", "ls"), None);
-        assert_eq!(TestWasmPlugin::on_terminal_output("s1", "out"), None);
     }
 
     #[test]
@@ -120,18 +122,19 @@ mod tests {
             topic: "t".into(),
             sender: "s".into(),
             payload: serde_json::Value::Null,
+            payload_binary: None,
             timestamp: 0,
         };
         assert!(TestWasmPlugin::on_bus_message(&msg).is_ok());
+        assert!(TestWasmPlugin::on_message_binary(&msg).is_ok());
     }
 }
 
 /// 生成组件 world（`bedcode:plugin`）的全部导出实现
 ///
-/// 展开为 wit-bindgen 生成的 6 组 `Guest` trait 实现（command / lifecycle /
-/// events / terminal-hooks / manifest /
-/// abi）并调用 `export!` 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl
-/// 注释）。
+/// 展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现（command / lifecycle /
+/// events / manifest / abi）并调用 `export!` 导出。语义与旧 `__bedcode_*`
+/// 导出 1:1 对应（见各 impl 注释）。
 ///
 /// # 用法
 /// ```ignore
@@ -247,6 +250,7 @@ macro_rules! wasm_entry {
                     topic,
                     sender: String::new(),
                     payload,
+                    payload_binary: None,
                     timestamp: 0,
                 };
                 match <$plugin_type as $crate::wasm::WasmPlugin>::on_bus_message(&msg) {
@@ -319,18 +323,6 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== terminal-hooks（原 __bedcode_on_terminal_input/output） ====================
-
-        impl $crate::wasm::exports::bedcode::plugin::terminal_hooks::Guest for $plugin_type {
-            fn on_terminal_input(session_id: String, text: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_input(&session_id, &text)
-            }
-
-            fn on_terminal_output(session_id: String, data: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_output(&session_id, &data)
-            }
-        }
-
         // ==================== manifest（原 __bedcode_manifest） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::manifest::Guest for $plugin_type {
@@ -340,21 +332,36 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== abi（原 __bedcode_abi_version） ====================
+        // ==================== events-binary（v9，可选导出，宿主动态探测） ====================
 
-        impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v9）完全一致。
-            /// 无 form 字段：项目未发布、一次性切割，不存在 core 形态共存
-            fn version() -> u32 {
-                $crate::abi::ABI_VERSION as u32
+        impl $crate::wasm_binary::exports::bedcode::plugin::events_binary::Guest for $plugin_type {
+            fn on_message_binary(topic: String, sender: String, payload: Vec<u8>) {
+                // 字节列 → 类型化 BusMessage（payload 为 Null，payload_binary 携带原始字节）；
+                // 无返回值：处理失败经 host-log 记录（观察型回调）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender,
+                    payload: serde_json::Value::Null,
+                    payload_binary: Some(payload),
+                    timestamp: 0,
+                };
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_message_binary(&msg) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_message_binary failed: {}", e),
+                    );
+                }
             }
         }
 
         // ==================== 组件导出 ====================
 
-        // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 6 组接口的 cabi 导出）。
+        // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 5 组接口的 cabi 导出）。
         // 宏展开处 `$crate` 为插件依赖的 SDK：绑定类型路径经 lib.rs 的
         // `pub use wasm::bedcode` re-export 定位（generate! 的 default_bindings_module）
         $crate::wasm::export!($plugin_type);
+        // v9：events-binary 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_binary::export!($plugin_type);
     };
 }

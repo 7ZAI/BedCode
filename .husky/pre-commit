@@ -3,6 +3,21 @@
 # 用 || true 避免 husky 的 sh -e 因 doc-tracking 非零退出而阻断提交。
 sh "$(git rev-parse --show-toplevel)/scripts/doc-tracking.sh" untrack pre-commit || true
 
+# ==================== WIT 分片拼装漂移锁（票 2026-10-09 wasm-core-single-crate 票 07）====================
+# 端 `rust/wit/` 是生成物（真源 = `packages/bedcode-wasm-core/wit/core.wit` + 能力域 / 端 cap 分片，
+# 端清单 `compose.json` 驱动）。生成物被手改、或分片真源改了没重拼，这里即红阻断——
+# 与 CI（.github/workflows/wit-drift-lock.yml）同判据。修复：`pnpm run check:wit` 看漂移文件，
+# 跑 `node scripts/compose-wit.mjs --all` 重拼后重新 git add。
+# node 缺失（未装 / PATH 无）时跳过：本锁依赖 node，不依赖 pnpm 依赖树。
+if command -v node >/dev/null 2>&1; then
+  if ! node "$(git rev-parse --show-toplevel)/scripts/compose-wit.mjs" --all --check; then
+    echo ":: WIT 生成物漂移，提交已阻断。重拼：node scripts/compose-wit.mjs --all"
+    exit 1
+  fi
+else
+  echo "node 不在 PATH，跳过 WIT 漂移锁。"
+fi
+
 # ==================== 桌面端前端 ESLint 门禁（仅校验暂存文件）====================
 # 不依赖 lint-staged：仅当本次提交包含 bedcode-desktop 前端文件时才校验。
 # 只因 error 阻断提交（warning 不卡，逐步收紧，与 CI `pnpm exec eslint .` 的 0-error 基准一致）。

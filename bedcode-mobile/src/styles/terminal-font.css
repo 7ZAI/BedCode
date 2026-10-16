@@ -1,0 +1,31 @@
+/**
+ * 终端字体声明（移动端）
+ *
+ * 为什么随包带字体：终端「行尾凹凸 / TUI 色块摆动」的根因是 CJK 走系统比例字体
+ * 回退——系统等宽字体给拉丁 advance（如 Droid Sans Mono 0.6em），中文字形落到
+ * 1em 的比例 CJK 字体，1em ≠ 2×0.6em，误差逐字符累积，行尾背景盒被推出网格右界
+ * （详见 terminal.css「行尾软裁切」注释）。根治要「CJK 严格 2 格」的等宽字体，
+ * Android/国产 ROM 都不预装（Noto Sans Mono CJK 缺失），故随包内置。
+ *
+ * 选型：更纱黑体 Sarasa Mono SC（拉丁 Iosevka 0.5em + 思源黑体 CJK 1em，
+ * 制表符 0.5em；OFL-1.1 可随包分发，子集规则见 scripts/build-terminal-font.mjs）。
+ * 产物为子集（GB2312 6763 汉字 + 制表符/块元素/标点/符号/假名/全半角，
+ * 10635 码位 ≈ 1.05MB）；子集外的汉字落回系统 CJK 字体，其 advance 恒为 1em
+ * = 2×0.5em，仍满足「CJK = 2 格」，不会重新引入漂移。
+ *
+ * 加载面：@font-face 声明全局引入（main.ts），但 woff2 只在终端首次渲染时按需
+ * 下载（无元素使用该族名时浏览器不发起请求）；终端页在首次测量前显式
+ * await ensureTerminalFontLoaded()，保证「测量度量 = 渲染度量」。
+ */
+
+/* 字体族名与 FONT_FAMILY（src/utils/terminalMetrics.ts）必须一致，改一处要改两处 */
+@font-face {
+  font-family: 'Sarasa Mono SC';
+  src: url('../assets/fonts/SarasaMonoSC-Terminal-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  /* swap 而非 block：字体解码失败/设备异常时不留 3s 文字不可见空窗，
+     而是先按 fallback 度量渲染（终端首帧 fit 收敛循环会兜底重排） */
+  font-display: swap;
+  /* 许可证随字体入库于 src/assets/fonts/LICENSE-Sarasa-Gothic.txt（OFL 第 2 条） */
+}

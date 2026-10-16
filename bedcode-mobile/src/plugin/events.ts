@@ -31,13 +31,19 @@ export function on(pluginId: string, event: string, handler: EventHandler): Disp
   set.add(handler)
 
   // 桥接 Rust 侧 app_handle.emit() 发送的事件（WASM 宿主 emit_event 亦走此通道）。
-  // 事件名为完整名称（如 plugin:file-transfer:tasks-changed），经 Tauri 事件系统到达前端，
-  // 转发给内存总线中的 handler；Tauri API 不可用时（如测试环境）静默降级。
+  // 事件名逐字透传、无映射：**必须满足 Tauri 事件名约束**（只允许 alphanumeric /
+  // `-` / `/` / `:` / `_`），例如 `plugin:file-transfer:tasks-changed`。含 `.` 的
+  // 名字（插件 reverse-DNS id 直接拼入）会被 Tauri 拒绝，两端必须同步改；
+  // Tauri API 不可用时（如测试环境）降级为仅内存总线并记 warn（见下方 catch）。
   let tauriUnlisten: (() => void) | null = null
   // dispose 与 Tauri listen 建立存在竞态：dispose 先行时，listen resolve 后须立即反注册
   let disposed = false
+  // 返回 listen 链：让「建立失败」也落到下方 catch——否则内层 rejection 逃逸成
+  // unhandled rejection，且会被当成「非 Tauri 环境」静默吞掉。非法事件名（如含
+  // `.`：Tauri 只允许 alphanumeric / `-` / `/` / `:` / `_`）就是这条路径下
+  // 状态事件永不送达的放大点（2026-10-15 终端订阅门控失效事故）。
   import('@tauri-apps/api/event')
-    .then(({ listen }) => {
+    .then(({ listen }) =>
       listen(event, (tauriEvent: any) => {
         handler(tauriEvent.payload)
       }).then(unlisten => {
@@ -46,10 +52,13 @@ export function on(pluginId: string, event: string, handler: EventHandler): Disp
         } else {
           tauriUnlisten = unlisten
         }
-      })
-    })
-    .catch(() => {
-      // 非 Tauri 环境：仅走内存总线
+      }),
+    )
+    .catch((e) => {
+      // 非 Tauri 环境（单测 / dev-shell）模块不可用属正常降级；但 listen 建立失败
+      // （事件名非法 / IPC 异常）是缺陷，必须留痕——曾因事件名含 `.` 被 Tauri 拒绝
+      // 而静默断链（emit 端记 error，listen 端却被这里吞掉，无对应线索）。
+      logger.warn(`[PluginEvents] listen "${event}" failed（仅内存总线，Tauri 通道未建立）:`, e)
     })
 
   const disposable: Disposable = {

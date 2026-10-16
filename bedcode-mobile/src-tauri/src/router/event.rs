@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Listener};
+use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::state::get_connection_manager;
@@ -389,40 +389,6 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
     }
 }
 
-// ==================== Terminal Output Activity ====================
-
-/// 监听前端 `terminal_output_activity` 事件（前端终端 WS 收到输出帧时发出）
-///
-/// 09 迁移后终端输出不再经 Rust 中转，插件 TerminalOutput 通知改由
-/// 前端 socket 路径在此触发（保持仅传 session_id 语义，D6）。
-/// 异步分发不 await：插件 WASM 回调串行执行，阻塞会拖慢事件处理
-static TERMINAL_OUTPUT_LISTENER_STARTED: AtomicBool = AtomicBool::new(false);
-
-pub fn init_terminal_output_listener(app: &AppHandle) {
-    if TERMINAL_OUTPUT_LISTENER_STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let pm = crate::state::get_plugin_manager();
-    let _ = app.listen("terminal_output_activity", move |event| {
-        // Tauri 事件 payload 为 JSON 字符串，解析出 session_id（仅传 session_id 语义）
-        let session_id = serde_json::from_str::<serde_json::Value>(event.payload())
-            .ok()
-            .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(str::to_string))
-            .unwrap_or_default();
-        if session_id.is_empty() {
-            return;
-        }
-        let pm = pm.clone();
-        spawn_with_error_boundary("plugin_terminal_output_notify", async move {
-            pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
-                session_id,
-                data: String::new(),
-            })
-            .await;
-        });
-    });
-}
-
 // ==================== Event Helpers ====================
 
 /// 发射连接开始事件
@@ -471,25 +437,7 @@ pub fn emit_paired(app: &AppHandle) {
     let _ = app.emit("ws_paired", ());
 }
 
-/// 发射配对请求事件
-pub fn emit_pairing_request(app: &AppHandle) {
-    tracing::info!("[EventHelper] Emitting ws_pairing_request");
-    let _ = app.emit("ws_pairing_request", ());
-}
-
-/// 发射配对验证成功事件
-pub fn emit_pairing_verified(app: &AppHandle) {
-    tracing::info!("[EventHelper] Emitting ws_pairing_verified");
-    let _ = app.emit("ws_pairing_verified", ());
-}
-
-/// 发射认证失败事件
-pub fn emit_auth_failed(app: &AppHandle, reason: &str) {
-    tracing::error!("[EventHelper] Emitting ws_auth_failed: {}", reason);
-    let _ = app.emit(
-        "ws_auth_failed",
-        serde_json::json!({
-            "reason": reason,
-        }),
-    );
-}
+// 票 14 阶段 B：ws_pairing_request / ws_pairing_verified / ws_auth_failed 的
+// 发射点已随配对编排迁 `com.bedcode.terminal-session` 插件（经 host-events
+// emit，事件名不变——前端监听零改动）；宿主侧同名 helper 退役，防回接见
+// retired_mobile_auth_orchestration_command_face_lock

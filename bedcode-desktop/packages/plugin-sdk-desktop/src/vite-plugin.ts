@@ -8,11 +8,20 @@
 import type { Plugin, UserConfig } from 'vite'
 import MagicString from 'magic-string'
 
-/** 共享模块映射：模块名 → 全局变量访问表达式 */
+/**
+ * 共享模块映射：模块名 → 全局变量访问表达式
+ *
+ * 收录标准：模块内部持有进程级单例状态，第二份实例导致状态错位——
+ * vue / vue-i18n / pinia 为运行时本体；`vue-sonner` 为 toast 队列本体
+ * （插件自带第二份 → toast 入自家队列，宿主 `<Toaster>` 收不到；票 13）。
+ * 宿主 `shared-runtime.ts` 必须同步收录同名条目，否则插件构建期外部化后
+ * 运行时取到 undefined。
+ */
 const SHARED_MODULES: Record<string, string> = {
   vue: 'window.__BEDCODE_SHARED__["vue"]',
   'vue-i18n': 'window.__BEDCODE_SHARED__["vue-i18n"]',
   pinia: 'window.__BEDCODE_SHARED__["pinia"]',
+  'vue-sonner': 'window.__BEDCODE_SHARED__["vue-sonner"]',
 }
 
 /**

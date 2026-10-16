@@ -12,10 +12,15 @@
 //!
 //! ## 构建期防漂移（spec §9.4）
 //!
-//! 宏在编译期读取 `<CARGO_MANIFEST_DIR>/plugin.json`（manifest 单一真源，
-//! ADR-0005），将 trait 方法推导出的 api 清单（`<manifest.id>.<method>`）与
-//! manifest `api` 字段做精确集合比对，不一致直接 `compile_error!` 使构建失败
-//! —— trait 与 manifest 任一侧改动都会在构建期暴露，杜绝互调契约漂移。
+//! 宏在编译期读取 manifest（默认 `<CARGO_MANIFEST_DIR>/plugin.json`，`manifest = "path"`
+//! 可指向对侧插件的清单；manifest 是单一真源，ADR-0005），将 trait 方法推导出的 api 清单
+//! （`<manifest.id>.<method>`）与 manifest `api` 字段比对，不一致直接 `compile_error!`
+//! 使构建失败。**判据按角色分岔，角色由 manifest 是否落在本 crate 的插件包内自动判定**：
+//!
+//! - **声明方**（manifest 属本插件包）：要求**精确集合相等**——trait 与 manifest 任一侧
+//!   改动都在构建期暴露，杜绝互调契约漂移。
+//! - **消费方**（manifest 属对侧插件包）：只要求 **trait ⊆ manifest**——调用对侧未声明的
+//!   api 仍编译失败，但对侧新增 api 不再要求不消费它的插件跟着镜像（ADR 0017 修订）。
 //!
 //! ## trait 方法契约
 //!
@@ -72,19 +77,34 @@ fn result_ok_ty(ty: &Type, span: proc_macro2::Span) -> syn::Result<Type> {
 }
 
 /// 从方法属性中取 `#[api("name")]` 覆盖名
+///
+/// 文档形态为括号列表 `#[api("override.name")]`（Meta::List，括号内单个
+/// 字符串字面量）；兼容 `#[api = "override.name"]`（Meta::NameValue）。
+/// 2026-09-19 票 09 修复：此前仅支持 NameValue，括号形态（文档所载）解析
+/// 为 List 永远不命中——覆盖名退化为 snake_case ident。
 fn method_name_override(attrs: &[Attribute]) -> Option<String> {
     for attr in attrs {
         if !attr.path().is_ident("api") {
             continue;
         }
-        if let syn::Meta::NameValue(nv) = &attr.meta {
-            if let syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(s),
-                ..
-            }) = &nv.value
-            {
-                return Some(s.value());
+        match &attr.meta {
+            // 文档形态：#[api("override.name")]
+            syn::Meta::List(_) => {
+                if let Ok(s) = attr.parse_args::<syn::LitStr>() {
+                    return Some(s.value());
+                }
             }
+            // 兼容形态：#[api = "override.name"]
+            syn::Meta::NameValue(nv) => {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+                {
+                    return Some(s.value());
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -107,7 +127,6 @@ fn parse_methods(trait_item: &mut ItemTrait) -> syn::Result<Vec<ApiMethod>> {
                 "plugin_api trait 仅支持方法定义",
             ));
         };
-        f.attrs.retain(|a| !a.path().is_ident("api"));
         if f.sig.receiver().is_some() {
             return Err(Error::new(
                 f.sig.span(),
@@ -144,7 +163,11 @@ fn parse_methods(trait_item: &mut ItemTrait) -> syn::Result<Vec<ApiMethod>> {
                 ))
             }
         };
+        // 先读 `#[api("override")]` 覆盖名再剥离元属性：覆盖名必须在 retain 之前
+        // 读取（否则属性已被移除、覆盖永远不生效——2026-09-19 票 09 修复，附
+        // parse_methods 回归测试 method_attr_override_participates_in_api_derivation）
         let method_name = method_name_override(&f.attrs).unwrap_or_else(|| f.sig.ident.to_string());
+        f.attrs.retain(|a| !a.path().is_ident("api"));
         methods.push(ApiMethod {
             ident: f.sig.ident.clone(),
             method_name,
@@ -208,8 +231,66 @@ fn read_manifest(path: &str) -> syn::Result<(String, Vec<String>)> {
     Ok((id, apis))
 }
 
-/// 构建期防漂移比对：trait 推导 api 清单 vs manifest api 字段（精确集合相等）
-fn check_drift(manifest_path: &str, methods: &[ApiMethod]) -> syn::Result<String> {
+/// 防漂移比对角色：manifest 属于本插件包还是对侧插件包
+///
+/// 两种角色要防的是不同的错，判据因此不同：
+///
+/// - [`DriftRole::Declarant`]（声明方）：trait 即本插件对外 api 的实现。漏声明 = 实现了解不到、
+///   多声明 = 调用必 404，两侧都是真缺陷，所以要求**精确集合相等**。
+/// - [`DriftRole::Consumer`]（消费方）：trait 只是调用对侧 api 的 client 镜像。调对侧未声明的
+///   api 必然运行期失败，所以要校 `trait ⊆ manifest`；而对侧**新增** api 与本插件无关，
+///   精确相等会把「改 A 插件的 api」变成「不消费它的 B 插件一起编译红」（票 13 根因）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DriftRole {
+    Declarant,
+    Consumer,
+}
+
+/// 折叠路径中的 `.` 与可消除的 `..`（纯词法，不触碰文件系统）
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(comp);
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// manifest 是否属于「本 crate 所在的插件包」
+///
+/// 判据：manifest 文件所在目录是本 crate 目录的自身或祖先。仓库两种真实形态都落在这条上：
+/// 声明方写 `plugin.json`（同目录）或 `../plugin.json`（crate 在包的 `rust/` 子目录），
+/// 消费方写 `../../<peer>/plugin.json`（目录分叉，不再是祖先）。
+fn is_own_package_manifest(manifest_path: &std::path::Path, crate_dir: &std::path::Path) -> bool {
+    let manifest_dir = match normalize_path(manifest_path).parent() {
+        Some(dir) => dir.to_path_buf(),
+        None => return false,
+    };
+    normalize_path(crate_dir).starts_with(&manifest_dir)
+}
+
+/// 判定角色；`CARGO_MANIFEST_DIR` 缺失时按消费方处理（判据更宽，不会误伤真实构建，
+/// 且 `read_manifest` 随后仍会校验 manifest 可读）
+fn drift_role(manifest_path: &std::path::Path, crate_dir: &str) -> DriftRole {
+    if crate_dir.is_empty() {
+        return DriftRole::Consumer;
+    }
+    if is_own_package_manifest(manifest_path, std::path::Path::new(crate_dir)) {
+        DriftRole::Declarant
+    } else {
+        DriftRole::Consumer
+    }
+}
+
+/// 构建期防漂移比对：trait 推导 api 清单 vs manifest api 字段（判据按 [`DriftRole`] 分岔）
+fn check_drift(manifest_path: &str, methods: &[ApiMethod], role: DriftRole) -> syn::Result<String> {
     let (plugin_id, manifest_apis) = read_manifest(manifest_path)?;
     let mut trait_apis: Vec<String> = methods
         .iter()
@@ -218,29 +299,38 @@ fn check_drift(manifest_path: &str, methods: &[ApiMethod]) -> syn::Result<String
     trait_apis.sort();
     let mut manifest_sorted = manifest_apis.clone();
     manifest_sorted.sort();
-    if trait_apis != manifest_sorted {
-        let missing: Vec<&String> = trait_apis
-            .iter()
-            .filter(|a| !manifest_sorted.contains(a))
-            .collect();
-        let extra: Vec<&String> = manifest_sorted
-            .iter()
-            .filter(|a| !trait_apis.contains(a))
-            .collect();
-        let mut msg = format!(
-            "plugin_api: trait 与 manifest '{}' 的 api 清单不一致（构建期防漂移检查失败）：\n",
-            manifest_path
-        );
-        if !missing.is_empty() {
-            msg.push_str(&format!("  - trait 有但 manifest 缺: {:?}\n", missing));
-        }
-        if !extra.is_empty() {
-            msg.push_str(&format!("  - manifest 有但 trait 缺: {:?}\n", extra));
-        }
-        msg.push_str("  两侧必须一致：trait 方法名 = manifest.api 条目（`<plugin-id>.<method>`）");
-        return Err(Error::new(proc_macro2::Span::call_site(), msg));
+    let missing: Vec<&String> = trait_apis
+        .iter()
+        .filter(|a| !manifest_sorted.contains(a))
+        .collect();
+    let extra: Vec<&String> = manifest_sorted
+        .iter()
+        .filter(|a| !trait_apis.contains(a))
+        .collect();
+    // 消费方只看 `missing`：对侧多声明的 api 不必镜像
+    let drifts = !missing.is_empty() || (!extra.is_empty() && role == DriftRole::Declarant);
+    if !drifts {
+        return Ok(plugin_id);
     }
-    Ok(plugin_id)
+    let mut msg = format!(
+        "plugin_api: trait 与 manifest '{}' 的 api 清单不一致（构建期防漂移检查失败，角色：{}）：\n",
+        manifest_path,
+        match role {
+            DriftRole::Declarant => "声明方",
+            DriftRole::Consumer => "消费方",
+        }
+    );
+    if !missing.is_empty() {
+        msg.push_str(&format!("  - trait 有但 manifest 缺: {:?}\n", missing));
+    }
+    if !extra.is_empty() {
+        msg.push_str(&format!("  - manifest 有但 trait 缺: {:?}\n", extra));
+    }
+    msg.push_str(match role {
+        DriftRole::Declarant => "  本 manifest 属本插件包（声明方）：trait 方法名 = manifest.api 条目（`<plugin-id>.<method>`），两侧必须精确一致",
+        DriftRole::Consumer => "  本 manifest 属对侧插件包（消费方）：trait 须为 manifest.api 的子集，只镜像本插件真正调用的 api——对侧新增条目无需跟演",
+    });
+    Err(Error::new(proc_macro2::Span::call_site(), msg))
 }
 
 /// 生成单方法的参数反序列化代码（零参 → 占位；单参 → 值直取；多参 → 元组）
@@ -304,10 +394,11 @@ pub fn plugin_api(attr: TokenStream, item: TokenStream) -> TokenStream {
     });
     parse_macro_input!(attr with parser);
 
-    let manifest_path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
-        .join(&manifest_rel)
-        .to_string_lossy()
-        .to_string();
+    let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let manifest_path_buf = std::path::Path::new(&crate_dir).join(&manifest_rel);
+    let manifest_path = manifest_path_buf.to_string_lossy().to_string();
+    // 声明方 / 消费方由 manifest 是否落在本 crate 的插件包内决定（无需调用点再声明一层词汇）
+    let role = drift_role(&manifest_path_buf, &crate_dir);
 
     let mut trait_item: ItemTrait = parse_macro_input!(item as ItemTrait);
     let trait_name = trait_item.ident.clone();
@@ -315,7 +406,7 @@ pub fn plugin_api(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // 1. 方法清单 + 防漂移比对（比对失败 → compile_error，构建失败）
     let (methods, plugin_id) = match parse_methods(&mut trait_item)
-        .and_then(|m| check_drift(&manifest_path, &m).map(|id| (m, id)))
+        .and_then(|m| check_drift(&manifest_path, &m, role).map(|id| (m, id)))
     {
         Ok(ok) => ok,
         Err(e) => return e.to_compile_error().into(),
@@ -540,7 +631,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bedcode_macro_ok_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = write_manifest(&dir, "com.bedcode.test", &["com.bedcode.test.list", "com.bedcode.test.add"]);
-        let id = check_drift(&path, &[method("add"), method("list")]).expect("must pass");
+        let id = check_drift(&path, &[method("add"), method("list")], DriftRole::Declarant)
+            .expect("must pass");
         assert_eq!(id, "com.bedcode.test");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -551,7 +643,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bedcode_macro_miss_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = write_manifest(&dir, "com.bedcode.test", &["com.bedcode.test.list"]);
-        let err = check_drift(&path, &[method("add"), method("list")]).unwrap_err();
+        let err = check_drift(&path, &[method("add"), method("list")], DriftRole::Declarant)
+            .unwrap_err();
         assert!(err.to_string().contains("trait 有但 manifest 缺"), "got: {}", err);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -562,9 +655,67 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bedcode_macro_extra_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = write_manifest(&dir, "com.bedcode.test", &["com.bedcode.test.list", "com.bedcode.test.remove"]);
-        let err = check_drift(&path, &[method("list")]).unwrap_err();
+        let err = check_drift(&path, &[method("list")], DriftRole::Declarant).unwrap_err();
         assert!(err.to_string().contains("manifest 有但 trait 缺"), "got: {}", err);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 消费方判据（票 13）：对侧新增 api 不要求镜像 → 子集即通过
+    #[test]
+    fn consumer_passes_on_trait_subset() {
+        let dir = std::env::temp_dir().join(format!("bedcode_macro_subset_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_manifest(
+            &dir,
+            "com.bedcode.test",
+            &["com.bedcode.test.list", "com.bedcode.test.add", "com.bedcode.test.remove"],
+        );
+        let id = check_drift(&path, &[method("list")], DriftRole::Consumer).expect("subset must pass for consumer");
+        assert_eq!(id, "com.bedcode.test");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 消费方判据仍守住的方向：调对侧未声明（改名/删除）的 api → 构建失败
+    #[test]
+    fn consumer_fails_when_calling_undeclared_api() {
+        let dir = std::env::temp_dir().join(format!("bedcode_macro_conmiss_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_manifest(&dir, "com.bedcode.test", &["com.bedcode.test.list"]);
+        let err = check_drift(&path, &[method("list"), method("renamed_away")], DriftRole::Consumer)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("trait 有但 manifest 缺"), "got: {}", msg);
+        assert!(msg.contains("消费方"), "角色须点明，便于定位判据: {}", msg);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 角色判定：manifest 与本 crate 同包 / 在包的父目录 → 声明方；目录分叉 → 消费方
+    #[test]
+    fn role_is_own_package_only_within_the_same_package() {
+        // 仓库两种声明方形态：manifest 与 crate 同目录、或在 crate 的父目录（插件包根）
+        assert!(is_own_package_manifest(
+            std::path::Path::new("/p/plugins/foo/plugin.json"),
+            std::path::Path::new("/p/plugins/foo/rust")
+        ));
+        assert!(is_own_package_manifest(
+            std::path::Path::new("/p/plugins/foo/rust/plugin.json"),
+            std::path::Path::new("/p/plugins/foo/rust")
+        ));
+        // 相对形态（宏入口用 CARGO_MANIFEST_DIR join，故这里给已拼接的路径）
+        assert!(is_own_package_manifest(
+            std::path::Path::new("/p/plugins/foo/rust/../plugin.json"),
+            std::path::Path::new("/p/plugins/foo/rust")
+        ));
+        // 对侧插件的清单：file-transfer 的 client 镜像 terminal-session
+        assert!(!is_own_package_manifest(
+            std::path::Path::new("/p/plugins/terminal-session/plugin.json"),
+            std::path::Path::new("/p/plugins/file-transfer/rust")
+        ));
+        // 兄弟包前缀相似不得误判（`foo` 与 `foo-bar`）
+        assert!(!is_own_package_manifest(
+            std::path::Path::new("/p/plugins/foo-bar/plugin.json"),
+            std::path::Path::new("/p/plugins/foo/rust")
+        ));
     }
 
     /// 缺失 manifest：报错而非 panic（要求插件遵守 ADR-0005 单一真源）
@@ -572,7 +723,12 @@ mod tests {
     fn missing_manifest_errors_cleanly() {
         let dir = std::env::temp_dir().join(format!("bedcode_macro_none_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let err = check_drift(&dir.join("plugin.json").to_string_lossy(), &[method("list")]).unwrap_err();
+        let err = check_drift(
+            &dir.join("plugin.json").to_string_lossy(),
+            &[method("list")],
+            DriftRole::Declarant,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("读取 manifest"), "got: {}", err);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -585,7 +741,37 @@ mod tests {
         let path = write_manifest(&dir, "com.bedcode.test", &["com.bedcode.test.schedule.list"]);
         let mut m = method("list");
         m.method_name = "schedule.list".to_string();
-        check_drift(&path, &[m]).expect("override name must match manifest");
+        check_drift(&path, &[m], DriftRole::Declarant).expect("override name must match manifest");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（2026-09-19 票 09）：`#[api("...")]` 属性必须参与 `parse_methods` 的
+    /// api 名推导——此前 retain 先于读取剥离属性，覆盖名永远不生效（方法名
+    /// 只能退化为 snake_case ident）。本测试走真实 trait 解析路径。
+    #[test]
+    fn method_attr_override_participates_in_api_derivation() {
+        let item: syn::ItemTrait = syn::parse_str(
+            r#"
+            trait Api {
+                #[api("decide-consent")]
+                fn decide_consent() -> Result<(), String>;
+                fn plain() -> Result<(), String>;
+            }
+            "#,
+        )
+        .expect("parse trait");
+        let mut item = item;
+        let methods = parse_methods(&mut item).expect("parse methods");
+        assert_eq!(methods.len(), 2);
+        let decide = methods.iter().find(|m| m.ident == "decide_consent").expect("decide_consent");
+        assert_eq!(
+            decide.method_name, "decide-consent",
+            "#[api] 覆盖名必须生效（retain 不得先于读取）"
+        );
+        let plain = methods.iter().find(|m| m.ident == "plain").expect("plain");
+        assert_eq!(plain.method_name, "plain", "无覆盖时退化为方法 ident");
+        // 覆盖属性已从输出 trait 剥离（编译器不认识 #[api]）
+        let trait_str = quote::quote!(#item).to_string();
+        assert!(!trait_str.contains("decide-consent"), "#[api] 属性必须剥离出输出 trait");
     }
 }

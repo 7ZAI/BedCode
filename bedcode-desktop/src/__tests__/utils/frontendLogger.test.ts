@@ -1,5 +1,5 @@
 /**
- * frontendLogger 单元测试：序列化、dev 转发链路、release 空函数、级别映射
+ * frontendLogger 单元测试：序列化、dev 转发链路、release error/warn 转发 + info/debug 裁剪、级别映射
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -94,13 +94,37 @@ describe('frontendLogger dev 转发链路', () => {
     expect(batch.map((e) => e.level)).toEqual(['error', 'warn', 'debug'])
   })
 
-  it('release：logger 为空函数，零输出零转发', () => {
+  it('release：error/warn 仍转发落盘，info/debug 裁剪（不写 console）', () => {
     configureLogger(false)
     const logSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    logger.error('should not appear')
+
+    logger.error('release boom')
+    logger.warn('release careful')
+    logger.info('should be trimmed')
+    logger.debug('should be trimmed')
+
+    // release 不写 console（生产零面向用户的控制台输出）
     expect(logSpy).not.toHaveBeenCalled()
-    expect(mockInvoke).not.toHaveBeenCalled()
+
+    // error/warn 攒批转发落盘；info/debug 不进批
+    vi.advanceTimersByTime(FLUSH_INTERVAL_MS)
+    expect(mockInvoke).toHaveBeenCalledTimes(1)
+    const batch = mockInvoke.mock.calls[0][1].logs as { level: string; message: string }[]
+    expect(batch).toEqual([
+      { level: 'error', message: 'release boom' },
+      { level: 'warn', message: 'release careful' },
+    ])
     logSpy.mockRestore()
+  })
+
+  it('release：重复 error/warn 达阈值立即发送（复用攒批机制）', () => {
+    configureLogger(false)
+    const messages = Array.from({ length: FLUSH_THRESHOLD }, (_, i) => `rel ${i}`)
+    for (const m of messages) logger.error(m)
+
+    expect(mockInvoke).toHaveBeenCalledTimes(1)
+    const batch = mockInvoke.mock.calls[0][1].logs as { level: string; message: string }[]
+    expect(batch).toHaveLength(FLUSH_THRESHOLD)
   })
 
   it('转发失败仅静默一次警告，不递归 console.error', async () => {

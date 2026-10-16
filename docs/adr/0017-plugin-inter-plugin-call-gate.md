@@ -20,3 +20,22 @@ BedCode 插件此前只能通过宿主消息总线广播事件（自由 topic + 
 - 计划任务插件声明 `schedule.add/remove/list/show/run/logs`，作为第一个实现者与验证载体。
 - 未声明互调 API 的插件不受影响；现有事件广播（`filesrv:peer_changed` 等）保持原样。
 - 互调调用为异步（总线单向 + 响应 topic 配对），SDK 隐藏异步细节，插件代码表现为 await 调用。
+
+## 修订记录
+
+- **2026-09-24 v2：构建期防漂移按「声明方 / 消费方」分判**。原文「构建期比对 manifest 与实现防漂移」
+  在实现里被写成**无条件精确集合相等**，于是同一个宏被两种角色复用时会走偏：消费方插件为了镜像
+  对侧清单，必须把**自己根本不调用**的 api 也逐个写进 client trait——给 A 插件加一条 api，就要改
+  一个不消费它的 B 插件，否则 B 构建红（实证：`file-transfer` 的 `SessionCenterApi` 镜像了 31 条，
+  真正调用的只有 `consent-decide` / `trust-list` 两条；terminal-session 会话真源下沉加 4 条 api 时
+  file-transfer 直接编译红，桌面 dev 起跑与 `plugins:build` 双堵）。
+  裁定后的判据：
+  - **声明方**（manifest 落在本 crate 所在插件包内）：仍要求 **trait 与 manifest.api 精确相等**。
+    漏声明 = 实现了却调不到、多声明 = 声明了却没有实现，两侧都是真缺陷。
+  - **消费方**（manifest 属对侧插件包）：只要求 **trait ⊆ manifest.api**。调用对侧未声明的条目
+    （含对侧改名/删除）仍编译失败；对侧**新增** api 与已声明但本插件不用的条目，不再要求镜像。
+  - 角色**不需要调用点声明**：由 manifest 路径是否落在本 crate 的插件包目录内自动判定，
+    比对失败时错误信息点名判出的角色，避免"为什么这次不报"变成新的口头知识。
+  门禁方向不缩水：本票要防的是**契约漂移**（trait 与 manifest 说的不是一回事），而不是
+  "清单条目数守恒"；对侧扩容本就不构成消费方的漂移。票面与实测证据见
+  `.scratch/2026-09-23-session-engine-downsink/issues/13-plugin-api-drift-trait-stale.md`。

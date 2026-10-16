@@ -8,24 +8,26 @@
 use anyhow::Context;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, RwLock};
 use tracing;
 
-use crate::connection::request::AuthRequest;
+use crate::connection::reconnect::ReconnectManager;
 use crate::connection::{ClientDefaultMessageHandler, WsClient, WsClientConfig, WsClientEvent};
 use crate::model::message::Message;
+use crate::plugin::manager::PluginManager;
 use crate::state::get_global_token;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
-use crate::router::{AuthHandler, SyncHandler, SystemHandler};
+use crate::handler::PluginEventRouter;
+use crate::handler::{AuthHandler, SystemHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 
 use crate::system::constants::connection::{
-    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_EVENT_PATH,
+    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_PLUGIN_SESSION_CONTROL_PATH,
 };
-use crate::system::constants::reconnect::{DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS};
+use crate::system::constants::reconnect::DEFAULT_MAX_RETRIES;
 
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
@@ -51,13 +53,39 @@ fn is_disconnect_error(error: &crate::AppError) -> bool {
     }
 }
 
+/// 插件端点认证首帧 `type`（票 03：极简认证 `{"type":"auth","token":"<jwt>"}`，
+/// **不是** `Message::Auth` 信封——插件端点只认这一个形状）
+pub const EVENT_CHANNEL_AUTH_TYPE: &str = "auth";
+
+/// 事件通道就绪（前端事件名）：认证首帧发出后发射，前端据此触发一次对账
+/// （事件不重放，重连期间的变化只能靠 HTTP 全量拉取补齐）
+pub const EVENT_CHANNEL_READY_EVENT: &str = "ws_event_channel_ready";
+
+/// 取事件通道的 JWT：全局 token 优先，回落认证凭据的 session_token
+///
+/// 两处同源（HTTP 认证成功时一并写入，见 `auth::manager::apply_auth_success`）；
+/// 全局 token 可能在前端冷启动时先落地，故按「全局优先 + 凭据兜底」取值。
+async fn event_channel_token() -> String {
+    let global = get_global_token();
+    if !global.is_empty() {
+        return global;
+    }
+    crate::state::get_auth_manager()
+        .get_credentials()
+        .await
+        .map(|c| c.session_token)
+        .unwrap_or_default()
+}
+
 /// 构建业务路由器（connect / reconnect 共用）
 fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusinessRouter> {
     let ctx = ClientRouteContext::new(event_tx);
     ClientBusinessRouter::builder()
         .context(ctx)
         .route("Auth", Arc::new(AuthHandler))
-        .route("SyncData", Arc::new(SyncHandler))
+        // 票 03/04：`SyncData` 路由随 `handler/sync.rs` 退役（事件改走插件事件帧，
+        // 见 `handler::PluginEventRouter`）；信封面退役（票 04）后保留的变体仅服务
+        // `ws_protocol_integration` 的 legacy 场景（WS 首消息 JWT 认证 / 请求-响应）
         .route("ServerClosed", Arc::new(SystemHandler))
         .route("Error", Arc::new(SystemHandler))
         .route("Ack", Arc::new(SystemHandler))
@@ -92,6 +120,17 @@ pub struct ConnectionManager {
     retry_count: Arc<AtomicU32>,
     /// 重连中标记
     is_reconnecting: Arc<AtomicBool>,
+    /// 重连退避策略（指数退避 + 抖动 + 同因熔断 + 1s 下限钳制）
+    ///
+    /// **单一事实源**：重连节奏只由本策略决定。2026-10-04 审计前本字段挂在
+    /// `WsClient::reconnect()` 上，而该方法全仓零调用者——等于退避引擎写了
+    /// 却从未接线，真正的等待走的是 `DEFAULT_RETRY_DELAYS_MS` 硬编码表
+    /// （无抖动）。两张表靠注释声称「一致」互相背书，实际各自独立。
+    reconnect_policy: Arc<ReconnectManager>,
+    /// 用户是否开启自动重连（设置项，前端经 `set_auto_reconnect` 同步）
+    ///
+    /// 关闭时监督任务不自愈，只发断连事件让 UI 提示用户手动重连。
+    auto_reconnect: Arc<AtomicBool>,
 }
 
 impl ConnectionManager {
@@ -107,12 +146,31 @@ impl ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            reconnect_policy: ReconnectManager::with_default_config(),
+            auto_reconnect: Arc::new(AtomicBool::new(true)),
         })
     }
 
     /// 获取当前连接状态（设备级 status）
     pub async fn get_status(&self) -> ConnectionStatus {
         self.status.read().await.clone()
+    }
+
+    /// 设置是否允许自动重连（前端设置项同步）
+    ///
+    /// 自动重连的唯一执行者是 `EventWsSupervisor`（见 `connection/event_ws.rs`）：
+    /// 关闭后监督任务**不自愈**，但仍照常发 `ws_unexpected_disconnect` 让 UI
+    /// 提示断连——「断开」是事实，「是否自动恢复」是策略，二者不能一起关。
+    pub fn set_auto_reconnect(&self, enabled: bool) {
+        let previous = self.auto_reconnect.swap(enabled, Ordering::SeqCst);
+        if previous != enabled {
+            tracing::info!("Auto-reconnect setting changed: {} -> {}", previous, enabled);
+        }
+    }
+
+    /// 当前是否允许自动重连
+    pub fn is_auto_reconnect_enabled(&self) -> bool {
+        self.auto_reconnect.load(Ordering::SeqCst)
     }
 
     /// 获取目标设备
@@ -227,8 +285,9 @@ impl ConnectionManager {
         self.set_target(address.clone(), port, name).await;
 
         *self.status.write().await = ConnectionStatus::Connecting;
-        // 旧 WS 配对/终端路由已下线，测试辅助路径指向事件 WS（mock 不按 path 分发）
-        self.establish_ws_client(&address, port, WS_EVENT_PATH, None).await?;
+        // 旧 WS 配对/终端路由已下线，测试辅助路径指向事件 WS（插件端点，mock 不按 path 分发）
+        self.establish_ws_client(&address, port, WS_PLUGIN_SESSION_CONTROL_PATH, None, None)
+            .await?;
         *self.status.write().await = ConnectionStatus::Connected;
 
         // 短暂等待连接稳定
@@ -237,17 +296,18 @@ impl ConnectionManager {
         Ok(())
     }
 
-    /// 建立 WS 客户端（测试路径与 04 事件 WS 共用）
+    /// 建立 WS 客户端（测试路径与事件 WS 共用）
     ///
-    /// 归拢 client 构建 + build_router + 断连监控三件事：04 复用同一 helper
-    /// 建常驻事件 WS（`WS_EVENT_PATH`），WS 首消息 JWT 认证语义由桌面端
-    /// 02 保证（裸连 10s 被关，故生产路径 04 前不建无认证 WS）。
+    /// 归拢 client 构建 + 事件路由 + build_router + 断连监控四件事：事件 WS
+    /// 复用同一 helper 建 `session-control` 常驻连接（`plugin_event = Some`），
+    /// 插件事件帧经 [`PluginEventRouter`] 闭环，其余帧走既有信封路由。
     async fn establish_ws_client(
         &self,
         address: &str,
         port: u16,
         path: &str,
         app_handle: Option<AppHandle>,
+        plugin_event: Option<Arc<PluginEventRouter>>,
     ) -> Result<Arc<WsClient>> {
         let config = WsClientConfig::new(address, port).with_path(path);
         let client = WsClient::new(config);
@@ -255,11 +315,12 @@ impl ConnectionManager {
         // 构建路由器
         let router = build_router(self.event_tx.clone())?;
 
-        client
-            .set_handler(Arc::new(
-                ClientDefaultMessageHandler::new().with_router(Arc::new(router)),
-            ))
-            .await;
+        let handler = ClientDefaultMessageHandler::new().with_router(Arc::new(router));
+        let handler = match plugin_event {
+            Some(events) => handler.with_plugin_event(events),
+            None => handler,
+        };
+        client.set_handler(Arc::new(handler)).await;
 
         // 直接 await 连接
         client.connect().await?;
@@ -274,12 +335,11 @@ impl ConnectionManager {
         Ok(client)
     }
 
-    /// 建立常驻事件 WS（04 契口③）：事件路径建连 + WS 首消息 JWT 认证
+    /// 建立常驻事件 WS：`session-control` 插件端点建连 + WS 首帧极简 JWT 认证
     ///
-    /// 返回的 client 已存入 `self.client`——认证成功后该连接天然成为
-    /// SyncData 收信道，且会话/配置/文件请求的 send/send_and_wait 恢复可用
-    /// （消除 03 过渡期「Not connected」回归）。`app_handle=Some` 时自动挂
-    /// 断连监控（意外断开 → ws_unexpected_disconnect + 桌面 peer 清理）。
+    /// 返回的 client 已存入 `self.client`——认证首帧发出即标记通道就绪并发射
+    /// `ws_event_channel_ready`（前端触发对账，事件不重放）。`app_handle=Some`
+    /// 时自动挂断连监控（意外断开 → ws_unexpected_disconnect + 桌面 peer 清理）。
     /// 目标未保存（未 connect）时拒绝建连。
     pub async fn establish_event_ws(&self, app_handle: Option<AppHandle>) -> Result<Arc<WsClient>> {
         // 目标不存在说明尚未 connect，无建连地址
@@ -290,91 +350,50 @@ impl ConnectionManager {
             .clone()
             .ok_or_else(|| crate::AppError::WebSocket("No target device".to_string()))?;
 
+        let plugin_event = PluginEventRouter::new(self.event_tx.clone());
         let client = self
-            .establish_ws_client(&target.address, target.port, WS_EVENT_PATH, app_handle)
+            .establish_ws_client(
+                &target.address,
+                target.port,
+                WS_PLUGIN_SESSION_CONTROL_PATH,
+                app_handle.clone(),
+                Some(plugin_event.clone()),
+            )
             .await?;
 
-        // WS 首消息 JWT 认证：凭据对（pairing_id/fingerprint/session_token）
-        // 由 HTTP 认证写入；缺失时以空串发送，让桌面端拒绝（可观测而非静默）
-        let creds = crate::state::get_auth_manager()
-            .get_credentials()
-            .await
-            .unwrap_or(crate::auth::AuthCredentials {
-                pairing_id: String::new(),
-                fingerprint: String::new(),
-                session_token: String::new(),
-            });
-
-        // 链路加密协商（issue 09）：已 pin 且主开关+事件子开关开 → 首消息附带
-        // 临时公钥提案，并等待认证响应完成派生；严格模式下失败即断连报错，
-        // 非 strict 回退明文（与 TS 侧语义一致）
-        let ctx = crate::state::get_link_crypto_context();
-        let negotiate = ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some();
-        let (message, ephemeral) = if negotiate {
-            use base64::Engine as _;
-            let (m_priv, m_pub) = bedcode_link_crypto::generate_ephemeral();
-            let proposal = crate::enums::auth::CryptoProposal {
-                v: 1,
-                ek: base64::engine::general_purpose::STANDARD.encode(m_pub),
-            };
-            (
-                AuthRequest::reauthenticate_with_crypto(
-                    &creds.pairing_id,
-                    &creds.fingerprint,
-                    &creds.session_token,
-                    Some(proposal.clone()),
-                ),
-                Some((m_priv, proposal.ek)),
-            )
-        } else {
-            (
-                AuthRequest::reauthenticate(&creds.pairing_id, &creds.fingerprint, &creds.session_token),
-                None,
-            )
-        };
-
-        match ephemeral {
-            Some((m_priv, m_ek_b64)) => {
-                // 提案路径：等认证响应拿服务端临时公钥回执（明文），随后装密码表。
-                // 语义分层：
-                // · 桌面未回执（拒绝/旧版）→ 服务端仍明文：非 strict 明文续跑，
-                //   strict 断连报错（spec：strict 不允许明文旁路）
-                // · 回执存在但派生/安装失败 → 必须断连：桌面端已注册密码表，
-                //   两端加密意愿不一致的半协商状态比纯明文更危险
-                let timeout = std::time::Duration::from_millis(EVENT_WS_AUTH_TIMEOUT_MS);
-                let response = client.send_and_wait(&message, timeout).await?;
-
-                match extract_crypto_echo(&response) {
-                    Some(echo_ek) => {
-                        if let Err(e) =
-                            install_event_crypto(&client, ctx.clone(), m_priv, m_ek_b64, echo_ek).await
-                        {
-                            client.disconnect().await;
-                            return Err(e);
-                        }
-                        Ok(client)
-                    }
-                    None => {
-                        if ctx.strict_mode {
-                            client.disconnect().await;
-                            Err(crate::AppError::WebSocket(
-                                "link crypto strict mode: desktop refused negotiation".to_string(),
-                            ))
-                        } else {
-                            tracing::warn!(
-                                "[EventWs] desktop refused link crypto, staying plaintext (non-strict)"
-                            );
-                            Ok(client)
-                        }
-                    }
-                }
-            }
-            None => {
-                // 无提案：现状路径（fire-and-forget，默认关时与旧行为一致）
-                client.send(&message).await?;
-                Ok(client)
-            }
+        // 极简认证首帧（票 03）：`{"type":"auth","token":"<jwt>"}`——
+        // 不再发 `Message::Auth` 信封、不携带链路加密提案、**不等待回执**
+        // （插件端点无认证回包；认证失败由宿主 close 4001 显性表达）。
+        let token = event_channel_token().await;
+        if token.is_empty() {
+            // 无 JWT 的裸连必被宿主拒绝（4001）：显性失败优于建一条注定被关的
+            // 连接——监督任务据此 warn 并等下一次认证成功再重建。
+            let _ = client.disconnect().await;
+            return Err(crate::AppError::Auth(
+                "event channel: no JWT available (authenticate first)".to_string(),
+            ));
         }
+        let frame = serde_json::json!({ "type": EVENT_CHANNEL_AUTH_TYPE, "token": token });
+        client.send_text(&frame.to_string()).await?;
+        // 认证门置位后事件帧才被路由（认证前帧丢弃，防御畸形服务端）
+        plugin_event.mark_authenticated();
+
+        // 通道就绪 → 前端对账：事件**不重放**，重连期间的变化只能靠这一次
+        // HTTP 全量拉取补齐（spec §6.2 强制）
+        if let Some(ah) = &app_handle {
+            let _ = ah.emit(
+                EVENT_CHANNEL_READY_EVENT,
+                serde_json::json!({ "endpoint": "session-control" }),
+            );
+        }
+
+        tracing::info!(
+            "[EventWs] session-control channel ready at {}:{} (jwt auth sent, len {})",
+            target.address,
+            target.port,
+            token.len()
+        );
+        Ok(client)
     }
 
     /// 创建连接断开监控任务（WS client 建连后调用）
@@ -386,32 +405,79 @@ impl ConnectionManager {
         let mut event_rx = client.subscribe();
         let app_clone = app_handle.clone();
         let manual_flag = self.manual_disconnect.clone();
+        let auto_reconnect_flag = self.auto_reconnect.clone();
         spawn_with_error_boundary("connection_monitor", async move {
             tracing::debug!("[ConnMonitor] Started monitoring connection");
             while let Ok(event) = event_rx.recv().await {
                 match event {
                     WsClientEvent::Disconnected | WsClientEvent::Error { .. } | WsClientEvent::ServerClosed { .. } => {
                         if !manual_flag.load(Ordering::SeqCst) {
-                            tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
-                            let reason = match &event {
-                                WsClientEvent::ServerClosed { reason } => reason.clone(),
-                                WsClientEvent::Error { message } => message.clone(),
-                                _ => "Connection lost".to_string(),
+                            // M1/ADR 0031：认证类 close code（4001/4003）是**致命**
+                            // 关闭——自愈重连前需重新配对/认证，重连无意义。前端据此
+                            // 只弹一次「需重新配对」提示，不走自动重连；后端自愈监督
+                            // 同样跳过（见 event_ws.rs）。非致命断开走既有自愈路径。
+                            let (reason, fatal, non_retryable) = match &event {
+                                WsClientEvent::ServerClosed { code, reason } => {
+                                    let fatal = crate::system::constants::connection::is_auth_fatal_close_code(*code);
+                                    // 协议/策略层不可重试：重连必然同样失败，且会把
+                                    // 「版本不匹配」伪装成网络抖动。与认证类致命分开
+                                    // 上报，前端才能给出「升级一端」而非「重新配对」。
+                                    let non_retryable =
+                                        crate::system::constants::connection::is_non_retryable_close_code(*code);
+                                    if fatal {
+                                        tracing::warn!(
+                                            close_code = %code,
+                                            %reason,
+                                            "[ConnMonitor] Auth-fatal WS close (need re-pair), no self-heal"
+                                        );
+                                    } else if non_retryable {
+                                        tracing::warn!(
+                                            close_code = %code,
+                                            %reason,
+                                            "[ConnMonitor] Non-retryable WS close (protocol/policy), no self-heal"
+                                        );
+                                    } else {
+                                        tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
+                                    }
+                                    (reason.clone(), fatal, non_retryable)
+                                }
+                                WsClientEvent::Error { message } => (message.clone(), false, false),
+                                _ => ("Connection lost".to_string(), false, false),
                             };
+                            // `auto_reconnect_disabled`：用户关掉了自动重连时告知前端
+                            // 「不会自愈，需手动重连」。不告知的话前端只能显示通用的
+                            // 「连接已断开」，用户分不清「正在自愈」与「不会自愈」，
+                            // 只能干等退避耗尽（最长 3 轮 + 认证超时）才发现。
+                            let auto_reconnect_disabled =
+                                !auto_reconnect_flag.load(Ordering::SeqCst) && !fatal && !non_retryable;
                             let _ = app_clone.emit(
                                 "ws_unexpected_disconnect",
                                 serde_json::json!({
-                                    "reason": reason
+                                    "reason": reason,
+                                    "fatal": fatal,
+                                    "non_retryable": non_retryable,
+                                    "auto_reconnect_disabled": auto_reconnect_disabled,
                                 }),
                             );
 
-                            // 通知插件连接断开
-                            {
-                                let pm = crate::state::get_plugin_manager();
-                                pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::Disconnect {
-                                    reason: reason.clone(),
-                                })
-                                .await;
+                            // 通知插件连接断开。
+                            // 经 AppHandle 取托管态而非 `state::get_plugin_manager()`
+                            // 静态单例：后者在 setup 未完成时 panic，而本处在
+                            // spawn 的监控任务里——一次 panic 会连带终止整个
+                            // 重连监督循环（静默失去自愈能力）。托管态缺失是
+                            // 启动窗口的正常情形，跳过通知即可。
+                            match app_clone.try_state::<Arc<PluginManager>>() {
+                                Some(pm) => {
+                                    pm.dispatch_lifecycle_event(
+                                        crate::plugin::types::PluginLifecycleEvent::Disconnect {
+                                            reason: reason.clone(),
+                                        },
+                                    )
+                                    .await;
+                                }
+                                None => tracing::debug!(
+                                    "[ConnMonitor] plugin manager not managed yet, skip disconnect notification"
+                                ),
                             }
                         } else {
                             tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
@@ -456,6 +522,11 @@ impl ConnectionManager {
     /// reconnected / reconnect_failed）与退避节奏保持原样，前端零改动。
     /// `app_handle` 可为 `None`：04 监督任务自愈重连在无窗口上下文中可测
     /// （仅跳过前端事件发射，HTTP 语义不变），command 层传 `Some`。
+    ///
+    /// **永久性凭证拒绝不走退避**（ADR 0033）：见循环体内注释与
+    /// [`is_credential_rejection`]。这种失败发 `ws_reauth_rejected` 而**不是**
+    /// `ws_reconnect_failed`——两者在 UI 上必须是**不同文案**（前者「需重新
+    /// 配对」，后者「网络/重连失败」），合并成一个终态正是本次要修的缺陷。
     pub async fn reconnect(&self, app_handle: Option<AppHandle>, token: Option<String>) -> Result<()> {
         let max_retry = DEFAULT_MAX_RETRIES;
         let mut current_retry: u32 = 0;
@@ -471,11 +542,22 @@ impl ConnectionManager {
         }
         self.is_reconnecting.store(true, Ordering::SeqCst);
         self.retry_count.store(0, Ordering::SeqCst);
+        // 策略复位：上一轮的退避进度 / 同因熔断计数不带入本轮
+        self.reconnect_policy.reset().await;
 
         while current_retry < max_retry {
             // 用户主动断开，停止重连循环（统一出口复位 flag）
             if self.manual_disconnect.load(Ordering::SeqCst) {
                 tracing::info!("Manual disconnect detected, aborting reconnect");
+                break;
+            }
+
+            // 推进一轮策略（内部按 should_retry 判定；命中同因熔断时返回 None）
+            if self.reconnect_policy.start().await.is_none() {
+                tracing::warn!(
+                    "Reconnect policy gave up before round {} (circuit breaker or retries exhausted)",
+                    current_retry + 1
+                );
                 break;
             }
 
@@ -492,18 +574,6 @@ impl ConnectionManager {
                 );
             }
             tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, max_retry);
-
-            // 等待指数退避间隔（首次不等待）
-            if current_retry > 0 {
-                let delay = DEFAULT_RETRY_DELAYS_MS[(current_retry - 1) as usize];
-                tracing::info!("Waiting {}ms before retry...", delay);
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                // 等待期间用户可能已断开（统一出口复位 flag）
-                if self.manual_disconnect.load(Ordering::SeqCst) {
-                    tracing::info!("Manual disconnect during reconnect delay, aborting");
-                    break;
-                }
-            }
 
             // 目标设备：HTTP reauth 的地址真源
             let target = self.target.read().await.clone();
@@ -529,11 +599,22 @@ impl ConnectionManager {
                 break;
             }
 
-            // HTTP reauth：成功（含 AuthSuccess 契口广播）即恢复；拒绝/网络
-            // 故障都继续退避（业务码 1001 等属于永久性拒绝，退避到上限自然退出）
+            // HTTP reauth：成功（含 AuthSuccess 契口广播）即恢复。
+            //
+            // **永久性拒绝立即停止重试**（ADR 0033 迁移后的关键区分）：入场签发
+            // 密钥换手后，存量已配对设备的旧 token 会被**永久**拒绝（业务码信封
+            // → `AppError::Auth`）。继续退避重试到上限只会：① 制造与网络故障
+            // 无法区分的假象；② 让用户以为是网络问题反复等待，而正确动作是
+            // **重新配对**。故这里按错误**变体**分流（`Auth` = 桌面端明确答复
+            // 「凭据不认」；`Internal`/`Parse` = 传输或协议层故障，值得重试）。
+            //
+            // 迁移前的口径是「业务码 1001 等属于永久性拒绝，退避到上限自然退出」——
+            // 那正是本次要改的行为：自然退出给用户的终态是「重连失败」，而真实
+            // 原因是「凭证失效需重配」。
             match auth_mgr.authenticate_with_token(&session_token).await {
                 Ok(true) => {
                     tracing::info!("Reconnect attempt {} succeeded (HTTP reauth)", current_retry + 1);
+                    self.reconnect_policy.on_success().await;
                     self.is_reconnecting.store(false, Ordering::SeqCst);
                     self.retry_count.store(0, Ordering::SeqCst);
 
@@ -546,11 +627,47 @@ impl ConnectionManager {
                 Ok(false) => {
                     tracing::warn!("Reconnect attempt {} rejected", current_retry + 1);
                     current_retry += 1;
+                    self.reconnect_policy
+                        .on_failure("reauth rejected without error".to_string())
+                        .await;
                 }
                 Err(e) => {
+                    if is_credential_rejection(&e) {
+                        // 永久性：发专用信号让前端点名「需重新配对」，然后停。
+                        // 不走 ws_reconnect_failed（那是网络类失败的终态文案）。
+                        tracing::warn!(
+                            "HTTP reauth permanently rejected (credential invalid, needs re-pair): {}",
+                            e
+                        );
+                        self.is_reconnecting.store(false, Ordering::SeqCst);
+                        self.reconnect_policy.abandon("credential permanently rejected").await;
+                        if let Some(ah) = &app_handle {
+                            let _ = ah.emit("ws_reauth_rejected", serde_json::json!({ "reason": e.to_string() }));
+                        }
+                        return Err(e);
+                    }
                     tracing::warn!("Reconnect attempt {} failed: {}", current_retry + 1, e);
                     current_retry += 1;
+                    self.reconnect_policy.on_failure(e.to_string()).await;
                 }
+            }
+
+            // 失败后按策略退避（首轮不等：current_retry==1 时 current_delay 仍是
+            // 首轮的 1s，与审计前 `DEFAULT_RETRY_DELAYS_MS[0]` 节奏一致；后续轮
+            // 由策略给出 2s/4s + ±10% 抖动，并受 1s 下限钳制）。
+            //
+            // 放在轮末而非轮首：无目标 / 无 token 的提前退出不再白白等一个退避，
+            // 且 `current_delay` 天然等于**本轮**的退避值，无需偏移索引。
+            if current_retry >= max_retry || self.reconnect_policy.is_abandoned().await {
+                break;
+            }
+            let delay = self.reconnect_policy.get_delay().await;
+            tracing::info!("Waiting {:?} before next reconnect attempt...", delay);
+            tokio::time::sleep(delay).await;
+            // 等待期间用户可能已断开（统一出口复位 flag）
+            if self.manual_disconnect.load(Ordering::SeqCst) {
+                tracing::info!("Manual disconnect during reconnect delay, aborting");
+                break;
             }
         }
 
@@ -708,6 +825,21 @@ impl ConnectionManager {
     }
 }
 
+/// 该错误是否代表**桌面端明确答复「凭据不被接受」**（永久性，重试无用）
+///
+/// 判据 = [`AppError`] 的**变体**而非错误文本：桌面端把业务拒绝包在 HTTP 200 的
+/// `{code, message}` 信封里，`auth::http::parse_envelope` 把 `code != 0` 映射成
+/// [`AppError::Auth`]；而传输失败（连不上 / 超时 / 非 2xx）与响应畸形分别落
+/// `Internal` / `Parse`。两类排障路径完全不同：前者要**重新配对**，后者值得退避重试。
+///
+/// **为什么不用错误文本判**：文本会随桌面端文案调整而漂移，判据必须落在结构上。
+///
+/// 典型触发（ADR 0033 D3 迁移）：入场签发密钥换手后，存量已配对设备的旧 token
+/// 被永久拒绝——**任何**重试策略都无法让它通过，只有重新配对。
+fn is_credential_rejection(e: &crate::AppError) -> bool {
+    matches!(e, crate::AppError::Auth(_))
+}
+
 impl Default for ConnectionManager {
     fn default() -> Self {
         let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
@@ -720,6 +852,8 @@ impl Default for ConnectionManager {
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
             is_reconnecting: Arc::new(AtomicBool::new(false)),
+            reconnect_policy: ReconnectManager::with_default_config(),
+            auto_reconnect: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -734,49 +868,87 @@ impl Clone for ConnectionManager {
             manual_disconnect: self.manual_disconnect.clone(),
             retry_count: self.retry_count.clone(),
             is_reconnecting: self.is_reconnecting.clone(),
+            reconnect_policy: self.reconnect_policy.clone(),
+            auto_reconnect: self.auto_reconnect.clone(),
         }
     }
 }
 
-// ==================== 事件 WS 链路加密（issue 09） ====================
+#[cfg(test)]
+mod tests {
+    use super::{is_credential_rejection, ConnectionManager};
+    use crate::AppError;
 
-/// 认证响应等待上限：桌面端 JWT 验签为同步路径，毫秒级返回；10s 已覆盖
-/// 极端弱网 RTT，超时按协商失败处理（strict 断连 / 非 strict 明文）
-pub const EVENT_WS_AUTH_TIMEOUT_MS: u64 = 10_000;
-
-/// 从认证响应中提取服务端临时公钥回执（auth 响应 payload.crypto.ek）
-fn extract_crypto_echo(response: &Message) -> Option<String> {
-    if let Message::Auth { payload, .. } = response {
-        return payload.crypto.as_ref().map(|c| c.ek.clone());
+    /// 行为契约（ADR 0033 §8.2 / F3）：只有 `Auth`（桌面端业务信封 `code != 0`）
+    /// 算**永久性凭证拒绝**——它是「桌面端答复了，而且答复是凭据不认」。
+    ///
+    /// 正例锁住：迁移后存量设备的旧 token 走这条路径（业务码信封 → `Auth`）。
+    #[test]
+    fn business_envelope_is_a_permanent_credential_rejection() {
+        // parse_envelope 对 `code != 0` 的映射形状（`code 1007: Invalid token`）
+        assert!(is_credential_rejection(&AppError::Auth(
+            "code 1007: Invalid token".into()
+        )));
+        // 业务码具体取值不敏感：判据是变体，不是文案
+        assert!(is_credential_rejection(&AppError::Auth(
+            "code 1001: Device not paired".into()
+        )));
     }
-    None
-}
 
-/// 用回执完成客户端派生并安装到连接上
-///
-/// 仅做派生与安装；失败语义（断连）由调用方处理——桌面端此时已注册密码表，
-/// 本地装表失败必须断连（半协商状态比纯明文更危险）。
-async fn install_event_crypto(
-    client: &Arc<WsClient>,
-    ctx: crate::state::LinkCryptoContext,
-    m_priv: [u8; 32],
-    m_ek_b64: String,
-    echo_ek: String,
-) -> Result<()> {
-    use base64::Engine as _;
+    /// 反例：传输 / 协议 / 业务以外的各种故障**不得**被判成永久性——
+    /// 它们退避重试是有意义的（网络会恢复），误判会让真·网络抖动永远不再重连。
+    #[test]
+    fn transport_and_protocol_failures_stay_retryable() {
+        for e in [
+            AppError::Internal("HTTP request to http://x/api/auth/reauth failed: timeout".into()),
+            AppError::Internal("HTTP 502 from http://x/api/auth/reauth".into()),
+            AppError::Parse("Invalid API response JSON".into()),
+            AppError::WebSocket("connection closed".into()),
+        ] {
+            assert!(!is_credential_rejection(&e), "传输类故障不得被判为永久性凭证拒绝: {e}");
+        }
+    }
 
-    let kd_public_b64 = ctx.kd_public_b64.ok_or_else(|| {
-        crate::AppError::WebSocket("link crypto context missing pin".to_string())
-    })?;
-    let kd_public: [u8; 32] = base64::engine::general_purpose::STANDARD
-        .decode(&kd_public_b64)
-        .map_err(|e| crate::AppError::WebSocket(format!("pin b64 decode failed: {e}")))?
-        .try_into()
-        .map_err(|v: Vec<u8>| {
-            crate::AppError::WebSocket(format!("pin length mismatch: expected 32, got {}", v.len()))
-        })?;
-    let crypto = bedcode_link_crypto::ClientWsCrypto::derive(&m_priv, &m_ek_b64, &echo_ek, &kd_public)
-        .map_err(|e| crate::AppError::WebSocket(format!("link crypto derive failed: {e}")))?;
-    client.install_link_crypto(crypto).await;
-    Ok(())
+    /// 变异自检锚点：若有人把判据改回「看错误文本里有没有 token / auth 字样」，
+    /// 第一条用例会先转红（它的文本含 `Invalid token` 但变体是 `Auth`），
+    /// 而「换个业务码就不认了」这类退化会被第二条抓住。
+    #[test]
+    fn judgement_is_structural_not_textual() {
+        // 变体是 Auth 但文本完全不含关键词 → 仍须判为永久性
+        assert!(is_credential_rejection(&AppError::Auth("1005".into())));
+        // 变体是 Internal 但文本含 credential/token 字样 → 不得判为永久性
+        assert!(!is_credential_rejection(&AppError::Internal(
+            "token credential rejected by proxy".into()
+        )));
+    }
+
+    /// 行为契约（2026-10-04 审计 P0-2）：自动重连开关是「是否允许自愈」的
+    /// 唯一入口，由连接层持有。前端不再持有任何重连循环，只把用户意图同步过来。
+    #[test]
+    fn auto_reconnect_defaults_to_enabled() {
+        // 正例：默认开启（既有行为不变——升级不能悄悄关掉用户可见的自愈）
+        assert!(ConnectionManager::default().is_auto_reconnect_enabled());
+    }
+
+    #[test]
+    fn set_auto_reconnect_toggles_the_supervisor_gate() {
+        // 正例 + 反例往返：关 → 监督任务不自愈；开 → 恢复
+        let mgr = ConnectionManager::default();
+        mgr.set_auto_reconnect(false);
+        assert!(!mgr.is_auto_reconnect_enabled());
+        mgr.set_auto_reconnect(true);
+        assert!(mgr.is_auto_reconnect_enabled());
+    }
+
+    #[test]
+    fn auto_reconnect_flag_is_shared_across_clones() {
+        // 副作用/共享状态：监督任务持有的是 clone，改设置必须作用到它看到的那份
+        let mgr = ConnectionManager::default();
+        let supervisor_view = mgr.clone();
+        mgr.set_auto_reconnect(false);
+        assert!(
+            !supervisor_view.is_auto_reconnect_enabled(),
+            "clone 未共享开关会导致设置页关了、实际仍在自愈"
+        );
+    }
 }

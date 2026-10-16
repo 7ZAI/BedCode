@@ -1,34 +1,23 @@
 //! Mobile Auth Commands
 //!
-//! 认证和配对相关命令
+//! 认证与配对相关命令（票 14 阶段 B 收窄后的残余引擎面）
+//!
+//! 配对流程编排（请求配对 → 等码 → 验码 / QR / 生物挑战）已迁
+//! `com.bedcode.terminal-session` 插件（经 WIT `host-auth` 触达引擎，凭据
+//! 零过境）；本文件只剩三类**引擎事实 / 凭据面**（C4：凭据持有在宿主引擎，
+//! 读取面也留在引擎侧，不经插件）：
+//!
+//! - `ws_authenticate`：重启 / 重连后的 JWT 换新（token 由前端 localStorage
+//!   镜像交还宿主——重启后宿主内存态 global token 为空的恢复路径）
+//! - `ws_get_auth_credentials`：凭据窄读（前端持久化镜像的唯一取数口）
+//! - 生物凭证绑定 / 解绑 / 状态（Keystore 私钥与公钥注册留在宿主引擎）
 
-use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::auth::{AuthCredentials, AuthStatus};
+use crate::auth::AuthCredentials;
 use crate::router::event;
 use crate::state::get_auth_manager;
 use crate::Result;
-
-/// 认证状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthState {
-    pub status: String,
-    pub is_authenticated: bool,
-}
-
-/// 获取认证状态
-#[tauri::command]
-pub async fn ws_get_auth_status() -> Result<AuthState> {
-    let auth = get_auth_manager();
-    let status = auth.get_status().await;
-    let is_authenticated = matches!(status, AuthStatus::Authenticated);
-
-    Ok(AuthState {
-        status: format!("{:?}", status),
-        is_authenticated,
-    })
-}
 
 /// 使用 JWT token 认证（重连时使用已存储的 session_token）
 #[tauri::command]
@@ -45,70 +34,16 @@ pub async fn ws_authenticate(app_handle: AppHandle, session_token: String) -> Re
     Ok(result)
 }
 
-/// 请求配对
+/// 读取宿主持有的认证凭据（窄读引擎事实）
+///
+/// 票 14 阶段 B：认证编排迁插件后，配对 / QR / 生物认证的成功路径不再向
+/// 前端返回凭据（凭据零过境，插件不接触 token）；前端持久化镜像
+/// （localStorage，重启后经 `ws_authenticate` 交还宿主）经本命令直接读引擎。
+/// 未持有凭据 → `None`
 #[tauri::command]
-pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
-    tracing::info!("[ws_request_pairing] command entered");
-
+pub async fn ws_get_auth_credentials() -> Result<Option<AuthCredentials>> {
     let auth = get_auth_manager();
-    match auth.request_pairing().await {
-        Ok(()) => {
-            tracing::info!("[ws_request_pairing] request_pairing OK, emitting event");
-            event::emit_pairing_request(&app_handle);
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!("[ws_request_pairing] request_pairing failed: {}", e);
-            Err(e)
-        }
-    }
-}
-
-/// 验证配对码，成功后返回凭据（含 JWT token）
-#[tauri::command]
-pub async fn ws_verify_pairing_code(app_handle: AppHandle, code: String) -> Result<Option<AuthCredentials>> {
-    let auth = get_auth_manager();
-    let result = auth.verify_pairing_code(&code).await?;
-
-    if result {
-        event::emit_pairing_verified(&app_handle);
-        event::emit_paired(&app_handle);
-        // 返回存储的凭据，前端持久化到 localStorage
-        Ok(auth.get_credentials().await)
-    } else {
-        event::emit_auth_failed(&app_handle, "Pairing verification failed");
-        Ok(None)
-    }
-}
-
-/// 使用 QR token 认证
-#[tauri::command]
-pub async fn ws_authenticate_with_qr(app_handle: AppHandle, token: String) -> Result<Option<AuthCredentials>> {
-    let auth = get_auth_manager();
-    let result = auth.authenticate_with_qr(&token).await?;
-
-    if result {
-        event::emit_pairing_verified(&app_handle);
-        event::emit_paired(&app_handle);
-        return Ok(auth.get_credentials().await);
-    }
-
-    Ok(None)
-}
-
-/// 生物认证登录（挑战-应答握手）
-#[tauri::command]
-pub async fn ws_authenticate_with_biometric(app_handle: AppHandle) -> Result<Option<AuthCredentials>> {
-    let auth = get_auth_manager();
-    let result = auth.authenticate_with_biometric().await?;
-
-    if result {
-        event::emit_pairing_verified(&app_handle);
-        event::emit_paired(&app_handle);
-        return Ok(auth.get_credentials().await);
-    }
-
-    Ok(None)
+    Ok(auth.get_credentials().await)
 }
 
 /// 绑定生物凭证：本地生成密钥对并注册公钥到桌面端（需已认证连接）
@@ -128,7 +63,7 @@ pub async fn ws_unbind_biometric_credential() -> Result<bool> {
 /// 生物认证密钥状态（设备支持 + 本地密钥已生成）
 ///
 /// camelCase 序列化与前端 TS 接口对齐（同 commands/session.rs 约定）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BiometricKeyStatus {
     pub device_supported: bool,

@@ -25,6 +25,48 @@ impl Default for PluginType {
     }
 }
 
+/// 应用适配平台（manifest `platform` 字段，必填）
+///
+/// 三值：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）。宿主在加载 /
+/// zip 安装时按本端校验（`supports`），单端声明遇到另一端即拒绝装载。
+///
+/// `Default` 取 `Both` **仅服务测试夹具与合成清单**（wire 层该字段必填、无 serde
+/// 缺省）：合成清单对两端都可装载，不把测试夹具钉死在某一个端。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPlatform {
+    /// 仅桌面端
+    Desktop,
+    /// 仅移动端
+    Mobile,
+    /// 双端适配（两端均可加载）
+    #[default]
+    Both,
+}
+
+impl PluginPlatform {
+    /// wire 值（错误文案 / 对比用；与 serde rename 同源）
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+            Self::Both => "both",
+        }
+    }
+
+    /// 本声明是否适用于 `host`（宿主当前端；只应传 `Desktop` / `Mobile`）
+    ///
+    /// `both` 对任一端成立；单端声明只对本端成立——移动宿主装载 / 安装的门禁判据。
+    pub const fn supports(self, host: PluginPlatform) -> bool {
+        match (self, host) {
+            (Self::Both, _) => true,
+            (Self::Desktop, Self::Desktop) => true,
+            (Self::Mobile, Self::Mobile) => true,
+            _ => false,
+        }
+    }
+}
+
 /// 插件运行时状态
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
@@ -48,12 +90,19 @@ impl Default for PluginState {
 }
 
 /// 插件清单
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     pub id: String,
     pub name: String,
     pub version: String,
+    /// 适配平台：`desktop`（仅桌面）/ `mobile`（仅移动）/ `both`（双端适配）
+    ///
+    /// **必填项**（与 id/name/version 同档，无 serde 缺省）——宿主在**加载 / zip
+    /// 安装**时校验声明必须覆盖当前端（`PluginPlatform::supports`），不匹配即
+    /// fail-visible 拒绝：把一端的分发包装到另一端后「装了却不工作」比一次显性
+    /// 拒绝难排查得多。
+    pub platform: PluginPlatform,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -156,13 +205,12 @@ pub struct SettingsContribution {
 }
 
 /// 终端扩展点
+///
+/// inputHandlers / outputParsers（terminal-hooks 声明面）已随票 15 阶段 B
+/// 整面退役——终端 UI 域在插件内闭环，宿主不再回调插件处理终端流。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalContribution {
-    #[serde(default)]
-    pub input_handlers: Vec<String>,
-    #[serde(default)]
-    pub output_parsers: Vec<String>,
     #[serde(default)]
     pub toolbar_items: Vec<TerminalToolbarItemContribution>,
 }
@@ -213,10 +261,6 @@ pub struct LifecycleContribution {
     pub on_session_created: bool,
     #[serde(default)]
     pub on_session_stopped: bool,
-    #[serde(default)]
-    pub on_terminal_input: bool,
-    #[serde(default)]
-    pub on_terminal_output: bool,
 }
 
 impl LifecycleContribution {
@@ -229,8 +273,6 @@ impl LifecycleContribution {
             "onDisconnect" => self.on_disconnect,
             "onSessionCreated" => self.on_session_created,
             "onSessionStopped" => self.on_session_stopped,
-            "onTerminalInput" => self.on_terminal_input,
-            "onTerminalOutput" => self.on_terminal_output,
             _ => false,
         }
     }
@@ -243,291 +285,9 @@ impl LifecycleContribution {
             || self.on_disconnect
             || self.on_session_created
             || self.on_session_stopped
-            || self.on_terminal_input
-            || self.on_terminal_output
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ==================== Tests ====================
 
-    // ==================== PluginManifest ====================
-
-    #[test]
-    fn test_manifest_parse_with_defaults() {
-        // 缺省字段（description/author/main/pluginType/permissions/contributes/
-        // icon/wasmHash/rustLibrary）全部走 default，宿主加载最小化 plugin.json 不应失败
-        let json = serde_json::json!({
-            "id": "com.bedcode.demo",
-            "name": "Demo",
-            "version": "0.1.0",
-            "permissions": ["storage", "terminal:input"]
-        });
-        let m: PluginManifest = serde_json::from_value(json).unwrap();
-        assert_eq!(m.id, "com.bedcode.demo");
-        assert_eq!(m.version, "0.1.0");
-        assert_eq!(m.description, "");
-        assert_eq!(m.author, "");
-        assert_eq!(m.main, "");
-        assert_eq!(m.plugin_type, PluginType::TsOnly);
-        assert_eq!(m.permissions, vec!["storage", "terminal:input"]);
-        assert_eq!(m.icon, None);
-        assert_eq!(m.wasm_hash, "");
-        assert_eq!(m.rust_library, "");
-        assert_eq!(m.preauth_dirs, Vec::<String>::new());
-        assert_eq!(m.preauth_urls, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_manifest_preauth_urls_parse() {
-        // preauthUrls（Egress L2 声明，camelCase）解析 + 缺失默认空数组
-        let json = serde_json::json!({
-            "id": "com.bedcode.ai-chatbox",
-            "name": "AI Chatbox",
-            "version": "1.0.0",
-            "preauthUrls": ["https://*.openai.com/*", "https://api.deepseek.com/*"]
-        });
-        let m: PluginManifest = serde_json::from_value(json).unwrap();
-        assert_eq!(
-            m.preauth_urls,
-            vec!["https://*.openai.com/*".to_string(), "https://api.deepseek.com/*".to_string()]
-        );
-        // 序列化回写保持 camelCase
-        let back = serde_json::to_value(&m).unwrap();
-        assert_eq!(back["preauthUrls"], serde_json::json!(["https://*.openai.com/*", "https://api.deepseek.com/*"]));
-    }
-
-    #[test]
-    fn test_manifest_round_trip_fills_defaults() {
-        // 宿主加载最小化 plugin.json 后序列化回写：缺省字段应已填充默认值
-        let json = serde_json::json!({ "id": "com.bedcode.x", "name": "X", "version": "1.0.0" });
-        let m: PluginManifest = serde_json::from_value(json).unwrap();
-        let back = serde_json::to_value(&m).unwrap();
-        assert_eq!(back["pluginType"], serde_json::json!("ts-only"));
-        assert_eq!(back["wasmHash"], serde_json::json!(""));
-        // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
-        assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
-        assert_eq!(back["contributes"]["navTab"], serde_json::Value::Null);
-        assert_eq!(back["contributes"]["settings"], serde_json::Value::Null);
-    }
-
-    // ==================== PluginType / PluginState ====================
-
-    #[test]
-    fn test_plugin_type_kebab_case() {
-        // 线协议 kebab-case：宿主按字面量解析 plugin.json 的 pluginType 字段；
-        // 移动端比桌面端多 Wasm 变体
-        assert_eq!(serde_json::to_value(PluginType::Rust).unwrap(), serde_json::json!("rust"));
-        assert_eq!(serde_json::to_value(PluginType::RustTs).unwrap(), serde_json::json!("rust-ts"));
-        assert_eq!(serde_json::to_value(PluginType::TsOnly).unwrap(), serde_json::json!("ts-only"));
-        assert_eq!(serde_json::to_value(PluginType::Wasm).unwrap(), serde_json::json!("wasm"));
-        assert_eq!(
-            serde_json::from_value::<PluginType>(serde_json::json!("wasm")).unwrap(),
-            PluginType::Wasm
-        );
-        assert!(serde_json::from_value::<PluginType>(serde_json::json!("rust_ts")).is_err());
-    }
-
-    #[test]
-    fn test_plugin_type_default() {
-        assert_eq!(PluginType::default(), PluginType::TsOnly);
-    }
-
-    #[test]
-    fn test_plugin_state_camel_case_tag() {
-        // state 内部标签 + camelCase 变体名（与桌面端 PascalCase 不同，移动端线协议如此）
-        assert_eq!(
-            serde_json::to_value(PluginState::Loaded).unwrap(),
-            serde_json::json!({ "state": "loaded" })
-        );
-        assert_eq!(
-            serde_json::to_value(PluginState::Activated).unwrap(),
-            serde_json::json!({ "state": "activated" })
-        );
-        assert_eq!(
-            serde_json::to_value(PluginState::Activating).unwrap(),
-            serde_json::json!({ "state": "activating" })
-        );
-        assert_eq!(
-            serde_json::to_value(PluginState::Degraded { error: "init fail".into() }).unwrap(),
-            serde_json::json!({ "state": "degraded", "error": "init fail" })
-        );
-        assert_eq!(
-            serde_json::to_value(PluginState::Error { error: "boom".into() }).unwrap(),
-            serde_json::json!({ "state": "error", "error": "boom" })
-        );
-        let back: PluginState =
-            serde_json::from_value(serde_json::json!({ "state": "error", "error": "x" })).unwrap();
-        assert_eq!(back, PluginState::Error { error: "x".into() });
-        let degraded_back: PluginState =
-            serde_json::from_value(serde_json::json!({ "state": "degraded", "error": "d" })).unwrap();
-        assert_eq!(degraded_back, PluginState::Degraded { error: "d".into() });
-    }
-
-    #[test]
-    fn test_plugin_state_default() {
-        assert_eq!(PluginState::default(), PluginState::Loaded);
-    }
-
-    // ==================== 移动端特有扩展点 ====================
-
-    #[test]
-    fn test_nav_tab_contribution_wire_format() {
-        // 底部导航 Tab（移动端特有）：order 缺省为 0
-        let t = NavTabContribution {
-            id: "tab1".into(),
-            title: "Tasks".into(),
-            icon: "tasks.svg".into(),
-            component: "TasksView".into(),
-            order: 2,
-        };
-        assert_eq!(
-            serde_json::to_value(&t).unwrap(),
-            serde_json::json!({
-                "id": "tab1",
-                "title": "Tasks",
-                "icon": "tasks.svg",
-                "component": "TasksView",
-                "order": 2
-            })
-        );
-        let minimal =
-            serde_json::json!({ "id": "t", "title": "T", "icon": "i", "component": "C" });
-        let back: NavTabContribution = serde_json::from_value(minimal).unwrap();
-        assert_eq!(back.order, 0);
-    }
-
-    #[test]
-    fn test_settings_contribution_wire_format() {
-        let s = SettingsContribution {
-            section: "network".into(),
-            component: "NetSettings".into(),
-        };
-        assert_eq!(
-            serde_json::to_value(&s).unwrap(),
-            serde_json::json!({ "section": "network", "component": "NetSettings" })
-        );
-    }
-
-    #[test]
-    fn test_view_contribution_type_field() {
-        // view_type 序列化为 "type"（与前端 vscode 风格扩展点一致）
-        let v = ViewContribution {
-            id: "v1".into(),
-            view_type: "toolbox".into(),
-            title: "Toolbox".into(),
-            component: "Panel".into(),
-        };
-        assert_eq!(
-            serde_json::to_value(&v).unwrap(),
-            serde_json::json!({
-                "id": "v1",
-                "type": "toolbox",
-                "title": "Toolbox",
-                "component": "Panel"
-            })
-        );
-    }
-
-    #[test]
-    fn test_terminal_contribution_toolbar_items() {
-        // 终端扩展点含工具栏按钮（ui:input 权限对应）
-        let t = TerminalContribution {
-            input_handlers: vec!["in1".into()],
-            output_parsers: vec!["out1".into()],
-            toolbar_items: vec![TerminalToolbarItemContribution {
-                id: "tb1".into(),
-                title: "Send".into(),
-                icon: "send.svg".into(),
-            }],
-        };
-        assert_eq!(
-            serde_json::to_value(&t).unwrap(),
-            serde_json::json!({
-                "inputHandlers": ["in1"],
-                "outputParsers": ["out1"],
-                "toolbarItems": [{ "id": "tb1", "title": "Send", "icon": "send.svg" }]
-            })
-        );
-    }
-
-    #[test]
-    fn test_contributes_defaults_and_full_parse() {
-        // 全量贡献点解析：commands/views/terminal/navTab/settings/configuration/lifecycle
-        let json = serde_json::json!({
-            "commands": [{ "id": "c1", "title": "C1" }],
-            "views": [{ "id": "v1", "type": "toolbox", "title": "V1", "component": "C" }],
-            "terminal": { "inputHandlers": ["in1"], "outputParsers": ["out1"] },
-            "navTab": { "id": "t1", "title": "T", "icon": "i.svg", "component": "C" },
-            "settings": { "section": "net", "component": "S" },
-            "configuration": {
-                "title": "Config",
-                "properties": { "key": { "type": "string", "title": "Key" } }
-            },
-            "lifecycle": { "onStartup": true, "onAuthSuccess": true }
-        });
-        let c: PluginContributes = serde_json::from_value(json).unwrap();
-        assert_eq!(c.commands[0].id, "c1");
-        assert_eq!(c.views[0].view_type, "toolbox");
-        assert_eq!(c.terminal.as_ref().unwrap().input_handlers, vec!["in1"]);
-        assert_eq!(c.nav_tab.as_ref().unwrap().id, "t1");
-        assert_eq!(c.settings.as_ref().unwrap().section, "net");
-        assert_eq!(c.configuration.as_ref().unwrap().properties.len(), 1);
-        assert!(c.lifecycle.as_ref().unwrap().on_startup);
-        assert!(c.lifecycle.as_ref().unwrap().on_auth_success);
-        assert!(!c.lifecycle.as_ref().unwrap().on_disconnect);
-    }
-
-    #[test]
-    fn test_config_property_type_field() {
-        // 属性类型字段序列化为 "type"，缺省字段（description/default）为 null
-        let p = ConfigProperty {
-            prop_type: "string".into(),
-            title: "API Key".into(),
-            description: None,
-            default: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&p).unwrap(),
-            serde_json::json!({
-                "type": "string",
-                "title": "API Key",
-                "description": null,
-                "default": null
-            })
-        );
-    }
-
-    // ==================== LifecycleContribution ====================
-
-    #[test]
-    fn test_lifecycle_is_declared_mapping() {
-        // 宿主按 camelCase 事件名查询声明；未声明/未知事件一律 false
-        let mut lc = LifecycleContribution::default();
-        assert!(!lc.is_declared("onStartup"));
-        lc.on_startup = true;
-        lc.on_auth_success = true;
-        lc.on_session_stopped = true;
-        assert!(lc.is_declared("onStartup"));
-        assert!(lc.is_declared("onAuthSuccess"));
-        assert!(lc.is_declared("onSessionStopped"));
-        assert!(!lc.is_declared("onShutdown"));
-        assert!(!lc.is_declared("onDisconnect"));
-        // 未知事件名拒绝，防止宿主拼写漂移静默通过
-        assert!(!lc.is_declared("onPaused"));
-        assert!(!lc.is_declared(""));
-    }
-
-    #[test]
-    fn test_lifecycle_has_any_declared() {
-        // 全空默认 = 无任何生命周期钩子声明
-        let lc = LifecycleContribution::default();
-        assert!(!lc.has_any_declared());
-        // 任一钩子置位即视为有声明（宿主据此决定是否注册回调）
-        let mut lc2 = LifecycleContribution::default();
-        lc2.on_terminal_input = true;
-        assert!(lc2.has_any_declared());
-    }
-
-}
+// 单元测试已全部迁至 `../tests/`（集成测试，只经 crate 公开 API 验证契约）。

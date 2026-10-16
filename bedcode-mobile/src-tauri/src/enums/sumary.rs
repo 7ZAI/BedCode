@@ -36,13 +36,3 @@ pub struct SessionConfigSummary {
     pub working_dir: String,
     pub command: String,
 }
-
-/// 快捷指令摘要
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickActionSummary {
-    pub id: String,
-    pub name: String,
-    pub content: String,
-    pub icon: Option<String>,
-    pub color: Option<String>,
-}

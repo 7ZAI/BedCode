@@ -1,7 +1,8 @@
 //! # bedcode-peer-net — 对等网络共享基础设施
 //!
-//! 桌面端与移动端共享的对等网络底座（issue `.scratch/peer-network/issues/01`、
-//! `/02`）：
+//! 桌面端与移动端共享的对等网络底座（设计依据见本文件末尾的 ADR 0027 / 0028；
+//! 原 issue tracker `.scratch/peer-network/issues/01`（节点身份）、`/02`（TLS 直连）
+//! 所在目录已不在仓库中，裁决已固化进 ADR 0027 / 0028）：
 //!
 //! - **节点身份**（[`identity`]）：Ed25519 长效密钥，首启纯随机生成、持久化于宿主
 //!   注入的数据目录；重装即新身份（决策 D2），与设备身份（DeviceIdentity）彻底分离；
@@ -22,6 +23,8 @@
 //!   `_bedcode-peer._tcp.local.` 广播+浏览并存，TXT 携带设备名/协议版本/能力
 //!   位图；发现结果进带 TTL 的在线缓存，「在线」即记录可见、与连接无关。
 //!   守护回调与测试喂入共用 [`DiscoveryCache::observe`] 同一通路（注入缝）；
+//!   浏览面消费宿主注入的类型中枢订阅（[`PeerMdnsBrowse`]，同类型 browse 唯一性
+//!   归中枢，ADR 0054），本 crate 不自行 browse / stop_browse；
 //!   与终端链路旧 `_bedcode._tcp` 完全独立互不感知。
 //!
 //! 设计依据：`docs/adr/0027-peer-network-transport-stack.md`（传输栈方向）、
@@ -49,9 +52,9 @@ mod tls;
 
 pub use cert::{CertDer, generate_self_signed_cert, verify_cert_matches_node_id};
 pub use discovery::{
-    CAP_FILE_TRANSFER, DISCOVERY_PROTOCOL_VERSION, DiscoveryAdvertiser, DiscoveryCache,
-    DiscoveryConfig, DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, PEER_DISCOVERY_TTL,
-    SERVICE_TYPE, SWEEP_INTERVAL, disable_virtual_interfaces, spawn_peer_mdns_advertiser,
+    CAP_FILE_TRANSFER, DISCOVERY_PROTOCOL_VERSION, DiscoveryCache,
+    DiscoveryConfig, DiscoveryDaemon, DiscoveredPeerRecord, PEER_DISCOVERY_TTL,
+    PeerMdnsBrowse, SERVICE_TYPE, SWEEP_INTERVAL, disable_virtual_interfaces,
     spawn_peer_mdns_daemon,
 };
 pub use error::{PeerNetError, Result};

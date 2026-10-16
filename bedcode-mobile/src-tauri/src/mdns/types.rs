@@ -24,26 +24,3 @@ pub struct DiscoveredService {
     /// 用户可读的设备名（from device_name TXT record）
     pub device_name: String,
 }
-
-/// mDNS 广播配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdvertiseConfig {
-    /// 实例名（如 "BedCode-Pixel8"）
-    pub service_name: String,
-    /// 服务端口
-    pub port: u16,
-    /// TXT 记录键值对
-    pub txt_records: HashMap<String, String>,
-}
-
-/// 发现事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
-pub enum DiscoveryEvent {
-    /// 发现新服务（尚未解析）
-    ServiceFound { instance_name: String },
-    /// 服务解析完成（含完整信息）
-    ServiceResolved(DiscoveredService),
-    /// 服务消失
-    ServiceRemoved { instance_name: String },
-}

@@ -20,12 +20,14 @@
 //!   指向本 SDK 的 `wasm` 模块（`$crate::wasm`），导出函数内的类型引用
 //!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
-use crate::events::{InputSubmittedEvent, ProcessDoneEvent, SessionLifecycleEvent};
+use crate::events::ProcessDoneEvent;
 use crate::types::PluginManifest;
 use crate::BusMessage;
 
 wit_bindgen::generate!({
-    path: "wit/bedcode.wit",
+    // 票 03：端 `wit/` 是生成物目录（core.wit + cap-*.wit + bedcode.wit 同 package
+    // 拼装），path 指目录让 wit-bindgen 以 push_dir 加载合成 package。
+    path: "wit",
     world: "plugin",
     pub_export_macro: true,
     default_bindings_module: "$crate::wasm",
@@ -53,15 +55,8 @@ pub trait WasmPlugin: Send + Sync + 'static {
     /// `args` 为类型化 JSON（宏已从 ABI 字符串解析，解析失败时为 `Value::Null`）
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 
-    /// 终端输入处理（可选，默认不做修改）
-    fn on_terminal_input(_session_id: &str, _text: &str) -> Option<String> {
-        None
-    }
-
-    /// 终端输出处理（可选，默认不做修改）
-    fn on_terminal_output(_session_id: &str, _data: &str) -> Option<String> {
-        None
-    }
+    // v27（票 10 删除的 `on_terminal_input` / `on_terminal_output`）：
+    // `terminal-hooks` interface 退役，宿主不再调用这两条修饰钩子。
 
     /// 应用启动完成回调（可选）
     ///
@@ -86,23 +81,76 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
-    /// 接收会话生命周期事件（可选，默认忽略）
+    /// 接收总线二进制消息（v11，可选，默认忽略）
     ///
-    /// 由宿主 SessionManager 直接分发，不走消息总线。
-    /// 事件为类型化枚举（宏已从 JSON 载荷解析）
-    fn on_session_lifecycle(_event: &SessionLifecycleEvent) -> anyhow::Result<()> {
+    /// 订阅方须以 `host-bus.subscribe-binary` 声明二进制格式偏好，
+    /// 宿主才把 `publish-binary` 载荷投递到本回调；否则按格式不匹配拒绝。
+    /// `msg.payload` 为 Null、`msg.payload_binary` 携带原始字节
+    /// （零 JSON 编解码，可传非 UTF-8 与大载荷）
+    fn on_message_binary(_msg: &BusMessage) -> anyhow::Result<()> {
         Ok(())
     }
 
-    /// 接收提交输入行事件（可选，默认忽略）
-    ///
-    /// 由宿主 SessionManager 异步分发（需先调用 `session_input_register()`
-    /// 注册并获得 `terminal:observe` 授权），不走消息总线。
-    /// 纯观察通知：回调出错不影响输入本身。
-    /// 事件为类型化结构体（宏已从 JSON 载荷解析）
-    fn on_input_submitted(_event: &InputSubmittedEvent) -> anyhow::Result<()> {
+    // ==================== 移动词汇回调（v38 events 并集，可选，默认忽略） ====================
+    //
+    // 并集理由：双端共享 wasm 产物按桌面 world 构建，必须同时导出移动宿主要按名
+    // 调用的回调（`on-bus-message` / `on-auth-success` / `on-disconnect` /
+    // `on-session-created` / `on-session-stopped`）——规格
+    // `.scratch/2026-10-13-file-transfer-single-wasm/spec.md`。桌面宿主的 dispatcher
+    // 只调 `on-message` / `on-process-done`，这 5 个方法对桌面原生插件是不可见的
+    // 死代码面，故给默认空实现；共享产物（file-transfer）覆写它们并把内部逻辑
+    // 与 `on-message` 汇流。
+
+    /// 移动词汇总线消息回调（无 sender 字段；共享产物覆写，与 `on-message` 汇流）
+    fn on_bus_message(_msg: &BusMessage) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// 移动词汇：WS 认证成功回调（共享产物按平台分支消费）
+    fn on_auth_success() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：WS 断开回调（reason 为人类可读原因）
+    fn on_disconnect(_reason: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：会话创建回调
+    fn on_session_created(_session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 移动词汇：会话停止回调
+    fn on_session_stopped(_session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 接收 WS 客户端域消息帧（v14，可选，默认忽略）
+    ///
+    /// 由宿主 host-websocket 出站连接任务投递（`events-ws` 可选导出，宿主
+    /// 实例化后动态探测）；`kind` = `"text"` | `"binary"`，`payload` 统一字节列
+    /// （text 为 UTF-8 字节，零 JSON 转义）；**同一连接内按到达序投递**（保序）。
+    /// 无返回值（观察型回调）：处理失败经 `host-log` 记录，不中断后续帧投递。
+    /// 状态事件请另行在 activate 期订阅 `ws:open/error/close.<owner>`（host-bus）。
+    fn on_ws_message(_handle: &str, _kind: &str, _payload: &[u8]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 接收 WS 服务端域（插件端点）对端消息帧（v14，可选，默认忽略）
+    ///
+    /// 语义同 [`WasmPlugin::on_ws_message`]，标识为端点句柄 + 对端 client-id。
+    fn on_ws_client_message(
+        _endpoint_id: &str,
+        _client_id: &str,
+        _kind: &str,
+        _payload: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    // v27（票 10 删除的 `on_session_lifecycle` / `on_input_submitted`）：
+    // 宿主侧派发源与 WIT 导出同批退役（票 03 + 票 10），SDK 不再留空实现。
 
     /// 接收进程执行完成事件（可选，默认忽略）
     ///
@@ -111,12 +159,42 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_process_done(_event: &ProcessDoneEvent) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// 接收宿主并发任务事件（v20，可选，默认忽略）
+    ///
+    /// 由宿主 host-task 分发（`submit` 登记的任务经 `events-task` 可选导出回调，
+    /// 宿主动态探测；`event_json` 为 camelCase：
+    /// `{ jobId, phase: "started"|"progress"|"completed"|"failed"|"cancelled",
+    ///   doneUnits?, failedUnits?, result? }`——result 仅终态携带，同 execute-batch
+    ///   返回）。无返回值（观察型回调，同 `on_ws_message`）：处理失败经 host-log
+    ///   记录，不影响任务执行与其余投递。
+    ///
+    /// **重入纪律（红线）**：本回调由宿主单线程串行投递（与其他宿主→插件导出
+    /// 调用共用同一把实例锁）；**禁止在 guest 调用栈内同步等待自己任务的事件**
+    /// （回调投递需要该锁，等待即自死锁）——等待语义一律走 `execute-batch`（宿主
+    /// 侧 join，不经 Store）；异步任务的结果消费只能在事件回调 / 后续空闲调用里
+    /// 做。回调内再 `submit` 允许（新调用、新拿锁）但受宿主每插件在册任务配额
+    /// 约束，避免「回调风暴」模式。
+    fn on_task_event(_event_json: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 认证策略导出实现（v17，可选，默认**拒绝**）
+    ///
+    /// `auth-policy` 能力导出（`verify-device-token`，票 12 C3）：宿主 server
+    /// 中间件验签后取认证中心策略（claims 结构/时效 + 信任撤销检查）。默认拒绝
+    /// ——非认证中心插件不提供策略（宿主动态探测命中但不消费）；认证中心
+    /// （`com.bedcode.terminal-session`）覆盖为真实策略。入参 = 宿主已验签通过的 JWT
+    /// token；返回 claims JSON（放行）或错误（拒绝原因）。
+    fn verify_device_token_policy(_token: &str) -> Result<String, String> {
+        Err("auth-policy not provided by this plugin".to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginKind, PluginType};
 
     /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
     struct TestWasmPlugin;
@@ -129,16 +207,9 @@ mod tests {
                 id: Self::ID.to_string(),
                 name: "Test Wasm".to_string(),
                 version: "0.1.0".to_string(),
-                description: String::new(),
-                author: String::new(),
-                main: String::new(),
-                sandbox: "inline".to_string(),
-                permissions: vec![],
-                contributes: PluginContributes::default(),
                 plugin_type: PluginType::Rust,
-                rust_library: String::new(),
-                api: vec![],
-                icon: None,
+                // 余下字段取 Default，SDK 追加可选字段时不必回来补格子（票 14）
+                ..Default::default()
             }
         }
 
@@ -156,41 +227,54 @@ mod tests {
     }
 
     #[test]
-    fn test_default_terminal_hooks_are_pass_through() {
-        // 默认行为 = 不修改管道（None），宿主按原样放行
-        assert_eq!(TestWasmPlugin::on_terminal_input("s1", "ls"), None);
-        assert_eq!(TestWasmPlugin::on_terminal_output("s1", "out"), None);
-    }
-
-    #[test]
     fn test_default_lifecycle_and_observer_hooks_succeed() {
-        // 未覆盖的启动/关闭/总线/生命周期/输入观察回调默认成功，不干扰宿主流程
+        // 未覆盖的启动/关闭/总线回调默认成功，不干扰宿主流程。
+        // v27：终端钩子与两个会话观察回调已随 WIT 面退役，不再有对应默认实现可断言。
         assert!(TestWasmPlugin::on_startup().is_ok());
         assert!(TestWasmPlugin::on_shutdown().is_ok());
         let msg = BusMessage {
             topic: "t".into(),
             sender: "s".into(),
             payload: serde_json::Value::Null,
+            payload_binary: None,
             timestamp: 0,
         };
         assert!(TestWasmPlugin::on_message(&msg).is_ok());
-        let lifecycle = SessionLifecycleEvent::Stopped {
-            session_id: "s1".into(),
-            source_device: None,
-            resource_dir: String::new(),
-        };
-        assert!(TestWasmPlugin::on_session_lifecycle(&lifecycle).is_ok());
-        let input = InputSubmittedEvent { session_id: "s1".into(), text: "x".into() };
-        assert!(TestWasmPlugin::on_input_submitted(&input).is_ok());
     }
 }
 
 
 /// 生成组件 world（`bedcode:plugin`）的全部导出实现
 ///
-/// 展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现（command / lifecycle /
-/// events / terminal-hooks / manifest / abi）并调用 `export!`
+/// 展开为 wit-bindgen 生成的 4 组 `Guest` trait 实现（command / lifecycle /
+/// events / manifest / abi）并调用 `export!`
 /// 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl 注释）。
+///
+/// v27：`terminal-hooks` 组已随 interface 删除（票 10）。
+/// v38：`events` 组扩为**七函数并集**（桌面 on-message / on-process-done + 移动
+/// on-bus-message / on-auth-success / on-disconnect / on-session-created /
+/// on-session-stopped）——双端共享产物按桌面 world 构建、同时满足两端宿主的按名
+/// 派发；桌面宿主只调前两个，后五个对桌面原生插件是默认空实现。
+///
+/// # 失败一律记 `warn`、不记 `error`（AGENTS §8 日志红线 ③）
+///
+/// 宏内 15 处失败路径（`activate` / `deactivate` / `on_startup` / `on_shutdown` /
+/// `on_message` / `on_message_binary` / `on_process_done` / `on_bus_message` /
+/// `on_auth_success` / `on_disconnect` / `on_session_created` /
+/// `on_session_stopped` / `on_ws_message` /
+/// `on_ws_client_message` / `on_task_event`）**全部**用 `log_warn` 而非 `log_error`。
+///
+/// 依据：AGENTS.md §8「guest 自报的可处理错误不升 `error!`」。这些 `Err` 都是**插件
+/// 自己报告的失败**（双层 Result 语义的内层），不是宿主侧的证据——真正的宿主故障
+/// （trap、Store 中毒、fuel 耗尽）由宿主运行时自己以 `error!` 记录并计数。把 guest
+/// 自报失败也打 error 会让「error 级」从「影响功能的宿主故障」退化成「插件返回了个 Err」，
+/// 告警因此失真。
+///
+/// 历史上这里是 `log_error`：该锁
+/// （`engine_limits::test_component_guest_self_reported_failure_no_host_error`）一直只跑
+/// 手写 wit-bindgen 夹具（直接返回 `Err(String)`，不经本宏），故这条实现与红线不符的
+/// 状态一直未被检验到。夹具合并到 SDK 绑定形态后（`packages/plugin-sdk-fixtures`）
+/// 首次照到并修正。
 ///
 /// # 用法
 /// ```ignore
@@ -203,6 +287,10 @@ mod tests {
 #[macro_export]
 macro_rules! wasm_entry {
     ($plugin_type:ident) => {
+
+/// 展开后即 `wasm_entry!` 全量导出实现（`wasm_entry_with_abi!` 已随整数 ABI 退役：
+/// 契约版本搬上 wire 后，共享产物不再需要自报协商下界——双端包版本对齐由
+/// `wit_package_version_lock.rs` + file-transfer 的 `wiring_lock.rs` 断言，见 ADR 0051 D3）。
         // ==================== command（原 __bedcode_invoke_command） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::command::Guest for $plugin_type {
@@ -242,7 +330,7 @@ macro_rules! wasm_entry {
                         Ok(())
                     }
                     Err(e) => {
-                        $crate::host::HostLog::log_error(&host, &format!("activate failed: {}", e));
+                        $crate::host::HostLog::log_warn(&host, &format!("activate failed: {}", e));
                         Err(e.to_string())
                     }
                 }
@@ -253,7 +341,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("deactivate failed: {}", e),
                         );
@@ -270,7 +358,7 @@ macro_rules! wasm_entry {
                         Ok(())
                     }
                     Err(e) => {
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_startup failed: {}", e),
                         );
@@ -284,7 +372,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_shutdown failed: {}", e),
                         );
@@ -294,7 +382,11 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== events（原 __bedcode_on_message/on_session_lifecycle/on_input_submitted） ====================
+        // ==================== events（原 __bedcode_on_message + on_process_done） ====================
+        //
+        // v27：`on_session_lifecycle` / `on_input_submitted` 两个导出已随派发源退役
+        // （票 03 删宿主注册表与派发点，票 10 删 WIT 函数）。会话生命周期事实由插件
+        // 自驱、跨插件事件走 `host-events` / `host-bus`。
 
         impl $crate::wasm::exports::bedcode::plugin::events::Guest for $plugin_type {
             fn on_message(topic: String, sender: String, payload: String) -> Result<(), String> {
@@ -305,49 +397,16 @@ macro_rules! wasm_entry {
                     topic,
                     sender,
                     payload,
+                    payload_binary: None,
                     timestamp: 0,
                 };
                 match <$plugin_type as $crate::wasm::WasmPlugin>::on_message(&msg) {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_message failed: {}", e),
-                        );
-                        Err(e.to_string())
-                    }
-                }
-            }
-
-            fn on_session_lifecycle(payload: String) -> Result<(), String> {
-                // JSON 字符串 → 类型化 SessionLifecycleEvent（解析失败视为协议错误）
-                let event: $crate::events::SessionLifecycleEvent = serde_json::from_str(&payload)
-                    .map_err(|e| format!("on_session_lifecycle: invalid event payload: {}", e))?;
-                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_lifecycle(&event) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
-                            &host,
-                            &format!("on_session_lifecycle failed: {}", e),
-                        );
-                        Err(e.to_string())
-                    }
-                }
-            }
-
-            fn on_input_submitted(payload: String) -> Result<(), String> {
-                // JSON 字符串 → 类型化 InputSubmittedEvent（解析失败视为协议错误）
-                let event: $crate::events::InputSubmittedEvent = serde_json::from_str(&payload)
-                    .map_err(|e| format!("on_input_submitted: invalid event payload: {}", e))?;
-                match <$plugin_type as $crate::wasm::WasmPlugin>::on_input_submitted(&event) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
-                            &host,
-                            &format!("on_input_submitted failed: {}", e),
                         );
                         Err(e.to_string())
                     }
@@ -362,7 +421,7 @@ macro_rules! wasm_entry {
                     Ok(()) => Ok(()),
                     Err(e) => {
                         let host = $crate::wasm_host::WasmHost;
-                        $crate::host::HostLog::log_error(
+                        $crate::host::HostLog::log_warn(
                             &host,
                             &format!("on_process_done failed: {}", e),
                         );
@@ -370,19 +429,120 @@ macro_rules! wasm_entry {
                     }
                 }
             }
-        }
 
-        // ==================== terminal-hooks（原 __bedcode_on_terminal_input/output） ====================
+            // ==================== 移动词汇 5 导出（v38 events 并集） ====================
+            //
+            // 桌面宿主不调用这 5 个导出（它的 dispatcher 只按名调 on-message /
+            // on-process-done）；它们的存在是为双端共享产物（file-transfer 单产物）
+            // 同时满足移动宿主的按名派发。对桌面原生插件是默认空实现。
 
-        impl $crate::wasm::exports::bedcode::plugin::terminal_hooks::Guest for $plugin_type {
-            fn on_terminal_input(_session_id: String, text: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_input(&_session_id, &text)
+            fn on_bus_message(topic: String, payload: String) -> Result<(), String> {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+                // 移动词汇无 sender 字段；BusMessage.sender 填空串（共享产物的
+                // on_bus_message 实现不消费 sender）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender: String::new(),
+                    payload,
+                    payload_binary: None,
+                    timestamp: 0,
+                };
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_bus_message(&msg) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_bus_message failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
 
-            fn on_terminal_output(_session_id: String, data: String) -> Option<String> {
-                <$plugin_type as $crate::wasm::WasmPlugin>::on_terminal_output(&_session_id, &data)
+            fn on_auth_success() -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_auth_success() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_auth_success failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_disconnect(reason: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_disconnect(&reason) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_disconnect failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_session_created(session_id: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_created(&session_id) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_session_created failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
+            }
+
+            fn on_session_stopped(session_id: String) -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_session_stopped(&session_id) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_warn(
+                            &host,
+                            &format!("on_session_stopped failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
         }
+
+        // ==================== events-binary（v11，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_binary::exports::bedcode::plugin::events_binary::Guest for $plugin_type {
+            fn on_message_binary(topic: String, sender: String, payload: Vec<u8>) {
+                // 字节列 → 类型化 BusMessage（payload 为 Null，payload_binary 携带原始字节）；
+                // 无返回值：处理失败经 host-log 记录（观察型回调，语义同 terminal-hooks）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender,
+                    payload: serde_json::Value::Null,
+                    payload_binary: Some(payload),
+                    timestamp: 0,
+                };
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_message_binary(&msg) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_warn(
+                        &host,
+                        &format!("on_message_binary failed: {}", e),
+                    );
+                }
+            }
+        }
+
+        // v27：`terminal-hooks` interface 已从 WIT world 删除（票 03 起逐帧输入修饰链
+        // 与终端输出修饰链都不再由宿主调用），故不再生成该导出实现。
 
         // ==================== manifest（原 __bedcode_manifest） ====================
 
@@ -393,17 +553,64 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== abi（原 __bedcode_abi_version + form 形态字段） ====================
+        // ==================== abi-form（产物形态声明；与版本协商正交，ADR 0051 D2） ====================
 
-        impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION` 完全一致
-            fn version() -> u32 {
-                $crate::abi::ABI_VERSION as u32
-            }
-
+        impl $crate::wasm::exports::bedcode::plugin::abi_form::Guest for $plugin_type {
             /// 产物形态：组件（Component Model），宿主按 `form()==1` 识别
             fn form() -> u32 {
-                $crate::abi::FORM_COMPONENT as u32
+                $crate::form::FORM_COMPONENT as u32
+            }
+        }
+
+        // ==================== events-ws（v14，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_ws::exports::bedcode::plugin::events_ws::Guest for $plugin_type {
+            /// 客户端域消息帧（handle = `wsc-<uuid>`）
+            fn on_message(handle: String, kind: String, payload: Vec<u8>) {
+                // 无返回值（观察型回调）：处理失败经 host-log 记录，宿主不断开连接
+                if let Err(e) =
+                    <$plugin_type as $crate::wasm::WasmPlugin>::on_ws_message(&handle, &kind, &payload)
+                {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_warn(&host, &format!("on_ws_message failed: {}", e));
+                }
+            }
+
+            /// 服务端域消息帧（endpoint-id = `wse-<uuid>`，client-id 为对端连接 id）
+            fn on_client_message(endpoint_id: String, client_id: String, kind: String, payload: Vec<u8>) {
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_ws_client_message(
+                    &endpoint_id,
+                    &client_id,
+                    &kind,
+                    &payload,
+                ) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_warn(&host, &format!("on_ws_client_message failed: {}", e));
+                }
+            }
+        }
+
+        // ==================== auth-policy（v17，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_auth_policy::exports::bedcode::plugin::auth_policy::Guest for $plugin_type {
+            /// 认证策略裁决：宿主已验签 → 取插件策略（默认拒绝——非认证中心
+            /// 插件不提供策略；宿主动态探测命中但不消费）
+            fn verify_device_token(token: String) -> Result<String, String> {
+                <$plugin_type as $crate::wasm::WasmPlugin>::verify_device_token_policy(&token)
+            }
+        }
+
+        // ==================== events-task（v20，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_task::exports::bedcode::plugin::events_task::Guest for $plugin_type {
+            /// 宿主并发任务进度/终态回调（event-json 为 camelCase，见
+            /// [`WasmPlugin::on_task_event`]）：无返回值（观察型回调）；处理失败经
+            /// host-log 记录，宿主仅 trap 时 error! 并计数，不影响任务执行与其余投递
+            fn on_task_event(event_json: String) {
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_task_event(&event_json) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_warn(&host, &format!("on_task_event failed: {}", e));
+                }
             }
         }
 
@@ -413,5 +620,13 @@ macro_rules! wasm_entry {
         // 宏展开处 `$crate` 为插件依赖的 SDK：绑定类型路径经 lib.rs 的
         // `pub use wasm::bedcode` re-export 定位（generate! 的 default_bindings_module）
         $crate::wasm::export!($plugin_type);
+        // v11：events-binary 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_binary::export!($plugin_type);
+        // v14：events-ws 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_ws::export!($plugin_type);
+        // v17：auth-policy 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_auth_policy::export!($plugin_type);
+        // v20：events-task 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_task::export!($plugin_type);
     };
 }

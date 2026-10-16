@@ -110,7 +110,9 @@ describe('SplashLoading Component', () => {
 
     const overlay = document.querySelector('.splash-root')!
     expect(overlay.querySelector('.splash-footer')?.textContent).toContain('v9.9.9')
-    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('LAN remote terminal')
+    // 品牌名回退 BedCode 后，footer 定位语保持「WASM app runtime」
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('bedcode')
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('WASM app runtime')
     wrapper.unmount()
   })
 

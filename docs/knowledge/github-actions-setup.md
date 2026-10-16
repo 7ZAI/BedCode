@@ -185,51 +185,71 @@ base64 -d <<< "$ANDROID_KEY_BASE64" | file -
 
 ## 7. 工作流说明
 
-当前工作流文件：`.github/workflows/release.yml`
+工作流文件共 5 个（`.github/workflows/`）：
 
-### 触发方式
+| 文件 | 触发 | 作用 |
+| --- | --- | --- |
+| `lint.yml` | push / PR（非 `dev`）+ 改动 `bedcode-{desktop,mobile}/**`、`scripts/**`、`eslint.config.js` | 根 `pnpm exec eslint .`（0-error 基线）+ 根 `pnpm run test:run`（`scripts/*.test.mjs`，含「ESLint 锁 glob ↔ 真实目录」结构锁） |
+| `test.yml` | 同上 + `cross-end-tests/**`、`packages/**`、`contracts/**` | `rust-desktop` / `rust-capability-crates`（根 `packages/*/` 各 crate 单测，清单由目录推导）/ `rust-mobile` / `cross-end` / `frontend-desktop` / `frontend-mobile` 六个并列 job |
+| `wit-drift-lock.yml` | 同上 + `packages/**`、`contracts/**`、双端 SDK WIT 目录、`scripts/compose-wit.mjs` | `node scripts/compose-wit.mjs --all --check` 只读漂移锁（与 husky pre-commit 同判据） |
+| `release.yml` | tag `v*` / workflow_dispatch | 发布流水线（见下） |
+| `sdk-publish.yml` | tag `sdk-v*` / workflow_dispatch | SDK 发布（npm + crates.io）：版本一致性校验 + 构建测试 + dry-run + 幂等发布 |
 
-- **推送 `v*` 格式 tag** 自动触发
-- **GitHub Actions 页面手动触发** (workflow_dispatch)
+> `dev` 是本地集成主线：对它的 push 不触发任何 workflow（`branches-ignore: dev`），CI 在合并到
+> `master` / `uat` 时接管。根 `packages/**`、`contracts/**` 只在 `test.yml` / `wit-drift-lock.yml`
+> 的 paths 里——只改机制内核 / 能力域 crate 或契约版本真源的 PR 也必须有门禁。
+>
+> `frontend-desktop` / `frontend-mobile` 在 vitest **之前**先构建各自 SDK 的 `dist/`
+> （`packages/plugin-sdk-{desktop,mobile}`）：wasm 应用测试 import SDK 包入口（`main` → `dist/index.js`），
+> 而 `dist/` 不入库——不先构建就只有 CI 会红（本地因遗留 dist 在场而假绿）。同理，
+> `package-sdks` 需先装 mobile SDK dev-shell 的依赖（独立 workspace），否则其单测报找不到 `vue-i18n`。
+>
+> 编 tauri 宿主（含 `cross-end-tests`）的 job 都先跑
+> `scripts/refresh-tauri-plugin-permissions.sh <app 目录>`：插件权限清单经 `DEP_*`／build script 产物
+> 交给宿主 `tauri-build`，而 rust-cache 恢复后插件 build script 可能是 fresh（不重跑）、
+> `registry/src` 又是重新解包的——不刷新就会报「Permission `wdio:default` not found」（Windows）
+> 或「failed to read plugin permissions ... `disable.toml`」（移动）。脚本头部有完整成因。
 
-### 构建流程
+### release.yml 的 job 图
+
+平台构建与产物打包**全部并行**（各自 `needs: prepare-release`），不是串行：
 
 ```
-build-windows (windows-latest)
-    │
-    │  ~10-15 分钟
-    │
-    ▼
-build-android (ubuntu-latest, needs: build-windows)
-    │
-    │  ~15-25 分钟
-    │
-    ▼
-Draft Release (包含 Windows 安装包 + Android APK)
+prepare-release（提取版本 + 生成双语 changelog）
+   ├─ build-windows   (windows-latest)  -> 签名 NSIS + latest.json 记录
+   ├─ build-linux     (ubuntu-latest)   -> 签名 deb
+   ├─ build-android   (ubuntu-latest)   -> 签名 APK
+   ├─ package-plugins (ubuntu-latest)   -> dist/plugin-packages/{desktop,mobile}/<id>-<target>.zip
+   └─ package-sdks    (ubuntu-latest)   -> dist/sdk-packages/{desktop,mobile}/*
+            ▼
+   finalize-release（同步 release body + 校验 latest.json 已上传）
+            ▼
+   publish-release（仅 tag 在 master 祖先上：draft -> 正式）
 ```
+
+**sccache 是硬前置**：根 `.cargo/config.toml` 强制 `rustc-wrapper = sccache`，任何跑 cargo 的 job 都必须先装
+（`mozilla-actions/sccache-action@v0.0.11`）——漏装 = cargo 直接失败，不是降速。
+
+**桌面插件构建链的工具链（易漏配）**：桌面插件不是单一 target——`agent-hub` / `ai-chatbox` /
+`terminal-session` 是 `wasm32-wasip3`（构建脚本注入 `RUSTUP_TOOLCHAIN=nightly-2026-09-16`，真源
+`scripts/plugin-wasm-config.mjs` + `scripts/wasip3-toolchain.sh`），`file-transfer` 是
+`wasm32-unknown-unknown` + 仓库级组件化（`packages/bedcode-componentize`）。因此**所有会跑
+`pnpm run plugins:build` 的 job**（`test.yml` 的 `rust-desktop` / `cross-end`，`release.yml` 的
+`build-windows` / `build-linux` / `package-plugins`）都必须装：stable 的 `wasm32-unknown-unknown`
+（+ `wasm32-wasip2`，wasm-core 的 WASI preopen 夹具需要）与 pinned nightly 的 `wasm32-wasip3`。
 
 ### 构建步骤概览
 
-**Windows 构建：**
-1. Checkout 代码
-2. 安装 Node.js LTS
-3. 安装 Rust stable
-4. Rust 编译缓存
-5. 导入 Windows 签名证书（如已配置）
-6. 安装前端依赖 (pnpm install)
-7. Tauri 构建并创建 Draft Release
+**Windows / Linux（桌面端）**：Checkout -> pnpm/Node -> Rust stable（`wasm32-unknown-unknown,
+wasm32-wasip2`）-> pinned nightly `wasm32-wasip3` -> sccache -> rust-cache ->（Windows 导入签名证书）
+-> `pnpm install` -> 构建桌面 SDK dist -> `pnpm run plugins:build` -> 校验
+`createUpdaterArtifacts` 与签名密钥 -> tauri-action 构建并写入 draft release。
 
-**Android 构建：**
-1. Checkout 代码
-2. 安装 Node.js LTS
-3. 安装 Rust stable (target: aarch64-linux-android)
-4. Rust 编译缓存
-5. 安装 Java 17
-6. 安装 Android SDK + NDK
-7. 配置 Android 签名 (从 Secrets 生成 key.properties)
-8. 安装前端依赖 (pnpm install)
-9. 构建 Android APK
-10. 上传 APK 到 Release
+**Android（移动端）**：Checkout -> pnpm/Node -> Rust stable（`aarch64-linux-android,
+wasm32-unknown-unknown, wasm32-wasip2`）-> sccache -> rust-cache -> Java 17 -> Android NDK -> 签名
+（`src-tauri/gen/android/key.properties`）-> `pnpm install` -> 构建移动 SDK dist -> 各移动插件依赖
+（清单由 `wasm-apps/*/` 目录推导，不再手写）-> `tauri android build --apk -t aarch64` -> 上传 APK 到
+draft release。
 
 ---
 
@@ -319,6 +339,15 @@ gh run watch <run-id> -R 7ZAI/BedCode
 ### 构建超时
 
 首次构建无 Rust 缓存，时间较长属正常。后续构建会利用 `swatinem/rust-cache` 加速。
+
+> **sccache（2026-10-05 引入）**：仓库根 `.cargo/config.toml` 强制 `rustc-wrapper = "sccache"`，
+> 因此**所有跑 cargo 的 job 必须安装 sccache**（test.yml 的 rust-desktop/rust-mobile/cross-end、
+> release.yml 的 build-windows/build-android/build-linux/package-plugins/package-sdks、
+> sdk-publish.yml 的 verify/publish-crates 已用 `mozilla-actions/sccache-action@v0.0.11`，
+> 漏装 = cargo 直接失败）。CI 不启用 sccache 的 GHA cache 后端（不设 `SCCACHE_GHA_ENABLED`）：
+> 跨 run 缓存仍由 `swatinem/rust-cache` 负责，sccache 只做 job 内跨 crate 命中（server-libs /
+> wasm-apps 循环共享依赖），job 级 `SCCACHE_CACHE_SIZE=2GiB`（根 config `[env] force=false`
+> 让外部值优先于 20GiB 默认）。
 
 ### 忘记 keystore 密码
 

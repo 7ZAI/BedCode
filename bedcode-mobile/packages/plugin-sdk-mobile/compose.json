@@ -1,0 +1,16 @@
+{
+  "package": "bedcode:plugin",
+  "world": "plugin",
+  "core": "packages/bedcode-wasm-core/wit/core.wit",
+  "out": "bedcode-mobile/packages/plugin-sdk-mobile/rust/wit",
+  "caps": {
+    "mobile": "bedcode-mobile/packages/plugin-sdk-mobile/rust/wit-src/cap-mobile.wit",
+    "mdns": "packages/bedcode-discovery-engine/wit/mdns.wit",
+    "peer": "packages/bedcode-server-peer-net/wit/peer.wit",
+    "http": "packages/bedcode-server-http/wit/http.wit",
+    "ws": "packages/bedcode-ws-client-engine/wit/ws.wit",
+    "notify": "packages/bedcode-notify-engine/wit/notify.wit"
+  },
+  "worlds": ["plugin", "plugin-binary"],
+  "abi": { "version": 21 }
+}

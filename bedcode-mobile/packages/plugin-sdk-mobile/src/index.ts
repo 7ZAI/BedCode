@@ -20,16 +20,17 @@ export type {
   RouteContribution,
   TerminalContribution,
   TerminalToolbarItemContribution,
-  ToolboxPageDescriptor,
-  NavTabDescriptor,
-  TerminalToolbarItemDescriptor,
-  SettingsSectionDescriptor,
+  TerminalStreamHandle,
+  MobileHostSessionEvent,
   PluginRouteDescriptor,
+  ShellSurfaceContribution,
+  ShellSlotContribution,
+  ShellCapsuleItem,
+  ShellSettingsEntry,
   PluginDialogAction,
   PluginDialogOptions,
   PluginDialogHandle,
   CommandRegistry,
-  TerminalAPI,
   SessionAPI,
   UIRegistry,
   EventAPI,
@@ -62,6 +63,9 @@ export {
   getPresetTasks,
   getMobileApi,
 } from './runtime'
+
+// SDK 常量（宿主与插件共用单一事实源）
+export { MOCK_SESSION_ID } from './constants'
 
 // 全局弹窗控制器（宿主 / dev-shell 共用，插件经 context.ui.showDialog 操控）
 export {

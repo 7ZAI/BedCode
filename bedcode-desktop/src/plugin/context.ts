@@ -16,7 +16,6 @@ import type {
   StorageAPI,
   HttpAPI,
   I18nAPI,
-  SystemAPI,
   SidebarPanelDescriptor,
   ToolboxPageDescriptor,
   StatusBarItemDescriptor,
@@ -25,6 +24,7 @@ import type {
   TitleBarItemDescriptor,
   PageToolbarItemDescriptor,
   FileHandlerDescriptor,
+  SettingsSectionDescriptor,
   PluginDialogOptions,
   PluginDialogHandle,
 } from './types'
@@ -36,11 +36,39 @@ import { getPluginRegistry } from './registry'
 // 不依赖已发布的 dist 构建（packages 在 vite fs.allow 与 TS include 之外，
 // 经相对路径显式拉入编译）
 import { openGlobalDialog } from '../../packages/plugin-sdk-desktop/src/global-dialog'
+// 终端窗口管理器（票 13）：`session.isTerminalOpen` 是同步查询，需静态导入；
+// 其余三个方法沿用同一单例（模块级 windows Map，与宿主会话页共享状态）
+import { useSessionWindows } from '@/composables/useSessionWindows'
+import { logger } from '@/utils/frontendLogger'
 
-/** 创建插件的 PluginContext */
-export function createPluginContext(info: PluginInfo): PluginContext {
+/**
+ * 会话中心插件 ID（终端窗口视图由该插件贡献；票 05 起宿主不留终端兜底）。
+ * 改名票 06 将集中化宿主侧插件常量，此处与 PluginWindowHostView 缺省目标同值先行。
+ */
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
+
+/** 终端窗口域激活门禁：session 插件停用 / Error 后终端视图不可渲染，宿主不再
+ *  降级代办——`openTerminal` / `closeTerminal` / `isTerminalOpen` 显性报错
+ *  （同配对 / QR 退役后模式：插件未激活时宿主命令面显性报错，不做静默兜底）。 */
+function requireSessionPluginActive(): void {
+  if (!getPluginRegistry().isContributionActive(SESSION_PLUGIN_ID)) {
+    throw new Error(`session plugin ${SESSION_PLUGIN_ID} is not active`)
+  }
+}
+
+/**
+ * 创建插件的 PluginContext
+ *
+ * 异步：先向宿主换取**本插件的前端通道令牌**（审计票 06）——插件面命令的身份由令牌绑定，
+ * 参数里的 plugin_id 只作目标，宿主按令牌反查并校验一致性。令牌保存在本函数闭包里，
+ * 不挂全局、不进 context 的公开字段（同 realm 理论上仍可窥探，见裁决 2 删掉 `isolated`
+ * 的说明：前端不是隔离边界，本票关闭的是「自报 plugin_id」这条通道）。
+ */
+export async function createPluginContext(info: PluginInfo): Promise<PluginContext> {
   const disposables: Disposable[] = []
   const permissions = info.permissions
+  /** 本插件的前端通道令牌（宿主签发；停用即回收，页面加载后重新签发） */
+  const channelToken = await pluginCmds.pluginChannelToken(info.id)
 
   /** 快速失败：检查权限 */
   function requirePermission(apiMethod: string): void {
@@ -71,27 +99,34 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       }
       // 尝试调用 Rust 插件的 command（通过 plugin_invoke 路由）
       // WASM 插件 invoke_command 的约定与 manifest contributes.commands 一致，
-      // 使用全名（如 "auto-task.list-task-history"）；插件侧 `_ =>` 兜底按全名匹配，
+      // 使用全名（如 "session.task.history-list"）；插件侧 `_ =>` 兜底按全名匹配，
       // 不能去前缀，否则落入 Unknown command（registry/命令面板/插件视图均传全名）
       try {
-        return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
+        return await pluginCmds.pluginInvoke(
+          info.id,
+          id,
+          args.length === 1 ? args[0] : args,
+          channelToken,
+        )
       } catch (e) {
-        // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）
-        // 统一掩盖成 "Command not found"，便于定位问题。
-        // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
-        const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
-        const detail = raw ? ` (${raw})` : ''
-        throw new Error(`Command not found: ${id}${detail}`)
+        // 票 04（ADR 0030 收口）：机制错误对象只承载控制流语义（命令未找到），
+        // **不再向 message 拼装底层 error 原文**——遗留字符串形状的兼容已随信封化退役；
+        // 技术详情唯一落点是日志（logger.error 带全量原文）。调用方（如插件前端）如
+        // 展示 e.message 也只会得到机制文案，不会泄漏 WASM trap / 宿主详细错误。
+        logger.error(`[PluginContext] command "${id}" failed:`, e)
+        throw new Error(`Command not found: ${id}`)
       }
     },
   }
 
   // ==================== TerminalAPI ====================
+  //
+  // 票 08：`sendInput` **已退役**——宿主不再有「替插件把输入导流到 PTY」的桥
+  // （`plugin_terminal_send_input` 注销）。插件写自己会话的输入走自家命令通道
+  // （`context.commands.execute('session.input', {sessionId, data})`），提交行重建
+  // 与任务域观察都在插件 WASM 内完成。留下的 `onOutput` / `onInput` 是**观察面**
+  // （宿主终端渲染管道的输出投递与输入修饰链观察点），与写入面分属两侧。
   const terminal: TerminalAPI = {
-    async sendInput(sessionId: string, text: string): Promise<void> {
-      requirePermission('terminal.sendInput')
-      return pluginCmds.pluginTerminalSendInput(info.id, sessionId, text)
-    },
     onOutput(handler: (sessionId: string, data: string) => void): Disposable {
       requirePermission('terminal.onOutput')
       const disposable = pluginEvents.on(info.id, 'terminal:output', handler as any)
@@ -107,22 +142,49 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   }
 
   // ==================== SessionAPI ====================
+  //
+  // 票 08：**数据面（`list` / `get`）已退役**。宿主不再有会话数据命令面
+  // （`list_sessions` / `get_session` 连壳删除）；插件读自己的会话事实走自家
+  // 命令通道（`context.commands.execute('session.list' | 'session.get')`，
+  // 与互调 api 同实现）——比经宿主 context 转一手少一跳，也不再需要
+  // 「宿主替插件读会话」这条通道。
+  //
+  // 留下的是**宿主窗口事实**（终端窗口的开关 / 存在性 / 初始网格）：窗口本体
+  // 与字体测量都在宿主（spec D3），插件无法自行实现，属裁剪线允许的原语。
+  //
+  // 票 09：**`onStatusChange` 已退役**。它监听的是内核状态订阅驱动的 Tauri 事件
+  // （宿主注册名与前端注册名历史上就不一致，从未真正触发），且零生产消费方；
+  // 转接通道随票 09 一并删除。会话状态的前端可见性由插件自己经 `host-events` /
+  // `host-bus` 发布（本插件已是 `SessionCreated` / `SessionStopped` 的发布方）。
   const session: SessionAPI = {
-    async list(): Promise<any[]> {
-      requirePermission('session.list')
-      const { listSessions } = await import('@/composables/useDesktopCommands')
-      return listSessions()
+    async predictTerminalSize(): Promise<{ cols: number; rows: number } | null> {
+      requirePermission('session.predictTerminalSize')
+      // 窗口几何与字体测量都在宿主（终端窗口本体留宿主，spec D3）：字体大小与
+      // 字间距取自宿主设置，widthRatio 取窗口创建规则，插件无需感知宿主设置形状
+      const [{ computeDesktopInitialTerminalSize, TERMINAL_WINDOW_WIDTH_RATIO }, { useSettingsStore }] =
+        await Promise.all([import('@/utils/terminalInitialSize'), import('@/stores/settings')])
+      const settings = useSettingsStore().settings.ui
+      return computeDesktopInitialTerminalSize(settings.terminal_font_size, {
+        widthRatio: TERMINAL_WINDOW_WIDTH_RATIO,
+        letterSpacing: settings.terminal_letter_spacing ?? 0,
+      })
     },
-    async get(sessionId: string): Promise<any> {
-      requirePermission('session.get')
-      const { getSession } = await import('@/composables/useDesktopCommands')
-      return getSession(sessionId)
+    async openTerminal(target: { id: string; name: string }): Promise<boolean> {
+      requirePermission('session.openTerminal')
+      requireSessionPluginActive()
+      return useSessionWindows().openTerminalWindow(target)
     },
-    onStatusChange(handler: (event: any) => void): Disposable {
-      requirePermission('session.onStatusChange')
-      const disposable = pluginEvents.on(info.id, 'session:statusChange', handler)
-      disposables.push(disposable)
-      return disposable
+    async closeTerminal(sessionId: string): Promise<void> {
+      requirePermission('session.closeTerminal')
+      requireSessionPluginActive()
+      await useSessionWindows().closeTerminalWindow(sessionId)
+    },
+    isTerminalOpen(sessionId: string): boolean {
+      requirePermission('session.isTerminalOpen')
+      requireSessionPluginActive()
+      // 同步查询：调用方（插件会话页）在打开窗口前决定是否显示就绪 loading，
+      // 与宿主会话页原行为同口径
+      return useSessionWindows().hasTerminalWindow(sessionId)
     },
   }
 
@@ -139,6 +201,15 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.registerToolboxPage')
       const registry = getPluginRegistry()
       const disposable = registry.registerView(info.id, 'toolbox', page)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerPage(page: SidebarPanelDescriptor): Disposable {
+      requirePermission('ui.registerPage')
+      const registry = getPluginRegistry()
+      // viewType 'page'：全量注册表可见（路由可渲染），sidebar/toolbox 投影不含
+      // （不进侧边栏菜单）——供「页内二级页面 / 深链直达」场景（票 14 收尾）
+      const disposable = registry.registerView(info.id, 'page', page)
       disposables.push(disposable)
       return disposable
     },
@@ -184,6 +255,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
+    registerSettingsSection(section: SettingsSectionDescriptor): Disposable {
+      requirePermission('ui.registerSettingsSection')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerSettingsSection(info.id, section)
+      disposables.push(disposable)
+      return disposable
+    },
     showDialog(options: PluginDialogOptions): PluginDialogHandle {
       requirePermission('ui.showDialog')
       // context 对象在本函数尾部组装；此处惰性引用（showDialog 调用时已初始化），
@@ -207,14 +285,14 @@ export function createPluginContext(info: PluginInfo): PluginContext {
   // ==================== StorageAPI ====================
   const storage: StorageAPI = {
     async get<T = any>(key: string): Promise<T | undefined> {
-      const val = await pluginCmds.pluginStorageGet(info.id, key)
+      const val = await pluginCmds.pluginStorageGet(info.id, key, channelToken)
       return val as T | undefined
     },
     async set(key: string, value: any): Promise<void> {
-      return pluginCmds.pluginStorageSet(info.id, key, value)
+      return pluginCmds.pluginStorageSet(info.id, key, value, channelToken)
     },
     async delete(key: string): Promise<void> {
-      return pluginCmds.pluginStorageDelete(info.id, key)
+      return pluginCmds.pluginStorageDelete(info.id, key, channelToken)
     },
     async flush(): Promise<void> {
       // 存储是即时写入的，flush 为 no-op
@@ -232,25 +310,9 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  // ==================== SystemAPI ====================
-
-  /** 检查 system:open 权限，失败时抛 i18n 文案错误 */
-  function requireSystemOpenPermission(apiMethod: string): void {
-    if (!hasPermissionForApi(permissions, apiMethod)) {
-      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
-      const message = hostI18n
-        ? hostI18n.global.t('desktop.plugin.noSystemOpenPermission', { plugin: info.id })
-        : 'desktop.plugin.noSystemOpenPermission'
-      throw new Error(message)
-    }
-  }
-
-  const system: SystemAPI = {
-    async revealInDir(path: string): Promise<void> {
-      requireSystemOpenPermission('system.revealInDir')
-      return pluginCmds.pluginRevealInDir(info.id, path)
-    },
-  }
+  // 注：原 `system.revealInDir` 插件 API（+ `system:open` 权限）已退役——
+  // 定位能力改为内核原语 `host-platform.reveal-in-dir`（ABI v22），插件在
+  // WASM 侧经 SDK `platform_reveal_in_dir` 调用，不经前端 context。
 
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
@@ -288,7 +350,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     storage,
     http,
     i18n,
-    system,
     _disposables: disposables,
   }
   return context

@@ -13,38 +13,51 @@
 //! 详细错误原因记录在宿主日志（完整错误透传见 ABI v2 计划）。
 
 pub mod app;
+pub mod auth;
 pub mod bus;
 pub mod config;
+pub mod connection;
+pub mod crypto;
 pub mod database;
 pub mod events;
 pub mod fs;
 pub mod http;
 pub mod log;
 pub mod mdns;
+/// 系统通知（共享域契约 `host-notify`；2026-10-13 自 events 迁出）
+pub mod notify;
 pub mod peer;
 pub mod platform;
 pub mod process;
-pub mod session;
+pub mod pty;
 pub mod storage;
-pub mod terminal;
+pub mod task;
 pub mod timer;
+pub mod ws;
 
 pub use app::HostApp;
-pub use bus::HostBus;
+pub use auth::HostAuth;
+pub use bus::{
+    owned_topic, topic_owner, HostBus, API_TOPIC_PREFIX, REPLY_TOPIC_PREFIX, TOPIC_NS_SEP,
+};
 pub use config::{ConfigKey, HostConfig};
-pub use database::{HostDatabase, HostPluginDatabase};
+pub use connection::HostConnection;
+pub use crypto::{CryptoKeypair, HostCrypto};
+pub use database::HostPluginDatabase;
 pub use events::HostEvents;
-pub use fs::HostFs;
+pub use fs::{FsDirEntry, FsNodeType, FsStat, HostFs};
 pub use http::HostHttp;
 pub use log::HostLog;
-pub use mdns::HostMdns;
+pub use mdns::{mdns_event_topic, HostMdns, MDNS_FOUND, MDNS_LOST};
+pub use notify::{HostNotify, NotifyOptions};
 pub use peer::HostPeer;
 pub use platform::HostPlatform;
-pub use process::HostProcess;
-pub use session::HostSession;
+pub use process::{HostProcess, ProcessSyncResult};
+pub use pty::{pty_event_topic, HostPty, PtyRingFetch, PtySpawnConfig, PTY_EXIT, PTY_OUTPUT};
 pub use storage::HostStorage;
-pub use terminal::HostTerminal;
+pub use task::{HostTask, TaskPlan, TaskProgress, TaskUnit};
 pub use timer::HostTimer;
+pub use ws::{ws_event_topic, HostWebsocket, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_ERROR, WS_OPEN};
 
 /// 宿主调用错误
 ///
@@ -150,11 +163,9 @@ mod tests {
 /// blanket impl：任何实现了全部子 trait 的类型自动获得此 trait。
 pub trait HostApi:
     HostStorage
-    + HostDatabase
     + HostPluginDatabase
-    + HostTerminal
-    + HostSession
     + HostEvents
+    + HostNotify
     + HostHttp
     + HostFs
     + HostLog
@@ -166,16 +177,15 @@ pub trait HostApi:
     + HostTimer
     + HostProcess
     + HostApp
+    + HostWebsocket
 {
 }
 
 impl<T> HostApi for T where
     T: HostStorage
-        + HostDatabase
         + HostPluginDatabase
-        + HostTerminal
-        + HostSession
         + HostEvents
+        + HostNotify
         + HostHttp
         + HostFs
         + HostLog
@@ -187,5 +197,6 @@ impl<T> HostApi for T where
         + HostTimer
         + HostProcess
         + HostApp
+        + HostWebsocket
 {
 }

@@ -7,9 +7,9 @@
  *   error / qr_token / public_key / challenge_nonce / signature / auth_method
  *   均为 Option + skip_serializing_if，序列化时省略 → fixture 默认不含）
  * - AuthStage     ← 同文件 `#[serde(rename_all = "snake_case")]` 枚举
- * - AuthCredentials ← 前端 src/composables/model.ts（ws_verify_pairing_code /
- *   ws_authenticate_with_qr / ws_authenticate_with_biometric 的 invoke 返回值，
- *   camelCase，非线协议 DTO，不参与字段清单断言）
+ * - AuthCredentials ← 前端 src/composables/model.ts（票 14 阶段 B：配对 / QR /
+ *   生物挑战编排已迁插件，凭据由前端经宿主窄读命令 ws_get_auth_credentials
+ *   取得——camelCase，非线协议 DTO，不参与字段清单断言）
  * - ConnectionInfo ← 前端 model.ts（ws_connect 返回）
  */
 
