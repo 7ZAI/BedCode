@@ -17,7 +17,7 @@
 #   verify   校验工具链与 target 已就绪，打印版本
 #   fixture  构建 packages/plugin-wasip3-test 并以 \0asm+0d000100 magic 校验
 #            （cdylib 直出 Component，免 componentize 步骤）
-#   health   存量桌面插件（file-transfer/ai-chatbox/agent-hub/session）
+#   health   存量桌面插件（file-transfer/ai-chatbox/agent-hub/terminal-session）
 #            wasip3 target 零代码改动编译基线（产物验证仅编译链；实例化需
 #            async 宿主，见票 02，不得替换 resources/plugins/ 现行产物）
 #
@@ -116,7 +116,7 @@ cmd_health() {
     file-transfer
     ai-chatbox
     agent-hub
-    session
+    terminal-session
   )
   # wasm 应用共享 target 目录：与各应用 scripts/build.js 的 --target-dir 同一落点
   #   路径真源 = scripts/plugin-wasm-config.mjs 的 WASM_TARGET_DIR（两处注释互相指认）
