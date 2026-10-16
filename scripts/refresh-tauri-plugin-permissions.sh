@@ -18,8 +18,13 @@
 # 修法：清掉依赖图里每个 tauri 插件包（`cargo clean -p`）——指纹与产物一并移除，
 # 下次构建强制其 build script 重跑，DEP_* 与生成物同时重建。每包数秒级，依赖树不受影响。
 #
-# 用法：scripts/refresh-tauri-plugin-permissions.sh [--dry-run] <app 目录>
+# 用法：scripts/refresh-tauri-plugin-permissions.sh [--dry-run] [--target <TRIPLE>]... <app 目录>
 #   <app 目录> 含 Cargo.toml 的应用目录（如 bedcode-desktop/src-tauri、cross-end-tests）
+#   --target  额外清理的 cross-target 产物目录（如 Android 的 aarch64-linux-android）
+#
+# 覆盖范围：默认 profile **与 release profile**、以及给定/隐含的每个 target 目录。
+# `cargo clean -p` 不带 profile/target 只清 dev + 默认 target（CI 实测 release job 里全是
+# "Removed 0 files"），release 构建（tauri build / android build）必须显式覆盖。
 #
 # 注意：本脚本只做「清理」，**绝不解析/改写依赖**——所有 cargo 调用带 `--locked`。
 # 不带 `--locked` 时，缓存恢复后 cargo 会重建索引并重解析（CI 实测：`cargo tree` 把
@@ -28,10 +33,14 @@
 set -euo pipefail
 
 dry_run=0
-if [ "${1:-}" = "--dry-run" ]; then
-  dry_run=1
-  shift
-fi
+targets=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) dry_run=1; shift ;;
+    --target) targets+=("$2"); shift 2 ;;
+    *) break ;;
+  esac
+done
 
 app_dir="${1:-}"
 if [ -z "$app_dir" ]; then
@@ -47,25 +56,49 @@ cd "$app_dir"
 # 只读守护：本步骤只允许删产物，不得碰 Cargo.lock（见头部注释）。
 lock_before="$(sha256sum Cargo.lock 2>/dev/null | cut -d' ' -f1 || true)"
 
-# 取**当前平台/feature 实际依赖图**里的插件（不是 lock 全量：平台专属插件不在图里时
-# `cargo clean -p` 会报 "did not match any packages"）。用 name@version 规格避免同名多版本歧义。
+# 插件清单**直接从 Cargo.lock 文本取**（不调 `cargo tree`）：CI 缓存恢复后 cargo 会重建索引
+# 并重解析，`cargo tree` 在该环境可能直接失败——而重定向到 /dev/null 会让脚本静默「跳过刷新」、
+# 权限问题照旧（2026-10-17 CI 实测：日志显示「依赖图里没有 tauri 插件，跳过」而构建仍红）。
+# 用 name@version 规格展开，避免同名多版本歧义；平台专属插件不在当前依赖图时
+# `cargo clean -p` 会报 "did not match any packages"，按 skip 容忍（其余错误必须显性失败）。
 mapfile -t specs < <(
-  cargo tree --locked --prefix none 2>/dev/null |
-    awk '/^tauri-plugin-/ {print $1 "@" substr($2, 2)}' |
-    sort -u
+  awk '
+    /^name = "tauri-plugin-/ { name = $3; gsub(/"/, "", name); pending = 1; next }
+    pending && /^version = / { version = $3; gsub(/"/, "", version); print name "@" version; pending = 0 }
+  ' Cargo.lock | sort -u
 )
 
 if [ "${#specs[@]}" -eq 0 ]; then
-  echo "[refresh-tauri-plugin-permissions] $app_dir 的依赖图里没有 tauri 插件，跳过"
+  echo "[refresh-tauri-plugin-permissions] $app_dir 的 Cargo.lock 里没有 tauri 插件，跳过"
   exit 0
 fi
 
+# profile × target 全展开：dev + release、默认 target + 显式 --target
+profile_flags=("" "--release")
+target_flags=("" )
+for t in "${targets[@]:-}"; do
+  [ -n "$t" ] && target_flags+=("--target $t")
+done
+
 for spec in "${specs[@]}"; do
-  if [ "$dry_run" = "1" ]; then
-    echo "cargo clean --locked -p $spec"
-  else
-    cargo clean --locked -p "$spec"
-  fi
+  for pf in "${profile_flags[@]}"; do
+    for tf in "${target_flags[@]}"; do
+      # shellcheck disable=SC2086  # 这里就是要按空格拆成多个参数
+      if [ "$dry_run" = "1" ]; then
+        echo "cargo clean --locked $pf $tf -p $spec"
+        continue
+      fi
+      if out="$(cargo clean --locked $pf $tf -p "$spec" 2>&1)"; then
+        printf '%s\n' "$out" | grep -E "Removed [1-9]" || true
+      elif grep -q 'did not match any packages' <<<"$out"; then
+        echo "[refresh-tauri-plugin-permissions] $spec 不在本平台/target 依赖图，跳过"
+      else
+        echo "[refresh-tauri-plugin-permissions] ::error::cargo clean $pf $tf -p $spec 失败" >&2
+        printf '%s\n' "$out" >&2
+        exit 1
+      fi
+    done
+  done
 done
 
 if [ "$dry_run" != "1" ]; then

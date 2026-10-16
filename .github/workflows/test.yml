@@ -172,6 +172,17 @@ jobs:
             (cd "bedcode-desktop/wasm-apps/$app/rust" && cargo test)
           done
 
+      # 宿主 wasm 闭环用例（src-tauri/tests/component_e2e.rs / sdk_e2e.rs / host_crypto_e2e.rs 等）
+      # 只读 fixture（`sdk_fixture_artifact_bytes`），产物由 **wasm-core 的 fixture_keeper 用例**
+      # 构建、落点 `bedcode-desktop/target/fixtures/wasm32-wasip3/<profile>/`（跨 job 不共享）。
+      # 不先构建就会报「sdk fixture 'sdk' 产物缺失 … 先跑 wasm-core 测试再跑本二进制」。
+      # 复用本 job 的 target 桶（src-tauri/target）：同一个 wasm-core 包 id，依赖图（wasmtime…）
+      # 直接命中，不重复编一遍。
+      - name: Build wasm fixtures (wasm-core fixture_keeper)
+        env:
+          CARGO_TARGET_DIR: bedcode-desktop/src-tauri/target
+        run: cargo test --manifest-path packages/bedcode-wasm-core/Cargo.toml fixture_keeper
+
       # 同上：本 job 会编宿主桌面 crate（tauri-build 收集插件权限）
       - name: Refresh tauri plugin permissions (rust-cache interaction)
         run: bash scripts/refresh-tauri-plugin-permissions.sh bedcode-desktop/src-tauri
