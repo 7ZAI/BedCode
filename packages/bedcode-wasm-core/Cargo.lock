@@ -598,6 +598,7 @@ dependencies = [
  "async-trait",
  "bedcode-host-api-core",
  "bedcode-link-crypto",
+ "flume",
  "futures-util",
  "local-ip-address",
  "mdns-sd",
