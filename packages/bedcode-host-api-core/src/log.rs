@@ -60,28 +60,32 @@ impl Callsite for PluginLogCallsite {
 /// `Event::dispatch` 要求 Metadata 为 `'static`，而插件 file 是 WASM 线性内存
 /// 中的运行时字符串，首次出现时泄漏一份（Box::leak）转为 `'static` 复用。
 /// 插件日志调用点数量有限（每个插件几十个），缓存有界，不会无限增长。
-static PLUGIN_LOG_META_CACHE: OnceLock<Mutex<HashMap<(String, u32, Level), &'static Metadata<'static>>>> =
-    OnceLock::new();
+static PLUGIN_LOG_META_CACHE: OnceLock<
+    Mutex<HashMap<(String, u32, Level), &'static Metadata<'static>>>,
+> = OnceLock::new();
 
 /// 获取（或缓存构造）指定插件调用点的日志 Metadata
 pub fn plugin_log_metadata(level: Level, file: &str, line: u32) -> &'static Metadata<'static> {
     let cache = PLUGIN_LOG_META_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    cache.entry((file.to_string(), line, level)).or_insert_with(|| {
-        // 泄漏转 'static：同一调用点后续命中缓存，仅首次泄漏
-        let file: &'static str = Box::leak(file.to_string().into_boxed_str());
-        let fields = field::FieldSet::new(&["message"], callsite::Identifier(&PLUGIN_LOG_CALLSITE));
-        Box::leak(Box::new(Metadata::new(
-            LOG_TARGET,
-            LOG_TARGET,
-            level,
-            Some(file),
-            Some(line),
-            Some(LOG_TARGET),
-            fields,
-            Kind::EVENT,
-        )))
-    })
+    cache
+        .entry((file.to_string(), line, level))
+        .or_insert_with(|| {
+            // 泄漏转 'static：同一调用点后续命中缓存，仅首次泄漏
+            let file: &'static str = Box::leak(file.to_string().into_boxed_str());
+            let fields =
+                field::FieldSet::new(&["message"], callsite::Identifier(&PLUGIN_LOG_CALLSITE));
+            Box::leak(Box::new(Metadata::new(
+                LOG_TARGET,
+                LOG_TARGET,
+                level,
+                Some(file),
+                Some(line),
+                Some(LOG_TARGET),
+                fields,
+                Kind::EVENT,
+            )))
+        })
 }
 
 /// 发出 info 日志（组件形态不携带插件调用点，file/line 传 ""/0）
@@ -184,6 +188,16 @@ fn emit_plugin_log(plugin_id: &str, level: Level, file: &str, line: u32, message
     let display_value = field::display(formatted);
     let value_slots = [Some(&display_value as &dyn Value)];
     let values = fieldset.value_set_all(&value_slots);
+    // 必须先过宿主 `enabled()` 判定（等价 tracing 宏路径 `__is_enabled` →
+    // `dispatch.enabled(meta)`）：per-layer filter（FilterFn / Targets /
+    // EnvFilter）的级别与 target 判定只在 `enabled()` pass 里执行，而
+    // `Event::dispatch` 直接派发只走 `event_enabled`（默认 true，仅重查
+    // `enabled()` pass 设置的 FilterState 位）。跳过本门禁会让插件日志
+    // 绕过宿主全部 per-layer filter——实测桌面 error.log 收全级别插件行、
+    // frontend.log 混入插件行、release 下 runtime 级别过滤对插件失效。
+    if !tracing::dispatcher::get_default(|d| d.enabled(meta)) {
+        return;
+    }
     Event::dispatch(meta, &values);
 }
 
@@ -222,7 +236,10 @@ pub mod capture {
     }
 
     /// 从 event 字段集中提取 message 与其余结构化字段
-    struct MessageVisitor(String, Vec<(String, String)>);
+    ///
+    /// 字段可见性为 pub(crate)：tests 模块的宿主门禁回归订阅者
+    /// （`ErrorOnlySubscriber` / `RejectAll`）复用同一提取逻辑
+    pub(crate) struct MessageVisitor(pub String, pub Vec<(String, String)>);
 
     impl Visit for MessageVisitor {
         fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
@@ -237,7 +254,8 @@ pub mod capture {
             if field.name() == "message" {
                 self.0 = format!("{:?}", value);
             } else {
-                self.1.push((field.name().to_string(), format!("{:?}", value)));
+                self.1
+                    .push((field.name().to_string(), format!("{:?}", value)));
             }
         }
 
@@ -287,7 +305,9 @@ pub mod capture {
     /// 以捕获订阅者为默认订阅者执行闭包，返回捕获到的事件列表
     pub fn capture<F: FnOnce()>(f: F) -> Vec<CapturedEvent> {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = CaptureSubscriber { events: events.clone() };
+        let subscriber = CaptureSubscriber {
+            events: events.clone(),
+        };
         with_default(subscriber, f);
         let captured = events.lock().unwrap();
         captured.clone()
@@ -296,6 +316,11 @@ pub mod capture {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tracing::span;
+    use tracing::Subscriber;
+
     use super::capture::*;
     use super::*;
 
@@ -363,7 +388,10 @@ mod tests {
         });
         assert_eq!(captured.len(), 4);
         let levels: Vec<Level> = captured.iter().map(|e| e.level.clone()).collect();
-        assert_eq!(levels, vec![Level::INFO, Level::DEBUG, Level::WARN, Level::ERROR]);
+        assert_eq!(
+            levels,
+            vec![Level::INFO, Level::DEBUG, Level::WARN, Level::ERROR]
+        );
         // 前缀对各级别一致生效
         assert_eq!(captured[3].message, "[plugin:p] e");
     }
@@ -438,5 +466,176 @@ mod tests {
             });
             assert_eq!(captured.len(), 2);
         });
+    }
+
+    // ==================== 宿主 enabled() 门禁（P0 防回归） ====================
+
+    /// 模拟桌面 error 层 per-layer filter 的订阅者：`enabled()` 仅放行
+    /// ERROR（span 全放行，与 `system/logging.rs` error_filter 同判据），
+    /// 并计数 `enabled()` 调用次数；`event()` 记录事件供断言。
+    ///
+    /// 用裸 Subscriber 而非 tracing-subscriber 层：不引入额外依赖
+    /// （本 crate 依赖纪律只允许 serde_json / tracing）；判据与捕获语义
+    /// 足以复现「per-layer filter 在 enabled() 里判定、事件走 event_enabled」
+    /// 的 dispatch 契约。
+    struct ErrorOnlySubscriber {
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+        enabled_calls: Arc<Mutex<usize>>,
+    }
+
+    impl Subscriber for ErrorOnlySubscriber {
+        fn enabled(&self, meta: &Metadata<'_>) -> bool {
+            *self.enabled_calls.lock().unwrap() += 1;
+            if meta.is_span() {
+                true
+            } else {
+                *meta.level() <= Level::ERROR
+            }
+        }
+
+        fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut visitor = MessageVisitor(String::new(), Vec::new());
+            event.record(&mut visitor);
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                file: event.metadata().file(),
+                line: event.metadata().line(),
+                message: visitor.0,
+                fields: visitor.1,
+            });
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    /// 在 ERROR-only 订阅者下运行闭包，返回 (捕获事件, enabled 调用次数)
+    fn capture_with_error_only<F: FnOnce()>(f: F) -> (Vec<CapturedEvent>, usize) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let enabled_calls = Arc::new(Mutex::new(0));
+        let subscriber = ErrorOnlySubscriber {
+            events: events.clone(),
+            enabled_calls: enabled_calls.clone(),
+        };
+        tracing::subscriber::with_default(subscriber, f);
+        let captured = events.lock().unwrap().clone();
+        let calls = *enabled_calls.lock().unwrap();
+        (captured, calls)
+    }
+
+    /// P0 回归：非 ERROR 插件日志被宿主 enabled() 门禁拦下，不产生事件。
+    /// 修复前直接 `Event::dispatch` 绕过 enabled()（事件走 event_enabled
+    /// 默认 true），DEBUG/INFO/WARN 全部泄漏进 error-only 面。
+    #[test]
+    fn emit_plugin_log_respects_host_error_only_enabled() {
+        let (captured, enabled_calls) = capture_with_error_only(|| {
+            emit_plugin_log("p", Level::DEBUG, "virtual.rs", 1, "debug leaked");
+            emit_plugin_log("p", Level::INFO, "virtual.rs", 2, "info leaked");
+            emit_plugin_log("p", Level::WARN, "virtual.rs", 3, "warn leaked");
+            emit_plugin_log("p", Level::ERROR, "virtual.rs", 4, "error kept");
+        });
+        // 门禁必须先经宿主 enabled()：四个级别至少各评估一次（精确值不可断言，
+        // 见 reject_all 测试注释；修复前直接 Event::dispatch 该计数为 0）
+        assert!(
+            enabled_calls >= 4,
+            "enabled() must be consulted per event, got {enabled_calls}"
+        );
+        // 仅 ERROR 通过
+        assert_eq!(
+            captured.len(),
+            1,
+            "only ERROR should reach events, got {:?}",
+            captured.iter().map(|e| e.level.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(captured[0].level, Level::ERROR);
+        assert_eq!(captured[0].message, "[plugin:p] error kept");
+        assert_eq!(captured[0].file, Some("virtual.rs"));
+        assert_eq!(captured[0].line, Some(4));
+    }
+
+    /// P0 回归变体：per-plugin 阈值（warn）与宿主 ERROR-only 门禁叠加——
+    /// 阈值先于门禁（warn 通过阈值但被门禁拦），error 两者都过
+    #[test]
+    fn emit_plugin_log_threshold_then_host_enabled_stack() {
+        // 插件 id 用 envp：避免与 log_level_macros_map_to_levels 的 "p" 在
+        // 并行测试下经进程级 BEDCODE_PLUGIN_LOG 互相污染
+        with_plugin_log_env("envp=warn", || {
+            let (captured, enabled_calls) = capture_with_error_only(|| {
+                emit_plugin_log("envp", Level::DEBUG, "v.rs", 1, "below threshold");
+                emit_plugin_log("envp", Level::WARN, "v.rs", 2, "warn meets threshold");
+                emit_plugin_log("envp", Level::ERROR, "v.rs", 3, "error both pass");
+            });
+            // DEBUG 被 per-plugin 阈值丢弃，不进入 enabled()；精确值不可断言
+            // （with_default 注册期 callsite 重建会额外计数）
+            assert!(
+                enabled_calls >= 2,
+                "threshold-filtered events skip enabled()"
+            );
+            assert_eq!(captured.len(), 1);
+            assert_eq!(captured[0].message, "[plugin:envp] error both pass");
+        });
+    }
+
+    /// P0 回归变体：host enabled() 全拒（模拟 frontend 层 target=frontend
+    /// 不匹配）时零事件，且 enabled() 仍被咨询
+    #[test]
+    fn emit_plugin_log_host_enabled_reject_all_produces_nothing() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let enabled_calls = Arc::new(Mutex::new(0));
+        // enabled() 恒 false：等价 target 不匹配的 Targets filter
+        struct RejectAll {
+            events: Arc<Mutex<Vec<CapturedEvent>>>,
+            enabled_calls: Arc<Mutex<usize>>,
+        }
+        impl Subscriber for RejectAll {
+            fn enabled(&self, _meta: &Metadata<'_>) -> bool {
+                *self.enabled_calls.lock().unwrap() += 1;
+                false
+            }
+            fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+            fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+            fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+            fn event(&self, event: &Event<'_>) {
+                let mut visitor = MessageVisitor(String::new(), Vec::new());
+                event.record(&mut visitor);
+                self.events.lock().unwrap().push(CapturedEvent {
+                    level: *event.metadata().level(),
+                    file: event.metadata().file(),
+                    line: event.metadata().line(),
+                    message: visitor.0,
+                    fields: visitor.1,
+                });
+            }
+            fn enter(&self, _span: &span::Id) {}
+            fn exit(&self, _span: &span::Id) {}
+        }
+        let subscriber = RejectAll {
+            events: events.clone(),
+            enabled_calls: enabled_calls.clone(),
+        };
+        tracing::subscriber::with_default(subscriber, || {
+            emit_plugin_log("p", Level::ERROR, "v.rs", 1, "even error rejected");
+        });
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "reject-all enabled() must block all events"
+        );
+        // enabled() 至少被咨询一次（精确值不可断言：with_default 注册会触发
+        // rebuild_callsite_interest，对进程内既有 callsite 重跑 register_callsite）
+        assert!(
+            *enabled_calls.lock().unwrap() >= 1,
+            "enabled() must still be consulted"
+        );
     }
 }
