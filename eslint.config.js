@@ -3,7 +3,8 @@ const pluginVue = require('eslint-plugin-vue')
 const { withVueTs, vueTsConfigs } = require('@vue/eslint-config-typescript')
 const prettier = require('eslint-config-prettier')
 
-// 全局单根配置：同时覆盖 bedcode-desktop 与 bedcode-mobile（含各自 packages/、plugins/）。
+// 全局单根配置：同时覆盖 bedcode-desktop 与 bedcode-mobile（宿主 `src/`、wasm 应用
+// `wasm-apps/*/src/`、端内 `packages/`）。
 // ESLint 9 flat config：被检查文件向上查找本配置，两端共用同一套规则。
 // src-tauri（Rust 后端）与生成物统一忽略；桌面端特例用 files 局部覆盖。
 
@@ -29,7 +30,7 @@ const frontendSourceGlobs = [
   'bedcode-desktop/wasm-apps/*/src/**/*.{ts,tsx,js,mjs,vue}',
   'bedcode-desktop/packages/plugin-sdk-desktop/{src,template,dev-shell}/**/*.{ts,tsx,js,mjs,vue}',
   'bedcode-mobile/src/**/*.{ts,tsx,js,mjs,vue}',
-  'bedcode-mobile/plugins/*/src/**/*.{ts,tsx,js,mjs,vue}',
+  'bedcode-mobile/wasm-apps/*/src/**/*.{ts,tsx,js,mjs,vue}',
   'bedcode-mobile/packages/plugin-sdk-mobile/{src,template,dev-shell}/**/*.{ts,tsx,js,mjs,vue}',
 ]
 

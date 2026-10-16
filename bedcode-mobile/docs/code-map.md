@@ -177,7 +177,7 @@ bedcode-mobile/                       # 移动端项目（Tauri 2 + Vue 3，远�
 
 | 防的是什么 | 所在文件 |
 | --- | --- |
-| 前端零资源访问（源码静态锁 + 运行期 ACL + 引擎级 CSP 三层） | 根 `eslint.config.js`（`bedcode/frontend-no-resource-access`）+ `src-tauri/capabilities/mobile.json` + `src-tauri/tauri.conf.json`（`security.csp`） |
+| 前端零资源访问（源码静态锁 + 运行期 ACL + 引擎级 CSP 三层） | 根 `eslint.config.js`（`bedcode/frontend-no-resource-access`）+ `src-tauri/capabilities/mobile.json` + `src-tauri/tauri.conf.json`（`security.csp`）；锁 glob 本身的一致性（目录改名不得让锁静默失效）由根 `scripts/eslint-lock-globs.test.mjs` 钉住 |
 | 壳层约束 L1–L7（零资源访问 / 不裸 invoke / 平台弹窗 / 无静默 catch / i18n / 无硬编码色 / **壳内自足**） | `src/__tests__/shell/shellConstraintLocks.test.ts` |
 | 壳注册桥与插件域机制（运行面解析 / 设置门类 / 连接事件投影 / 业务设置域） | `src/__tests__/{plugin/pluginContextShell,shell/useShellAppsSurface,shell/shellSettingsScreen,plugin/connectionEvents}.test.ts` + `wasm-apps/bedcode/src/{host,task,app,settings}/__tests__/**` |
 | 旧宿主 UI 退役面不回接（R1–R5 退役路由 / 组件 / 扩展点；含壳内底部系统条 `ShellSystemBar` 退役，R3 新增「不得回到磁盘」正面钉） | `src/__tests__/shell/retiredHostUIRetirementLocks.test.ts` |
