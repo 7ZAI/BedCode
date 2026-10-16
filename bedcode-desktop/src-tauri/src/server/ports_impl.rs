@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use bedcode_server_base::config::NetworkConfig;
 use bedcode_server_base::identity::AuthenticatedIdentity;
 use bedcode_server_base::ports::{
-    AuthCenter, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort, PathsPort,
-    PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort, ServerPorts, SystemInfoPort,
+    AuthCenter, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort, MdnsTypeSubscription, PathsPort, PluginInvoker,
+    PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort, ServerPorts, SystemInfoPort,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -307,11 +307,17 @@ impl ConfigPort for HostConfigPort {
 
 // ==================== MdnsPort ====================
 
-/// peer-net 发现守护接入（`bedcode-discovery-engine` 三函数包装）
+/// peer-net 发现守护接入（`bedcode-discovery-engine` 引擎函数包装）
 ///
 /// **方向倒置已终结**（wasm-core-lib-split 票 03）：改造前三函数取自
 /// `wasm_core::host_api::mdns`——即宿主 server 的端口层依赖 wasm_core 的**插件
 /// 绑定模块**（ADR 0022 裁剪线要消除的方向）。现在直接依赖平台无关引擎 crate。
+///
+/// **浏览面归类型中枢**（ADR 0054 / 票 04）：`subscribe_type` /
+/// `request_type_requery` 同样直转引擎——全进程对该服务类型的 `daemon.browse`
+/// 只由中枢发起（peer-net 的重查不再覆盖插件 browse 的 listener）。两个值形态
+/// （引擎 `MdnsBrowseSubscription` / 端口 `MdnsTypeSubscription`）只在这里转换，
+/// receiver 与退订守卫**整份移交**（`into_parts`），不得分家。
 pub struct HostMdnsPort;
 
 impl MdnsPort for HostMdnsPort {
@@ -325,6 +331,16 @@ impl MdnsPort for HostMdnsPort {
 
     fn stop_host_service(&self, advertise_id: &str) -> std::result::Result<bool, String> {
         bedcode_discovery_engine::engine::stop_host_service(advertise_id)
+    }
+
+    fn subscribe_type(&self, service_type: &str) -> std::result::Result<MdnsTypeSubscription, String> {
+        let subscription = bedcode_discovery_engine::subscribe_type(service_type)?;
+        let (receiver, guard) = subscription.into_parts();
+        Ok(MdnsTypeSubscription::new(receiver, guard))
+    }
+
+    fn request_type_requery(&self, service_type: &str) {
+        bedcode_discovery_engine::request_type_requery(service_type);
     }
 }
 

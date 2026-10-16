@@ -16,6 +16,13 @@
 //! `ServiceDaemon::new()`**——任何新建守护都会打破「单守护」红线
 //! （双守护同绑 5353 互抢多播包）。
 //!
+//! 浏览面另有**第二层**不变量（ADR 0054 / 票 04）：全进程对同一服务类型的
+//! `daemon.browse` / `stop_browse` 只由引擎的**类型中枢**
+//! （`bedcode_discovery_engine::type_hub`）代持，本模块的 `browse` 薄转发经
+//! `engine::browse` 挂中枢订阅（不再直调守护），宿主侧零 `daemon.browse`。中枢的
+//! 泵任务经 `DiscoveryPorts::spawn` 派生，故本域进程级端口必须由宿主开机期装入
+//! （[`register_process_ports`]）——未装即 `subscribe_type` 里 fail-visible panic。
+//!
 //! 行为契约（句柄表 / 属主隔离 / purge / topic 形状）由引擎自身单测覆盖
 //! （`bedcode-discovery-engine` crate 测试），本模块只保薄转发语义断言。
 
@@ -98,6 +105,25 @@ impl StateDiscoveryPorts {
             permitted: false,
         })
     }
+}
+
+/// 进程级端口装配（宿主开机期一次，幂等：`install_ports` 首装胜出；无头探针
+/// 装配插件浏览面时同用——与 `plugin::peer_ports::install` 同款入口）
+///
+/// **为什么需要它**（ADR 0054 / 票 04）：类型中枢的泵任务经
+/// `DiscoveryPorts::spawn` 派生到宿主运行时（中枢模块不假设 tokio 上下文），
+/// 而中枢的进程级出口走 `ports::ports()`；插件浏览面（`mdns_browse` →
+/// `engine::browse`）同样经中枢。移动端**不经**桌面的 host-kit 域装配链
+/// （移动的 `impl Host for WasmPluginState` 是自持 adapter，端口逐次按插件实例传参，
+/// 从不装全局），故必须显式装一次——否则老链路浏览（`mdns/discovery.rs`）、
+/// peer-net 订阅（`peer/ports.rs`）与插件 `host-mdns.browse` 全部在
+/// `subscribe_type` 里 fail-visible panic。
+///
+/// 取 [`StateDiscoveryPorts::minimal`] 形态：中枢只消费 `spawn`（fan-out 直接推给
+/// 订阅者，不经总线；也不经权限门——权限在插件原语入口按实例端口结算）。
+pub fn register_process_ports() {
+    let host_ports: Arc<dyn HostEnginePorts> = Arc::new(crate::plugin::host_ports::HostPorts::new());
+    bedcode_discovery_engine::ports::install_ports(StateDiscoveryPorts::minimal(&host_ports));
 }
 
 /// 宿主运行时任务包装（tauri async_runtime JoinHandle → `DiscoveryTask`）

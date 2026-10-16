@@ -1009,6 +1009,28 @@ async fn start_locked(ctx: Arc<PeerCtx>, data_dir: &Path, device_name: String) -
     // `mdns:found` / `mdns:lost` 桥接与缓存重发通道已退役（D1）——插件发现
     // 改经 host-mdns 自建 browse 收定向事件（file-transfer 一期同迁，D2）
     let mdns_daemon = ctx.ports.mdns.shared_daemon();
+    // 浏览面经**类型中枢**（ADR 0054）：全进程对该服务类型只允许一条
+    // `daemon.browse`，由中枢代持；本处只挂 fan-out 订阅，侦察面零直调 browse
+    // （旧实现每 30s 重查就再 browse 一次，按 mdns-sd 单 listener 槽语义静默
+    // 覆盖插件 browse 的信道——本票修的就是这条链路）。
+    let subscription = ctx
+        .ports
+        .mdns
+        .subscribe_type(bedcode_peer_net::SERVICE_TYPE)
+        .map_err(|e| AppError::Plugin(format!("mdns type subscription failed: {e}")))?;
+    // receiver 与退订守卫**成对**移交：前者进 peer-net 事件循环，后者随
+    // DiscoveryDaemon 存续期持有、stop 时释放（释放即退订）。两者不得分家，
+    // 否则订阅永留中枢表、该类型 browse 永不归零。
+    let (browse_receiver, browse_guard) = subscription.into_parts();
+    // 类型级重查闭包：绑到中枢 `request_type_requery(SERVICE_TYPE)`。peer-net 的
+    // 30s 周期与「探索发现」即时重查都转调它——重发唯一 browse + receiver 换绑 +
+    // 缓存重放广播全员归中枢，peer-net 侧零 daemon 交互（节奏仍留消费方）。
+    let requery_ports = Arc::clone(&ctx.ports.mdns);
+    let mdns_browse = bedcode_peer_net::PeerMdnsBrowse {
+        receiver: browse_receiver,
+        guard: browse_guard,
+        request_requery: Arc::new(move || requery_ports.request_type_requery(bedcode_peer_net::SERVICE_TYPE)),
+    };
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,
@@ -1017,6 +1039,7 @@ async fn start_locked(ctx: Arc<PeerCtx>, data_dir: &Path, device_name: String) -
             capabilities: CAP_FILE_TRANSFER,
         },
         mdns_daemon,
+        mdns_browse,
     )
     .map_err(map_peer_net_error)?;
     // 宿主身份广播登记（owner=host）：节点停机时随 runtime 注销（stop_host_service）
@@ -1442,9 +1465,10 @@ impl bedcode_server_base::ports::BusMessageHandler for DiscoveryRefreshHandler {
     }
 }
 
-/// 处理刷新请求：① 触发即时重查（查询→应答是本环境唯一可靠发现路径）；
-/// ② 当前发现缓存逐条以 `mdns:found` 重发——插件前端激活晚于发现事件时
-/// （引擎启动即发现对端，插件订阅在秒级之后）按钮/首屏仍有完整设备列表
+/// 处理刷新请求：① 触发即时重查（查询→应答是本环境唯一可靠发现路径；经类型中枢
+/// 统一重发该类型唯一 browse + 缓存重放，peer-net 与插件 browse 两路订阅者同时
+/// 收到）；② 存活连接逐个以 `peer:connection` 重发——插件前端激活晚于事件时
+/// （引擎启动即发现对端，插件订阅在秒级之后）连接态首屏即真，设备列表由 ① 喂饱
 ///
 /// **公开入口**（2026-10-10 能力域集中化）：宿主可自持 `peer:discovery-refresh`
 /// 订阅（如移动端——其订阅就绪判据是自身插件管理器而非 `ServerPorts`），
@@ -1476,9 +1500,9 @@ pub async fn request_discovery_refresh(ctx: Arc<PeerCtx>) {
     );
     drop(guard);
     // 设备名映射（连接态重发携带；记录已随 requery 事件流刷入插件定向 browse）
-    // 注意：不再逐条重发 mdns:found（spec v2 D1 缓存重发通道退役）——requery
-    // 触发引擎重新 browse，插件自建 browse 的 receiver 会收到 mdns-sd 缓存
-    // 重放（含新发现），设备列表各端自行收敛
+    // 注意：不再逐条重发 mdns:found（spec v2 D1 缓存重发通道退役）——requery 经
+    // 类型中枢统一执行（重发该类型唯一 browse + 缓存重放），peer-net 与插件 browse
+    // 两路订阅者同时收到重放（含新发现），设备列表各端自行收敛
     let device_names: std::collections::HashMap<String, String> = snapshot
         .iter()
         .map(|record| (record.node_id.as_str().to_string(), record.device_name.clone()))

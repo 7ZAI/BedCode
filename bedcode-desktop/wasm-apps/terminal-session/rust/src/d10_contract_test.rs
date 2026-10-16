@@ -64,8 +64,8 @@ use bedcode_server_base::config::NetworkConfig;
 use bedcode_server_base::identity::AuthenticatedIdentity;
 use bedcode_server_base::ports::{
     AuthCenter, BusMessageHandler, BusPort, ConfigPort, EventSink, MdnsAdvertiserPort, MdnsPort,
-    PathsPort, PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent, ServerLifecyclePort,
-    ServerPorts, SystemInfoPort,
+    MdnsTypeSubscription, PathsPort, PluginInvoker, PowerPort, RuntimePort, ServerLifecycleEvent,
+    ServerLifecyclePort, ServerPorts, SystemInfoPort,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -317,6 +317,15 @@ impl MdnsPort for PilotMdns {
         panic!("PilotMdns must not be used: 本测试无 peer-net 面");
     }
     fn stop_host_service(&self, _advertise_id: &str) -> std::result::Result<bool, String> {
+        panic!("PilotMdns must not be used: 本测试无 peer-net 面");
+    }
+    fn subscribe_type(
+        &self,
+        _service_type: &str,
+    ) -> std::result::Result<MdnsTypeSubscription, String> {
+        panic!("PilotMdns must not be used: 本测试无 peer-net 面");
+    }
+    fn request_type_requery(&self, _service_type: &str) {
         panic!("PilotMdns must not be used: 本测试无 peer-net 面");
     }
 }
