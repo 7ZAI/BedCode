@@ -135,4 +135,45 @@ describe('前端插件通道身份', () => {
       credential: LOADER_SESSION,
     })
   })
+
+  it('C5 冷启动并发取凭证只打一次宿主命令（在途请求共享）', async () => {
+    // 冷缓存路径要新模块实例（本文件 beforeEach 已预热缓存；vi.resetModules 不碰生产代码）
+    vi.resetModules()
+    const fresh = await import('@/plugin/commands')
+    let releaseInvoke: ((credential: string) => void) | null = null
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseInvoke = resolve
+        }),
+    )
+
+    // 两个调用者同时进入（宿主前端实测：`loadAll()` 与授权弹窗挂载补拉）
+    const both = Promise.all([fresh.ensureHostCredential(), fresh.ensureHostCredential()])
+    releaseInvoke?.(LOADER_SESSION)
+    const [first, second] = await both
+
+    expect(first).toBe(LOADER_SESSION)
+    expect(second).toBe(LOADER_SESSION)
+    // 变异对照：去掉在途 Promise 共享 → 两个调用者各自 invoke，后到者会撞上宿主侧
+    // 「首个调用者生效」的第二道闸（session already issued）→ 本断言转红
+    expect(
+      invokeMock.mock.calls.filter(([c]) => c === 'plugin_frontend_loader_session'),
+      '并发调用必须共享同一次宿主命令',
+    ).toHaveLength(1)
+    // 落地后仍走缓存（不得每次调用都重新签发）
+    expect(await fresh.ensureHostCredential()).toBe(LOADER_SESSION)
+    expect(invokeMock.mock.calls.filter(([c]) => c === 'plugin_frontend_loader_session')).toHaveLength(1)
+  })
+
+  it('C5 取凭证失败不缓存：下一次调用重试（一次瞬时失败不得锁死整页）', async () => {
+    vi.resetModules()
+    const fresh = await import('@/plugin/commands')
+    invokeMock.mockRejectedValueOnce(new Error('frontend loader session already issued for this page load'))
+
+    await expect(fresh.ensureHostCredential()).rejects.toThrow('already issued')
+    // 重试路径：宿主侧重置后（或首次撞闸后）仍能拿到凭证
+    expect(await fresh.ensureHostCredential()).toBe(LOADER_SESSION)
+    expect(invokeMock.mock.calls.filter(([c]) => c === 'plugin_frontend_loader_session')).toHaveLength(2)
+  })
 })

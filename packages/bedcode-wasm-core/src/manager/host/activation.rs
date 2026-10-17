@@ -612,6 +612,26 @@ impl PluginHost {
             }
         }
 
+        // 激活完成（含降级）→ 通知前端补加载本插件的前端模块。
+        //
+        // 启动期持久化激活是异步的（构造器不再同步激活，见 `auto_activate_from_persisted_state`
+        // 文档）：前端 `loadAll()` 在页面启动时就查一次状态，会把正在激活的插件当成
+        // `activating` 跳过 → 该插件界面整会话不出现（2026-10-18 实测：agent-hub）。
+        // 这里在状态已定型的时点发一次信号，前端据此补加载（幂等）。
+        // 投递失败只影响“前端何时看到界面”，不改变激活结果，故只 warn 不失败。
+        if let Some(handle) = self.wasm_host_ctx().app_handle() {
+            if let Err(e) = handle.emit(
+                crate::system::constants::PLUGIN_ACTIVATED,
+                serde_json::json!({ "pluginId": plugin_id }),
+            ) {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "插件激活事件投递失败（前端需等下次刷新才能看到该插件界面）"
+                );
+            }
+        }
+
         if persist {
             tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Persisting activation state after activating");
             self.persist_activation_state().await;

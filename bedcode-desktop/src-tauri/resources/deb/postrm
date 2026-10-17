@@ -1,0 +1,19 @@
+#!/bin/sh
+# BedCode deb post-remove：卸载后提示用户数据位置
+#
+# Linux 包管理器（apt/dpkg）卸载**非交互**，且 postrm 以 root 运行、无法可靠
+# 定位 /home 下各用户的目录——因此**不自动删除**用户数据（成熟 Linux 软件惯例：
+# remove 保留数据）。purge 阶段同样只提示（purge 语义清除的是包配置，不越权删
+# /home 用户数据）。
+# 数据完整清除由用户手动执行（提示给出命令）；卸载时「选择 + 默认清理」的交互
+# 语义由 Windows NSIS 安装器承担（卸载确认页复选框，默认勾选删除）。
+
+case "$1" in
+  remove|purge)
+    echo "BedCode 已卸载。用户数据保留在 ~/.local/share/com.bedcode.app"
+    echo "（主库 bedcode.db / 日志 / 插件私有库）。如需完全清除请手动执行："
+    echo "  rm -rf ~/.local/share/com.bedcode.app"
+    ;;
+esac
+
+exit 0

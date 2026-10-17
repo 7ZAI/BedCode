@@ -302,7 +302,22 @@ impl PluginHost {
     }
 
     /// 根据持久化状态自动激活之前已激活的插件
-    pub(crate) async fn auto_activate_from_persisted_state(&self) {
+    /// 根据持久化状态自动激活之前已激活的插件（L3 业务应用）
+    ///
+    /// ## 调用契约（2026-10-18 从 `PluginHost::new` 拆出，ADR 0022 宿主时序归宿主）
+    ///
+    /// **`PluginHost::new` 不再调用本方法**。原因：激活可弹交互式目录授权（最长等
+    /// [`crate::security::fs_auth::PROMPT_TIMEOUT`]），而构造器在宿主 setup 主线程上被
+    /// `block_on` 调用——同步执行会把窗口与前端一起卡到超时，且弹窗在宿主前端就绪前
+    /// 发出必然无人应答（Windows 正式版首启实测 `后端初始化耗时: 32869ms` + 插件启用被拒）。
+    ///
+    /// 调用方（生产）：桌面宿主启动钩子（`bedcode-desktop/.../system/lifecycle.rs`，
+    /// setup 之后、异步、不阻塞 UI）。无头测试夹具需要激活态时显式调用它。
+    ///
+    /// 幂等：重复调用不会重复激活——已 `Activated` 的插件在阶段 1 短路跳过
+    /// （`activate_plugin_inner`）。但每次调用都会重走审批门禁与预授权检查（与首次
+    /// 激活同一口径）：已落账的授权记录命中则静默放行，不会因为重复调用再弹窗。
+    pub async fn auto_activate_from_persisted_state(&self) {
         let activated_map = match self.storage.load_activated_plugins().await {
             Ok(map) => {
                 tracing::info!(

@@ -272,6 +272,7 @@ wasm-apps/<app-id>/rust/**    业务真源（会话 / 传输 / 配对 / 对话�
 | file-transfer 单产物平台分支与移动桩 | `bedcode-mobile/src-tauri/src/plugin/desktop_compat.rs` |
 | 拆分 crate 不得长 `tests/` / dev-dependencies 禁拉 bedcode crate | `src-tauri/tests/capability_crates_unit_tests_only.rs` |
 | 权限词汇三副本漂移 | `packages/bedcode-wasm-core/src/permission.rs` |
+| **前端通道凭证重置时机（只在页面加载 `Started`）+ 构造器不得回接持久化激活 + 启动钩子必须触发它** | `src-tauri/tests/frontend_channel_boot_lock.rs` |
 | 前端零资源访问三层封锁 / 热路径日志 / 空目录残留 | `src-tauri/tests/{capabilities_lock,hot_path_logging_lock,empty_dir_lock}.rs` |
 | 品牌标志几何漂移（旧 W 标志退役面回接：新壳 `shell/` 与旧布局 `components/` 两套品牌位必须同代） | `src/__tests__/shell/brandMark.test.ts` |
 | 前端 ESLint 锁 glob 与真实目录漂移（目录改名 ⇒ 锁静默失效；2026-10-16 实测：移动端 `plugins/` 改名 `wasm-apps/` 后 lint 全绿而锁未挂在任何文件上） | 根 `scripts/eslint-lock-globs.test.mjs`（`lint.yml` 跑根 `pnpm run test:run`） |

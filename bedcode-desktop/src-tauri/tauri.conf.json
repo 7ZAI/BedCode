@@ -1,7 +1,7 @@
 {
   "productName": "BedCode",
   "identifier": "com.bedcode.app",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1420",
@@ -77,7 +77,8 @@
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
-        "installerHooks": "nsis/icon-cache-refresh.nsh"
+        "installerHooks": "nsis/icon-cache-refresh.nsh",
+        "template": "nsis/installer.nsi"
       }
     },
     "linux": {
@@ -92,7 +93,8 @@
         "section": "utils",
         "priority": "optional",
         "desktopTemplate": "resources/deb/bedcode.desktop",
-        "postInstallScript": "resources/deb/postinst"
+        "postInstallScript": "resources/deb/postinst",
+        "postRemoveScript": "resources/deb/postrm"
       }
     }
   },

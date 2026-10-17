@@ -9,6 +9,17 @@ const tauriEvent = vi.hoisted(() => ({
   lastFsAuthHandler: null as ((e: { payload: unknown }) => void) | null,
 }))
 
+/**
+ * 宿主面命令的返回值（用例可改）
+ *
+ * `pendingRequests` = `plugin_fs_auth_pending` 的补拉结果（冷启动补投递用例）；
+ * `pendingFails` = 让补拉失败，验证「补拉挂了不阻断事件路径」。
+ */
+const hostState = vi.hoisted(() => ({
+  pendingRequests: [] as unknown[],
+  pendingFails: false,
+}))
+
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async (_event: string, handler: (e: { payload: unknown }) => void) => {
     tauriEvent.lastFsAuthHandler = handler
@@ -17,7 +28,14 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async () => undefined),
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === 'plugin_frontend_loader_session') return 'loader-session'
+    if (cmd === 'plugin_fs_auth_pending') {
+      if (hostState.pendingFails) throw new Error('invalid frontend loader session credential')
+      return hostState.pendingRequests
+    }
+    return undefined
+  }),
 }))
 
 /** 测试用最小 i18n 实例：仅含 fs 授权弹窗相关 key */
@@ -176,7 +194,7 @@ describe('FsAuthDialog Component', () => {
 
     expect(vi.mocked(await import('@tauri-apps/api/core')).invoke).toHaveBeenCalledWith(
       'plugin_fs_auth_respond',
-      { requestId: 'req-1', decision: 'allow_remember' },
+      { requestId: 'req-1', decision: 'allow_remember', credential: 'loader-session' },
     )
     // 响应后弹窗关闭（Transition 离场在 happy-dom 依赖兜底定时器，轮询等待）
     await vi.waitFor(() => {
@@ -239,7 +257,7 @@ describe('FsAuthDialog Component', () => {
     await clickAllow()
     expect(vi.mocked(await import('@tauri-apps/api/core')).invoke).toHaveBeenCalledWith(
       'plugin_fs_auth_respond',
-      { requestId: 'req-pick-2', decision: 'allow_remember' },
+      { requestId: 'req-pick-2', decision: 'allow_remember', credential: 'loader-session' },
     )
     wrapper.unmount()
   })
@@ -384,6 +402,138 @@ describe('FsAuthDialog 三态应答与档位（票 03）', () => {
     await emitFsAuthRequest()
     await clickAllow()
     expect(await lastDecision()).toBe('allow_remember')
+    wrapper.unmount()
+  })
+})
+
+/** 已发出的 `plugin_fs_auth_respond` 参数（按调用顺序） */
+async function respondArgs(): Promise<Array<Record<string, unknown>>> {
+  const invoke = vi.mocked((await import('@tauri-apps/api/core')).invoke)
+  return invoke.mock.calls
+    .filter((c) => c[0] === 'plugin_fs_auth_respond')
+    .map((c) => (c[1] ?? {}) as Record<string, unknown>)
+}
+
+/**
+ * 冷启动补投递与请求队列（2026-10-18）
+ *
+ * 现场（Windows 正式版首次运行）：启动期插件自动激活就请求目录授权，而宿主前端此时还没
+ * 挂监听——事件丢失、无人应答，30s 超时后按拒绝收敛（插件启用失败）。修复两半：
+ * ① 挂载时经 `plugin_fs_auth_pending` 补拉在等请求；② 多个请求排队逐个应答（单槽会被
+ * 后到的请求覆盖，先到的只能超时）。
+ */
+describe('FsAuthDialog 冷启动补投递与请求队列', () => {
+  beforeEach(async () => {
+    document.body.innerHTML = ''
+    tauriEvent.lastFsAuthHandler = null
+    hostState.pendingRequests = []
+    hostState.pendingFails = false
+    // 调用历史是跨用例共享的 mock：不清会让「respond 只调了一次」这类断言假红
+    vi.mocked((await import('@tauri-apps/api/core')).invoke).mockClear()
+  })
+
+  it('挂载时补拉在等请求并渲染（事件已丢的冷启动路径）', async () => {
+    hostState.pendingRequests = [
+      {
+        requestId: 'pending-1',
+        pluginId: 'com.bedcode.agent-hub',
+        paths: ['/home/u/.codex'],
+        path: '/home/u/.codex',
+        operation: 'read',
+        origin: 'fs',
+        grantScope: 'exact',
+        strategy: 'default',
+      },
+    ]
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    // 补拉必须带宿主面凭证（否则插件前端也能枚举其它应用正要访问的目录）
+    const invoke = vi.mocked((await import('@tauri-apps/api/core')).invoke)
+    expect(invoke.mock.calls.find((c) => c[0] === 'plugin_fs_auth_pending')?.[1]).toEqual({
+      credential: 'loader-session',
+    })
+
+    expect(dialogBody()).toContain('/home/u/.codex')
+    expect(dialogBody()).toContain('com.bedcode.agent-hub')
+    await clickAllow()
+    expect(await respondArgs()).toEqual([
+      { requestId: 'pending-1', decision: 'allow_remember', credential: 'loader-session' },
+    ])
+    wrapper.unmount()
+  })
+
+  it('多个请求排队逐个应答：先到先问，应答后展示下一个', async () => {
+    const wrapper = mountDialog()
+    await emitFsAuthPayload({
+      requestId: 'req-a',
+      pluginId: 'com.bedcode.a',
+      paths: ['/p/a'],
+      operation: 'read',
+    })
+    await emitFsAuthPayload({
+      requestId: 'req-b',
+      pluginId: 'com.bedcode.b',
+      paths: ['/p/b'],
+      operation: 'read',
+    })
+
+    // 单槽实现会在这里被 req-b 覆盖（只看得见 b），req-a 只能等 30s 超时被拒
+    expect(dialogBody()).toContain('/p/a')
+    expect(dialogBody()).not.toContain('/p/b')
+
+    await clickButton('拒绝')
+    expect(dialogBody(), '应答第一个后必须展示第二个').toContain('/p/b')
+
+    await clickButton('拒绝')
+    // Transition 离场在 jsdom/happy-dom 下走兑底定时器：轮询等弹窗消失（与既有用例同手法）
+    await vi.waitFor(() => {
+      expect(document.querySelector('.max-w-sm'), '队列清空后弹窗必须消失').toBeNull()
+    })
+    expect(await respondArgs()).toEqual([
+      { requestId: 'req-a', decision: 'deny', credential: 'loader-session' },
+      { requestId: 'req-b', decision: 'deny', credential: 'loader-session' },
+    ])
+    wrapper.unmount()
+  })
+
+  it('事件与补拉同 requestId 去重：只问一次', async () => {
+    hostState.pendingRequests = [
+      {
+        requestId: 'dup-1',
+        pluginId: 'com.bedcode.dup',
+        paths: ['/p/x'],
+        path: '/p/x',
+        operation: 'read',
+      },
+    ]
+    const wrapper = mountDialog()
+    await flushPromises()
+    // 同一请求又走事件路径到达（挂载瞬间事件恰好在路上）
+    await emitFsAuthPayload({
+      requestId: 'dup-1',
+      pluginId: 'com.bedcode.dup',
+      paths: ['/p/x'],
+      operation: 'read',
+    })
+
+    await clickButton('拒绝')
+    await vi.waitFor(() => {
+      expect(document.querySelector('.max-w-sm'), '同一请求不得再弹第二次').toBeNull()
+    })
+    expect(await respondArgs()).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('补拉失败不阻断事件路径（留痕但不降级成不可用）', async () => {
+    hostState.pendingFails = true
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await emitFsAuthRequest()
+    expect(dialogBody()).toContain('/home/u/.codex')
+    await clickButton('拒绝')
+    expect(await respondArgs()).toHaveLength(1)
     wrapper.unmount()
   })
 })

@@ -55,7 +55,21 @@
           @input="port = Number(($event.target as HTMLInputElement).value)"
         />
       </div>
+
+      <!-- 恢复初始设置：危险操作，弹窗二次确认（只清宿主主库授权/配置，保留应用数据） -->
+      <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+        <div>
+          <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{ t('settings.system.factoryReset') }}</span>
+          <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{{ t('settings.system.factoryResetDescShort') }}</p>
+        </div>
+        <Button variant="danger" size="sm" @click="showFactoryReset = true">
+          {{ t('settings.system.factoryResetButton') }}
+        </Button>
+      </div>
     </div>
+
+    <!-- 恢复初始设置确认弹窗（Teleport 到 body，z-50 覆盖层） -->
+    <FactoryResetDialog v-model:visible="showFactoryReset" />
   </section>
 </template>
 
@@ -63,14 +77,21 @@
 /**
  * 设置页 — 系统分组（SettingsView 拆分产物）
  *
- * 防止休眠开关与默认端口，直写 store，由父组件 deep watch 防抖持久化。
+ * 防止休眠开关与默认端口，直写 store，由父组件 deep watch 防抖持久化；
+ * 恢复初始设置是宿主级危险操作（清主库授权/配置 + 还原默认配置，保留应用数据），
+ * 经 FactoryResetDialog 二次确认后调宿主命令。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
+import Button from '@/components/Button.vue'
+import FactoryResetDialog from './FactoryResetDialog.vue'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
+
+/** 恢复初始设置确认弹窗显隐 */
+const showFactoryReset = ref(false)
 
 const preventSleep = computed({
   get: () => settingsStore.settings.network.prevent_sleep ?? true,

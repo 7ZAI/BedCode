@@ -9,7 +9,9 @@
 //!   只签发一次。宿主前端 bootstrap 在**导入任何插件模块之前**取得并保存在模块作用域变量里
 //!   （不进全局、不进 storage）；插件代码开始运行时（其模块已被导入）密钥已被占位 → 取不到。
 //!   页面加载时由宿主重置（[`crate::manager::host::PluginHost::reset_frontend_loader_session`]，
-//!   挂在 Tauri 的 `on_page_load` 钩子），使 dev 下页面刷新可重新取得。
+//!   挂在 Tauri 的 `on_page_load` 钩子），使 dev 下页面刷新可重新取得。**只能在页面加载的
+//!   `Started` 事件上重置**：`Finished` 属同一次页面加载，宿主前端 bootstrap 恰好落在两者
+//!   之间（Windows 正式版首启实测），在那里再重置会把刚签发的密钥当场作废。
 //! - **插件通道令牌**（插件面凭证）：[`FrontendChannelRegistry::issue_token`] 校验 loader 密钥与
 //!   插件激活态后签发，**停用即回收**；令牌决定身份，命令参数里的 `plugin_id` 只作「目标」，
 //!   两者不符即拒绝。
@@ -70,6 +72,21 @@ pub enum ChannelIdentity {
     Plugin(String),
 }
 
+/// 一次重置的回收面（诊断口径）
+///
+/// `revoked_tokens` 只数**插件令牌**：loader 密钥不在令牌表里，所以
+/// 「新页面加载把上一页刚取到的宿主面密钥清掉」这类事故的令牌数是 0。判据是
+/// `had_loader_session`——它才是「这次重置作废了一个活着的宿主面凭证」的信号
+/// （2026-10-18 排查 Windows 首启事故时，日得里只有 `revoked_tokens=0` 一行，
+/// 真正的回收发生在 debug 层，正式版看不出来）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResetReport {
+    /// 被重置的域里当时是否有 loader 密钥（= 是否作废了一个已签发的宿主面凭证）
+    pub had_loader_session: bool,
+    /// 一并回收的插件令牌数
+    pub revoked_tokens: usize,
+}
+
 impl FrontendChannelRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -77,21 +94,29 @@ impl FrontendChannelRegistry {
 
     /// 重置某 webview 的凭证域：该窗口的旧 loader 密钥与全部插件令牌一律失效
     ///
-    /// 返回被回收的插件令牌数（日志用）。由该 webview 的页面加载钩子调用（dev 下页面刷新
+    /// 返回回收面（[`ResetReport`]）。由该 webview 的页面加载钩子调用（dev 下页面刷新
     /// 需能重新取得宿主面凭证）；**其它 webview 的域不受影响**——这是多窗口互踩修复的关键：
     /// 终端窗口加载不再回收主窗口的凭证。
-    pub fn reset(&self, webview_label: &str) -> usize {
+    ///
+    /// **调用时机只能是页面加载的 `Started`**（不是 `Finished`）：同一次导航两个事件都会
+    /// 回调，而宿主前端 bootstrap 在两者之间取密钥（loader 密钥「首个调用者生效」），
+    /// 在 `Finished` 再重置会把刚签发的密钥当场作废（Windows 正式版首启实测：整页
+    /// `plugin_*` 命令被拒、授权弹窗无法应答）。调用方见
+    /// `lib.rs::frontend_channel_session_hook`。
+    pub fn reset(&self, webview_label: &str) -> ResetReport {
         let mut domains = self.domains.lock().unwrap_or_else(|e| e.into_inner());
         let removed = domains.remove(webview_label);
-        let had_session = removed.as_ref().map(|d| d.loader_session.is_some()).unwrap_or(false);
-        let revoked = removed.map(|d| d.tokens.len()).unwrap_or(0);
+        let report = ResetReport {
+            had_loader_session: removed.as_ref().map(|d| d.loader_session.is_some()).unwrap_or(false),
+            revoked_tokens: removed.map(|d| d.tokens.len()).unwrap_or(0),
+        };
         tracing::debug!(
             webview = %webview_label,
-            had_loader_session = had_session,
-            revoked_tokens = revoked,
+            had_loader_session = report.had_loader_session,
+            revoked_tokens = report.revoked_tokens,
             "[PluginChannel] 前端通道会话已重置"
         );
-        revoked
+        report
     }
 
     /// 签发某 webview 的 loader 会话密钥（宿主前端 bootstrap；**域内首个调用者生效**）
@@ -311,8 +336,12 @@ mod tests {
         let session = registry.issue_loader_session(MAIN).unwrap();
         let token = registry.issue_token(MAIN, &session, "com.test.a").unwrap();
 
-        let revoked = registry.reset(MAIN);
-        assert_eq!(revoked, 1, "重置必须报告回收的令牌数");
+        let report = registry.reset(MAIN);
+        assert_eq!(report.revoked_tokens, 1, "重置必须报告回收的令牌数");
+        assert!(
+            report.had_loader_session,
+            "重置必须点名作废了一个已签发的宿主面密钥（只看令牌数会漏报）"
+        );
         assert!(
             !registry.verify_loader_session(MAIN, &session),
             "页面加载后旧 loader 密钥失效"
@@ -343,7 +372,11 @@ mod tests {
             .collect();
 
         // 终端窗口加载：reset 只清 TERMINAL 域（该域此前为空 → 回收 0）
-        assert_eq!(registry.reset(TERMINAL), 0, "reset 不得越域回收其它窗口的令牌");
+        assert_eq!(
+            registry.reset(TERMINAL).revoked_tokens,
+            0,
+            "reset 不得越域回收其它窗口的令牌"
+        );
         // 终端窗口 bootstrap 签发自己的密钥与令牌
         let terminal_session = registry.issue_loader_session(TERMINAL).unwrap();
         let terminal_token = registry.issue_token(TERMINAL, &terminal_session, "com.test.a").unwrap();
@@ -400,7 +433,7 @@ mod tests {
         let first_token = registry.issue_token(TERMINAL, &first_session, "com.test.a").unwrap();
 
         // 窗口销毁重建 → 再次页面加载：域内旧凭证先被重置
-        assert_eq!(registry.reset(TERMINAL), 1);
+        assert_eq!(registry.reset(TERMINAL).revoked_tokens, 1);
         assert_eq!(registry.resolve(TERMINAL, &first_token), None, "旧窗口令牌必须失效");
         assert!(
             registry.issue_loader_session(TERMINAL).is_ok(),

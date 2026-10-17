@@ -136,6 +136,10 @@
  * `grantScope: 'directory'` 时额外说明「记住」按**所在目录**落账——授权范围必须
  * 让用户看得见，否则「勾了记住」的实际含义只有宿主知道。
  *
+ * **请求队列**（2026-10-18）：事件推送与挂载时的 `plugin_fs_auth_pending` 补拉共用同一个
+ * 队列，弹窗逐个展示。单槽实现会在「首启多插件同时请求」时用后到的请求覆盖先到的，
+ * 被覆盖的那个只能等 30s 超时被拒（现场：Windows 正式版首次运行）。
+ *
  * 三态应答（票 03）：允许本次 / 拒绝 / 以后都拒绝；「默认」档另有「记住」勾选
  * （允许并记住）。**决定集由宿主随事件下发的 `strategy` 决定**（弹出时快照）：
  * 「总是询问」档跳过授权记录，该档不出现「记住」（写了也没人读，spec §6.3），
@@ -151,28 +155,49 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { pluginFsAuthRespond, type FsAuthDecision } from '@/plugin/commands'
+import {
+  pluginFsAuthPending,
+  pluginFsAuthRespond,
+  type FsAuthDecision,
+  type FsAuthRequestPayload,
+} from '@/plugin/commands'
 import { normalizeStrategy } from '@/utils/authPolicy'
+import { logger } from '@/utils/frontendLogger'
 
 const { t } = useI18n()
 
-interface FsAuthRequest {
-  requestId: string
-  pluginId: string
-  path?: string
-  /** 批量授权：未授权路径数组（桌面 1.0 后新增，优先于 path） */
-  paths?: string[]
-  operation: string
-  /** 请求来源：fs = 插件直接请求访问；picker = 用户刚在系统选择器里选中 */
-  origin?: 'fs' | 'picker'
-  /** 「记住」的落账粒度：directory = 按所在目录记（同目录其它文件不再询问） */
-  grantScope?: 'exact' | 'directory'
-  /** 弹出时的策略档位（票 03；缺字段 / 值未识别按默认档，与宿主读面兜底同向） */
-  strategy?: string
+/** 弹窗消费的请求形状（真源在 `commands.ts`：事件推送与冷启动补拉同形） */
+type FsAuthRequest = FsAuthRequestPayload
+
+/**
+ * 待应答请求队列（先进先出，弹窗只展示队首）
+ *
+ * 为何是队列而不是单槽：首启时多个插件同时自动激活（file-transfer / agent-hub /
+ * ai-chatbox 各一个请求），单槽会被后来的请求覆盖——先到的那个无人应答、 30s 超时
+ * 被拒。队列让用户按「被问到的顺序」逐个应答，每个请求都拿得到答复。
+ */
+const queue = ref<FsAuthRequest[]>([])
+const remember = ref(true)
+
+/** 当前展示的请求 = 队首（无待应答请求时不渲染弹窗） */
+const request = computed<FsAuthRequest | null>(() => queue.value[0] ?? null)
+
+/**
+ * 入队（事件推送与冷启动补拉共用）
+ *
+ * 按 `requestId` 去重：补拉与事件可能就同一个请求各投递一次（挂载瞬间事件恰好在路上），
+ * 重复入队会让用户被同一个请求问两遍。
+ */
+function enqueue(req: FsAuthRequest) {
+  if (queue.value.some((r) => r.requestId === req.requestId)) return
+  queue.value.push(req)
 }
 
-const request = ref<FsAuthRequest | null>(null)
-const remember = ref(true)
+/** 出队（用户已应答 / 已处理）：弹窗随即展示下一个待应答请求，「记住」勾选重置为默认 */
+function dequeue() {
+  queue.value.shift()
+  remember.value = true
+}
 
 /** 弹出时的档位（决定本次弹窗给不给「记住」） */
 const strategy = computed(() => normalizeStrategy(request.value?.strategy))
@@ -209,10 +234,20 @@ const operationLabel = computed(() => {
 let unlisten: UnlistenFn | null = null
 
 onMounted(async () => {
+  // 先挂监听再补拉：两路都会去重，顺序只影响「挂载瞬间到达的请求走哪条路」
   unlisten = await listen<FsAuthRequest>('plugin:fs-auth-request', (event) => {
-    request.value = event.payload
-    remember.value = true
+    enqueue(event.payload)
   })
+  // 冷启动补投递：宿主前端监听器注册之前发出的请求事件会丢（首次运行启动期插件
+  // 自动激活就请求目录授权）——不补拉则只能等 30s 超时被拒（宿主侧
+  // `plugin_fs_auth_pending`）。补拉失败不阻断事件路径，但必须留痕
+  try {
+    for (const pending of await pluginFsAuthPending()) {
+      enqueue(pending)
+    }
+  } catch (e) {
+    logger.error('[FsAuthDialog] 待应答授权请求补拉失败（事件路径仍生效）:', e)
+  }
 })
 
 onUnmounted(() => {
@@ -225,14 +260,14 @@ async function allow() {
   // 「记住」= 允许并记住（落 allow 记录）；否则一次性放行
   const decision: FsAuthDecision =
     offersRemember.value && remember.value ? 'allow_remember' : 'allow_once'
-  request.value = null
+  dequeue()
   await pluginFsAuthRespond(requestId, decision)
 }
 
 async function deny() {
   if (!request.value) return
   const { requestId } = request.value
-  request.value = null
+  dequeue()
   await pluginFsAuthRespond(requestId, 'deny')
 }
 
@@ -240,7 +275,7 @@ async function deny() {
 async function denyAlways() {
   if (!request.value) return
   const { requestId } = request.value
-  request.value = null
+  dequeue()
   await pluginFsAuthRespond(requestId, 'deny_always')
 }
 </script>
