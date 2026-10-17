@@ -159,11 +159,29 @@ where
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
 
+/// 页面加载事件是否应重置该 webview 的前端通道会话（纯判据）
+///
+/// **只有 `Started`**：wry 对同一次导航回调两次（WebView2 `ContentLoading→Started` /
+/// `NavigationCompleted→Finished`，WebKitGTK `Committed` / `Finished`；tauri-runtime-wry
+/// 两者都透传）。宿主前端 bootstrap 恰好落在两者之间：`main.ts` 末尾导入插件模块前先
+/// 取 loader 密钥（`ensureHostCredential`），而 `load` 事件才对应的 `Finished` 若也重置，
+/// 就会把刚签发、已被页面缓存的密钥当场作废 —— 整页 `plugin_*` 命令全拒（Windows 正式版
+/// 首启实测：插件前端模块加载失败、授权弹窗应答被拒 → 插件启用失败 / 降级）。
+///
+/// `Started` 先于本页面任何 JS 执行（ContentLoading / Committed 语义），足以承担
+/// 「新页面加载 = 上一页凭证作废」的语义；`Finished` 只是同一次加载的收尾。
+fn page_load_resets_channel(event: tauri::webview::PageLoadEvent) -> bool {
+    matches!(event, tauri::webview::PageLoadEvent::Started)
+}
+
 /// 前端插件通道会话的生命周期钩子（审计票 06）
 ///
 /// 页面加载重置**该 webview** 的 loader 会话密钥与全部插件令牌：宿主前端 bootstrap 会在导入
 /// 任何插件模块之前重新取得密钥，而插件代码只在模块被导入后才开始运行——「首个调用者生效」
 /// 因此恒由宿主前端赢得；dev 下页面刷新也能重新取得（否则刷新后插件前端全部拿不到凭证）。
+///
+/// **只在 `Started` 重置**（判据见 [`page_load_resets_channel`]）：`Finished` 也重置会把
+/// 宿主刚取到的密钥作废（2026-10-18 Windows 正式版首启事故根因）。
 ///
 /// **按 webview 分区**（2026-09-26）：本钩子对每个 webview（主窗口 / 终端窗口 / 未来任何
 /// 独立窗口）都触发，凭证表按 label 分域——否则终端窗口加载会回收主窗口凭证，使主窗口插件面
@@ -171,6 +189,9 @@ pub struct AppStartTime(std::time::Instant);
 fn frontend_channel_session_hook() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::<tauri::Wry>::new("bedcode-frontend-channel")
         .on_page_load(|webview, payload| {
+            if !page_load_resets_channel(payload.event()) {
+                return;
+            }
             let Some(plugin_host) = webview
                 .app_handle()
                 .try_state::<std::sync::Arc<crate::wasm_core::manager::host::PluginHost>>()
@@ -435,7 +456,9 @@ pub fn run() {
             // 解析桌面端插件目录
             // dev 模式下 resolve 指向 target/debug/resources/...（Tauri 不自动复制资源）
             // 生产模式下 resolve 指向安装目录的 resources/...（打包时已包含）
-            // 因此 dev 模式回退到源码目录
+            // 因此 dev 模式回退到源码目录；release 下 resolve 缺失 = 安装资源损坏，
+            // **必须显性留痕**（不能静默落到打包机源码路径——安装机上不存在该路径，
+            // 会退化成零插件空壳启动且只有 PluginLoader 一条 warn）
             let plugins_dir = {
                 let resolved = app_handle
                     .path()
@@ -443,7 +466,7 @@ pub fn run() {
                     .expect("Failed to resolve plugins directory");
                 if resolved.exists() {
                     resolved
-                } else {
+                } else if cfg!(debug_assertions) {
                     // dev 模式 fallback：使用源码目录
                     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
                     let fallback = std::path::PathBuf::from(manifest_dir)
@@ -455,6 +478,15 @@ pub fn run() {
                         fallback
                     );
                     fallback
+                } else {
+                    // release：安装资源缺失（安装包损坏 / 杀软隔离 / 手动删除）——
+                    // 显性 error 留痕，仍返回原路径（加载器会 warn + 空集），
+                    // 前端横幅据 plugin_list_loaded 空集向用户提示重装应用
+                    tracing::error!(
+                        "内置插件目录缺失（安装资源不完整）：{:?} —— 请重装应用；前端将显示缺失内置插件警告横幅",
+                        resolved
+                    );
+                    resolved
                 }
             };
 
@@ -793,6 +825,7 @@ pub fn run() {
             commands::get_app_settings,
             commands::save_app_settings,
             commands::set_terminal_bg_image,
+            commands::reset_app_settings,
             // Utility
             commands::ping,
             commands::get_app_version,
@@ -835,6 +868,7 @@ pub fn run() {
             commands::plugin_list_rust_commands,
             commands::plugin_dev_reload,
             commands::plugin_fs_auth_respond,
+            commands::plugin_fs_auth_pending,
             commands::plugin_network_auth_respond,
             commands::plugin_auth_overview,
             commands::plugin_auth_set_strategy,
@@ -946,4 +980,28 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<()> {
 
     tracing::info!("System tray initialized");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::webview::PageLoadEvent;
+
+    /// 页面加载重置判据：只有 `Started` 为真
+    ///
+    /// 现场（2026-10-18 Windows 正式版首启）：钩子对 `Started` / `Finished` 都重置，
+    /// 宿主前端 bootstrap（两次事件之间取 loader 密钥）刚拿到的密钥被 `Finished` 那次
+    /// 当场作废 → 整页 `plugin_*` 命令被拒（插件前端模块加载失败、授权弹窗应答被拒、
+    /// 插件启用失败）。变异对照：判据改成 `Finished`、两个都认、或恒真，本用例必红。
+    #[test]
+    fn page_load_resets_channel_only_on_started() {
+        assert!(
+            page_load_resets_channel(PageLoadEvent::Started),
+            "Started 是新页面加载的起点，必须重置上一页凭证"
+        );
+        assert!(
+            !page_load_resets_channel(PageLoadEvent::Finished),
+            "Finished 属同一次加载：此时宿主前端可能已取到密钥，重置会把它作废"
+        );
+    }
 }

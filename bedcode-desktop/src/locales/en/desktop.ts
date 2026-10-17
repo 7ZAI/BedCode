@@ -352,5 +352,10 @@ export default {
       uninstallSuccess: 'App {name} uninstalled',
       uninstallFailed: 'Uninstall failed, please try again',
     },
+    // ==================== Host diagnostics (gap B: explicit missing builtin plugins) ====================
+    diagnostics: {
+      builtinPluginsMissing: 'Built-in plugin resources missing',
+      builtinPluginsMissingDesc: 'No built-in app resources detected; the installation may be incomplete — please reinstall BedCode',
+    },
   },
 }

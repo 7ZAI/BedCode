@@ -26,6 +26,18 @@ export default {
       // 票 14：默认端口随「配对设置」分组退役迁入本组（文案与迁移前逐字一致）
       defaultPort: '默认端口',
       defaultPortDesc: '服务器启动时使用的端口，重启后生效',
+      // 恢复初始设置（宿主级危险操作；弹窗说明清/保留范围，见 FactoryResetDialog）
+      factoryReset: '恢复初始设置',
+      factoryResetDescShort: '清除本机的授权记录与配置并还原出厂默认；应用（wasm 应用）数据保留',
+      factoryResetButton: '恢复初始设置',
+      factoryResetTitle: '确认恢复初始设置？',
+      factoryResetDesc: '将清除以下内容并还原出厂默认配置：',
+      factoryResetClears: '授权记录 / 授权策略 / 引擎配置 / 插件激活状态 / 用户配置文件',
+      factoryResetKeeps: '保留：应用数据（会话、聊天记录等）、凭据、设备信任',
+      factoryResetRestartHint: '部分设置（如服务器端口）需重启应用后完全生效',
+      factoryResetConfirm: '确认恢复',
+      factoryResetDone: '已恢复初始设置，重启应用后完全生效',
+      factoryResetFailed: '恢复初始设置失败，详情见日志',
     },
     log: {
       title: '日志设置',

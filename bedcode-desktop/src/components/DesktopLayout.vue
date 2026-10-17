@@ -9,6 +9,8 @@
     <div class="flex flex-col h-screen desktop-ui">
       <!-- Custom Title Bar -->
       <TitleBar />
+      <!-- 内置插件缺失警告横幅：安装资源不完整时明示并引导重装（宿主诊断） -->
+      <BuiltinPluginsMissingBanner />
       <div class="flex flex-1 overflow-hidden">
         <!-- Sidebar -->
         <Sidebar />
@@ -45,6 +47,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import TitleBar from '@/components/TitleBar.vue'
+import BuiltinPluginsMissingBanner from '@/components/BuiltinPluginsMissingBanner.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import PluginCommandPalette from '@/plugin/components/PluginCommandPalette.vue'
 import PluginStatusBar from '@/plugin/components/PluginStatusBar.vue'

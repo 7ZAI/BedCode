@@ -328,5 +328,10 @@ export default {
       uninstallSuccess: '应用 {name} 已卸载',
       uninstallFailed: '卸载失败，请稍后重试',
     },
+    // ==================== 宿主诊断（缺口 B：内置插件资源缺失的明示） ====================
+    diagnostics: {
+      builtinPluginsMissing: '内置插件资源缺失',
+      builtinPluginsMissingDesc: '未检测到内置应用资源，安装可能不完整——请重新安装 BedCode',
+    },
   },
 }

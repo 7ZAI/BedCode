@@ -77,7 +77,8 @@
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
-        "installerHooks": "nsis/icon-cache-refresh.nsh"
+        "installerHooks": "nsis/icon-cache-refresh.nsh",
+        "template": "nsis/installer.nsi"
       }
     },
     "linux": {
@@ -92,7 +93,8 @@
         "section": "utils",
         "priority": "optional",
         "desktopTemplate": "resources/deb/bedcode.desktop",
-        "postInstallScript": "resources/deb/postinst"
+        "postInstallScript": "resources/deb/postinst",
+        "postRemoveScript": "resources/deb/postrm"
       }
     }
   },

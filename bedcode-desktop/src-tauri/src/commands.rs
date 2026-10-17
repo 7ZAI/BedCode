@@ -100,6 +100,99 @@ pub async fn save_log_settings(app_handle: tauri::AppHandle, log: crate::system:
     Ok(())
 }
 
+/// 恢复初始设置（危险操作，前端需二次确认）
+///
+/// 清空宿主主库的授权记录 / 授权策略 / 引擎配置表（settings）与插件激活态，
+/// 删除用户 config.properties（下次启动从打包资源复制默认）——还原系统出厂状态。
+/// **保留**：插件私有库（wasm 应用业务数据）、`plugin_secrets`（凭据 / 密钥环）、
+/// 对等网络身份与信任、插件业务 KV（plugin_storage 非授权类键）。
+///
+/// 生效语义：授权裁决与链路加密开关**立即**生效（热同步）；config.properties 与
+/// 服务器端口等需**重启应用**后完全生效（前端提示）。
+#[tauri::command]
+pub async fn reset_app_settings(app_handle: tauri::AppHandle) -> Result<()> {
+    let db = app_handle.state::<Arc<std::sync::Mutex<Database>>>();
+    let config_path = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {e}")))?
+        .join("config.properties");
+
+    {
+        let mut guard = db.lock().expect("main db lock poisoned");
+        reset_factory_state(&mut guard, &config_path)?;
+    }
+
+    // 链路加密：settings 表已清空 → 运行期开关立即回默认（全关），否则正在运行的
+    // 服务器仍按旧配置裁决（与 init_link_crypto_at_startup 的错误分支同款热同步）
+    bedcode_server_core::link_crypto::update_config(LinkCryptoConfig::default());
+    // 防止休眠：资源默认 config.properties 为 true，运行期单例同步一致
+    crate::system::power::power_manager().set_enabled(true);
+
+    tracing::info!(
+        "App settings reset to factory defaults (auth records / policies / engine config / activation state)"
+    );
+    Ok(())
+}
+
+/// 恢复初始设置的核心执行体（独立于 Tauri，便于单测）
+///
+/// 事务内清空：授权记录 / 授权策略 / 引擎配置表（settings）/ 插件激活态
+/// （`__system__|activation_state`）/ legacy 授权键（`fs_granted_paths` /
+/// `preauth_paths`——授权记录的旧扁平形态，见 wasm-core `security/framework.rs`
+/// 与 file-transfer 预授权）。随后删除用户 config.properties（存在时），下次启动
+/// 从打包资源复制默认（lib.rs 启动逻辑）。
+///
+/// 事务内任何一步失败整体回滚，不留「授权已清、策略未清」的半态；config 文件删除
+/// 在事务外——失败返回带上下文错误（此时主库已清空，前端提示手动删除或重试）。
+pub(crate) fn reset_factory_state(db: &mut Database, config_path: &std::path::Path) -> Result<()> {
+    let tx = db
+        .conn_mut()
+        .unchecked_transaction()
+        .map_err(|e| crate::AppError::Internal(format!("begin factory-reset transaction: {e}")))?;
+
+    for (stmt, what) in [
+        ("DELETE FROM plugin_auth_records", "授权记录"),
+        ("DELETE FROM plugin_auth_policies", "授权策略"),
+        ("DELETE FROM settings", "引擎配置表 settings"),
+        (
+            "DELETE FROM plugin_storage WHERE plugin_id = '__system__' AND key = 'activation_state'",
+            "插件激活态",
+        ),
+        (
+            "DELETE FROM plugin_storage WHERE key IN ('fs_granted_paths', 'preauth_paths')",
+            "legacy 授权键（fs_granted_paths / preauth_paths）",
+        ),
+    ] {
+        tx.execute(stmt, []).map_err(|e| {
+            crate::AppError::Internal(format!("reset factory state: 清理{what}: {e}"))
+        })?;
+    }
+
+    tx.commit().map_err(|e| {
+        crate::AppError::Internal(format!("commit factory-reset transaction: {e}"))
+    })?;
+
+    // 用户配置文件还原：删除后下次启动从打包资源复制默认（启动逻辑仅在文件
+    // 不存在时复制，删除即还原）。运行期 AppConfig 单例保持旧值到重启——
+    // 与「需重启完全生效」语义一致。
+    match std::fs::remove_file(config_path) {
+        Ok(()) => tracing::info!(
+            "factory reset: removed user config.properties ({})",
+            config_path.display()
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(crate::AppError::Internal(format!(
+                "恢复初始设置：主库已清空，但删除用户配置文件失败（{}）——请手动删除该文件后重启",
+                config_path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// 运行时热调日志文件级别（不落盘；重启后回落到持久化 `log.file_level`）
 ///
 /// 仅允许标准五级之一；非法值返回配置错误。
@@ -676,6 +769,7 @@ pub async fn reset_server_network_config(app_handle: tauri::AppHandle) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
 
     #[test]
     fn normalized_level_maps_known_and_unknown() {
@@ -688,6 +782,144 @@ mod tests {
         assert_eq!(normalized_level("trace"), "debug");
         assert_eq!(normalized_level("whatever"), "debug");
     }
+
+    /// 造一个带「出厂前状态」的库：授权记录 / 授权策略 / 引擎配置 / 激活态 /
+    /// legacy 授权键 / 插件业务 KV / 密钥托管，外加一个用户 config.properties
+    fn seed_pre_reset_state() -> (Database, std::path::PathBuf) {
+        let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");
+        db.init_schema().expect("init schema");
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_auth_records \
+                 (plugin_id, resource, target, effect, ops, prefix_match, source, created_at) \
+                 VALUES ('com.bedcode.terminal-session', 'fs', '/tmp/authed', 'allow', '[]', 0, 'user', 1)",
+                [],
+            )
+            .expect("seed auth record");
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_auth_policies (plugin_id, resource, strategy, updated_at) \
+                 VALUES ('com.bedcode.terminal-session', 'fs', 'always_ask', 1)",
+                [],
+            )
+            .expect("seed auth policy");
+        db.conn()
+            .execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES ('pairing_code_ttl', '600', '2026-01-01')",
+                [],
+            )
+            .expect("seed engine config");
+        // 插件业务 KV（host-storage 常态数据，恢复初始设置必须保留）
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, value, updated_at) VALUES \
+                 ('com.bedcode.ai-chatbox', 'recent_models', '[\"gpt-4o\"]', '2026-01-01')",
+                [],
+            )
+            .expect("seed plugin business kv");
+        // 激活态（系统键，恢复初始设置应清空——出厂无激活记录）
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, value, updated_at) VALUES \
+                 ('__system__', 'activation_state', '{}', '2026-01-01')",
+                [],
+            )
+            .expect("seed activation state");
+        // legacy 授权键（旧扁平授权形态，恢复初始设置应清空）
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, value, updated_at) VALUES \
+                 ('com.bedcode.agent-hub', 'fs_granted_paths', '[\"/legacy\"]', '2026-01-01')",
+                [],
+            )
+            .expect("seed legacy grant");
+        // 凭据托管（用户密钥环，恢复初始设置必须保留——误删会丢用户 API key）
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_secrets (plugin_id, key, value, updated_at) VALUES \
+                 ('com.bedcode.ai-chatbox', 'api_key', 'sk-test', '2026-01-01')",
+                [],
+            )
+            .expect("seed secret");
+
+        // 用户 config.properties（存在则被删除 = 还原默认）
+        let dir = std::env::temp_dir().join(format!("factory-reset-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let config_path = dir.join("config.properties");
+        std::fs::write(&config_path, "network.port=9999\n").expect("write config");
+        (db, config_path)
+    }
+
+    /// 正例：恢复初始设置清空授权/配置/激活态，保留插件业务 KV 与凭据，
+    /// 用户 config.properties 被删除（下次启动还原默认）
+    #[test]
+    fn reset_factory_state_clears_auth_and_config_keeps_secrets_and_business_kv() {
+        let (mut db, config_path) = seed_pre_reset_state();
+
+        reset_factory_state(&mut db, &config_path).expect("factory reset");
+
+        let count = |sql: &str| -> i64 {
+            db.conn()
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .expect("count query")
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM plugin_auth_records"), 0, "授权记录必须清空");
+        assert_eq!(count("SELECT COUNT(*) FROM plugin_auth_policies"), 0, "授权策略必须清空");
+        assert_eq!(count("SELECT COUNT(*) FROM settings"), 0, "引擎配置表必须清空");
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE key = 'activation_state'"),
+            0,
+            "激活态必须清空"
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE key = 'fs_granted_paths'"),
+            0,
+            "legacy 授权键必须清空"
+        );
+        // 保留面：插件业务 KV / 凭据
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE plugin_id = 'com.bedcode.ai-chatbox' AND key = 'recent_models'"),
+            1,
+            "插件业务 KV 必须保留（wasm 应用数据不清理）"
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_secrets"),
+            1,
+            "凭据必须保留（误删会丢用户 API key）"
+        );
+        assert!(
+            !config_path.exists(),
+            "用户 config.properties 必须被删除（下次启动还原默认）"
+        );
+
+        std::fs::remove_dir_all(config_path.parent().expect("temp parent")).ok();
+    }
+
+    /// 幂等：连跑两次结果一致，不报错；config 文件不存在时也视为成功
+    #[test]
+    fn reset_factory_state_is_idempotent_and_tolerates_missing_config() {
+        let (mut db, config_path) = seed_pre_reset_state();
+
+        reset_factory_state(&mut db, &config_path).expect("first reset");
+        reset_factory_state(&mut db, &config_path).expect("second reset must be idempotent");
+
+        let count = |sql: &str| -> i64 {
+            db.conn()
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .expect("count query")
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM plugin_auth_records"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM settings"), 0);
+        // 保留面第二次也不误伤
+        assert_eq!(count("SELECT COUNT(*) FROM plugin_secrets"), 1);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE plugin_id = 'com.bedcode.ai-chatbox'"),
+            1
+        );
+
+        std::fs::remove_dir_all(config_path.parent().expect("temp parent")).ok();
+    }
+
 
     #[test]
     fn truncate_message_keeps_short_input_unchanged() {
