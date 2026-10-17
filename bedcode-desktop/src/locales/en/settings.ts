@@ -32,11 +32,11 @@ export default {
       defaultPortDesc: 'The port used when the server starts; takes effect after restart',
       // Factory reset (host-level destructive action; scope explained in FactoryResetDialog)
       factoryReset: 'Factory Reset',
-      factoryResetDescShort: 'Clear local authorization records and config, restore factory defaults; app (wasm app) data is kept',
+      factoryResetDescShort: 'Clear local authorization records, plugin approvals and activation state, restore factory defaults; app (wasm app) data is kept',
       factoryResetButton: 'Factory Reset',
       factoryResetTitle: 'Reset to factory defaults?',
       factoryResetDesc: 'The following will be cleared and factory defaults restored:',
-      factoryResetClears: 'Authorization records / policies / engine config / plugin activation state / user config file',
+      factoryResetClears: 'App authorization records / policies / plugin approval (pending authorization) records / plugin activation state / engine config / user config file',
       factoryResetKeeps: 'Kept: app data (sessions, chat history, etc.), credentials, device trust',
       factoryResetRestartHint: 'Some settings (e.g. server port) fully take effect after restart',
       factoryResetConfirm: 'Reset',

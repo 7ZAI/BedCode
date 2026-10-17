@@ -102,8 +102,10 @@ pub async fn save_log_settings(app_handle: tauri::AppHandle, log: crate::system:
 
 /// 恢复初始设置（危险操作，前端需二次确认）
 ///
-/// 清空宿主主库的授权记录 / 授权策略 / 引擎配置表（settings）与插件激活态，
-/// 删除用户 config.properties（下次启动从打包资源复制默认）——还原系统出厂状态。
+/// 清空宿主主库的授权记录 / 授权策略 / 引擎配置表（settings）/ 插件激活态 /
+/// 插件权限审批记录（`__system__|plugin_approvals`，即前端「待授权」态的持久化真源），
+/// 删除用户 config.properties（下次启动从打包资源复制默认）——还原系统出厂状态：
+/// 所有 wasm 业务应用回到未激活，且用户安装插件需重新人工授权。
 /// **保留**：插件私有库（wasm 应用业务数据）、`plugin_secrets`（凭据 / 密钥环）、
 /// 对等网络身份与信任、插件业务 KV（plugin_storage 非授权类键）。
 ///
@@ -130,18 +132,24 @@ pub async fn reset_app_settings(app_handle: tauri::AppHandle) -> Result<()> {
     crate::system::power::power_manager().set_enabled(true);
 
     tracing::info!(
-        "App settings reset to factory defaults (auth records / policies / engine config / activation state)"
+        "App settings reset to factory defaults (auth records / policies / engine config / activation state / plugin approvals)"
     );
     Ok(())
 }
 
 /// 恢复初始设置的核心执行体（独立于 Tauri，便于单测）
 ///
-/// 事务内清空：授权记录 / 授权策略 / 引擎配置表（settings）/ 插件激活态
-/// （`__system__|activation_state`）/ legacy 授权键（`fs_granted_paths` /
+/// 事务内清空：授权记录 / 授权策略 / 引擎配置表（settings）/ 插件系统态——
+/// `__system__` 空间的激活态（`activation_state`，见 wasm-core `storage.rs`）与
+/// 权限审批记录（`plugin_approvals`，见 `security/approval.rs`；它决定插件是
+/// 「待授权」还是已授权）——以及 legacy 授权键（`fs_granted_paths` /
 /// `preauth_paths`——授权记录的旧扁平形态，见 wasm-core `security/framework.rs`
 /// 与 file-transfer 预授权）。随后删除用户 config.properties（存在时），下次启动
 /// 从打包资源复制默认（lib.rs 启动逻辑）。
+///
+/// 两个 `__system__` 键都按**字面量**写死在 SQL 里（不引 wasm-core 常量）：宿主
+/// 与 wasm-core 的键名漂移会在这里显性可见——改名时必须同步本处，否则恢复初始设置
+/// 会悄悄漏清（激活态 / 审批记录残留）。
 ///
 /// 事务内任何一步失败整体回滚，不留「授权已清、策略未清」的半态；config 文件删除
 /// 在事务外——失败返回带上下文错误（此时主库已清空，前端提示手动删除或重试）。
@@ -156,8 +164,9 @@ pub(crate) fn reset_factory_state(db: &mut Database, config_path: &std::path::Pa
         ("DELETE FROM plugin_auth_policies", "授权策略"),
         ("DELETE FROM settings", "引擎配置表 settings"),
         (
-            "DELETE FROM plugin_storage WHERE plugin_id = '__system__' AND key = 'activation_state'",
-            "插件激活态",
+            "DELETE FROM plugin_storage WHERE plugin_id = '__system__' \
+             AND key IN ('activation_state', 'plugin_approvals')",
+            "插件系统态（激活态 activation_state / 权限审批记录 plugin_approvals）",
         ),
         (
             "DELETE FROM plugin_storage WHERE key IN ('fs_granted_paths', 'preauth_paths')",
@@ -783,8 +792,9 @@ mod tests {
         assert_eq!(normalized_level("whatever"), "debug");
     }
 
-    /// 造一个带「出厂前状态」的库：授权记录 / 授权策略 / 引擎配置 / 激活态 /
-    /// legacy 授权键 / 插件业务 KV / 密钥托管，外加一个用户 config.properties
+    /// 造一个带「出厂前状态」的库：授权记录 / 授权策略 / 引擎配置 / 系统态
+    /// （激活态 + 权限审批记录）/ legacy 授权键 / 插件业务 KV / 密钥托管，
+    /// 外加一个用户 config.properties
     fn seed_pre_reset_state() -> (Database, std::path::PathBuf) {
         let db = Database::new(std::path::Path::new(":memory:")).expect("open in-memory db");
         db.init_schema().expect("init schema");
@@ -825,6 +835,16 @@ mod tests {
                 [],
             )
             .expect("seed activation state");
+        // 权限审批记录（系统键，恢复初始设置应清空——清后用户安装插件回到「待授权」）
+        db.conn()
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, value, updated_at) VALUES \
+                 ('__system__', 'plugin_approvals', \
+                  '{\"com.bedcode.demo\":{\"approved_permissions\":[\"fs:read\"],\"content_hash\":\"abc\",\"version\":\"1.0.0\",\"approved_at\":\"2026-01-01T00:00:00Z\"}}', \
+                  '2026-01-01')",
+                [],
+            )
+            .expect("seed plugin approvals");
         // legacy 授权键（旧扁平授权形态，恢复初始设置应清空）
         db.conn()
             .execute(
@@ -850,8 +870,8 @@ mod tests {
         (db, config_path)
     }
 
-    /// 正例：恢复初始设置清空授权/配置/激活态，保留插件业务 KV 与凭据，
-    /// 用户 config.properties 被删除（下次启动还原默认）
+    /// 正例：恢复初始设置清空授权/配置/系统态（激活态 + 审批记录），保留插件业务 KV
+    /// 与凭据，用户 config.properties 被删除（下次启动还原默认）
     #[test]
     fn reset_factory_state_clears_auth_and_config_keeps_secrets_and_business_kv() {
         let (mut db, config_path) = seed_pre_reset_state();
@@ -870,6 +890,11 @@ mod tests {
             count("SELECT COUNT(*) FROM plugin_storage WHERE key = 'activation_state'"),
             0,
             "激活态必须清空"
+        );
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE key = 'plugin_approvals'"),
+            0,
+            "插件权限审批记录必须清空（清后用户插件回到待授权）"
         );
         assert_eq!(
             count("SELECT COUNT(*) FROM plugin_storage WHERE key = 'fs_granted_paths'"),
@@ -910,6 +935,12 @@ mod tests {
         };
         assert_eq!(count("SELECT COUNT(*) FROM plugin_auth_records"), 0);
         assert_eq!(count("SELECT COUNT(*) FROM settings"), 0);
+        // 系统态两键第二次也不复现
+        assert_eq!(
+            count("SELECT COUNT(*) FROM plugin_storage WHERE plugin_id = '__system__'"),
+            0,
+            "系统态（激活态 / 审批记录）第二次仍为空"
+        );
         // 保留面第二次也不误伤
         assert_eq!(count("SELECT COUNT(*) FROM plugin_secrets"), 1);
         assert_eq!(

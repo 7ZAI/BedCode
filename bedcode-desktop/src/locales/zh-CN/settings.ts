@@ -28,11 +28,11 @@ export default {
       defaultPortDesc: '服务器启动时使用的端口，重启后生效',
       // 恢复初始设置（宿主级危险操作；弹窗说明清/保留范围，见 FactoryResetDialog）
       factoryReset: '恢复初始设置',
-      factoryResetDescShort: '清除本机的授权记录与配置并还原出厂默认；应用（wasm 应用）数据保留',
+      factoryResetDescShort: '清除本机的授权记录与插件授权（待授权）、激活状态并还原出厂默认；应用（wasm 应用）数据保留',
       factoryResetButton: '恢复初始设置',
       factoryResetTitle: '确认恢复初始设置？',
       factoryResetDesc: '将清除以下内容并还原出厂默认配置：',
-      factoryResetClears: '授权记录 / 授权策略 / 引擎配置 / 插件激活状态 / 用户配置文件',
+      factoryResetClears: '应用授权记录 / 授权策略 / 插件授权（待授权）记录 / 插件激活状态 / 引擎配置 / 用户配置文件',
       factoryResetKeeps: '保留：应用数据（会话、聊天记录等）、凭据、设备信任',
       factoryResetRestartHint: '部分设置（如服务器端口）需重启应用后完全生效',
       factoryResetConfirm: '确认恢复',
