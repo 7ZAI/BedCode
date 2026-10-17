@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.1] - 2026-10-18
+
+### Fixes
+
+- **Windows 3.0.0 first-start incident** (plugin channel credential reset timing + startup auth
+  sequencing): the plugin channel credential is no longer reset by page reloads during startup; plugin
+  activation became asynchronous after startup, and a new `plugin:activated` event plus a reload step
+  in the frontend loader now ensure an app's UI appears as soon as its activation finishes.
+- **Factory reset now also clears plugin approval records** (`plugin_approvals`) in addition to
+  activation state, auth policies and settings — after a factory reset, installed apps return to the
+  pending-authorisation state instead of keeping previous grants.
+
+### Features
+
+- **Lifecycle closure trio (desktop)**: missing built-in apps now surface an explicit banner instead of
+  failing silently; uninstalling an app cleans its data by default; factory reset covers the full
+  reset surface with a clearer confirmation dialog.
+
 ## [3.0.0] - 2026-10-17
 
 ### New features
