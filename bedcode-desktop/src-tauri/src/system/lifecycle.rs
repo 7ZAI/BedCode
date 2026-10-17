@@ -251,6 +251,25 @@ pub fn register_core_lifecycle_hooks() {
         ctx.plugin_host().notify_startup().await;
     });
 
+    // L3 业务应用的持久化启用态激活 — 优先级 20，晚于 notify_startup
+    //
+    // **为何不在 setup 主线程里同步做**（2026-10-18）：激活可能弹交互式目录授权
+    // （最长等 30s 用户点击），而 `PluginHost::new` 是在 setup 里被
+    // `tauri::async_runtime::block_on` 调用的——同步执行会把窗口与前端一起卡到超时，
+    // 且弹窗在宿主前端就绪前发出必然无人应答（Windows 正式版首启实测
+    // `后端初始化耗时: 32869ms` + `file access authorization rejected`）。
+    //
+    // 这里**派生独立任务**而不是在本钩子里 await：钩子本身带超时保护
+    // （`SHUTDOWN_HOOK_TIMEOUT_SECS`），而激活等用户点授权可以合法地超过它——
+    // 被钩子超时打断会把激活截停在半路。派生后钩子立即返回，激活在后台走完。
+    registry.on_startup("plugin-host-persisted-activation", 20, || async {
+        let host = crate::system::app_context::AppContext::global().plugin_host().clone();
+        crate::system::error_boundary::spawn_with_error_boundary(
+            "plugin-host-persisted-activation",
+            async move { host.auto_activate_from_persisted_state().await },
+        );
+    });
+
     // 引擎层 PTY 回收 — 优先级 10，最先清理（停止所有 PTY 进程）
     //
     // 票 11 起**只剩引擎一条线**：所有会话（业务 + 插件私有）的 PTY 都住在

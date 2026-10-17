@@ -13,10 +13,15 @@
  * 追踪号 request_id 记进前端日志，可与宿主日志里的详情按值关联。
  *
  * 回调内 useToast() 在事件触发时求值（Pinia 已安装），与 main.ts 原逻辑一致。
+ *
+ * 第四个通道 `plugin:activated`（2026-10-18）：**不是用户可见事件**，而是给插件加载器
+ * 的「激活已完成」信号——启动期持久化激活是异步的，`loadAll()` 可能先看到 `activating`
+ * 而跳过该插件（实测：界面整会话缺失），收到信号后补加载（幂等）。
  */
 import { listen } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
 import { parseInvokeError, showUserError } from '@/utils/userError'
+import { pluginLoader } from '@/plugin/loader'
 
 interface PluginNotifyPayload {
   plugin_id: string
@@ -63,5 +68,14 @@ export function setupPluginRuntimeListeners() {
   // 详情（含 panic 消息 / 回溯）不再进 toast，也不截断展示——只在宿主日志里
   listen<PluginErrorEnvelopePayload>('plugin:runtime-error', (event) => {
     showUserError(parseInvokeError(event.payload))
+  })
+
+  // 监听插件激活完成事件（宿主 `PluginHost::activate_plugin` 成功/降级时发送，
+  // 常量 `PLUGIN_ACTIVATED`）：补加载该插件的前端模块。
+  // 为何必须：启动期持久化激活是异步的，`loadAll()` 会把正在激活的插件当 `activating`
+  // 跳过（2026-10-18 实测：agent-hub 整会话界面缺失）。补加载本身幂等 + 并发合并，
+  // 这里不解释 payload（`loadMissingActivated` 自己重查状态，能自愈早先漏掉的事件）。
+  listen<{ pluginId: string }>('plugin:activated', () => {
+    void pluginLoader.loadMissingActivated()
   })
 }

@@ -374,6 +374,27 @@ enum NoDialogDecision {
     Ask(AuthStrategy),
 }
 
+/// 弹窗事件载荷（**形状的唯一真源**，可单测）
+///
+/// 两个消费者共用它：事件推送（[`FsAuthChecker::request_user_auth_batch`]）与
+/// 冷启动补投递（[`FsAuthChecker::pending_prompts`]）。形状若各写一份，补投递的
+/// 请求会在前端渲染成空弹窗（路径 / 操作集字段名漂移），而事件那条路照常正常
+/// ——只在「前端挂载晚于请求」时才复现，属于最不该靠运气发现的那类不一致。
+///
+/// `path` 是 `paths` 首个元素的兼容字段（旧前端只读单路径）。
+fn auth_prompt_payload(request: &PendingRequest) -> serde_json::Value {
+    serde_json::json!({
+        "requestId": request.request_id,
+        "pluginId": request.plugin_id,
+        "paths": request.paths,
+        "path": request.paths.first().cloned().unwrap_or_default(),
+        "operation": request.ops.as_wire_str(),
+        "grantScope": request.grant_scope.as_str(),
+        "origin": request.origin.as_str(),
+        "strategy": request.strategy.as_str(),
+    })
+}
+
 /// 记录层信号（一次读库算出，避免判定链里两次查表）
 #[derive(Debug, Clone, Copy, Default)]
 struct RecordSignals {
@@ -663,6 +684,20 @@ impl FsAuthChecker {
     #[cfg(test)]
     pub(crate) fn auth_records(&self) -> &AuthPolicyStore {
         &self.auth_records
+    }
+
+    /// 待应答授权请求快照（前端冷启动补投递；宿主面命令 `plugin_fs_auth_pending` 唯一消费者）
+    ///
+    /// **为什么需要**：弹窗事件是单向广播，宿主前端在注册监听器之前收到的请求会丢。
+    /// 首次运行（无授权记录）恰好命中：启动期插件自动激活就要授权，请求在 UI 就绪前
+    /// 发出 → 无人应答 → 30s 超时按拒绝收敛（Windows 正式版首启实测）。前端挂载后拉
+    /// 一次本快照，把在等的请求补进弹窗队列即可应答。
+    ///
+    /// 载荷形状与事件**同源**（[`auth_prompt_payload`]）；已应答 / 已超时的请求不在
+    /// 其中——两条路径都会把条目从队列移除，故快照即「仍在等用户点击」的集合。
+    pub async fn pending_prompts(&self) -> Vec<serde_json::Value> {
+        let pending = self.pending_requests.lock().await;
+        pending.iter().map(auth_prompt_payload).collect()
     }
 
     /// 处理用户授权回复（由前端 Tauri command 调用；决定三态见 [`FsDecision`]）
@@ -987,31 +1022,20 @@ impl FsAuthChecker {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        {
-            let mut pending = self.pending_requests.lock().await;
-            pending.push(PendingRequest {
-                request_id: request_id.clone(),
-                plugin_id: plugin_id.to_string(),
-                paths: paths.to_vec(),
-                ops,
-                grant_scope,
-                origin,
-                strategy,
-                reply_tx,
-            });
-        }
-
-        // 发送弹窗事件到前端（paths 数组 + path 兼容字段 = 首个路径）
-        let payload = serde_json::json!({
-            "requestId": request_id,
-            "pluginId": plugin_id,
-            "paths": paths,
-            "path": paths.first().cloned().unwrap_or_default(),
-            "operation": ops.as_wire_str(),
-            "grantScope": grant_scope.as_str(),
-            "origin": origin.as_str(),
-            "strategy": strategy.as_str(),
-        });
+        // 载荷与待应答条目同源构造：事件推送与冷启动补投递（[`Self::pending_prompts`]）
+        // 必须逐字同形，前端才可以用同一套渲染逻辑消费两者
+        let request = PendingRequest {
+            request_id: request_id.clone(),
+            plugin_id: plugin_id.to_string(),
+            paths: paths.to_vec(),
+            ops,
+            grant_scope,
+            origin,
+            strategy,
+            reply_tx,
+        };
+        let payload = auth_prompt_payload(&request);
+        self.pending_requests.lock().await.push(request);
 
         // 无头上下文（测试）没有投递口，无法弹窗：移除已入队请求，保守拒绝
         let Some(emit) = self.emit.as_ref() else {
@@ -1088,35 +1112,28 @@ impl FsAuthChecker {
     }
 
     /// 弹窗请求用户授权（单路径：操作集就是本次操作；`strategy` 语义同批量入口）
+    ///
+    /// 载荷与批量入口**同源同形**（[`auth_prompt_payload`]）：单路径请求也是
+    /// 「一个路径的批量」，`paths` 恒在场、`path` 作为首个元素的兼容字段保留。
+    /// 两条入口各写一份 json! 曾是真实的不一致来源——冷启动补拉（`pending_prompts`）
+    /// 只认一份形状，前端也只应实现一套渲染逻辑。
     async fn request_user_auth(&self, plugin_id: &str, path: &str, ops: FsOps, strategy: AuthStrategy) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        {
-            let mut pending = self.pending_requests.lock().await;
-            pending.push(PendingRequest {
-                request_id: request_id.clone(),
-                plugin_id: plugin_id.to_string(),
-                paths: vec![path.to_string()],
-                ops,
-                grant_scope: GrantScope::Exact,
-                origin: AuthOrigin::Fs,
-                strategy,
-                reply_tx,
-            });
-        }
-
-        // 发送弹窗事件到前端
-        let payload = serde_json::json!({
-            "requestId": request_id,
-            "pluginId": plugin_id,
-            "path": path,
-            "operation": ops.as_wire_str(),
-            "grantScope": GrantScope::Exact.as_str(),
-            "origin": AuthOrigin::Fs.as_str(),
-            "strategy": strategy.as_str(),
-        });
+        let request = PendingRequest {
+            request_id: request_id.clone(),
+            plugin_id: plugin_id.to_string(),
+            paths: vec![path.to_string()],
+            ops,
+            grant_scope: GrantScope::Exact,
+            origin: AuthOrigin::Fs,
+            strategy,
+            reply_tx,
+        };
+        let payload = auth_prompt_payload(&request);
+        self.pending_requests.lock().await.push(request);
 
         // 无头上下文（测试）没有投递口，无法弹窗：移除已入队请求，保守拒绝
         let Some(emit) = self.emit.as_ref() else {
@@ -3189,6 +3206,138 @@ mod tests {
             "超时不落任何记录"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ==================== 冷启动补投递（`pending_prompts`）====================
+    //
+    // 现场（Windows 正式版首次运行）：启动期插件自动激活就请求目录授权，而宿主前端的
+    // 事件监听器此时尚未注册 —— 事件丢失、无人应答，30s 超时后按拒绝收敛（日志
+    // `batch auth request timed out or cancelled` + `file access authorization rejected`）。
+    // 快照接口让前端挂载后补拉在等请求，把「丢事件」从静默拒绝变成可应答。
+
+    /// 轮询等待待应答快照非空（弹窗判定挂在等待上，只能异步观察）
+    async fn wait_for_pending(checker: &FsAuthChecker) -> Vec<serde_json::Value> {
+        for _ in 0..400 {
+            let snapshot = checker.pending_prompts().await;
+            if !snapshot.is_empty() {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("等待待应答快照非空超时");
+    }
+
+    /// 正例：真实弹窗链路的在等请求出现在快照里，字段与推送事件**逐字同形**；应答后清空
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_prompts_mirrors_live_request_then_clears_on_response() {
+        let (checker, log) = promptable_checker(Duration::from_secs(5)).await;
+        let dir = fixture_dir("fs-auth-pending-snapshot");
+        let file = dir.join("data.jsonl");
+        std::fs::write(&file, b"x").unwrap();
+        let path = file.to_string_lossy().to_string();
+
+        let checker = Arc::new(checker);
+        let judge = {
+            let checker = checker.clone();
+            let path = path.clone();
+            tokio::spawn(async move {
+                // 未授权 → 弹窗 → 等应答（本用例在快照侧观察，随后手工应答）
+                checker.check("com.bedcode.test", &path, FsOp::Read).await
+            })
+        };
+
+        let snapshot = wait_for_pending(&checker).await;
+        assert_eq!(snapshot.len(), 1, "同时在等一个请求");
+        let payload = &snapshot[0];
+        assert_eq!(payload["pluginId"], "com.bedcode.test");
+        assert_eq!(payload["paths"], serde_json::json!([path]), "单路径请求也走同一形状");
+        assert_eq!(payload["path"], path, "path = 首个路径的兼容字段");
+        assert_eq!(payload["operation"], "read");
+        assert_eq!(payload["grantScope"], "exact");
+        assert_eq!(payload["origin"], "fs");
+        assert_eq!(payload["strategy"], "default");
+        let request_id = payload["requestId"].as_str().expect("requestId 必须在场").to_string();
+        assert_eq!(request_id.len(), 36, "requestId = UUID 字符串");
+        // 同形契约：补拉载荷与推送事件载荷逐字一致（否则前端要为两条路各写一套渲染）
+        assert_eq!(
+            Some(payload.clone()),
+            log.lock().expect("emit log poisoned").last().map(|(_, p)| p.clone()),
+            "补拉载荷必须与事件载荷同形"
+        );
+
+        checker.respond(&request_id, FsDecision::AllowOnce).await;
+        assert!(judge.await.unwrap(), "应答 allow_once 后判定必须放行");
+        assert!(
+            checker.pending_prompts().await.is_empty(),
+            "应答后快照不得残留（否则前端会重复弹同一个请求）"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 边界：超时已收敛的请求不得出现在快照里（否则前端补拉会弹一个已失效的框）
+    #[tokio::test]
+    async fn pending_prompts_excludes_timed_out_request() {
+        let (checker, log) = promptable_checker(Duration::from_millis(80)).await;
+        let dir = fixture_dir("fs-auth-pending-timeout");
+        let file = dir.join("data.jsonl");
+        std::fs::write(&file, b"x").unwrap();
+
+        assert!(
+            !checker
+                .check("com.bedcode.test", &file.to_string_lossy(), FsOp::Read)
+                .await,
+            "无应答超时按拒绝"
+        );
+        assert!(!log.lock().expect("emit log poisoned").is_empty(), "前置：确实弹过窗");
+        assert!(
+            checker.pending_prompts().await.is_empty(),
+            "超时已收敛的请求不得出现在补拉快照里"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 多请求：快照按入队顺序返回全部在等请求
+    ///
+    /// 首启现场是多插件同时请求（file-transfer / agent-hub / ai-chatbox），弹窗必须能
+    /// 排队逐个展示——只留「最后一个」会让其余请求静默超时。
+    #[tokio::test]
+    async fn pending_prompts_lists_every_request_in_queue_order() {
+        let (checker, _log) = promptable_checker(Duration::from_secs(5)).await;
+        seed_pending(
+            &checker,
+            "req-1",
+            "com.bedcode.a",
+            vec!["/tmp/a".into()],
+            FsOps::READ,
+            GrantScope::Exact,
+            AuthOrigin::Fs,
+            AuthStrategy::Default,
+        )
+        .await;
+        seed_pending(
+            &checker,
+            "req-2",
+            "com.bedcode.b",
+            vec!["/tmp/b".into(), "/tmp/c".into()],
+            FsOps::READ_WRITE,
+            GrantScope::Directory,
+            AuthOrigin::Picker,
+            AuthStrategy::AlwaysAsk,
+        )
+        .await;
+
+        let snapshot = checker.pending_prompts().await;
+        let ids: Vec<&str> = snapshot
+            .iter()
+            .filter_map(|p| p["requestId"].as_str())
+            .collect();
+        assert_eq!(ids, vec!["req-1", "req-2"], "按入队顺序（= 用户被问到的顺序）");
+        assert_eq!(snapshot[1]["paths"], serde_json::json!(["/tmp/b", "/tmp/c"]));
+        assert_eq!(snapshot[1]["operation"], "read+write");
+        assert_eq!(snapshot[1]["grantScope"], "directory");
+        assert_eq!(snapshot[1]["origin"], "picker");
+        assert_eq!(snapshot[1]["strategy"], "always_ask");
+        assert_eq!(snapshot[1]["path"], "/tmp/b", "path 兼容字段 = 首个路径");
     }
 }
 

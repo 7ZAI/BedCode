@@ -21,15 +21,40 @@ import type { AuthStrategy, PluginAuthOverview } from '@/utils/authPolicy'
 let hostCredentialCache: string | null = null
 
 /**
+ * 在途的凭证请求（并发共享）
+ *
+ * **为什么需要**：宿主侧「首个调用者生效」——同一 webview 同一页面加载里第二次
+ * `plugin_frontend_loader_session` 会被拒（`session already issued`）。而宿主前端有多个
+ * 冷启动调用点（`pluginLoader.loadAll()` 与授权弹窗挂载时的 `pluginFsAuthPending()`），
+ * 它们都在缓存写入**之前**就可能发出请求：各自 `invoke` 一次时，后到者拿到拒绝，
+ * 该命令整条失败（首启实测：授权弹窗补拉失败 `host.internal`，真实原因是
+ * `frontend loader session already issued`）。共享同一个在途 Promise 后，两个调用者
+ * 拿到同一枚密钥，只发一次请求。
+ */
+let hostCredentialPromise: Promise<string> | null = null
+
+/**
  * 取得宿主面凭证（幂等）：宿主面命令（`pluginInvoke` / 插件存储 / fs 授权应答）的凭证来源
  *
- * 必须在插件模块导入前调用一次（`pluginLoader.loadAll()` 首行）；之后的宿主调用点复用缓存。
+ * 必须在插件模块导入前调用一次（`pluginLoader.loadAll()` 首行）；之后的宿主调用点复用缓存
+ * （并发调用共享在途请求，见 {@link hostCredentialPromise}）。
  */
 export async function ensureHostCredential(): Promise<string> {
   if (hostCredentialCache) return hostCredentialCache
-  hostCredentialCache = await invoke<string>('plugin_frontend_loader_session')
-  logger.log('[PluginCmd] host credential acquired (loader session)')
-  return hostCredentialCache
+  if (!hostCredentialPromise) {
+    hostCredentialPromise = invoke<string>('plugin_frontend_loader_session')
+      .then((credential) => {
+        hostCredentialCache = credential
+        logger.log('[PluginCmd] host credential acquired (loader session)')
+        return credential
+      })
+      .catch((e) => {
+        // 失败不缓存：下一次调用重试（否则一次瞬时失败会把整页的插件命令全锁死）
+        hostCredentialPromise = null
+        throw e
+      })
+  }
+  return hostCredentialPromise
 }
 
 
@@ -228,6 +253,46 @@ export async function pluginFsAuthRespond(
 ): Promise<void> {
   const credential = await ensureHostCredential()
   return await invoke('plugin_fs_auth_respond', { requestId, decision, credential })
+}
+
+/**
+ * 文件授权请求载荷（`plugin:fs-auth-request` 事件与 `plugin_fs_auth_pending` 补拉**同形**）
+ *
+ * 形状真源在宿主 `security::fs_auth::auth_prompt_payload`（事件推送与补拉共用一个构造器），
+ * 前端也只用一套渲染逻辑消费两者。字段全为可选的部分是「旧宿主发来的载荷」与
+ * 「策略档位缺省」两种情形，弹窗侧都有兜底。
+ */
+export interface FsAuthRequestPayload {
+  requestId: string
+  pluginId: string
+  /** 批量授权：未授权路径数组（单路径请求也是单元素数组） */
+  paths?: string[]
+  /** 兼容字段 = `paths` 首个元素（旧前端 / 旧宿主形状） */
+  path?: string
+  operation: string
+  /** 请求来源：fs = 插件直接请求访问；picker = 用户刚在系统选择器里选中 */
+  origin?: 'fs' | 'picker'
+  /** 「记住」的落账粒度：directory = 按所在目录记（同目录其它文件不再询问） */
+  grantScope?: 'exact' | 'directory'
+  /** 弹出时的策略档位（票 03；缺字段 / 值未识别按默认档） */
+  strategy?: string
+}
+
+/**
+ * 拉取仍在等待用户应答的文件授权请求（宿主面命令：需宿主凭证）
+ *
+ * **冷启动补投递**：授权请求走事件推送，宿主前端在注册监听器之前收到的请求会丢。
+ * 首次运行恰好命中——启动期插件自动激活就要请求目录授权，而那时弹窗还没挂载：请求
+ * 无人应答 → 30s 超时按拒绝收敛（插件启用失败）。弹窗挂载后拉一次本命令，把在等的
+ * 请求补进队列即可应答，不再依赖「事件恰好没丢」。
+ *
+ * 载荷形状与事件同形（见 {@link FsAuthRequestPayload}）；已应答 / 已超时的请求不在其中。
+ */
+export async function pluginFsAuthPending(): Promise<FsAuthRequestPayload[]> {
+  const credential = await ensureHostCredential()
+  const pending = await invoke<FsAuthRequestPayload[]>('plugin_fs_auth_pending', { credential })
+  logger.log(`[PluginCmd] pluginFsAuthPending() returned ${pending.length} pending request(s)`)
+  return pending
 }
 
 /** 获取所有命令 */

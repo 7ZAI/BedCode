@@ -19,6 +19,29 @@ interface ActivePlugin {
   context: PluginContext
 }
 
+/**
+ * 选出「后端已运行、前端模块还没加载」的插件（纯判据，可单测）
+ *
+ * 两个调用方共用它，避免门禁口径分叉：
+ * - `loadAll()`（启动首扫，`loadedIds` 为空集）；
+ * - `loadMissingActivated()`（宿主 `plugin:activated` 事件后的补加载）。
+ *
+ * 判据与 `loadAll` 的原门禁逐字一致：非 rust-only（前端无模块）+ `activated` / `degraded`
+ * （degraded 实例在运行、扩展点已注册，UI 入口应可见）+ 未加载。`activating` 等中间态
+ * 一律不选：它们在等激活完成，由后续的 `plugin:activated` 事件触发补加载。
+ */
+export function pluginsNeedingFrontendLoad(
+  manifests: PluginInfo[],
+  loadedIds: ReadonlySet<string>,
+): PluginInfo[] {
+  return manifests.filter(
+    (m) =>
+      m.pluginType !== 'rust' &&
+      (m.state.state === 'activated' || m.state.state === 'degraded') &&
+      !loadedIds.has(m.id),
+  )
+}
+
 /** 插件加载器 */
 class PluginLoaderClass {
   private plugins: Map<string, ActivePlugin> = new Map()
@@ -32,6 +55,9 @@ class PluginLoaderClass {
    * 二次 import + 二次 activate（重复副作用），故只能共用同一个句柄。
    */
   private startupLoad: Promise<void> | null = null
+
+  /** 补加载的在途句柄（`loadMissingActivated` 并发合并用） */
+  private activationSync: Promise<void> | null = null
 
   /**
    * 等待启动期插件加载完成（幂等）——首次调用即发起 loadAll，后续调用共用同一句柄。
@@ -55,7 +81,10 @@ class PluginLoaderClass {
    * - 已 activated 的插件：加载前端 TS 模块（UI 组件注册）
    * - degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
    *   UI 入口应可见；仅 console.warn 标注降级原因（spec §3.6）
-   * - 其余状态（含 activating 中间态）：跳过，等待用户手动激活
+   * - 其余状态（含 activating 中间态）：跳过 —— **但启动期持久化激活是异步的**
+   *   （`PluginHost::new` 不再同步激活，见 wasm-core `auto_activate_from_persisted_state`
+   *   文档），被跳过的插件由宿主 `plugin:activated` 事件触发 {@link loadMissingActivated}
+   *   补加载（2026-10-18 实测：agent-hub 在 `activating` 期间被跳过 → 整会话界面缺失）
    * - Rust-only 插件：完全由后端管理，前端无需处理
    */
   async loadAll(): Promise<void> {
@@ -65,6 +94,10 @@ class PluginLoaderClass {
     await pluginCmds.ensureHostCredential()
     const manifests = await pluginCmds.pluginListLoaded()
     logger.log(`[PluginLoader] Found ${manifests.length} plugin(s) from backend`)
+
+    // 门禁与补加载（`loadMissingActivated`）共用同一判据：两处各写一套时，
+    // 补加载漏掉 degraded 之类的分支会静默少加载插件
+    const loadable = new Set(pluginsNeedingFrontendLoad(manifests, new Set()).map((m) => m.id))
 
     for (const manifest of manifests) {
       logger.log(
@@ -77,40 +110,69 @@ class PluginLoaderClass {
         continue
       }
 
-      // 加载门禁：线上值 activated 正常加载；degraded 也放行（实例在运行，仅降级）；
-      // 其余状态跳过。功能门禁归类依据 spec §5.1 开放问题裁决：先放行 + UI 降级标识
-      // （状态判定必须用 camelCase 线上值，见 `./types.ts` 头注）
-      const stateName = manifest.state.state
-
-      if (stateName !== 'activated' && stateName !== 'degraded') {
+      if (!loadable.has(manifest.id)) {
         logger.log(
-          `[PluginLoader] Plugin ${manifest.id} not activated (state: ${stateName}), skipping frontend load`,
+          `[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping frontend load`,
         )
         continue
       }
 
-      if (stateName === 'degraded') {
-        logger.warn(
-          `[PluginLoader] Plugin ${manifest.id} is DEGRADED, loading frontend module anyway. Reason: ${manifest.state.error}`,
-        )
-      }
-
-      // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
-      if (manifest.pluginType === 'rust-ts') {
-        logger.log(`[PluginLoader] Loading Rust+TS plugin frontend: ${manifest.id}`)
-        await this.loadFrontendOnly(manifest)
-      } else {
-        // TS-only 插件：Rust 端已激活（自动激活），前端加载入口但不重复调用 pluginActivate
-        logger.log(
-          `[PluginLoader] Loading TS-only plugin frontend (already activated): ${manifest.id}`,
-        )
-        await this.loadFrontendForAlreadyActivated(manifest)
-      }
+      await this.loadRunningPlugin(manifest)
     }
 
     logger.log(
       `[PluginLoader] loadAll() complete, ${this.plugins.size} plugin(s) with frontend modules loaded`,
     )
+  }
+
+  /**
+   * 补加载「后端已运行、前端模块还没加载」的插件（启动期异步激活完成后）
+   *
+   * 触发点：宿主 `plugin:activated` 事件（`system/runtime-listeners.ts` 注册）。
+   * **幂等 + 并发合并**：事件可能连续到达（多个插件同时激活），重复触发不会重复
+   * import——在途请求共享同一句柄，已加载的插件被 {@link pluginsNeedingFrontendLoad} 过滤。
+   */
+  async loadMissingActivated(): Promise<void> {
+    if (!this.activationSync) {
+      this.activationSync = this.syncMissingActivated()
+      void this.activationSync.finally(() => {
+        this.activationSync = null
+      })
+    }
+    return this.activationSync
+  }
+
+  /** 补加载本体（错误自收口：事件回调不得抛成未处理拒绝） */
+  private async syncMissingActivated(): Promise<void> {
+    try {
+      const manifests = await pluginCmds.pluginListLoaded()
+      const pending = pluginsNeedingFrontendLoad(manifests, new Set(this.plugins.keys()))
+      if (pending.length === 0) return
+      logger.log(`[PluginLoader] Loading ${pending.length} plugin frontend(s) activated after startup`)
+      for (const manifest of pending) {
+        await this.loadRunningPlugin(manifest)
+      }
+    } catch (e) {
+      logger.error('[PluginLoader] 启动后激活插件的前端补加载失败:', e)
+    }
+  }
+
+  /** 加载一个「后端已运行」插件的前端模块（`loadAll` 与补加载共用；按类型分派） */
+  private async loadRunningPlugin(manifest: PluginInfo): Promise<void> {
+    if (manifest.state.state === 'degraded') {
+      logger.warn(
+        `[PluginLoader] Plugin ${manifest.id} is DEGRADED, loading frontend module anyway. Reason: ${manifest.state.error}`,
+      )
+    }
+    // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
+    if (manifest.pluginType === 'rust-ts') {
+      logger.log(`[PluginLoader] Loading Rust+TS plugin frontend: ${manifest.id}`)
+      await this.loadFrontendOnly(manifest)
+    } else {
+      // TS-only 插件：Rust 端已激活（自动激活），前端加载入口但不重复调用 pluginActivate
+      logger.log(`[PluginLoader] Loading TS-only plugin frontend (already activated): ${manifest.id}`)
+      await this.loadFrontendForAlreadyActivated(manifest)
+    }
   }
 
   /** 加载 Rust+TS 插件的前端部分（不触发后端 activate，Rust 端已激活） */

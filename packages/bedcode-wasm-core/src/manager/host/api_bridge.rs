@@ -449,6 +449,38 @@ pub async fn plugin_fs_auth_respond(
     Ok(())
 }
 
+/// 待应答文件授权请求快照（前端冷启动补投递）
+///
+/// **为什么需要**：授权请求是事件推送，宿主前端在注册监听器之前收到的请求会丢。首次运行
+/// 恰好命中——启动期的插件自动激活就要请求目录授权，而那时宿主前端尚未就绪：请求无人应答
+/// → 30s 超时按拒绝收敛（Windows 正式版首启实测 `batch auth request timed out or cancelled`
+/// + `file access authorization rejected`）。前端挂载后拉一次本命令，把仍在等待的请求
+/// 补进弹窗队列即可应答，不再依赖「事件恰好没丢」。
+///
+/// 载荷形状与事件 `plugin:fs-auth-request` **同源同形**（宿主侧同一个构造器），前端用一套
+/// 渲染逻辑消费两者；已应答 / 已超时的请求不在其中（快照 = 仍在等用户点击的集合）。
+///
+/// **只接受宿主面凭证**（与 [`plugin_fs_auth_respond`] 同一判据）：待授权清单是安全闸门的
+/// 配给账，插件面凭证不得用它枚举其它应用正打算访问哪些目录。
+#[tauri::command]
+pub async fn plugin_fs_auth_pending(
+    webview: tauri::Webview,
+    credential: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+    fs_auth: State<'_, Arc<FsAuthChecker>>,
+) -> crate::Result<Vec<serde_json::Value>> {
+    require_host_surface(
+        &plugin_host,
+        webview.label(),
+        "plugin_fs_auth_pending",
+        &credential,
+        "pending file authorization requests must be listed by the host frontend",
+    )?;
+    let pending = fs_auth.pending_prompts().await;
+    tracing::debug!(count = pending.len(), "[API] plugin_fs_auth_pending: 待应答请求快照已返回");
+    Ok(pending)
+}
+
 // ==================== Network Auth（票 05） ====================
 
 /// 回复网络出站授权询问（由前端弹窗调用）

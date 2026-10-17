@@ -623,9 +623,13 @@ impl PluginHost {
         // L1 的能力注册表装配必须先于消费方的依赖检查，L2 的裁决面须先于业务面就绪
         host.activate_role_driven_components().await;
 
-        // 5. 根据持久化状态自动激活之前已激活的插件
-        tracing::info!("[PluginHost] Starting auto-activation from persisted state...");
-        host.auto_activate_from_persisted_state().await;
+        // 5. L3 业务应用（持久化启用态）的激活**不在这里做**（2026-10-18）：激活可能弹
+        // 交互式目录授权（最长等 30s 用户点击），而本构造器在 setup 主线程上被 `block_on`
+        // 调用——同步执行会把窗口与前端一起卡到超时（Windows 正式版首启实测
+        // `后端初始化耗时: 32869ms`，且弹窗在 UI 就绪前发出必然无人应答 → 插件启用失败）。
+        // 改由宿主在启动钩子里异步触发 `auto_activate_from_persisted_state()`（契约与
+        // 调用点见该方法文档）；无头/测试夹具按需显式调用它。
+        tracing::info!("[PluginHost] L3 persisted activation deferred to host startup hook (non-blocking boot)");
 
         let count = host.plugins.read().await.len();
         let wasm_count = host.wasm_plugins.read().await.len();
@@ -855,15 +859,20 @@ impl PluginHost {
     /// 取得宿主面凭证）；也可在测试中显式调用以模拟某窗口前端重启。
     /// **只作用于该 label 的凭证域**——多窗口（主窗口 / 终端窗口）互不干扰：终端窗口加载
     /// 不再回收主窗口凭证（2026-09-26 修复，见 `security::frontend_channel` 模块注释）。
+    /// **调用方只能在页面加载的 `Started` 上重置**（判据在 `lib.rs::frontend_channel_session_hook`）：
+    /// `Finished` 属同一次加载，在那里重置会作废宿主前端刚签发的 loader 密钥。
     pub fn reset_frontend_loader_session(&self, webview_label: &str, reason: &str) -> usize {
-        let revoked = self.frontend_channel.reset(webview_label);
+        let report = self.frontend_channel.reset(webview_label);
+        // had_loader_session 与 revoked_tokens 同期打印：形式上是「一次重置」，代价却
+        // 可能是「作废了一个活着的页面凭证」——只报令牌数（常见值 0）会把后者隐掉
         tracing::info!(
             webview = %webview_label,
             reason = %reason,
-            revoked_tokens = revoked,
+            had_loader_session = report.had_loader_session,
+            revoked_tokens = report.revoked_tokens,
             "[PluginChannel] 前端通道会话已重置"
         );
-        revoked
+        report.revoked_tokens
     }
 
     /// 获取 WASM 运行时引用
@@ -965,6 +974,7 @@ mod tests {
     mod instance_call_model_test;
     mod l2_gating_test;
     mod lifecycle_test;
+    mod persisted_activation_test;
     mod runtime_preauth_test;
     mod scaffold;
     mod scan_dedup_test;

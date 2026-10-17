@@ -37,6 +37,18 @@ pub const LIFECYCLE_SHUTDOWN: &str = "lifecycle:shutdown";
 /// 插件开发模式热重载通知
 pub const PLUGIN_DEV_RELOAD: &str = "plugin:dev-reload";
 
+/// 插件激活成功（含降级）——前端据此补加载该插件的前端模块
+///
+/// **为什么需要**：启动期的持久化激活是**异步**的（`PluginHost::new` 不再同步激活，
+/// 见 wasm-core `auto_activate_from_persisted_state` 文档：构造器跑在 setup 主线程上，
+/// 同步激活会弹交互式目录授权把窗口卡到超时）。而前端 `pluginLoader.loadAll()` 在
+/// 页面启动时就查一次状态，会看到正在激活的插件是 `activating` 而跳过它——
+/// 2026-10-18 实测：agent-hub 因此整会话界面缺失（只能重启或手动启停一次）。
+///
+/// payload: `{ pluginId }`（前端收到后补加载「已运行但前端模块未加载」的插件，
+/// 幂等：已加载的插件不会被重复 import）。
+pub const PLUGIN_ACTIVATED: &str = "plugin:activated";
+
 /// 插件自检失败提示（host_mark_plugin_error）— 前端提示，不改插件状态
 ///
 /// payload: 错误信封 `{ code, request_id, params: { plugin } }`，code 恒为

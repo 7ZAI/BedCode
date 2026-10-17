@@ -675,6 +675,10 @@ async fn test_boot_activates_system_components_before_app_plugins() {
     let user_plugins_dir = tmp_dir.path().join("user-plugins");
     let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts), None).await;
 
+    // L3 持久化启用态不再由构造函数激活（`PluginHost::new` 不阻塞启动：激活可能弹交互式
+    // 目录授权）。生产由桌面启动钩子异步触发；本用例显式走同一条入口
+    host.auto_activate_from_persisted_state().await;
+
     // 终态：两者均 Activated（应用插件的依赖检查在系统组件装配之后执行，
     // 激活成功即顺序成立的语义断言）
     let sys_info = host.get_plugin(sys_id).await.expect("system component present");
@@ -785,6 +789,9 @@ async fn setup_three_layer_host(tmp_dir: &tempfile::TempDir, l2_manifest_extra: 
         .expect("seed persisted activation state (L3 only)");
 
     let host = PluginHost::new(db, &plugins_dir, &user_plugins_dir, None, None, Vec::new(), bedcode_wasm_core::manager::runtime::AbiPolicy { form: Some(bedcode_plugin_api::form::FORM_COMPONENT) }, std::sync::Arc::new(bedcode_desktop_lib::plugin::host_facts::DesktopHostFacts), None).await;
+    // 同一夹具供多个用例使用：L3 持久化激活由调用方显式触发（与生产启动钩子同一条入口），
+    // 不再是 `PluginHost::new` 的副作用
+    host.auto_activate_from_persisted_state().await;
     host
 }
 
